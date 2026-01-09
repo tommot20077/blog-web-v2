@@ -1,0 +1,14 @@
+# Redis Service 配置
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: default
+spec:
+  type: NodePort # 透過節點端口暴露服務
+  selector:
+    app: redis
+  ports:
+    - port: 6379 # Redis 服務端口
+      targetPort: 6379
+      nodePort: 30121 # 外部訪問端口

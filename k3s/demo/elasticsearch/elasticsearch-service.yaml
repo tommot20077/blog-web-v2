@@ -1,0 +1,18 @@
+# Elasticsearch Service 配置
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+spec:
+  type: NodePort # 透過節點端口暴露服務
+  selector:
+    app: elasticsearch
+  ports:
+    - name: "9200" # HTTP REST API 端口
+      port: 9200
+      targetPort: 9200
+      nodePort: 30123 # 外部訪問端口
+    - name: "9300" # 節點間通訊端口
+      port: 9300
+      targetPort: 9300
+      nodePort: 30124 # 外部訪問端口

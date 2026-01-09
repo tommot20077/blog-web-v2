@@ -1,0 +1,20 @@
+# RabbitMQ 部署配置
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+spec:
+  replicas: 1 # 運行一個副本
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4.2.2
+          ports:
+            - containerPort: 5672 # AMQP 協議端口

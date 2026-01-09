@@ -1,0 +1,36 @@
+# Redis 部署配置
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8-alpine # 使用指定版本的 Redis 映像
+          ports:
+            - containerPort: 6379 # Redis 服務端口
+          command: ["redis-server"]
+          args: # Redis 啟動參數
+            - "--maxmemory"
+            - "256mb"             # 設定最大記憶體
+            - "--maxmemory-policy"
+            - "allkeys-lru"       # 記憶體回收策略
+            - "--save"
+            - ""                  # 禁用 RDB 持久化
+            - "--appendonly"
+            - "no"                # 禁用 AOF 持久化
+          resources: # 資源限制與請求
+            limits:
+              memory: "300Mi"
+              cpu: "200m"
+            requests:
+              memory: "200Mi"
+              cpu: "100m"

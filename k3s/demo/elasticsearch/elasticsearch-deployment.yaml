@@ -1,0 +1,33 @@
+# Elasticsearch 部署配置
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elasticsearch
+spec:
+  replicas: 1 # 運行一個副本
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:9.2.3 # 使用指定版本的 Elasticsearch 映像
+          env:
+            - name: discovery.type
+              value: single-node # 單節點模式配置
+            - name: ES_JAVA_OPTS
+              value: "-Xms512m -Xmx512m" # JVM 記憶體設定
+          ports:
+            - containerPort: 9200
+            - containerPort: 9300
+          volumeMounts:
+            - mountPath: /usr/share/elasticsearch/data # Elasticsearch 數據目錄
+              name: elasticsearch-storage
+      volumes:
+        - name: elasticsearch-storage
+          persistentVolumeClaim:
+            claimName: elasticsearch-pvc # 使用預定義的 PVC
