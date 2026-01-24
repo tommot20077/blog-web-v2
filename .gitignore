@@ -36,3 +36,7 @@ build/
 /src/main/resources/application-dev.yaml
 /k3s/product/
 /.env
+/GEMINI.md
+/blog-start/src/main/resources/application-dev.yaml
+/blog-start/src/main/resources/application-prod.yaml
+/logs/

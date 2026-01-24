@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- status="WARN" 關閉 Log4j2 自身的除錯日誌 -->
+<Configuration status="WARN">
+    <Properties>
+        <Property name="LOG_HOME">./logs</Property>
+        <Property name="PROJECT_NAME">blog-web</Property>
+        <!-- 開發環境用的人類可讀格式 -->
+        <Property name="LOG_PATTERN_CONSOLE">%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight{%-5level} [%15.15t] %cyan{%-40.40c{1.}} : %msg%n</Property>
+        <!-- 文件存檔用的格式 -->
+        <Property name="LOG_PATTERN_FILE">%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %c{1.}:%L - %msg%n</Property>
+    </Properties>
+
+    <Appenders>
+        <!-- 1. 控制台 Appender -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <!-- 開發環境: 純文字 -->
+            <SpringProfile name="dev | default">
+                <PatternLayout pattern="${LOG_PATTERN_CONSOLE}"/>
+            </SpringProfile>
+            
+            <!-- K8s環境: JSON -->
+            <SpringProfile name="prod">
+                <JsonTemplateLayout eventTemplateUri="classpath:LogstashJsonEventLayoutV1.json"/>
+            </SpringProfile>
+        </Console>
+
+        <!-- 2. INFO 級別備份文件 -->
+        <RollingRandomAccessFile name="InfoFile" fileName="${LOG_HOME}/${PROJECT_NAME}-info.log"
+                                 filePattern="${LOG_HOME}/info/%d{yyyy-MM-dd}/${PROJECT_NAME}-info-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN_FILE}"/>
+            
+            <Filters>
+                <ThresholdFilter level="ERROR" onMatch="DENY" onMismatch="NEUTRAL"/>
+                <ThresholdFilter level="INFO" onMatch="ACCEPT" onMismatch="DENY"/>
+            </Filters>
+
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1"/>
+                <SizeBasedTriggeringPolicy size="100 MB"/>
+            </Policies>
+            
+            <DefaultRolloverStrategy max="30">
+                <Delete basePath="${LOG_HOME}/info" maxDepth="2">
+                    <IfFileName glob="*/${PROJECT_NAME}-info-*.log.gz"/>
+                    <IfLastModified age="15d"/>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingRandomAccessFile>
+
+        <!-- 3. ERROR 級別備份文件 -->
+        <RollingRandomAccessFile name="ErrorFile" fileName="${LOG_HOME}/${PROJECT_NAME}-error.log"
+                                 filePattern="${LOG_HOME}/error/%d{yyyy-MM-dd}/${PROJECT_NAME}-error-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN_FILE}"/>
+            
+            <ThresholdFilter level="ERROR" onMatch="ACCEPT" onMismatch="DENY"/>
+
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1"/>
+                <SizeBasedTriggeringPolicy size="100 MB"/>
+            </Policies>
+
+            <DefaultRolloverStrategy max="30">
+                <Delete basePath="${LOG_HOME}/error" maxDepth="2">
+                    <IfFileName glob="*/${PROJECT_NAME}-error-*.log.gz"/>
+                    <IfLastModified age="30d"/>
+                </Delete>
+            </DefaultRolloverStrategy>
+        </RollingRandomAccessFile>
+    </Appenders>
+
+    <Loggers>
+        <Logger name="org.springframework" level="INFO"/>
+        <Logger name="dowob.xyz.blog" level="DEBUG"/>
+
+        <Root level="INFO">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="InfoFile"/>
+            <AppenderRef ref="ErrorFile"/>
+        </Root>
+    </Loggers>
+</Configuration>
