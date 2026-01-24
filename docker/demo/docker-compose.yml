@@ -1,0 +1,175 @@
+version: '3.8'
+
+services:
+  # Elasticsearch 安全設定初始化
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.2.4
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - blog-v2-network
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_PASSWORD=${KIBANA_PASSWORD}
+    command: >
+      bash -c '
+        echo "Waiting for Elasticsearch health check...";
+        until curl -s http://elasticsearch:9200 | grep -q "missing authentication credentials"; do sleep 2; done;
+
+        echo "Setting kibana_system password...";
+        curl -s -X POST -u "elastic:${ELASTIC_PASSWORD}" \
+          -H "Content-Type: application/json" \
+          http://elasticsearch:9200/_security/user/kibana_system/_password \
+          -d "{\"password\":\"${KIBANA_PASSWORD}\"}";
+
+        echo "All done!";
+      '
+
+  # PostgreSQL 資料庫服務
+  postgres:
+    image: postgres:16-alpine
+    container_name: blog-v2-postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - blog-v2-network
+    restart: unless-stopped
+
+  # Redis 快取服務
+  redis:
+    image: redis:8-alpine
+    container_name: blog-v2-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no --requirepass ${REDIS_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          memory: 300M
+          cpus: '0.2'
+        reservations:
+          memory: 200M
+          cpus: '0.1'
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - blog-v2-network
+    restart: unless-stopped
+
+  # Elasticsearch 搜尋引擎服務
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.2.4
+    container_name: blog-v2-elasticsearch
+    ports:
+      - "127.0.0.1:9200:9200"
+      - "127.0.0.1:9300:9300"
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.license.self_generated.type=trial
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -u elastic:${ELASTIC_PASSWORD} -f http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - blog-v2-network
+    restart: unless-stopped
+
+  # Kibana 日誌視覺化介面
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.2.4
+    container_name: blog-v2-kibana
+    ports:
+      - "127.0.0.1:5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_FLEET_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - blog-v2-network
+    restart: unless-stopped
+
+  # RabbitMQ 訊息佇列服務
+  rabbitmq:
+    image: rabbitmq:4.2.2-management
+    container_name: blog-v2-rabbitmq
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - blog-v2-network
+    restart: unless-stopped
+
+  # Fluent Bit 日誌收集服務
+  fluent-bit:
+    image: fluent/fluent-bit:2.1.10
+    container_name: blog-v2-fluent-bit
+    ports:
+      - "127.0.0.1:2020:2020"
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - blog-v2-network
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+    driver: local
+  elasticsearch-data:
+    driver: local
+
+networks:
+  blog-v2-network:
+    driver: bridge

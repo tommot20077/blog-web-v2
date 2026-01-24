@@ -233,8 +233,6 @@ main() {
         local environments=($(get_environments))
         if [ ${#environments[@]} -eq 1 ]; then
             env=${environments[0]}
-        elif [ -n "$DEFAULT_ENV" ]; then
-            env=$DEFAULT_ENV
         fi
     fi
 

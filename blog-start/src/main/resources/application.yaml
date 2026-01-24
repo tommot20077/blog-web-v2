@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: blog-web-v2
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+
+# SpringDoc OpenAPI 配置
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    # 預設排序
+    operations-sorter: method
+    # 是否顯示請求時間
+    display-request-duration: true
+  api-docs:
+    path: /v3/api-docs
+  # 自動掃描套件
+  packages-to-scan: dowob.xyz.blog
+  # 是否支持分組 (預設全開)
+  default-flat-param-object: true
