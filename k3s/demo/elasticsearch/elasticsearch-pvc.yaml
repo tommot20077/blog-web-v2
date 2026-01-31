@@ -8,5 +8,5 @@ spec:
     - ReadWriteOnce # 單一節點讀寫模式
   resources:
     requests:
-      storage: 1Gi # 請求 1GB 儲存空間
+      storage: 2Gi # 請求 2GB 儲存空間
   storageClassName: local-path # 使用 local-path 儲存類別

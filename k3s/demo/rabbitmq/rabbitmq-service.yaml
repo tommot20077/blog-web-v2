@@ -12,3 +12,7 @@ spec:
       port: 5672
       targetPort: 5672
       nodePort: 30126 # 外部訪問端口
+    - name: "15672" # 管理界面端口
+      port: 15672
+      targetPort: 15672
+      nodePort: 30127 # 外部訪問端口

@@ -15,12 +15,23 @@ spec:
     spec:
       containers:
         - name: elasticsearch
-          image: docker.elastic.co/elasticsearch/elasticsearch:9.2.3 # 使用指定版本的 Elasticsearch 映像
+          image: docker.elastic.co/elasticsearch/elasticsearch:9.2.4 # 使用指定版本的 Elasticsearch 映像
           env:
             - name: discovery.type
               value: single-node # 單節點模式配置
             - name: ES_JAVA_OPTS
-              value: "-Xms512m -Xmx512m" # JVM 記憶體設定
+              value: "-Xms1024m -Xmx1024m" # JVM 記憶體設定
+            - name: xpack.security.enabled
+              value: "true"
+            - name: xpack.security.http.ssl.enabled
+              value: "false"
+            - name: xpack.license.self_generated.type
+              value: "trial"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-secret
+                  key: ELASTIC_PASSWORD
           ports:
             - containerPort: 9200
             - containerPort: 9300

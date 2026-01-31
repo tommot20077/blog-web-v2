@@ -15,9 +15,36 @@ spec:
     spec:
       containers:
         - name: kibana
-          image: docker.elastic.co/kibana/kibana:8.11.1 # 使用指定版本的 Kibana 映像
+          image: docker.elastic.co/kibana/kibana:9.2.4 # 使用指定版本的 Kibana 映像
           env:
             - name: ELASTICSEARCH_HOSTS
-              value: '["http://elasticsearch:9200"]' # 連接到 Elasticsearch 服務
+              value: "http://elasticsearch:9200" # 連接到 Elasticsearch 服務
+            - name: ELASTICSEARCH_USERNAME
+              value: "kibana_system"
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kibana-secret
+                  key: KIBANA_PASSWORD
+            - name: XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY
+              valueFrom:
+                secretKeyRef:
+                  name: kibana-secret
+                  key: KIBANA_ENCRYPTION_KEY
+            - name: XPACK_SECURITY_ENCRYPTIONKEY
+              valueFrom:
+                secretKeyRef:
+                  name: kibana-secret
+                  key: KIBANA_ENCRYPTION_KEY
+            - name: XPACK_REPORTING_ENCRYPTIONKEY
+              valueFrom:
+                secretKeyRef:
+                  name: kibana-secret
+                  key: KIBANA_ENCRYPTION_KEY
+            - name: XPACK_FLEET_ENCRYPTIONKEY
+              valueFrom:
+                secretKeyRef:
+                  name: kibana-secret
+                  key: KIBANA_ENCRYPTION_KEY
           ports:
             - containerPort: 5601 # Kibana 網頁介面端口
