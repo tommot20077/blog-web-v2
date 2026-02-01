@@ -41,6 +41,7 @@ build/
 /GEMINI.md
 /blog-start/src/main/resources/application-dev.yaml
 /blog-start/src/main/resources/application-prod.yaml
+/blog-start/src/main/resources/application-local.yaml
 /logs/
 /.claude/
 /docker/prod/

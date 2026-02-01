@@ -34,6 +34,22 @@
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-article</artifactId>
         </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-file</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-tag</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-search</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-recommend</artifactId>
+        </dependency>
         
         <!-- Tests -->
         <dependency>

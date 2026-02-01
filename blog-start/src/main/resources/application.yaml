@@ -5,17 +5,50 @@ spring:
     pathmatch:
       matching-strategy: ant_path_matcher
 
+  # Database
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/blogv2}
+    username: ${DATABASE_USERNAME:postgres}
+    password: ${DATABASE_PASSWORD:password}
+    driver-class-name: org.postgresql.Driver
+
+  # RabbitMQ
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+
+  # Elasticsearch
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
+
+  # Flyway
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+# MyBatis 配置
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
+    use-generated-keys: true
+  type-aliases-package: dowob.xyz.blog.module
+
+# MinIO Config
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  bucket-name: ${MINIO_BUCKET:blog-files}
+
 # SpringDoc OpenAPI 配置
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
-    # 預設排序
     operations-sorter: method
-    # 是否顯示請求時間
     display-request-duration: true
   api-docs:
     path: /v3/api-docs
-  # 自動掃描套件
   packages-to-scan: dowob.xyz.blog
-  # 是否支持分組 (預設全開)
   default-flat-param-object: true

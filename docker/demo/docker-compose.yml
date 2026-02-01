@@ -164,10 +164,35 @@ services:
       - blog-v2-network
     restart: unless-stopped
 
+  # MinIO 物件存儲服務
+  minio:
+    image: minio/minio:latest
+    container_name: blog-v2-minio
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API
+      - "127.0.0.1:9001:9001"   # Console
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - blog-v2-network
+    restart: unless-stopped
+
 volumes:
   postgres-data:
     driver: local
   elasticsearch-data:
+    driver: local
+  minio-data:
     driver: local
 
 networks:

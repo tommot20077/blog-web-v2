@@ -34,6 +34,12 @@ public enum CommonErrorCode implements IErrorCode {
     REQUEST_PATH_NOT_FOUND("A0003", "請求路徑不存在"),
 
     /**
+     * 請求參數缺失
+     */
+    REQUEST_PARAM_MISSING("A0004", "請求參數缺失"),
+
+
+    /**
      * 系統執行出錯，請稍後再試
      */
     SYSTEM_EXECUTION_ERROR("B0001", "系統執行出錯，請稍後再試"),

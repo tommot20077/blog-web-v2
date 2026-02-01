@@ -1,0 +1,11 @@
+# MinIO PersistentVolumeClaim 配置
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce # 單節點讀寫
+  resources:
+    requests:
+      storage: 10Gi # 請求 10GB 存儲空間

@@ -33,14 +33,12 @@ public class ApiResponse<T> {
    */
   private long timestamp;
 
-
   /**
    * 構造方法
    */
   protected ApiResponse() {
     this.timestamp = System.currentTimeMillis();
   }
-
 
   /**
    * 成功返回 (無數據)
@@ -52,7 +50,6 @@ public class ApiResponse<T> {
   public static <T> ApiResponse<T> success() {
     return success(null);
   }
-
 
   /**
    * 成功返回 (帶數據)
@@ -70,6 +67,22 @@ public class ApiResponse<T> {
     return apiResponse;
   }
 
+  /**
+   * 成功返回 (帶數據與自定義訊息)
+   *
+   * @param data    數據對象
+   * @param message 響應訊息
+   * @param <T>     數據類型
+   *
+   * @return 響應對象
+   */
+  public static <T> ApiResponse<T> success(T data, String message) {
+    ApiResponse<T> apiResponse = new ApiResponse<>();
+    apiResponse.setCode(CommonErrorCode.SUCCESS.getCode());
+    apiResponse.setMessage(message);
+    apiResponse.setData(data);
+    return apiResponse;
+  }
 
   /**
    * 失敗返回 (使用標準錯誤碼)
@@ -85,7 +98,6 @@ public class ApiResponse<T> {
     apiResponse.setMessage(errorCode.getMessage());
     return apiResponse;
   }
-
 
   /**
    * 失敗返回 (自定義訊息)
