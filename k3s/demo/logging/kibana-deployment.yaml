@@ -12,6 +12,7 @@ spec:
     metadata:
       labels:
         app: kibana
+        service: logging
     spec:
       containers:
         - name: kibana

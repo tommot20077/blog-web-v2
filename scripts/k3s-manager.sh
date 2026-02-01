@@ -130,9 +130,31 @@ deploy_service() {
         return 1
     fi
 
+    # 確保 namespace 存在
+    if ! kubectl get namespace "$env" &>/dev/null; then
+        print_info "創建命名空間: $env"
+        kubectl create namespace "$env"
+    fi
+
     print_info "在環境 [$env] 中部署服務 [$service]..."
-    kubectl apply -f "$service_dir"
-    print_success "服務 [$service] 在環境 [$env] 中部署完成"
+    
+    local success=true
+    # 遍歷目錄下的所有 yaml 檔案
+    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) | while read -r yaml_file; do
+        if ! cat "$yaml_file" | \
+             sed "s/namespace: *default/namespace: $env/g" | \
+             sed "s/NAMESPACE_PLACEHOLDER/$env/g" | \
+             kubectl apply -n "$env" -f -; then
+            success=false
+        fi
+    done
+
+    if $success; then
+        print_success "服務 [$service] 在環境 [$env] 中部署完成"
+    else
+        print_error "服務 [$service] 在環境 [$env] 中部署部分失敗，請檢查上方錯誤訊息"
+        return 1
+    fi
 }
 
 # 停止服務
@@ -147,7 +169,7 @@ delete_service() {
     fi
 
     print_warning "在環境 [$env] 中停止服務 [$service]..."
-    kubectl delete -f "$service_dir/" --ignore-not-found=true
+    kubectl delete -f "$service_dir/" -n "$env" --ignore-not-found=true
     print_success "服務 [$service] 在環境 [$env] 中已停止"
 }
 
@@ -175,7 +197,7 @@ down_service() {
     fi
 
     print_warning "完全刪除環境 [$env] 中的服務 [$service]..."
-    kubectl delete -f "$service_dir" --ignore-not-found=true
+    kubectl delete -f "$service_dir" -n "$env" --ignore-not-found=true
     print_success "服務 [$service] 在環境 [$env] 中已完全刪除"
 }
 
@@ -187,14 +209,14 @@ check_service_status() {
     print_info "在環境 [$env] 中檢查服務 [$service] 狀態..."
 
     echo -e "\n${YELLOW}Pods:${NC}"
-    kubectl get pods -l app=$service
+    kubectl get pods -n "$env" -l app=$service
 
     echo -e "\n${YELLOW}Services:${NC}"
-    kubectl get service -l app=$service 2>/dev/null || kubectl get service | grep $service
+    kubectl get service -n "$env" -l app=$service 2>/dev/null || kubectl get service -n "$env" | grep $service
 
     if [[ "$service" == "postgres" || "$service" == "elasticsearch" ]]; then
         echo -e "\n${YELLOW}Storage:${NC}"
-        kubectl get pvc | grep $service
+        kubectl get pvc -n "$env" | grep $service
     fi
 }
 
@@ -204,7 +226,7 @@ view_service_logs() {
     local service=$2
     local follow=${3:-false}
 
-    local pod=$(kubectl get pods -l app=$service -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    local pod=$(kubectl get pods -n "$env" -l app=$service -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
     if [[ -z "$pod" ]]; then
         print_error "在環境 [$env] 中找不到服務 [$service] 的Pod"
@@ -214,9 +236,9 @@ view_service_logs() {
     print_info "查看環境 [$env] 中服務 [$service] 的日誌 (Pod: $pod)..."
 
     if [[ "$follow" == "true" ]]; then
-        kubectl logs -f "$pod"
+        kubectl logs -n "$env" -f "$pod"
     else
-        kubectl logs "$pod" --tail=50
+        kubectl logs -n "$env" "$pod" --tail=50
     fi
 }
 
@@ -226,10 +248,10 @@ restart_service() {
     local service=$2
 
     print_warning "在環境 [$env] 中重啟服務 [$service]..."
-    kubectl delete pod -l app=$service
+    kubectl delete pod -n "$env" -l app=$service
     print_info "等待服務重新啟動..."
     sleep 5
-    kubectl wait --for=condition=ready pod -l app=$service --timeout=60s
+    kubectl wait --for=condition=ready pod -n "$env" -l app=$service --timeout=60s
     print_success "服務 [$service] 在環境 [$env] 中重啟完成"
 }
 
@@ -258,96 +280,56 @@ show_usage() {
 # 列出所有環境和服務
 list_all() {
     print_header "可用的環境和服務"
-    local max_len=0
+    local max_len=20
 
     # 儲存每個服務的名稱和帶顏色的狀態
     declare -A service_details_map
     local environments_list=($(get_environments))
 
     for env in "${environments_list[@]}"; do
-        local services_in_env=($(get_services "$env"))
-        for service in "${services_in_env[@]}"; do
-            local status_text=""
-            local pods_json=$(kubectl get pods -l app=$service -o json -n "$env" 2>/dev/null)
+        local services_in_env=$(get_services "$env")
+        for service in $services_in_env; do
+            local status_text="${RED}未部署${NC}"
+            
+            # 獲取 Pods JSON (優先使用 app 標籤，其次使用 service 標籤用於群組服務)
+            local pods_json=$(kubectl get pods -n "$env" -l "app=$service" -o json 2>/dev/null)
+            local count=$(echo "$pods_json" | jq -r '(.items // []) | length' 2>/dev/null || echo "0")
+            
+            if [[ "$count" -eq 0 ]]; then
+                pods_json=$(kubectl get pods -n "$env" -l "service=$service" -o json 2>/dev/null)
+                count=$(echo "$pods_json" | jq -r '(.items // []) | length' 2>/dev/null || echo "0")
+            fi
 
-            if [[ -z "$(echo "$pods_json" | jq -r '.items')" ]]; then
-                status_text="${RED}未部署${NC}"
-            else
-                local running_pods=0
-                local pending_pods=0
-                local error_pods=0
-                local total_pods=$(echo "$pods_json" | jq -r '.items | length')
+            if [[ -n "$pods_json" && "$count" -gt 0 ]]; then
+                local states=$(echo "$pods_json" | jq -r '
+                    (.items // []) | {
+                        running: [ .[] | select(.status.phase == "Running") ] | length,
+                        pending: [ .[] | select(.status.phase == "Pending") ] | length,
+                        failed:  [ .[] | select(.status.phase == "Failed") ] | length,
+                        succeeded: [ .[] | select(.status.phase == "Succeeded") ] | length,
+                        error:   [ .[] | select(.status.containerStatuses[]? | .ready == false and .state.waiting.reason != null) ] | length
+                    } | "\(.running) \(.pending) \(.failed) \(.succeeded) \(.error)"
+                ' 2>/dev/null)
 
-                if [[ "$total_pods" -eq 0 ]]; then
-                    status_text="${RED}未部署${NC}"
+                read running_pods pending_pods failed_pods succeeded_pods error_pods <<< "$states"
+
+                if [[ "$failed_pods" -gt 0 || "$error_pods" -gt 0 ]]; then
+                    status_text="${RED}容器錯誤${NC}"
+                elif [[ "$running_pods" -gt 0 ]]; then
+                    status_text="${GREEN}運行中${NC}"
+                elif [[ "$pending_pods" -gt 0 ]]; then
+                    status_text="${YELLOW}啟動中${NC}"
+                elif [[ "$succeeded_pods" -eq "$count" ]]; then
+                    status_text="${BLUE}已完成${NC}"
                 else
-                    for i in $(seq 0 $((total_pods - 1))); do
-                        local pod_name=$(echo "$pods_json" | jq -r ".items[${i}].metadata.name")
-                        local pod_phase=$(echo "$pods_json" | jq -r ".items[${i}].status.phase")
-                        local container_statuses=$(echo "$pods_json" | jq -r ".items[${i}].status.containerStatuses")
-
-                        if [[ "$pod_phase" == "Failed" ]]; then
-                            error_pods=$((error_pods + 1))
-                            continue
-                        fi
-
-                        local container_error=false
-                        if [[ -n "$container_statuses" && "$container_statuses" != "null" ]]; then
-                            # 檢查每個容器的狀態
-                            local num_containers=$(echo "$container_statuses" | jq -r 'length')
-                            for c_idx in $(seq 0 $((num_containers - 1))); do
-                                local c_state=$(echo "$container_statuses" | jq -r ".items[${c_idx}].state")
-                                local c_ready=$(echo "$container_statuses" | jq -r ".items[${c_idx}].ready")
-
-                                if [[ "$c_state" =~ "waiting" ]]; then
-                                    local reason=$(echo "$c_state" | jq -r ".waiting.reason")
-                                    if [[ "$reason" == "CrashLoopBackOff" || "$reason" == "ImagePullBackOff" ]]; then
-                                        container_error=true
-                                        break
-                                    fi
-                                fi
-                                if [[ "$c_state" =~ "terminated" ]]; then
-                                    local reason=$(echo "$c_state" | jq -r ".terminated.reason")
-                                    if [[ "$reason" == "Error" ]]; then
-                                        container_error=true
-                                        break
-                                    fi
-                                fi
-                                if [[ "$c_ready" == "false" && "$pod_phase" == "Running" ]]; then
-                                    # Running pod with not ready container often indicates an issue
-                                    container_error=true
-                                    break
-                                fi
-                            done
-                        fi
-
-                        if $container_error; then
-                            error_pods=$((error_pods + 1))
-                        elif [[ "$pod_phase" == "Pending" ]]; then
-                            pending_pods=$((pending_pods + 1))
-                        elif [[ "$pod_phase" == "Running" ]]; then
-                            running_pods=$((running_pods + 1))
-                        fi
-                    done # end of pod loop
-
-                    if [[ "$error_pods" -gt 0 ]]; then
-                        status_text="${RED}容器錯誤${NC}"
-                    elif [[ "$running_pods" -eq "$total_pods" && "$total_pods" -gt 0 ]]; then
-                        status_text="${GREEN}運行中${NC}"
-                    elif [[ "$pending_pods" -gt 0 ]]; then
-                        status_text="${YELLOW}啟動中${NC}"
-                    else
-                        status_text="${NC}狀態未知${NC}"
-                    fi
-                fi # end of total_pods > 0
-            fi # end of pods_json check
+                    status_text="${NC}狀態未知${NC}"
+                fi
+            fi
 
             service_details_map["$env-$service"]="$service:$status_text"
-            if [[ ${#service} -gt $max_len ]]; then
-                max_len=${#service}
-            fi
-        done # end of service loop
-    done # end of env loop
+            [[ ${#service} -gt $max_len ]] && max_len=${#service}
+        done
+    done
 
     # 輸出對齊的狀態
     for env in "${environments_list[@]}"; do
