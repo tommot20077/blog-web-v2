@@ -33,7 +33,7 @@ import java.util.Objects;
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    private final JwtUtil jwtUtil;
+    private final JwtService jwtService;
     private final UserAuthService userAuthService;
     private final StringRedisTemplate redisTemplate;
 
@@ -45,11 +45,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             String jwt = getJwtFromRequest(request);
 
-            if (StringUtils.hasText(jwt) && jwtUtil.validateToken(jwt)) {
-                String userIdStr = jwtUtil.getUserIdFromToken(jwt);
+            if (StringUtils.hasText(jwt) && jwtService.validateToken(jwt)) {
+                String userIdStr = jwtService.getUserIdFromToken(jwt);
                 Long userId = Long.parseLong(userIdStr);
-                String tokenVersion = jwtUtil.getVersionFromToken(jwt);
-                Role role = jwtUtil.getRoleFromToken(jwt);
+                String tokenVersion = jwtService.getVersionFromToken(jwt);
+                Role role = jwtService.getRoleFromToken(jwt);
 
                 // 檢查 Redis 中的版本號與狀態
                 // Key format: user:auth:{userId} -> Hash

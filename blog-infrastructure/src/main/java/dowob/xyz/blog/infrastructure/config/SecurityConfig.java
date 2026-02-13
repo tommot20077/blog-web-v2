@@ -55,6 +55,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/**").permitAll()
 
+                        // Admin 管理端點，僅 ADMIN 可存取
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+
                         // 其他所有請求需認證
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

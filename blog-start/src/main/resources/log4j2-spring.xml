@@ -4,8 +4,10 @@
     <Properties>
         <Property name="LOG_HOME">./logs</Property>
         <Property name="PROJECT_NAME">blog-web</Property>
-        <!-- 開發環境用的人類可讀格式 -->
-        <Property name="LOG_PATTERN_CONSOLE">%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight{%-5level} [%15.15t] %cyan{%-40.40c{1.}} : %msg%n</Property>
+        <!-- 本機開發用：彩色 + location info 供 IntelliJ 點擊跳轉 -->
+        <Property name="LOG_PATTERN_LOCAL">%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight{%-5level}{FATAL=bright_red, ERROR=red, WARN=yellow, INFO=green, DEBUG=cyan, TRACE=white} [%15.15t] %cyan{%-40.40c{1.}} (%F:%L) : %msg%n</Property>
+        <!-- CI / Docker Compose 用：彩色，無 location info -->
+        <Property name="LOG_PATTERN_DEV">%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight{%-5level}{FATAL=bright_red, ERROR=red, WARN=yellow, INFO=green, DEBUG=cyan, TRACE=white} [%15.15t] %cyan{%-40.40c{1.}} : %msg%n</Property>
         <!-- 文件存檔用的格式 -->
         <Property name="LOG_PATTERN_FILE">%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %c{1.}:%L - %msg%n</Property>
     </Properties>
@@ -13,12 +15,17 @@
     <Appenders>
         <!-- 1. 控制台 Appender -->
         <Console name="Console" target="SYSTEM_OUT">
-            <!-- 開發環境: 純文字 -->
-            <SpringProfile name="dev | default">
-                <PatternLayout pattern="${LOG_PATTERN_CONSOLE}"/>
+            <!-- 本機開發: 彩色 + 可點擊連結 (IntelliJ hyperlink) -->
+            <SpringProfile name="local">
+                <PatternLayout pattern="${LOG_PATTERN_LOCAL}"/>
             </SpringProfile>
-            
-            <!-- K8s環境: JSON -->
+
+            <!-- CI / Docker Compose: 彩色純文字 -->
+            <SpringProfile name="dev | default">
+                <PatternLayout pattern="${LOG_PATTERN_DEV}"/>
+            </SpringProfile>
+
+            <!-- 正式環境: JSON 供 ELK 收集 -->
             <SpringProfile name="prod">
                 <JsonTemplateLayout eventTemplateUri="classpath:LogstashJsonEventLayoutV1.json"/>
             </SpringProfile>

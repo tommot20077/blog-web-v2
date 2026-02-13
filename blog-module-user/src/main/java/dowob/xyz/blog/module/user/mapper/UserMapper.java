@@ -21,7 +21,7 @@ import java.util.List;
 public interface UserMapper {
 
     /**
-     * 根據角色查詢用戶列表 (範例)
+     * 根據角色查詢用戶列表
      *
      * @param role 角色名稱
      * @return 用戶列表
@@ -30,7 +30,7 @@ public interface UserMapper {
     List<User> findByRole(@Param("role") String role);
 
     /**
-     * 模糊搜尋暱稱 (範例)
+     * 模糊搜尋暱稱
      *
      * @param keyword 關鍵字
      * @return 用戶列表

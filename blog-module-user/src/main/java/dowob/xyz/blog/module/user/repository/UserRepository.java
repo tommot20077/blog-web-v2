@@ -40,6 +40,14 @@ public interface UserRepository extends CrudRepository<User, Long> {
     boolean existsByEmail(String email);
 
     /**
+     * 透過暱稱查詢用戶
+     *
+     * @param nickname 暱稱
+     * @return 用戶 Optional
+     */
+    Optional<User> findByNickname(String nickname);
+
+    /**
      * 檢查暱稱是否存在
      *
      * @param nickname 暱稱

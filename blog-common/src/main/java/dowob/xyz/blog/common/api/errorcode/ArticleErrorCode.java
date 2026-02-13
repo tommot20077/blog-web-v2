@@ -21,7 +21,17 @@ public enum ArticleErrorCode implements IErrorCode {
     /**
      * 文章發布失敗
      */
-    ARTICLE_PUBLISH_FAILED("A0202", "文章發布失敗");
+    ARTICLE_PUBLISH_FAILED("A0202", "文章發布失敗"),
+
+    /**
+     * 非文章作者，無操作權限
+     */
+    ARTICLE_ACCESS_DENIED("A0203", "您無權限操作此文章"),
+
+    /**
+     * 非法狀態轉換
+     */
+    ARTICLE_STATUS_TRANSITION_INVALID("A0204", "文章狀態轉換不合法");
 
     /**
      * 錯誤碼

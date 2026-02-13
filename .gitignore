@@ -45,3 +45,9 @@ build/
 /logs/
 /.claude/
 /docker/prod/
+
+# 開發規劃文件
+plan.md
+plan2.md
+todo.md
+nul

@@ -61,8 +61,12 @@ public enum UserErrorCode implements IErrorCode {
     /**
      * 無效的用戶角色
      */
-    INVALID_USER_ROLE("A0110", "無效的用戶角色")
+    INVALID_USER_ROLE("A0110", "無效的用戶角色"),
 
+    /**
+     * 電子信箱尚未驗證
+     */
+    EMAIL_NOT_VERIFIED("A0111", "請先驗證電子信箱")
 
     ;
 
