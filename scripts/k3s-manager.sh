@@ -202,6 +202,17 @@ down_service() {
     fi
 
     print_warning "完全刪除環境 [$env] 中的服務 [$service]..."
+
+    # Phase 1：先刪除 Deployment/StatefulSet/DaemonSet，觸發 Pod 終止
+    print_info "Phase 1: 刪除工作負載資源..."
+    kubectl delete deployment,statefulset,daemonset -n "$env" -l "app=$service" --ignore-not-found=true
+
+    # Phase 2：等待 Pod 完全消失，確保 PVC protection finalizer 被釋放
+    print_info "Phase 2: 等待 Pod 終止（最多 90 秒）..."
+    kubectl wait --for=delete pod -n "$env" -l "app=$service" --timeout=90s 2>/dev/null || true
+
+    # Phase 3：刪除其餘資源（Service、PVC、Secret、ConfigMap 等）
+    print_info "Phase 3: 刪除剩餘資源..."
     find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) ! -name "*.template.yaml" | while read -r yaml_file; do
         cat "$yaml_file" | \
             sed "s/namespace: *default/namespace: $env/g" | \
