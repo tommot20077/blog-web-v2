@@ -139,8 +139,8 @@ deploy_service() {
     print_info "在環境 [$env] 中部署服務 [$service]..."
     
     local success=true
-    # 遍歷目錄下的所有 yaml 檔案
-    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) | while read -r yaml_file; do
+    # 遍歷目錄下的所有 yaml 檔案（排除 *.template.yaml 範本檔）
+    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) ! -name "*.template.yaml" | while read -r yaml_file; do
         if ! cat "$yaml_file" | \
              sed "s/namespace: *default/namespace: $env/g" | \
              sed "s/NAMESPACE_PLACEHOLDER/$env/g" | \
@@ -169,7 +169,7 @@ delete_service() {
     fi
 
     print_warning "在環境 [$env] 中停止服務 [$service]..."
-    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) | while read -r yaml_file; do
+    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) ! -name "*.template.yaml" | while read -r yaml_file; do
         cat "$yaml_file" | \
             sed "s/namespace: *default/namespace: $env/g" | \
             sed "s/NAMESPACE_PLACEHOLDER/$env/g" | \
@@ -202,7 +202,7 @@ down_service() {
     fi
 
     print_warning "完全刪除環境 [$env] 中的服務 [$service]..."
-    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) | while read -r yaml_file; do
+    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) ! -name "*.template.yaml" | while read -r yaml_file; do
         cat "$yaml_file" | \
             sed "s/namespace: *default/namespace: $env/g" | \
             sed "s/NAMESPACE_PLACEHOLDER/$env/g" | \
