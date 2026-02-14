@@ -1,5 +1,6 @@
 HELP.md
 target/
+.worktrees/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
@@ -52,3 +53,4 @@ plan2.md
 todo.md
 nul
 /.mcp.json
+.worktrees/
