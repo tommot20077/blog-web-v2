@@ -40,6 +40,9 @@
         <blog.version>1.0</blog.version>
         <minio.version>8.6.0</minio.version>
         <jjwt.version>0.12.3</jjwt.version>
+        <thumbnailator.version>0.4.20</thumbnailator.version>
+        <tika.version>3.1.0</tika.version>
+        <opencc4j.version>1.8.1</opencc4j.version>
     </properties>
 
     <dependencyManagement>
@@ -256,6 +259,31 @@
                 <artifactId>testcontainers-redis</artifactId>
                 <version>2.2.4</version>
                 <scope>test</scope>
+            </dependency>
+
+            <!-- File Module -->
+            <dependency>
+                <groupId>net.coobird</groupId>
+                <artifactId>thumbnailator</artifactId>
+                <version>${thumbnailator.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-core</artifactId>
+                <version>${tika.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>minio</artifactId>
+                <version>${testcontainers.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- Tag Module -->
+            <dependency>
+                <groupId>com.github.houbb</groupId>
+                <artifactId>opencc4j</artifactId>
+                <version>${opencc4j.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
