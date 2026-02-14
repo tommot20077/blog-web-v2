@@ -31,7 +31,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.util.Collections;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -165,10 +166,25 @@ class ArticleControllerIT {
      * @param role   角色
      * @return RequestPostProcessor
      */
+    /**
+     * 建立模擬認證的 RequestPostProcessor
+     *
+     * <p>
+     * 使用 Spring Security Test 提供的機制，
+     * 確保認證物件在完整過濾器鏈中正確傳遞。
+     * 同時注入角色對應的所有 {@link dowob.xyz.blog.common.api.enums.Permission} 作為 Authority，
+     * 以支援 {@code @PreAuthorize("hasAuthority('...')")} 的宣告式存取控制。
+     * </p>
+     *
+     * @param userId 用戶 ID
+     * @param role   角色
+     * @return RequestPostProcessor
+     */
     private RequestPostProcessor asUser(Long userId, Role role) {
-        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                userId, null,
-                Collections.singletonList(new SimpleGrantedAuthority(role.getSpringSecurityRole())));
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
+        role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(userId, null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -489,6 +505,59 @@ class ArticleControllerIT {
         mockMvc.perform(get("/api/v1/articles/me"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles - Role.USER 呼叫應回傳 403（缺少 ARTICLE_CREATE）")
+    void createArticle_userRole_forbidden() throws Exception {
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle("USER 發文");
+        request.setContent("不應被允許");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} - Role.USER 呼叫應回傳 403（缺少 ARTICLE_EDIT）")
+    void updateArticle_userRole_forbidden() throws Exception {
+        UpdateArticleRequest request = new UpdateArticleRequest();
+        request.setTitle("嘗試更新");
+
+        mockMvc.perform(put("/api/v1/articles/" + UUID.randomUUID())
+                .with(asUser(AUTHOR_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/articles/{uuid} - Role.USER 呼叫應回傳 403（缺少 ARTICLE_DELETE）")
+    void deleteArticle_userRole_forbidden() throws Exception {
+        mockMvc.perform(delete("/api/v1/articles/" + UUID.randomUUID())
+                .with(asUser(AUTHOR_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles - Role.ADMIN 呼叫應正常通過（擁有 ARTICLE_CREATE）")
+    void createArticle_adminRole_success() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("AdminUser"));
+
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle("Admin 發文");
+        request.setContent("管理員內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.uuid").exists());
     }
 
     @Test

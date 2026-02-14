@@ -11,6 +11,7 @@ import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -80,6 +81,7 @@ public class ArticleController {
      * @param request 建立文章請求
      * @return 建立後的文章完整資訊
      */
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @PostMapping
     public ApiResponse<ArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request) {
         Long authorId = getCurrentUserId();
@@ -93,6 +95,7 @@ public class ArticleController {
      * @param request 更新請求
      * @return 更新後的文章完整資訊
      */
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PutMapping("/{uuid}")
     public ApiResponse<ArticleResponse> updateArticle(
             @PathVariable UUID uuid,
@@ -108,6 +111,7 @@ public class ArticleController {
      * @param uuid 文章公開 UUID
      * @return 成功回應
      */
+    @PreAuthorize("hasAuthority('ARTICLE_DELETE')")
     @DeleteMapping("/{uuid}")
     public ApiResponse<Void> deleteArticle(@PathVariable UUID uuid) {
         Long operatorId = getCurrentUserId();
@@ -137,6 +141,7 @@ public class ArticleController {
      * @param uuid 文章公開 UUID
      * @return 發布後的文章完整資訊
      */
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/publish")
     public ApiResponse<ArticleResponse> publishArticle(@PathVariable UUID uuid) {
         Long operatorId = getCurrentUserId();

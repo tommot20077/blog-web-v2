@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -38,6 +39,7 @@ public class AdminArticleController {
      * @param pageSize 每頁筆數，預設 10
      * @return 分頁待審文章摘要列表
      */
+    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
     @GetMapping("/pending")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPendingArticles(
             @RequestParam(defaultValue = "1") int pageNum,

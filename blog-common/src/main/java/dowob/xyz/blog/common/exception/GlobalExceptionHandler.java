@@ -3,6 +3,7 @@ package dowob.xyz.blog.common.exception;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -51,6 +52,22 @@ public class GlobalExceptionHandler {
                 .collect(Collectors.joining(", "));
         log.warn("Bind Exception: {}", message);
         return ApiResponse.failed("400", message);
+    }
+
+    /**
+     * 處理存取拒絕異常（@PreAuthorize 驗證失敗）
+     *
+     * <p>
+     * 必須重新拋出，讓 Spring Security 的 {@code ExceptionTranslationFilter}
+     * 統一處理並回傳 HTTP 403，避免被 catch-all handler 吞掉而回傳 HTTP 200。
+     * </p>
+     *
+     * @param e 存取拒絕異常
+     * @throws AccessDeniedException 原樣重新拋出
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public void handleAccessDeniedException(AccessDeniedException e) throws AccessDeniedException {
+        throw e;
     }
 
     /**

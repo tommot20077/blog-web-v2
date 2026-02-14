@@ -19,7 +19,8 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -89,10 +90,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         return;
                     }
 
-                    // Token 有效且狀態正常
+                    // Token 有效且狀態正常：組合角色字串與所有對應 Permission 為 GrantedAuthority 列表
+                    List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+                    authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
+                    role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
+
                     UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                            userId, null,
-                            Collections.singletonList(new SimpleGrantedAuthority(role.getSpringSecurityRole())));
+                            userId, null, authorities);
 
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authentication);
