@@ -54,4 +54,20 @@ public interface UserRepository extends CrudRepository<User, Long> {
      * @return 是否存在
      */
     boolean existsByNickname(String nickname);
+
+    /**
+     * 透過用戶名查詢用戶
+     *
+     * @param username 用戶名
+     * @return 用戶 Optional
+     */
+    Optional<User> findByUsername(String username);
+
+    /**
+     * 檢查用戶名是否存在
+     *
+     * @param username 用戶名
+     * @return 是否存在
+     */
+    boolean existsByUsername(String username);
 }

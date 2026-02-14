@@ -29,4 +29,17 @@ public class UpdateProfileRequest {
     @Schema(description = "個人簡介", example = "我是一位部落客")
     @Size(max = 500, message = "個人簡介不能超過 500 字元")
     private String bio;
+
+    /**
+     * 個人網站 URL（最多 255 字元，可為空）
+     */
+    @Schema(description = "個人網站 URL", example = "https://myblog.com")
+    @Size(max = 255, message = "網站 URL 不能超過 255 字元")
+    private String website;
+
+    /**
+     * 社群連結（JSON 字串，可為空）
+     */
+    @Schema(description = "社群連結（JSON 格式）", example = "{\"twitter\":\"@user\"}")
+    private String socialLinks;
 }

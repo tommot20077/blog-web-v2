@@ -83,12 +83,30 @@ class UserServiceTest {
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
         when(userRepository.existsByNickname("newNickname")).thenReturn(false);
 
-        userService.updateProfile(TEST_USER_ID, "newNickname", "新的個人簡介");
+        userService.updateProfile(TEST_USER_ID, "newNickname", "新的個人簡介", null, null);
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
         assertThat(captor.getValue().getNickname()).isEqualTo("newNickname");
         assertThat(captor.getValue().getBio()).isEqualTo("新的個人簡介");
+    }
+
+    /**
+     * 驗證：updateProfile 應正確設定 website 與 socialLinks 欄位。
+     */
+    @Test
+    @DisplayName("updateProfile → 含 website 與 socialLinks → 應正確儲存欄位")
+    void updateProfile_withWebsiteAndSocialLinks_shouldPersist() {
+        User mockUser = buildActiveUser();
+        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
+
+        userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, "簡介", "https://myblog.com", "{\"twitter\":\"@user\"}");
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        assertThat(captor.getValue().getWebsite()).isEqualTo("https://myblog.com");
+        assertThat(captor.getValue().getSocialLinks()).isEqualTo("{\"twitter\":\"@user\"}");
     }
 
     /**
@@ -101,7 +119,7 @@ class UserServiceTest {
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
         when(userRepository.existsByNickname("takenNickname")).thenReturn(true);
 
-        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "takenNickname", null))
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "takenNickname", null, null, null))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
@@ -115,7 +133,7 @@ class UserServiceTest {
     void updateProfile_userNotFound_shouldThrowUserNotFound() {
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "newNickname", null))
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "newNickname", null, null, null))
                 .isInstanceOf(BusinessException.class);
     }
 

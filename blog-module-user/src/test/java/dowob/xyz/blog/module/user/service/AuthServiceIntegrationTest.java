@@ -65,6 +65,9 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     /** 測試用密碼 */
     private static final String TEST_PASSWORD = "password123";
 
+    /** 測試用用戶名 */
+    private static final String TEST_USERNAME = "integrationuser";
+
     /** 測試用暱稱 */
     private static final String TEST_NICKNAME = "integrationUser";
 
@@ -90,7 +93,7 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     @Test
     @DisplayName("register → 應將用戶持久化至資料庫")
     void register_shouldPersistUserToDatabase() {
-        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_NICKNAME);
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
 
         Optional<User> saved = userRepository.findByEmail(TEST_EMAIL);
 
@@ -214,6 +217,7 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
         User user = new User();
         user.setUuid(UUID.randomUUID());
         user.setEmail(TEST_EMAIL);
+        user.setUsername(TEST_USERNAME);
         user.setNickname(TEST_NICKNAME);
         user.setPasswordHash(passwordEncoder.encode(TEST_PASSWORD));
         user.setRole(Role.USER);

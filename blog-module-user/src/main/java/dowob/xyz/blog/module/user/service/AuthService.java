@@ -59,17 +59,21 @@ public class AuthService {
     /**
      * 用戶註冊
      *
-     * <p>驗證信箱與暱稱唯一性後建立帳號（PENDING_VERIFICATION 狀態），
+     * <p>驗證信箱、用戶名與暱稱唯一性後建立帳號（PENDING_VERIFICATION 狀態），
      * 並發布 {@link UserRegisteredEvent} 至 RabbitMQ 以觸發驗證信發送。</p>
      *
      * @param email    電子信箱
      * @param password 明文密碼
+     * @param username 用戶名（唯一登入識別符）
      * @param nickname 暱稱
      */
     @Transactional
-    public void register(String email, String password, String nickname) {
+    public void register(String email, String password, String username, String nickname) {
         if (userRepository.existsByEmail(email)) {
             throw new BusinessException(UserErrorCode.EMAIL_DUPLICATED);
+        }
+        if (userRepository.existsByUsername(username)) {
+            throw new BusinessException(UserErrorCode.USERNAME_DUPLICATED);
         }
         if (userRepository.existsByNickname(nickname)) {
             throw new BusinessException(UserErrorCode.NICKNAME_DUPLICATED);
@@ -78,6 +82,7 @@ public class AuthService {
         User user = new User();
         user.setUuid(UUID.randomUUID());
         user.setEmail(email);
+        user.setUsername(username);
         user.setNickname(nickname);
         user.setPasswordHash(passwordEncoder.encode(password));
         user.setRole(Role.USER);
@@ -105,8 +110,9 @@ public class AuthService {
     /**
      * 用戶登入（雙 Token 架構）
      *
-     * <p>支援以電子信箱或暱稱登入。成功後生成 Access Token 與 Refresh Token，
-     * 並將 Refresh Token 寫入 Redis，同時更新 Auth Hash 快取。</p>
+     * <p>支援以電子信箱或用戶名登入。內建登入鎖定機制：連續失敗 5 次後帳號鎖定 15 分鐘。
+     * 成功後生成 Access Token 與 Refresh Token，Refresh Token 以 ZSet 儲存，
+     * 最多允許 3 個同時登入的裝置（自動移除最舊的）。</p>
      *
      * @param identifier 登入識別符（電子信箱或暱稱）
      * @param password   明文密碼
@@ -114,18 +120,30 @@ public class AuthService {
      */
     public LoginResult login(String identifier, String password) {
         User user = userRepository.findByEmail(identifier)
-                .or(() -> userRepository.findByNickname(identifier))
+                .or(() -> userRepository.findByUsername(identifier))
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_PASSWORD_ERROR));
 
+        String loginFailKey = RedisKeyConstant.getLoginFailKey(user.getId());
+        String failCountStr = redisTemplate.opsForValue().get(loginFailKey);
+        if (failCountStr != null && Integer.parseInt(failCountStr) >= RedisKeyConstant.LOGIN_FAIL_MAX) {
+            throw new BusinessException(UserErrorCode.ACCOUNT_LOCKED);
+        }
+
         if (!passwordEncoder.matches(password, user.getPasswordHash())) {
+            Long count = redisTemplate.opsForValue().increment(loginFailKey);
+            if (count != null && count == 1L) {
+                redisTemplate.expire(loginFailKey, RedisKeyConstant.LOGIN_FAIL_TTL_MINUTES, TimeUnit.MINUTES);
+            }
             throw new BusinessException(UserErrorCode.USER_PASSWORD_ERROR);
         }
+
+        redisTemplate.delete(loginFailKey);
 
         if (user.getStatus() == UserStatus.PENDING_VERIFICATION) {
             throw new BusinessException(UserErrorCode.EMAIL_NOT_VERIFIED);
         }
 
-        if (user.getStatus() == UserStatus.SUSPENDED || user.getStatus() == UserStatus.DELETED) {
+        if (user.getStatus() == UserStatus.BANNED || user.getStatus() == UserStatus.DELETED) {
             throw new BusinessException(UserErrorCode.ACCOUNT_SUSPENDED);
         }
 
@@ -137,7 +155,12 @@ public class AuthService {
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, user.getStatus().name());
 
         String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
-        redisTemplate.opsForValue().set(refreshKey, refreshToken, 7, TimeUnit.DAYS);
+        redisTemplate.opsForZSet().add(refreshKey, refreshToken, System.currentTimeMillis());
+        Long deviceCount = redisTemplate.opsForZSet().zCard(refreshKey);
+        if (deviceCount != null && deviceCount > 3) {
+            redisTemplate.opsForZSet().popMin(refreshKey);
+        }
+        redisTemplate.expire(refreshKey, 7, TimeUnit.DAYS);
 
         return new LoginResult(accessToken, refreshToken);
     }
@@ -145,13 +168,19 @@ public class AuthService {
     /**
      * 用戶登出
      *
-     * <p>刪除 Redis 中儲存的 Refresh Token，使舊 Refresh Token 立即失效。</p>
+     * <p>從 ZSet 中移除指定的 Refresh Token，使該裝置立即失效。
+     * 若 refreshToken 為空，刪除整個 ZSet 以登出所有裝置。</p>
      *
-     * @param userId 用戶 ID
+     * @param userId       用戶 ID
+     * @param refreshToken 要撤銷的 Refresh Token（可為 null，表示登出所有裝置）
      */
-    public void logout(Long userId) {
+    public void logout(Long userId, String refreshToken) {
         String refreshKey = RedisKeyConstant.getUserRefreshKey(userId);
-        redisTemplate.delete(refreshKey);
+        if (refreshToken != null && !refreshToken.isBlank()) {
+            redisTemplate.opsForZSet().remove(refreshKey, refreshToken);
+        } else {
+            redisTemplate.delete(refreshKey);
+        }
     }
 
     /**
@@ -187,12 +216,32 @@ public class AuthService {
      *
      * <p>若信箱存在，建立密碼重設 Token（15 分鐘有效），並發布
      * {@link UserPasswordResetRequestedEvent} 至 RabbitMQ。
-     * 若信箱不存在，靜默忽略（安全考量，不洩漏信箱是否已註冊）。</p>
+     * 若信箱不存在，靜默忽略（安全考量，不洩漏信箱是否已註冊）。
+     * 每封信箱每分鐘限呼叫 1 次、每日限 5 次，超過拋出 RATE_LIMIT_EXCEEDED。</p>
      *
      * @param email 用戶電子信箱
      */
     @Transactional
     public void forgotPassword(String email) {
+        String minKey = RedisKeyConstant.getForgotPwdMinKey(email);
+        String dayKey = RedisKeyConstant.getForgotPwdDayKey(email);
+
+        Long minCount = redisTemplate.opsForValue().increment(minKey);
+        if (minCount != null && minCount == 1L) {
+            redisTemplate.expire(minKey, 60, TimeUnit.SECONDS);
+        }
+        if (minCount != null && minCount > 1L) {
+            throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
+        }
+
+        Long dayCount = redisTemplate.opsForValue().increment(dayKey);
+        if (dayCount != null && dayCount == 1L) {
+            redisTemplate.expire(dayKey, 86400, TimeUnit.SECONDS);
+        }
+        if (dayCount != null && dayCount > 5L) {
+            throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
+        }
+
         userRepository.findByEmail(email).ifPresent(user -> {
             String tokenValue = UUID.randomUUID().toString();
             VerificationToken resetToken = new VerificationToken();
@@ -207,6 +256,60 @@ public class AuthService {
                     UserRabbitMqConfig.EXCHANGE,
                     "user.password.reset",
                     new UserPasswordResetRequestedEvent(user.getId(), user.getEmail(), tokenValue)
+            );
+        });
+    }
+
+    /**
+     * 重發驗證信
+     *
+     * <p>若信箱存在且帳號處於 PENDING_VERIFICATION 狀態，刪除舊有驗證 Token 並建立新的
+     * （24 小時有效），接著發布 {@link UserRegisteredEvent} 至 RabbitMQ。
+     * 若信箱不存在或帳號已啟用，靜默忽略（安全考量）。
+     * 每封信箱每分鐘限呼叫 1 次、每日限 5 次，超過拋出 RATE_LIMIT_EXCEEDED。</p>
+     *
+     * @param email 用戶電子信箱
+     */
+    @Transactional
+    public void resendVerification(String email) {
+        String minKey = RedisKeyConstant.getResendVerifyMinKey(email);
+        String dayKey = RedisKeyConstant.getResendVerifyDayKey(email);
+
+        Long minCount = redisTemplate.opsForValue().increment(minKey);
+        if (minCount != null && minCount == 1L) {
+            redisTemplate.expire(minKey, 60, TimeUnit.SECONDS);
+        }
+        if (minCount != null && minCount > 1L) {
+            throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
+        }
+
+        Long dayCount = redisTemplate.opsForValue().increment(dayKey);
+        if (dayCount != null && dayCount == 1L) {
+            redisTemplate.expire(dayKey, 86400, TimeUnit.SECONDS);
+        }
+        if (dayCount != null && dayCount > 5L) {
+            throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
+        }
+
+        userRepository.findByEmail(email).ifPresent(user -> {
+            if (user.getStatus() != UserStatus.PENDING_VERIFICATION) {
+                return;
+            }
+            verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
+
+            String tokenValue = UUID.randomUUID().toString();
+            VerificationToken verificationToken = new VerificationToken();
+            verificationToken.setUserId(user.getId());
+            verificationToken.setToken(tokenValue);
+            verificationToken.setType("EMAIL_VERIFICATION");
+            verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
+            verificationToken.setCreatedAt(LocalDateTime.now());
+            verificationTokenRepository.save(verificationToken);
+
+            rabbitTemplate.convertAndSend(
+                    UserRabbitMqConfig.EXCHANGE,
+                    UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
+                    new UserRegisteredEvent(user.getId(), user.getEmail(), user.getNickname(), tokenValue)
             );
         });
     }

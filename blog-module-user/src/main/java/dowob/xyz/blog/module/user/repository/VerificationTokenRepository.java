@@ -33,4 +33,12 @@ public interface VerificationTokenRepository extends CrudRepository<Verification
      * @param userId 用戶 ID
      */
     void deleteByUserId(Long userId);
+
+    /**
+     * 依用戶 ID 與類型刪除對應的驗證 Token
+     *
+     * @param userId 用戶 ID
+     * @param type   Token 類型
+     */
+    void deleteByUserIdAndType(Long userId, String type);
 }

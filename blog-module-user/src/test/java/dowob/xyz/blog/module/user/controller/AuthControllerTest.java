@@ -82,6 +82,9 @@ class AuthControllerTest {
     /** 測試用密碼 */
     private static final String TEST_PASSWORD = "password123";
 
+    /** 測試用用戶名 */
+    private static final String TEST_USERNAME = "testuser";
+
     /** 測試用暱稱 */
     private static final String TEST_NICKNAME = "testUser";
 
@@ -98,9 +101,10 @@ class AuthControllerTest {
         RegisterRequest request = new RegisterRequest();
         request.setEmail(TEST_EMAIL);
         request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
         request.setNickname(TEST_NICKNAME);
 
-        doNothing().when(authService).register(anyString(), anyString(), anyString());
+        doNothing().when(authService).register(anyString(), anyString(), anyString(), anyString());
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -116,6 +120,25 @@ class AuthControllerTest {
     @DisplayName("POST /register → 缺少 email → 應回傳驗證錯誤")
     void register_missingEmail_shouldReturnValidationError() throws Exception {
         RegisterRequest request = new RegisterRequest();
+        request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
+        request.setNickname(TEST_NICKNAME);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 驗證：缺少 username 欄位時應回傳驗證錯誤回應。
+     */
+    @Test
+    @DisplayName("POST /register → 缺少 username → 應回傳驗證錯誤")
+    void register_missingUsername_shouldReturnValidationError() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
         request.setPassword(TEST_PASSWORD);
         request.setNickname(TEST_NICKNAME);
 
@@ -135,10 +158,11 @@ class AuthControllerTest {
         RegisterRequest request = new RegisterRequest();
         request.setEmail(TEST_EMAIL);
         request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
         request.setNickname(TEST_NICKNAME);
 
         doThrow(new BusinessException(UserErrorCode.EMAIL_DUPLICATED))
-                .when(authService).register(anyString(), anyString(), anyString());
+                .when(authService).register(anyString(), anyString(), anyString(), anyString());
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -171,6 +195,26 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.accessToken").value("mock.access.token"))
                 .andExpect(header().exists("Set-Cookie"));
+    }
+
+    /**
+     * 驗證：帳號鎖定時應回傳 ACCOUNT_LOCKED 錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /login → 帳號鎖定 → 應回傳 ACCOUNT_LOCKED 錯誤碼")
+    void login_accountLocked_shouldReturnAccountLockedError() throws Exception {
+        LoginRequest request = new LoginRequest();
+        request.setIdentifier(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+
+        when(authService.login(anyString(), anyString()))
+                .thenThrow(new BusinessException(UserErrorCode.ACCOUNT_LOCKED));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.ACCOUNT_LOCKED.getCode()));
     }
 
     /**
@@ -235,7 +279,7 @@ class AuthControllerTest {
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                 1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
 
-        doNothing().when(authService).logout(anyLong());
+        doNothing().when(authService).logout(anyLong(), any());
 
         mockMvc.perform(post("/api/v1/auth/logout")
                         .with(authentication(auth)))
@@ -313,6 +357,28 @@ class AuthControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    // =========================================================================
+    // POST /api/v1/auth/resend-verification 測試
+    // =========================================================================
+
+    /**
+     * 驗證：合法請求應回傳 200（不洩露信箱或帳號狀態）。
+     */
+    @Test
+    @DisplayName("POST /resend-verification → 合法請求 → 應回傳 200")
+    void resendVerification_validRequest_shouldReturn200() throws Exception {
+        ForgotPasswordRequest request = new ForgotPasswordRequest();
+        request.setEmail(TEST_EMAIL);
+
+        doNothing().when(authService).resendVerification(anyString());
+
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
     }
 
     // =========================================================================

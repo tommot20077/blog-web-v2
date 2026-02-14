@@ -66,7 +66,22 @@ public enum UserErrorCode implements IErrorCode {
     /**
      * 電子信箱尚未驗證
      */
-    EMAIL_NOT_VERIFIED("A0111", "請先驗證電子信箱")
+    EMAIL_NOT_VERIFIED("A0111", "請先驗證電子信箱"),
+
+    /**
+     * 用戶名已被使用
+     */
+    USERNAME_DUPLICATED("A0112", "該用戶名已被使用"),
+
+    /**
+     * 請求頻率超過限制
+     */
+    RATE_LIMIT_EXCEEDED("A0113", "請求過於頻繁，請稍後再試"),
+
+    /**
+     * 帳號因多次失敗嘗試被暫時鎖定
+     */
+    ACCOUNT_LOCKED("A0114", "帳號已因多次失敗嘗試被暫時鎖定，請15分鐘後再試")
 
     ;
 

@@ -22,9 +22,9 @@ public enum UserStatus {
     ACTIVE,
 
     /**
-     * 停權
+     * 封禁
      */
-    SUSPENDED,
+    BANNED,
 
     /**
      * 已刪除

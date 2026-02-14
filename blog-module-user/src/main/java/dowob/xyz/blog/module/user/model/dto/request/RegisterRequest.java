@@ -25,6 +25,11 @@ public class RegisterRequest {
     @Size(min = 6, max = 50, message = "密碼長度須為 6-50 字元")
     private String password;
 
+    @Schema(description = "用戶名", example = "yuan_dev")
+    @NotBlank(message = "用戶名不能為空")
+    @Size(min = 3, max = 50, message = "用戶名長度須為 3-50 字元")
+    private String username;
+
     @Schema(description = "暱稱", example = "Yuan")
     @NotBlank(message = "暱稱不能為空")
     private String nickname;

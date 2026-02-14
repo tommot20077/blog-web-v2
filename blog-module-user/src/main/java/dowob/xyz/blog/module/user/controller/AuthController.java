@@ -50,13 +50,13 @@ public class AuthController {
     /**
      * 用戶註冊
      *
-     * @param request 包含信箱、密碼與暱稱的註冊請求
+     * @param request 包含信箱、密碼、用戶名與暱稱的註冊請求
      * @return 成功回應
      */
     @Operation(summary = "用戶註冊", description = "使用信箱註冊新帳號，完成後需驗證電子信箱才可登入")
     @PostMapping("/register")
     public ApiResponse<Void> register(@Valid @RequestBody RegisterRequest request) {
-        authService.register(request.getEmail(), request.getPassword(), request.getNickname());
+        authService.register(request.getEmail(), request.getPassword(), request.getUsername(), request.getNickname());
         return ApiResponse.success();
     }
 
@@ -114,8 +114,8 @@ public class AuthController {
 
         Long userId = Long.parseLong(jwtService.getUserIdFromToken(refreshToken));
 
-        String storedToken = redisTemplate.opsForValue().get(RedisKeyConstant.getUserRefreshKey(userId));
-        if (!refreshToken.equals(storedToken)) {
+        Double score = redisTemplate.opsForZSet().score(RedisKeyConstant.getUserRefreshKey(userId), refreshToken);
+        if (score == null) {
             throw new BusinessException(UserErrorCode.TOKEN_INVALID);
         }
 
@@ -151,9 +151,11 @@ public class AuthController {
      */
     @Operation(summary = "用戶登出", description = "清除 Refresh Token，使 Cookie 失效")
     @PostMapping("/logout")
-    public ApiResponse<Void> logout(Authentication authentication, HttpServletResponse response) {
+    public ApiResponse<Void> logout(Authentication authentication,
+                                    @CookieValue(name = "refreshToken", required = false) String refreshToken,
+                                    HttpServletResponse response) {
         Long userId = (Long) authentication.getPrincipal();
-        authService.logout(userId);
+        authService.logout(userId, refreshToken);
 
         ResponseCookie clearCookie = ResponseCookie.from("refreshToken", "")
                 .httpOnly(true)
@@ -177,6 +179,19 @@ public class AuthController {
     @GetMapping("/verify-email")
     public ApiResponse<Void> verifyEmail(@RequestParam String token) {
         authService.verifyEmail(token);
+        return ApiResponse.success();
+    }
+
+    /**
+     * 重發驗證信
+     *
+     * @param request 包含電子信箱的請求
+     * @return 成功回應（無論信箱是否存在或帳號狀態，一律回傳成功以防資訊洩漏）
+     */
+    @Operation(summary = "重發驗證信", description = "重新發送電子信箱驗證信，每分鐘限 1 次，每日限 5 次")
+    @PostMapping("/resend-verification")
+    public ApiResponse<Void> resendVerification(@Valid @RequestBody ForgotPasswordRequest request) {
+        authService.resendVerification(request.getEmail());
         return ApiResponse.success();
     }
 

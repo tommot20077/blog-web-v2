@@ -35,6 +35,11 @@ public class User {
     private String email;
 
     /**
+     * 用戶名（登入識別符，唯一）
+     */
+    private String username;
+
+    /**
      * 密碼雜湊
      */
     @Column("password_hash")
@@ -55,6 +60,17 @@ public class User {
      * 個人簡介
      */
     private String bio;
+
+    /**
+     * 個人網站 URL
+     */
+    private String website;
+
+    /**
+     * 社群連結（JSONB 以 String 儲存）
+     */
+    @Column("social_links")
+    private String socialLinks;
 
     /**
      * 角色

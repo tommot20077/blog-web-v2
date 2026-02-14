@@ -41,7 +41,7 @@ public class UserController {
     public ApiResponse<Void> updateProfile(Authentication authentication,
                                             @Valid @RequestBody UpdateProfileRequest request) {
         Long userId = (Long) authentication.getPrincipal();
-        userService.updateProfile(userId, request.getNickname(), request.getBio());
+        userService.updateProfile(userId, request.getNickname(), request.getBio(), request.getWebsite(), request.getSocialLinks());
         return ApiResponse.success();
     }
 

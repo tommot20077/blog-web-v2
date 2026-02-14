@@ -128,12 +128,12 @@ class UserAuthServiceImplTest {
     }
 
     /**
-     * 驗證：SUSPENDED 用戶的 isAvailable 應為 false（停權帳號不可使用）。
+     * 驗證：BANNED 用戶的 isAvailable 應為 false（封禁帳號不可使用）。
      */
     @Test
-    @DisplayName("getUserDetail → SUSPENDED 用戶 → isAvailable 應為 false")
+    @DisplayName("getUserDetail → BANNED 用戶 → isAvailable 應為 false")
     void getUserDetail_suspendedUser_shouldBeDisabled() throws Exception {
-        User mockUser = buildUser(UserStatus.SUSPENDED, "v1");
+        User mockUser = buildUser(UserStatus.BANNED, "v1");
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
 
         UserAuthService.SimpleUserDetail detail = userAuthServiceImpl.getUserDetail(TEST_USER_ID);

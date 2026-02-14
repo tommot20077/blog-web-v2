@@ -37,14 +37,16 @@ public class UserService {
     /**
      * 更新個人資料
      *
-     * <p>更新暱稱與個人簡介；若新暱稱已被其他用戶使用，拋出 BusinessException。</p>
+     * <p>更新暱稱、個人簡介、個人網站與社群連結；若新暱稱已被其他用戶使用，拋出 BusinessException。</p>
      *
-     * @param userId   用戶 ID
-     * @param nickname 新的暱稱
-     * @param bio      新的個人簡介（可為 null）
+     * @param userId      用戶 ID
+     * @param nickname    新的暱稱
+     * @param bio         新的個人簡介（可為 null）
+     * @param website     個人網站 URL（可為 null）
+     * @param socialLinks 社群連結 JSON 字串（可為 null）
      */
     @Transactional
-    public void updateProfile(Long userId, String nickname, String bio) {
+    public void updateProfile(Long userId, String nickname, String bio, String website, String socialLinks) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
@@ -54,6 +56,8 @@ public class UserService {
 
         user.setNickname(nickname);
         user.setBio(bio);
+        user.setWebsite(website);
+        user.setSocialLinks(socialLinks);
         userRepository.save(user);
     }
 
