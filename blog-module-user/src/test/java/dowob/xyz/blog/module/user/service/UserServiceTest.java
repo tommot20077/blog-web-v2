@@ -21,9 +21,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -99,7 +97,6 @@ class UserServiceTest {
     void updateProfile_withWebsiteAndSocialLinks_shouldPersist() {
         User mockUser = buildActiveUser();
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
-        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
 
         userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, "簡介", "https://myblog.com", "{\"twitter\":\"@user\"}");
 

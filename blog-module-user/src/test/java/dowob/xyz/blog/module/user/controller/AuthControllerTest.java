@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
@@ -42,7 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>
  * 使用 {@code @WebMvcTest} 僅載入 Web 層，透過 MockMvc 驗證各端點的
  * HTTP 請求處理行為，包含請求驗證、回應結構、Cookie 設定與例外映射。
- * 所有服務依賴均以 {@code @MockBean} 替代，不觸及業務邏輯。
+ * 所有服務依賴均以 {@code @MockitoBean} 替代，不觸及業務邏輯。
  * </p>
  *
  * @author Yuan
@@ -61,19 +61,19 @@ class AuthControllerTest {
     private ObjectMapper objectMapper;
 
     /** Mock：認證業務服務 */
-    @MockBean
+    @MockitoBean
     private AuthService authService;
 
     /** Mock：JWT 服務（AuthController + JwtAuthenticationFilter 所需） */
-    @MockBean
+    @MockitoBean
     private JwtService jwtService;
 
     /** Mock：Redis 模板（AuthController refresh + JwtAuthenticationFilter 所需） */
-    @MockBean
+    @MockitoBean
     private StringRedisTemplate redisTemplate;
 
     /** Mock：用戶認證服務（JwtAuthenticationFilter 所需） */
-    @MockBean
+    @MockitoBean
     private UserAuthService userAuthService;
 
     /** 測試用電子信箱 */

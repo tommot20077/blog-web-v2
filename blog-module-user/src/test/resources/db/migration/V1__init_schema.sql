@@ -14,7 +14,7 @@ CREATE TABLE users
     avatar_url     VARCHAR(512),
     bio            TEXT,
     website        VARCHAR(255),
-    social_links   JSONB,
+    social_links TEXT,
     role           VARCHAR(20)  NOT NULL DEFAULT 'USER',
     status         VARCHAR(20)  NOT NULL,
     email_verified BOOLEAN      NOT NULL DEFAULT FALSE,

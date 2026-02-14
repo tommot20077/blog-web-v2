@@ -14,7 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
@@ -27,6 +27,7 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -38,7 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>
  * 使用 {@code @WebMvcTest} 僅載入 Web 層，透過 MockMvc 驗證各端點的
  * HTTP 請求處理行為，包含 Authentication 注入、請求驗證與業務例外映射。
- * 所有服務依賴均以 {@code @MockBean} 替代。
+ * 所有服務依賴均以 {@code @MockitoBean} 替代。
  * </p>
  *
  * @author Yuan
@@ -57,19 +58,19 @@ class UserControllerTest {
     private ObjectMapper objectMapper;
 
     /** Mock：用戶自助業務服務 */
-    @MockBean
+    @MockitoBean
     private UserService userService;
 
     /** Mock：JWT 服務（JwtAuthenticationFilter 所需） */
-    @MockBean
+    @MockitoBean
     private JwtService jwtService;
 
     /** Mock：Redis 模板（JwtAuthenticationFilter 所需） */
-    @MockBean
+    @MockitoBean
     private StringRedisTemplate redisTemplate;
 
     /** Mock：用戶認證服務（JwtAuthenticationFilter 所需） */
-    @MockBean
+    @MockitoBean
     private UserAuthService userAuthService;
 
     /** 測試用 Authentication（principal=1L，角色=ROLE_USER） */
@@ -92,7 +93,7 @@ class UserControllerTest {
         request.setNickname("newNickname");
         request.setBio("新的個人簡介");
 
-        doNothing().when(userService).updateProfile(anyLong(), anyString(), any());
+        doNothing().when(userService).updateProfile(anyLong(), anyString(), nullable(String.class), nullable(String.class), nullable(String.class));
 
         mockMvc.perform(patch("/api/v1/users/me/profile")
                         .with(authentication(USER_AUTH))
@@ -144,7 +145,7 @@ class UserControllerTest {
         request.setNickname("takenNickname");
 
         doThrow(new BusinessException(UserErrorCode.NICKNAME_DUPLICATED))
-                .when(userService).updateProfile(anyLong(), anyString(), any());
+                .when(userService).updateProfile(anyLong(), anyString(), nullable(String.class), nullable(String.class), nullable(String.class));
 
         mockMvc.perform(patch("/api/v1/users/me/profile")
                         .with(authentication(USER_AUTH))

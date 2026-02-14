@@ -6,7 +6,7 @@ import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -42,11 +42,11 @@ public abstract class AbstractIntegrationTest {
      *
      * <p>
      * 整合測試排除了 RabbitAutoConfiguration，但 RabbitMqConfig 仍需要 ConnectionFactory。
-     * 此 @MockBean 提供一個 Mockito mock，讓 Spring Context 可以正常啟動，
+     * 此 @MockitoBean 提供一個 Mockito mock，讓 Spring Context 可以正常啟動，
      * 而不需要真實的 RabbitMQ 連線。
      * </p>
      */
-    @MockBean
+    @MockitoBean
     protected ConnectionFactory connectionFactory;
 
     /**
@@ -57,7 +57,7 @@ public abstract class AbstractIntegrationTest {
      * 整合測試不需要真實 RabbitMQ，以 MockBean 替代。
      * </p>
      */
-    @MockBean
+    @MockitoBean
     protected RabbitTemplate rabbitTemplate;
 
     /**
@@ -68,7 +68,7 @@ public abstract class AbstractIntegrationTest {
      * 整合測試不設置 verification_tokens 資料表，以 MockBean 替代。
      * </p>
      */
-    @MockBean
+    @MockitoBean
     protected VerificationTokenRepository verificationTokenRepository;
 
     /**

@@ -17,7 +17,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -115,25 +115,25 @@ class ArticleControllerIT {
     /**
      * Mock RabbitMQ ConnectionFactory（避免啟動時找不到 Bean）
      */
-    @MockBean
+    @MockitoBean
     private ConnectionFactory connectionFactory;
 
     /**
      * Mock RabbitTemplate（避免 IT 真正發送 MQ 訊息）
      */
-    @MockBean
+    @MockitoBean
     private RabbitTemplate rabbitTemplate;
 
     /**
      * Mock UserFacade（避免依賴 User Module）
      */
-    @MockBean
+    @MockitoBean
     private UserFacade userFacade;
 
     /**
      * Mock UserAuthService（避免依賴 User Module 實作）
      */
-    @MockBean
+    @MockitoBean
     private UserAuthService userAuthService;
 
     /**
