@@ -3,6 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: minio
+  namespace: NAMESPACE_PLACEHOLDER
 spec:
   replicas: 1 # 運行一個副本
   selector:

@@ -169,7 +169,12 @@ delete_service() {
     fi
 
     print_warning "在環境 [$env] 中停止服務 [$service]..."
-    kubectl delete -f "$service_dir/" -n "$env" --ignore-not-found=true
+    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) | while read -r yaml_file; do
+        cat "$yaml_file" | \
+            sed "s/namespace: *default/namespace: $env/g" | \
+            sed "s/NAMESPACE_PLACEHOLDER/$env/g" | \
+            kubectl delete -n "$env" --ignore-not-found=true -f -
+    done
     print_success "服務 [$service] 在環境 [$env] 中已停止"
 }
 
@@ -197,7 +202,12 @@ down_service() {
     fi
 
     print_warning "完全刪除環境 [$env] 中的服務 [$service]..."
-    kubectl delete -f "$service_dir" -n "$env" --ignore-not-found=true
+    find "$service_dir" -maxdepth 1 \( -name "*.yaml" -o -name "*.yml" \) | while read -r yaml_file; do
+        cat "$yaml_file" | \
+            sed "s/namespace: *default/namespace: $env/g" | \
+            sed "s/NAMESPACE_PLACEHOLDER/$env/g" | \
+            kubectl delete -n "$env" --ignore-not-found=true -f -
+    done
     print_success "服務 [$service] 在環境 [$env] 中已完全刪除"
 }
 
