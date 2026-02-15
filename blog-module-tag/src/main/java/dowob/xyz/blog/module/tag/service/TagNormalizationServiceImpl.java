@@ -1,10 +1,13 @@
 package dowob.xyz.blog.module.tag.service;
 
 import com.github.houbb.opencc4j.util.ZhConverterUtil;
+import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.tag.model.Tag;
+import dowob.xyz.blog.module.tag.model.TagErrorCode;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
 import dowob.xyz.blog.module.tag.util.SlugUtils;
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -44,6 +47,9 @@ public class TagNormalizationServiceImpl implements TagNormalizationService {
 
     @Override
     public String normalize(String rawName) {
+        if (StringUtils.isBlank(rawName)) {
+            throw new BusinessException(TagErrorCode.TAG_INVALID_NAME);
+        }
         String trimmed = rawName.trim().toLowerCase();
         return ZhConverterUtil.toSimple(trimmed);
     }
@@ -52,6 +58,9 @@ public class TagNormalizationServiceImpl implements TagNormalizationService {
     public Tag findOrCreate(String rawName) {
         String normalized = normalize(rawName);
         String slug = SlugUtils.generateSlug(normalized);
+        if (StringUtils.isBlank(slug)) {
+            throw new BusinessException(TagErrorCode.TAG_INVALID_NAME);
+        }
 
         Optional<Tag> existing = tagRepository.findBySlug(slug);
         if (existing.isPresent()) {

@@ -15,7 +15,10 @@ import org.springframework.data.redis.core.ZSetOperations;
 
 import java.util.Optional;
 
+import dowob.xyz.blog.common.exception.BusinessException;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -85,6 +88,38 @@ class TagNormalizationServiceTest {
 
         assertThat(result).isSameAs(existingTag);
         verify(tagRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("normalize: 輸入為 null，應拋出 BusinessException")
+    void normalize_withNullInput_throwsBusinessException() {
+        assertThatThrownBy(() -> normalizationService.normalize(null))
+            .isInstanceOf(BusinessException.class)
+            .hasMessage("標籤名稱不能為空");
+    }
+
+    @Test
+    @DisplayName("normalize: 輸入為空白字串，應拋出 BusinessException")
+    void normalize_withBlankInput_throwsBusinessException() {
+        assertThatThrownBy(() -> normalizationService.normalize("   "))
+            .isInstanceOf(BusinessException.class)
+            .hasMessage("標籤名稱不能為空");
+    }
+
+    @Test
+    @DisplayName("findOrCreate: 輸入為空白，應拋出 BusinessException")
+    void findOrCreate_withBlankInput_throwsBusinessException() {
+        assertThatThrownBy(() -> normalizationService.findOrCreate(""))
+            .isInstanceOf(BusinessException.class)
+            .hasMessage("標籤名稱不能為空");
+    }
+
+    @Test
+    @DisplayName("findOrCreate: 輸入只含特殊符號導致 Slug 為空，應拋出 BusinessException")
+    void findOrCreate_withSpecialCharsOnly_throwsBusinessException() {
+        assertThatThrownBy(() -> normalizationService.findOrCreate("!!!"))
+            .isInstanceOf(BusinessException.class)
+            .hasMessage("標籤名稱不能為空");
     }
 
     @Test

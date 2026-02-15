@@ -29,7 +29,10 @@ public enum TagErrorCode implements IErrorCode {
     TAG_IN_USE("T003", "標籤正在使用中，無法刪除"),
 
     /** 標籤 Slug 已存在 */
-    TAG_SLUG_CONFLICT("T004", "標籤 Slug 已存在");
+    TAG_SLUG_CONFLICT("T004", "標籤 Slug 已存在"),
+
+    /** 標籤名稱不能為空或只含特殊符號 */
+    TAG_INVALID_NAME("T005", "標籤名稱不能為空");
 
     /**
      * 錯誤碼
