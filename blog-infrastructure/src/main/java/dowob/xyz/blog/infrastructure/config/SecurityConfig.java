@@ -50,10 +50,11 @@ public class SecurityConfig {
                         // 認證相關 API
                         .requestMatchers("/api/v1/auth/**").permitAll()
 
-                        // 公開的 GET 請求 (文章、標籤等) - 暫定，後續可細調
+                        // 公開的 GET 請求 (文章、標籤、檔案元資料等) - 暫定，後續可細調
                         .requestMatchers(HttpMethod.GET, "/api/v1/articles/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
 
                         // Admin 管理端點，僅 ADMIN 可存取
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
