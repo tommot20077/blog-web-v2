@@ -1,0 +1,46 @@
+package dowob.xyz.blog.module.user.consumer;
+
+import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.module.user.config.UserRabbitMqConfig;
+import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.support.AmqpHeaders;
+import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+
+/**
+ * 密碼重設訊息消費者
+ *
+ * <p>監聽 {@code user.password.reset} Queue，接收密碼重設請求後記錄重設連結（MVP 階段）。
+ * 採用 Manual Ack 模式，確保訊息成功處理後才回報 ACK。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Slf4j
+@Component
+public class PasswordResetConsumer {
+
+    /**
+     * 處理密碼重設請求事件
+     *
+     * <p>MVP 階段記錄重設連結至日誌；正式環境應改為呼叫 JavaMailSender 發送郵件。
+     * 處理完畢後呼叫 {@code channel.basicAck} 確認訊息。</p>
+     *
+     * @param event       密碼重設請求事件，包含用戶 ID、信箱與重設 Token
+     * @param channel     RabbitMQ Channel（用於 Manual Ack）
+     * @param deliveryTag 訊息投遞標籤
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @RabbitListener(queues = UserRabbitMqConfig.QUEUE_PASSWORD_RESET)
+    public void handlePasswordResetRequested(UserPasswordResetRequestedEvent event,
+                                              Channel channel,
+                                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        log.info("收到密碼重設請求 - userId={}, email={}", event.userId(), event.email());
+        log.info("密碼重設連結（開發模式）: /api/v1/auth/reset-password?token={}", event.resetToken());
+        channel.basicAck(deliveryTag, false);
+    }
+}
