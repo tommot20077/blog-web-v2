@@ -589,4 +589,70 @@ class ArticleControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.authorNickname").value("TestAuthor"));
     }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - 回應中包含 contentHtml 欄位（含 HTML 標籤）")
+    void getArticle_shouldReturnContentHtml() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+
+        /** 建立文章並發布 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("HTML 渲染驗證");
+        createRequest.setContent("這是 Markdown 段落內容。");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 匿名取得已發布文章，驗證 contentHtml 存在且含 HTML 標籤 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.contentHtml").exists())
+                .andExpect(jsonPath("$.data.contentHtml").value(org.hamcrest.Matchers.containsString("<")));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - 同 IP 連續兩次存取，viewCount 只增加 1")
+    void getArticle_shouldNotCountViewTwice_whenSameIpWithinWindow() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+
+        /** 建立文章並發布 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("防刷測試文章");
+        createRequest.setContent("防刷測試內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 第一次存取 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.viewCount").value(1));
+
+        /** 第二次存取（同 IP，5 分鐘內） → viewCount 應維持 1 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.viewCount").value(1));
+    }
 }

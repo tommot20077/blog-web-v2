@@ -17,7 +17,12 @@ import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.commonmark.node.Node;
+import org.commonmark.parser.Parser;
+import org.commonmark.renderer.html.HtmlRenderer;
+import org.commonmark.renderer.text.TextContentRenderer;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -64,6 +70,16 @@ public class ArticleServiceImpl implements ArticleService {
     private final RabbitTemplate rabbitTemplate;
 
     /**
+     * Redis 字串操作模板（用於瀏覽數防刷）
+     */
+    private final StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * Redis 防刷 Key 前綴
+     */
+    private static final String VIEW_KEY_PREFIX = "view:";
+
+    /**
      * 合法狀態轉換規則
      */
     private static final Map<ArticleStatus, Set<ArticleStatus>> VALID_TRANSITIONS = Map.of(
@@ -88,7 +104,8 @@ public class ArticleServiceImpl implements ArticleService {
         article.setAuthorId(authorId);
         article.setTitle(request.getTitle());
         article.setContent(request.getContent());
-        article.setSummary(request.getSummary());
+        article.setContentHtml(convertToHtml(request.getContent()));
+        article.setSummary(extractSummary(request.getContent(), request.getSummary()));
         article.setSlug(generateSlug(request.getTitle()));
         article.setStatus(request.getStatus() != null ? request.getStatus() : ArticleStatus.DRAFT);
         article.setViewCount(0L);
@@ -121,9 +138,11 @@ public class ArticleServiceImpl implements ArticleService {
         }
         if (request.getContent() != null) {
             article.setContent(request.getContent());
+            article.setContentHtml(convertToHtml(request.getContent()));
         }
         if (request.getSummary() != null) {
-            article.setSummary(request.getSummary());
+            String baseContent = request.getContent() != null ? request.getContent() : article.getContent();
+            article.setSummary(extractSummary(baseContent, request.getSummary()));
         }
         if (request.getStatus() != null) {
             validateStatusTransition(article.getStatus(), request.getStatus(), operatorRole);
@@ -155,14 +174,19 @@ public class ArticleServiceImpl implements ArticleService {
     /**
      * 根據 UUID 取得文章詳情
      *
+     * <p>
+     * 已發布文章同 IP 5 分鐘內只計算一次瀏覽數（Redis 防刷）。
+     * </p>
+     *
      * @param articleUuid 文章公開 UUID
      * @param viewerId    觀看者 ID（匿名為 null）
      * @param viewerRole  觀看者角色（匿名為 null）
+     * @param clientIp    客戶端 IP（用於防刷）
      * @return 文章完整資訊
      */
     @Override
     @Transactional
-    public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole) {
+    public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
         Article article = findByUuidOrThrow(articleUuid);
 
         boolean isAdmin = Role.ADMIN == viewerRole;
@@ -173,10 +197,14 @@ public class ArticleServiceImpl implements ArticleService {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }
 
-        /* 增加瀏覽次數（原子性） */
+        /** 增加瀏覽次數（Redis 防刷：同 IP 5 分鐘內只計算一次） */
         if (isPublished) {
-            articleMapper.incrementViewCount(article.getId());
-            article.setViewCount(article.getViewCount() + 1);
+            String viewKey = VIEW_KEY_PREFIX + article.getUuid() + ":" + clientIp;
+            if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(viewKey))) {
+                stringRedisTemplate.opsForValue().set(viewKey, "1", 5, TimeUnit.MINUTES);
+                articleMapper.incrementViewCount(article.getId());
+                article.setViewCount(article.getViewCount() + 1);
+            }
         }
 
         return toResponse(article);
@@ -372,6 +400,47 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
+     * 將 Markdown 轉換為 HTML 字串
+     *
+     * @param markdown Markdown 原文
+     * @return HTML 字串
+     */
+    private String convertToHtml(String markdown) {
+        if (markdown == null) {
+            return null;
+        }
+        Parser parser = Parser.builder().build();
+        Node document = parser.parse(markdown);
+        HtmlRenderer renderer = HtmlRenderer.builder().build();
+        return renderer.render(document);
+    }
+
+    /**
+     * 自動擷取摘要
+     *
+     * <p>
+     * summary 非空白時直接回傳；空白則從 Markdown 取純文字前 200 字。
+     * </p>
+     *
+     * @param content Markdown 內容
+     * @param summary 原始摘要（可能為空）
+     * @return 摘要字串
+     */
+    private String extractSummary(String content, String summary) {
+        if (summary != null && !summary.isBlank()) {
+            return summary;
+        }
+        if (content == null) {
+            return null;
+        }
+        Parser parser = Parser.builder().build();
+        Node document = parser.parse(content);
+        TextContentRenderer textRenderer = TextContentRenderer.builder().build();
+        String plainText = textRenderer.render(document);
+        return plainText.substring(0, Math.min(200, plainText.length()));
+    }
+
+    /**
      * 轉換文章實體為完整回應 DTO
      *
      * @param article 文章實體
@@ -382,6 +451,7 @@ public class ArticleServiceImpl implements ArticleService {
                 .uuid(article.getUuid())
                 .title(article.getTitle())
                 .content(article.getContent())
+                .contentHtml(article.getContentHtml())
                 .summary(article.getSummary())
                 .coverImageUrl(article.getCoverImageUrl())
                 .authorUuid(resolveAuthorUuid(article.getAuthorId()))

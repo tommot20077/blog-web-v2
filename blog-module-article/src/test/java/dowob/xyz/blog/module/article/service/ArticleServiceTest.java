@@ -24,6 +24,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
@@ -32,6 +34,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -66,6 +69,9 @@ class ArticleServiceTest {
 
     @Mock
     private RabbitTemplate rabbitTemplate;
+
+    @Mock
+    private StringRedisTemplate stringRedisTemplate;
 
     @InjectMocks
     private ArticleServiceImpl articleService;
@@ -165,6 +171,62 @@ class ArticleServiceTest {
             assertThat(response).isNotNull();
             assertThat(response.getAuthorNickname()).isNull();
         }
+
+        @Test
+        @DisplayName("正常：建立文章時應自動產生 contentHtml（含 <p> 標籤）")
+        void createArticle_shouldGenerateContentHtml() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("HTML 渲染測試");
+            request.setContent("這是一段文字");
+            request.setSummary("摘要");
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+
+            org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getContentHtml()).isNotNull();
+            assertThat(captor.getValue().getContentHtml()).contains("<p>");
+        }
+
+        @Test
+        @DisplayName("正常：summary 為空白時，自動截取 Markdown 純文字前 200 字")
+        void createArticle_shouldAutoGenerateSummary_whenSummaryIsBlank() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("自動摘要測試");
+            request.setContent("這是一段測試內容，用來驗證自動摘要功能。");
+            request.setSummary("");
+
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            String summary = captor.getValue().getSummary();
+            assertThat(summary).isNotNull();
+            assertThat(summary).doesNotContain("<p>");
+            assertThat(summary.length()).isLessThanOrEqualTo(200);
+        }
+
+        @Test
+        @DisplayName("正常：summary 非空白時保留原值")
+        void createArticle_shouldUseSummaryAsProvided_whenNotBlank() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("保留摘要測試");
+            request.setContent("文章內容");
+            request.setSummary("自訂摘要");
+
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getSummary()).isEqualTo("自訂摘要");
+        }
     }
 
     /**
@@ -249,6 +311,24 @@ class ArticleServiceTest {
             verify(articleRepository).save(articleCaptor.capture());
             assertThat(articleCaptor.getValue().getTitle()).isEqualTo("測試標題");
             assertThat(articleCaptor.getValue().getContent()).isEqualTo("測試內容");
+        }
+
+        @Test
+        @DisplayName("正常：content 更新後，contentHtml 應重新渲染（含 <p> 標籤）")
+        void updateArticle_shouldReRenderHtml_whenContentChanges() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setContent("更新後的 Markdown 內容");
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getContentHtml()).isNotNull();
+            assertThat(captor.getValue().getContentHtml()).contains("<p>");
         }
     }
 
@@ -346,12 +426,15 @@ class ArticleServiceTest {
     class GetArticleByUuidTests {
 
         @Test
-        @DisplayName("正常：PUBLISHED 文章，匿名用戶可存取")
+        @DisplayName("正常：PUBLISHED 文章，匿名用戶可存取，新 IP 增加瀏覽數")
         void getArticle_published_anonymous() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(stringRedisTemplate.hasKey(anyString())).thenReturn(false);
+            ValueOperations<String, String> valueOps = org.mockito.Mockito.mock(ValueOperations.class);
+            when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
 
-            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, null, null);
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
 
             assertThat(response).isNotNull();
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
@@ -364,7 +447,7 @@ class ArticleServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
-            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR);
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
 
             assertThat(response).isNotNull();
             verify(articleMapper, never()).incrementViewCount(anyLong());
@@ -376,7 +459,7 @@ class ArticleServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
-            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.ADMIN);
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.ADMIN, "127.0.0.1");
 
             assertThat(response).isNotNull();
         }
@@ -388,7 +471,7 @@ class ArticleServiceTest {
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
             assertThatThrownBy(
-                    () -> articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR))
+                    () -> articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR, "127.0.0.1"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
         }
@@ -399,7 +482,7 @@ class ArticleServiceTest {
             Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
-            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR);
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
 
             assertThat(response).isNotNull();
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
@@ -413,9 +496,36 @@ class ArticleServiceTest {
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
             assertThatThrownBy(
-                    () -> articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR))
+                    () -> articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR, "127.0.0.1"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+        }
+
+        @Test
+        @DisplayName("正常：新 IP 存取 PUBLISHED 文章，應增加瀏覽數並寫入 Redis")
+        void getArticleByUuid_shouldIncrementViewCount_whenNewIp() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(stringRedisTemplate.hasKey(anyString())).thenReturn(false);
+            ValueOperations<String, String> valueOps = org.mockito.Mockito.mock(ValueOperations.class);
+            when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
+
+            articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            verify(articleMapper).incrementViewCount(article.getId());
+            verify(valueOps).set(anyString(), eq("1"), eq(5L), eq(java.util.concurrent.TimeUnit.MINUTES));
+        }
+
+        @Test
+        @DisplayName("正常：相同 IP 5 分鐘內重複存取，不增加瀏覽數")
+        void getArticleByUuid_shouldNotIncrementViewCount_whenSameIpWithinWindow() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(stringRedisTemplate.hasKey(anyString())).thenReturn(true);
+
+            articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            verify(articleMapper, never()).incrementViewCount(anyLong());
         }
     }
 

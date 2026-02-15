@@ -57,14 +57,16 @@ public interface ArticleService {
      * <p>
      * 公開 API：已發布文章任何人可存取；其他狀態需作者本人或 ADMIN 權限。
      * 匿名存取（viewerId/viewerRole 為 null）只能取得 PUBLISHED 文章。
+     * clientIp 用於 Redis 防刷計數（同 IP 5 分鐘內只計算一次瀏覽）。
      * </p>
      *
      * @param articleUuid 文章公開 UUID
      * @param viewerId    觀看者 ID（匿名為 null）
      * @param viewerRole  觀看者角色（匿名為 null）
+     * @param clientIp    客戶端 IP（用於防刷）
      * @return 文章完整資訊
      */
-    ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole);
+    ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp);
 
     /**
      * 分頁取得已發布文章列表（公開）
