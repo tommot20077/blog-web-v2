@@ -9,6 +9,7 @@ import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.service.ArticleService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -65,14 +66,15 @@ public class ArticleController {
     /**
      * 取得單篇文章詳情
      *
-     * @param uuid 文章公開 UUID
+     * @param uuid    文章公開 UUID
+     * @param request HTTP 請求（用於取得客戶端 IP）
      * @return 文章完整資訊
      */
     @GetMapping("/{uuid}")
-    public ApiResponse<ArticleResponse> getArticle(@PathVariable UUID uuid) {
+    public ApiResponse<ArticleResponse> getArticle(@PathVariable UUID uuid, HttpServletRequest request) {
         Long viewerId = getCurrentUserId();
         Role viewerRole = getCurrentUserRole();
-        return ApiResponse.success(articleService.getArticleByUuid(uuid, viewerId, viewerRole));
+        return ApiResponse.success(articleService.getArticleByUuid(uuid, viewerId, viewerRole, getClientIp(request)));
     }
 
     /**
@@ -165,6 +167,22 @@ public class ArticleController {
         return ApiResponse.success(articleService.rejectArticle(operatorId, operatorRole, uuid, request.getReason()));
     }
 
+
+    /**
+     * 取得客戶端真實 IP
+     *
+     * <p>
+     * 搭配 {@code server.forward-headers-strategy=framework} 設定，
+     * Spring 框架會自動解析 X-Forwarded-For 並更新 RemoteAddr，
+     * 此處直接使用 RemoteAddr 可避免手動解析 header 被偽造的安全風險。
+     * </p>
+     *
+     * @param request HTTP 請求
+     * @return 客戶端 IP 字串
+     */
+    private String getClientIp(HttpServletRequest request) {
+        return request.getRemoteAddr();
+    }
 
     /**
      * 從 SecurityContextHolder 取得當前用戶 ID
