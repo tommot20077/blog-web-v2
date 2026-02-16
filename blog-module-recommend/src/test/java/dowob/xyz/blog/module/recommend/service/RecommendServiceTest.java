@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.module.recommend.model.dto.response.RecommendArticleResponse;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,15 +27,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.anySet;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * RecommendServiceImpl 單元測試
@@ -89,7 +83,8 @@ class RecommendServiceTest {
     class GetRelatedArticles {
 
         @Test
-        void 當文章不存在時回傳空列表() {
+        @DisplayName("當文章不存在時回傳空列表")
+        void whenArticleNotFound_returnsEmptyList() {
             when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID)).thenReturn(Optional.empty());
 
             List<RecommendArticleResponse> result = service.getRelatedArticles(ARTICLE_UUID, 5);
@@ -98,7 +93,8 @@ class RecommendServiceTest {
         }
 
         @Test
-        void 同標籤文章足夠時不查ES和最新文章() {
+        @DisplayName("同標籤文章足夠時不查 ES 和最新文章")
+        void whenTagArticlesSufficient_skipsEsAndRecentQuery() {
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1));
             UUID uuid1 = UUID.randomUUID();
             UUID uuid2 = UUID.randomUUID();
@@ -115,7 +111,8 @@ class RecommendServiceTest {
         }
 
         @Test
-        void 同標籤不足時補充ES相似文章() {
+        @DisplayName("同標籤不足時補充 ES 相似文章")
+        void whenTagArticlesInsufficient_supplementsWithEsSimilar() {
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1));
             UUID tagArticleUuid = UUID.randomUUID();
             UUID esUuid = UUID.randomUUID();
@@ -136,7 +133,27 @@ class RecommendServiceTest {
         }
 
         @Test
-        void 仍不足時補充最新文章() {
+        @DisplayName("ES 查詢傳入 remaining 乘以 2 而非完整 limit")
+        void esQuery_receivesRemainingTimesTwo() {
+            /** limit=5，第一層取得1篇，remaining=4，ES 應被呼叫時傳入 4*2=8 */
+            ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1));
+            UUID tagUuid = UUID.randomUUID();
+
+            when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID)).thenReturn(Optional.of(basicInfo));
+            when(articleFacade.getArticlesByTagIds(anyList(), eq(ARTICLE_UUID), anyInt()))
+                    .thenReturn(List.of(summary(tagUuid, "TagA")));
+            when(searchFacade.findSimilarArticles(eq(ARTICLE_UUID), anyInt()))
+                    .thenReturn(Collections.emptyList());
+
+            service.getRelatedArticles(ARTICLE_UUID, 5);
+
+            /** remaining = 5 - 1 = 4, 預期傳入 4 * 2 = 8 */
+            verify(searchFacade).findSimilarArticles(eq(ARTICLE_UUID), eq(8));
+        }
+
+        @Test
+        @DisplayName("仍不足時補充最新文章")
+        void whenStillInsufficient_supplementsWithRecentArticles() {
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, Collections.emptyList());
             UUID recentUuid = UUID.randomUUID();
 
@@ -153,7 +170,8 @@ class RecommendServiceTest {
         }
 
         @Test
-        void 結果去重不重複出現相同文章() {
+        @DisplayName("結果去重不重複出現相同文章")
+        void deduplicatesResultsSoSameArticleAppearsOnce() {
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1));
             UUID sharedUuid = UUID.randomUUID();
 
@@ -172,7 +190,8 @@ class RecommendServiceTest {
         }
 
         @Test
-        void 快取命中時直接回傳快取結果() throws Exception {
+        @DisplayName("快取命中時直接回傳快取結果")
+        void whenCacheHit_returnsCachedResult() throws Exception {
             ObjectMapper mapper = new ObjectMapper();
             mapper.registerModule(new JavaTimeModule());
             List<RecommendArticleResponse> cached = List.of(
@@ -195,7 +214,8 @@ class RecommendServiceTest {
     class GetTrendingArticles {
 
         @Test
-        void ZSet為空時回傳空列表() {
+        @DisplayName("ZSet 為空時回傳空列表")
+        void whenZSetEmpty_returnsEmptyList() {
             when(zSetOperations.reverseRange(anyString(), eq(0L), eq(9L)))
                     .thenReturn(Collections.emptySet());
 
@@ -205,7 +225,8 @@ class RecommendServiceTest {
         }
 
         @Test
-        void 正常回傳ZSet中的熱門文章() {
+        @DisplayName("正常回傳 ZSet 中的熱門文章")
+        void returnsTrendingArticlesFromZSet() {
             UUID uuid1 = UUID.randomUUID();
             when(zSetOperations.reverseRange(
                     eq(RecommendServiceImpl.TRENDING_KEY_PREFIX + "7d"), eq(0L), eq(4L)))

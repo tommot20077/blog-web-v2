@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.recommend.job;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,12 +21,8 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anySet;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * TrendingRefreshJob 單元測試
@@ -60,7 +57,8 @@ class TrendingRefreshJobTest {
     class RefreshPeriod {
 
         @Test
-        void 無文章時不更新Redis() {
+        @DisplayName("無文章時不更新 Redis")
+        void whenNoArticles_skipsRedisUpdate() {
             when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of());
 
             job.refreshPeriod("7d", 7L, 4L);
@@ -70,7 +68,8 @@ class TrendingRefreshJobTest {
         }
 
         @Test
-        void 有文章時寫入ZSet() {
+        @DisplayName("有文章時使用 tmp key 並 RENAME 原子切換")
+        void whenArticlesExist_usesTmpKeyAndRenamesAtomically() {
             UUID uuid = UUID.randomUUID();
             ArticleTrendingData data = new ArticleTrendingData(
                     uuid, 100L, 10L, LocalDateTime.now().minusDays(1));
@@ -79,7 +78,27 @@ class TrendingRefreshJobTest {
 
             job.refreshPeriod("7d", 7L, 4L);
 
-            verify(stringRedisTemplate).delete("recommend:trending:7d");
+            String tmpKey = "recommend:trending:7d:tmp";
+            String key = "recommend:trending:7d";
+
+            /** 應先清除 tmp key，寫入 tmp key，最後 rename 到正式 key */
+            org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(stringRedisTemplate, zSetOperations);
+            inOrder.verify(stringRedisTemplate).delete(tmpKey);
+            inOrder.verify(zSetOperations).add(eq(tmpKey), anySet());
+            inOrder.verify(stringRedisTemplate).rename(tmpKey, key);
+        }
+
+        @Test
+        @DisplayName("有文章時寫入 ZSet")
+        void whenArticlesExist_writesToZSet() {
+            UUID uuid = UUID.randomUUID();
+            ArticleTrendingData data = new ArticleTrendingData(
+                    uuid, 100L, 10L, LocalDateTime.now().minusDays(1));
+
+            when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of(data));
+
+            job.refreshPeriod("7d", 7L, 4L);
+
             @SuppressWarnings("unchecked")
             ArgumentCaptor<Set<ZSetOperations.TypedTuple<String>>> captor =
                     ArgumentCaptor.forClass(Set.class);
@@ -93,7 +112,8 @@ class TrendingRefreshJobTest {
         }
 
         @Test
-        void 較新文章分數高於較舊文章() {
+        @DisplayName("較新文章分數高於較舊文章")
+        void newerArticleHasHigherScoreThanOlder() {
             UUID newUuid = UUID.randomUUID();
             UUID oldUuid = UUID.randomUUID();
 
@@ -126,7 +146,8 @@ class TrendingRefreshJobTest {
         }
 
         @Test
-        void 按讚多的文章分數加成正確() {
+        @DisplayName("按讚多的文章分數加成正確")
+        void articleWithMoreLikesGetsHigherScore() {
             UUID highLikeUuid = UUID.randomUUID();
             UUID lowLikeUuid = UUID.randomUUID();
 

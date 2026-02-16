@@ -37,6 +37,11 @@ public class SearchFacadeImpl implements SearchFacade {
     private final ElasticsearchOperations elasticsearchOperations;
 
     /**
+     * 文章索引名稱，與 {@link dowob.xyz.blog.module.search.document.ArticleDocument} 宣告一致
+     */
+    private static final String ARTICLE_INDEX = "blog_articles";
+
+    /**
      * {@inheritDoc}
      *
      * <p>
@@ -51,7 +56,7 @@ public class SearchFacadeImpl implements SearchFacade {
             NativeQuery query = NativeQuery.builder()
                     .withQuery(q -> q.moreLikeThis(mlt -> mlt
                             .like(l -> l.document(d -> d
-                                    .index("articles")
+                                    .index(ARTICLE_INDEX)
                                     .id(articleUuid.toString())
                             ))
                             .fields("title", "summary", "content")

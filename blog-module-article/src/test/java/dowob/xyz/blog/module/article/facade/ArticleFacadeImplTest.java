@@ -12,6 +12,7 @@ import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,13 +28,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * ArticleFacadeImpl 單元測試
@@ -84,7 +80,8 @@ class ArticleFacadeImplTest {
     class GetPublishedArticleBasicInfo {
 
         @Test
-        void 文章不存在時回傳empty() {
+        @DisplayName("文章不存在時回傳 empty")
+        void whenArticleNotFound_returnsEmpty() {
             when(recommendMapper.findPublishedIdByUuid(ARTICLE_UUID)).thenReturn(null);
 
             Optional<ArticleBasicInfo> result = facade.getPublishedArticleBasicInfo(ARTICLE_UUID);
@@ -94,7 +91,8 @@ class ArticleFacadeImplTest {
         }
 
         @Test
-        void 文章存在時回傳基本資訊含標籤() {
+        @DisplayName("文章存在時回傳基本資訊含標籤")
+        void whenArticleExists_returnsBasicInfoWithTags() {
             when(recommendMapper.findPublishedIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_ID);
             when(recommendMapper.findTagIdsByArticleId(ARTICLE_ID)).thenReturn(List.of(1L, 2L));
 
@@ -110,7 +108,8 @@ class ArticleFacadeImplTest {
     class GetArticlesByTagIds {
 
         @Test
-        void tagIds為空時不查詢直接回傳空列表() {
+        @DisplayName("tagIds 為空時不查詢直接回傳空列表")
+        void whenTagIdsEmpty_skipsQueryAndReturnsEmptyList() {
             List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(
                     Collections.emptyList(), ARTICLE_UUID, 5);
 
@@ -119,7 +118,8 @@ class ArticleFacadeImplTest {
         }
 
         @Test
-        void 正常查詢並組裝標籤名稱() {
+        @DisplayName("正常查詢並組裝標籤名稱")
+        void queriesAndAssemblesTagNames() {
             ArticleSummaryRow row = row(ARTICLE_ID, ARTICLE_UUID, "Test");
             ArticleTagRow tagRow = new ArticleTagRow();
             tagRow.setArticleId(ARTICLE_ID);
@@ -142,7 +142,8 @@ class ArticleFacadeImplTest {
     class GetPublishedArticlesByUuids {
 
         @Test
-        void uuids為空時不查詢直接回傳空列表() {
+        @DisplayName("uuids 為空時不查詢直接回傳空列表")
+        void whenUuidsEmpty_skipsQueryAndReturnsEmptyList() {
             List<ArticleSummaryInfo> result = facade.getPublishedArticlesByUuids(Collections.emptyList());
 
             assertThat(result).isEmpty();
@@ -154,7 +155,8 @@ class ArticleFacadeImplTest {
     class FindAllPublishedForIndex {
 
         @Test
-        void 正確呼叫Mapper並組裝索引資料() {
+        @DisplayName("正確呼叫 Mapper 並組裝索引資料")
+        void callsMapperAndAssemblesIndexData() {
             Article article = new Article();
             article.setId(ARTICLE_ID);
             article.setUuid(ARTICLE_UUID);
@@ -180,7 +182,8 @@ class ArticleFacadeImplTest {
         }
 
         @Test
-        void 無已發布文章時回傳空列表() {
+        @DisplayName("無已發布文章時回傳空列表")
+        void whenNoPublishedArticles_returnsEmptyList() {
             when(articleMapper.findAllPublished()).thenReturn(List.of());
 
             assertThat(facade.findAllPublishedForIndex()).isEmpty();
@@ -191,7 +194,8 @@ class ArticleFacadeImplTest {
     class GetArticlesPublishedAfter {
 
         @Test
-        void 正確呼叫Mapper並回傳結果() {
+        @DisplayName("正確呼叫 Mapper 並回傳結果")
+        void callsMapperAndReturnsResult() {
             LocalDateTime since = LocalDateTime.now().minusDays(7);
             ArticleTrendingData data = new ArticleTrendingData(ARTICLE_UUID, 100L, 10L, since);
             when(recommendMapper.findPublishedAfter(since)).thenReturn(List.of(data));

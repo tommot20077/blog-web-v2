@@ -61,8 +61,8 @@ public class ArticlePublishedConsumer {
             stringRedisTemplate.delete(cacheKey);
             log.debug("已清除文章推薦快取，articleUuid={}", event.articleUuid());
             channel.basicAck(deliveryTag, false);
-        } catch (IOException e) {
-            log.error("ACK 失敗，訊息送往 DLQ，articleUuid={}", event.articleUuid(), e);
+        } catch (Exception e) {
+            log.error("處理文章發布事件失敗，訊息送往 DLQ，articleUuid={}", event.articleUuid(), e);
             try {
                 channel.basicNack(deliveryTag, false, false);
             } catch (IOException nackException) {
