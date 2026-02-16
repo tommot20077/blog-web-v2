@@ -6,6 +6,7 @@ import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -65,15 +66,20 @@ public class RecommendRabbitMqConfig {
      * <p>
      * 僅推薦模組的 Consumer 使用此工廠，以實現精確的訊息確認控制。
      * 其他模組（Tag、File 等）維持預設 AUTO ACK 模式。
+     * 必須注入 {@link MessageConverter} 以確保 JSON 格式的訊息能正確反序列化。
      * </p>
      *
      * @param connectionFactory RabbitMQ 連線工廠
+     * @param messageConverter  訊息轉換器（JSON 反序列化用）
      * @return 手動 ACK 模式的容器工廠
      */
     @Bean(name = MANUAL_ACK_CONTAINER_FACTORY)
-    public SimpleRabbitListenerContainerFactory manualAckContainerFactory(ConnectionFactory connectionFactory) {
+    public SimpleRabbitListenerContainerFactory manualAckContainerFactory(
+            ConnectionFactory connectionFactory,
+            MessageConverter messageConverter) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
         factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(messageConverter);
         factory.setAcknowledgeMode(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
         return factory;
     }

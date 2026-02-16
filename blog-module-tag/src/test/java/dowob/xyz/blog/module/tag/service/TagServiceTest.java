@@ -88,6 +88,20 @@ class TagServiceTest {
     }
 
     @Test
+    @DisplayName("getHotTags: limit <= 0 時回傳空列表")
+    void getHotTags_limitZero_returnsEmpty() {
+        List<Tag> result = tagService.getHotTags(0);
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("getHotTags: limit 負數時回傳空列表")
+    void getHotTags_limitNegative_returnsEmpty() {
+        List<Tag> result = tagService.getHotTags(-1);
+        assertThat(result).isEmpty();
+    }
+
+    @Test
     @DisplayName("getHotTags: cache hit returns from Redis")
     @SuppressWarnings("unchecked")
     void getHotTags_cacheHit_returnsFromRedis() {

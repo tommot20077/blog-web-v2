@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -71,6 +72,18 @@ class ArticlePublishedConsumerTest {
     @DisplayName("ACK 失敗時呼叫 basicNack 避免訊息卡住")
     void handleArticlePublished_ACK失敗_呼叫basicNack() throws IOException {
         doThrow(new IOException("ACK failed")).when(channel).basicAck(DELIVERY_TAG, false);
+
+        consumer.handleArticlePublished(event(), channel, DELIVERY_TAG);
+
+        verify(channel).basicNack(eq(DELIVERY_TAG), eq(false), eq(false));
+    }
+
+    @Test
+    @DisplayName("Redis 拋出 RuntimeException 時仍應呼叫 basicNack")
+    void handleArticlePublished_Redis拋出RuntimeException_呼叫basicNack() throws IOException {
+        org.springframework.data.redis.RedisConnectionFailureException redisEx =
+                new org.springframework.data.redis.RedisConnectionFailureException("連線失敗");
+        doThrow(redisEx).when(stringRedisTemplate).delete(anyString());
 
         consumer.handleArticlePublished(event(), channel, DELIVERY_TAG);
 

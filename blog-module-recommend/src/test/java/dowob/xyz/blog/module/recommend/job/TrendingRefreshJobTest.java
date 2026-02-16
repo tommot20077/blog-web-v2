@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -70,6 +71,26 @@ class TrendingRefreshJobTest {
         }
 
         @Test
+        void 有文章時使用tmp_key並RENAME原子切換() {
+            UUID uuid = UUID.randomUUID();
+            ArticleTrendingData data = new ArticleTrendingData(
+                    uuid, 100L, 10L, LocalDateTime.now().minusDays(1));
+
+            when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of(data));
+
+            job.refreshPeriod("7d", 7L, 4L);
+
+            String tmpKey = "recommend:trending:7d:tmp";
+            String key = "recommend:trending:7d";
+
+            /** 應先清除 tmp key，寫入 tmp key，最後 rename 到正式 key */
+            org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(stringRedisTemplate, zSetOperations);
+            inOrder.verify(stringRedisTemplate).delete(tmpKey);
+            inOrder.verify(zSetOperations).add(eq(tmpKey), anySet());
+            inOrder.verify(stringRedisTemplate).rename(tmpKey, key);
+        }
+
+        @Test
         void 有文章時寫入ZSet() {
             UUID uuid = UUID.randomUUID();
             ArticleTrendingData data = new ArticleTrendingData(
@@ -79,7 +100,6 @@ class TrendingRefreshJobTest {
 
             job.refreshPeriod("7d", 7L, 4L);
 
-            verify(stringRedisTemplate).delete("recommend:trending:7d");
             @SuppressWarnings("unchecked")
             ArgumentCaptor<Set<ZSetOperations.TypedTuple<String>>> captor =
                     ArgumentCaptor.forClass(Set.class);

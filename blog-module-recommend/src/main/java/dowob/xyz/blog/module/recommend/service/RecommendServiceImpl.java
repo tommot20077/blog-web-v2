@@ -168,7 +168,7 @@ public class RecommendServiceImpl implements RecommendService {
         /** 第二層：ES more_like_this 相似文章 */
         if (results.size() < limit) {
             int remaining = limit - results.size();
-            List<UUID> similarUuids = searchFacade.findSimilarArticles(articleUuid, limit);
+            List<UUID> similarUuids = searchFacade.findSimilarArticles(articleUuid, remaining * 2);
             List<UUID> newUuids = similarUuids.stream()
                     .filter(u -> !seenUuids.contains(u))
                     .limit(remaining)

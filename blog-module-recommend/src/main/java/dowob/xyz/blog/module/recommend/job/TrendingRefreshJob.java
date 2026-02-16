@@ -101,8 +101,10 @@ public class TrendingRefreshJob {
             tuples.add(ZSetOperations.TypedTuple.of(data.uuid().toString(), score));
         }
 
-        stringRedisTemplate.delete(key);
-        stringRedisTemplate.opsForZSet().add(key, tuples);
+        String tmpKey = key + ":tmp";
+        stringRedisTemplate.delete(tmpKey);
+        stringRedisTemplate.opsForZSet().add(tmpKey, tuples);
+        stringRedisTemplate.rename(tmpKey, key);
         log.debug("熱門排行更新完成，period={}，文章數={}", period, articles.size());
     }
 }

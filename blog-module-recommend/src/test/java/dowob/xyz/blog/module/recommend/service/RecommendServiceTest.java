@@ -136,6 +136,24 @@ class RecommendServiceTest {
         }
 
         @Test
+        void ES查詢傳入remaining乘以2而非完整limit() {
+            /** limit=5，第一層取得1篇，remaining=4，ES 應被呼叫時傳入 4*2=8 */
+            ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1));
+            UUID tagUuid = UUID.randomUUID();
+
+            when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID)).thenReturn(Optional.of(basicInfo));
+            when(articleFacade.getArticlesByTagIds(anyList(), eq(ARTICLE_UUID), anyInt()))
+                    .thenReturn(List.of(summary(tagUuid, "TagA")));
+            when(searchFacade.findSimilarArticles(eq(ARTICLE_UUID), anyInt()))
+                    .thenReturn(Collections.emptyList());
+
+            service.getRelatedArticles(ARTICLE_UUID, 5);
+
+            /** remaining = 5 - 1 = 4, 預期傳入 4 * 2 = 8 */
+            verify(searchFacade).findSimilarArticles(eq(ARTICLE_UUID), eq(8));
+        }
+
+        @Test
         void 仍不足時補充最新文章() {
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, Collections.emptyList());
             UUID recentUuid = UUID.randomUUID();
