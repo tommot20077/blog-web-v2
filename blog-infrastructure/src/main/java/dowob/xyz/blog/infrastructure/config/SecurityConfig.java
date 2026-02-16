@@ -56,6 +56,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
 
+                        // 搜尋：全文搜尋與建議公開，歷史需認證
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
+
                         // Admin 管理端點，僅 ADMIN 可存取
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
