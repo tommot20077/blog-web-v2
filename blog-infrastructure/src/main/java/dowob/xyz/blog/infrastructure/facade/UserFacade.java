@@ -31,4 +31,12 @@ public interface UserFacade {
      * @return 用戶暱稱，若不存在則回傳 empty
      */
     Optional<String> getUserNicknameById(Long userId);
+
+    /**
+     * 根據用戶內部 ID 取得帳號名稱（username）
+     *
+     * @param userId 用戶資料庫主鍵
+     * @return 用戶帳號，若不存在則回傳 empty
+     */
+    Optional<String> getUserUsernameById(Long userId);
 }

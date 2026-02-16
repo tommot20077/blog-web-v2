@@ -50,4 +50,16 @@ public class UserFacadeImpl implements UserFacade {
         return userRepository.findById(userId)
                 .map(user -> user.getNickname());
     }
+
+    /**
+     * 根據用戶內部 ID 取得帳號名稱
+     *
+     * @param userId 用戶資料庫主鍵
+     * @return 用戶帳號，若不存在則回傳 empty
+     */
+    @Override
+    public Optional<String> getUserUsernameById(Long userId) {
+        return userRepository.findById(userId)
+                .map(user -> user.getUsername());
+    }
 }

@@ -3,11 +3,13 @@ package dowob.xyz.blog.common.exception;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.stream.Collectors;
 
@@ -68,6 +70,26 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public void handleAccessDeniedException(AccessDeniedException e) throws AccessDeniedException {
         throw e;
+    }
+
+    /**
+     * 處理 ResponseStatusException，保留原始 HTTP 狀態碼
+     *
+     * <p>
+     * {@link ResponseStatusException} 攜帶明確的 HTTP 狀態（如 404、400），
+     * 必須在 catch-all {@code Exception} handler 之前處理，
+     * 以確保正確的 HTTP 狀態碼被回傳給客戶端。
+     * </p>
+     *
+     * @param e ResponseStatusException 實例
+     * @return 包含錯誤訊息的回應，HTTP 狀態碼由例外決定
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiResponse<Void>> handleResponseStatusException(ResponseStatusException e) {
+        log.warn("ResponseStatusException: {} {}", e.getStatusCode(), e.getReason());
+        return ResponseEntity
+                .status(e.getStatusCode())
+                .body(ApiResponse.failed(String.valueOf(e.getStatusCode().value()), e.getReason()));
     }
 
     /**
