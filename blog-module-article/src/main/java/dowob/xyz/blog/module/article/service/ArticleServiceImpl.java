@@ -8,6 +8,7 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
+import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -22,6 +23,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +65,11 @@ public class ArticleServiceImpl implements ArticleService {
      * RabbitMQ 訊息發送模板
      */
     private final RabbitTemplate rabbitTemplate;
+
+    /**
+     * 瀏覽計數服務（讀取 DB + Redis 合計瀏覽數）
+     */
+    private final ViewCountService viewCountService;
 
     /**
      * 合法狀態轉換規則
@@ -174,10 +181,10 @@ public class ArticleServiceImpl implements ArticleService {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }
 
-        /* 增加瀏覽次數（原子性） */
+        /** 發送瀏覽事件至 MQ（ViewCountConsumer 接收後增加 Redis 計數，ViewCountFlushJob 批次寫入 DB） */
         if (isPublished) {
-            articleMapper.incrementViewCount(article.getId());
-            article.setViewCount(article.getViewCount() + 1);
+            ArticleViewedEvent event = new ArticleViewedEvent(article.getUuid(), Instant.now());
+            rabbitTemplate.convertAndSend(ArticleRabbitMqConfig.EXCHANGE, ArticleRabbitMqConfig.ROUTING_KEY_VIEWED, event);
         }
 
         return toResponse(article);
@@ -424,7 +431,7 @@ public class ArticleServiceImpl implements ArticleService {
                 .authorUuid(resolveAuthorUuid(article.getAuthorId()))
                 .authorNickname(resolveAuthorNickname(article.getAuthorId()))
                 .status(article.getStatus())
-                .viewCount(article.getViewCount())
+                .viewCount(viewCountService.getViewCount(article.getUuid()))
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
                 .build();

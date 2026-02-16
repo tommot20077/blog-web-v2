@@ -27,7 +27,9 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
+import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.event.TagInfo;
+import dowob.xyz.blog.module.article.service.ViewCountService;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -69,6 +71,9 @@ class ArticleServiceTest {
     @Mock
     private RabbitTemplate rabbitTemplate;
 
+    @Mock
+    private ViewCountService viewCountService;
+
     @InjectMocks
     private ArticleServiceImpl articleService;
 
@@ -106,6 +111,7 @@ class ArticleServiceTest {
         when(userFacade.getUserUuidById(AUTHOR_ID)).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(AUTHOR_ID)).thenReturn(Optional.of("TestAuthor"));
         when(userFacade.getUserUsernameById(AUTHOR_ID)).thenReturn(Optional.of("testuser"));
+        when(viewCountService.getViewCount(any())).thenReturn(0L);
     }
 
     /**
@@ -388,7 +394,7 @@ class ArticleServiceTest {
 
             assertThat(response).isNotNull();
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
-            verify(articleMapper).incrementViewCount(article.getId());
+            verify(rabbitTemplate).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE), eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
         }
 
         @Test
@@ -400,7 +406,7 @@ class ArticleServiceTest {
             ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR);
 
             assertThat(response).isNotNull();
-            verify(articleMapper, never()).incrementViewCount(anyLong());
+            verify(rabbitTemplate, never()).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE), eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
         }
 
         @Test
@@ -436,7 +442,7 @@ class ArticleServiceTest {
 
             assertThat(response).isNotNull();
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
-            verify(articleMapper, never()).incrementViewCount(anyLong());
+            verify(rabbitTemplate, never()).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE), eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
         }
 
         @Test

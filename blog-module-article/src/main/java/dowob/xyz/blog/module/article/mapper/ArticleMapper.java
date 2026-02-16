@@ -11,6 +11,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 文章 MyBatis Mapper
@@ -84,14 +85,6 @@ public interface ArticleMapper {
     long countByAuthorId(@Param("authorId") Long authorId);
 
     /**
-     * 原子性增加瀏覽次數（+1）
-     *
-     * @param id 文章資料庫主鍵
-     */
-    @Update("UPDATE articles SET view_count = view_count + 1 WHERE id = #{id}")
-    void incrementViewCount(@Param("id") Long id);
-
-    /**
      * 分頁查詢待審文章（按提交時間升冪，供管理員審核）
      *
      * @param offset 偏移量
@@ -139,4 +132,22 @@ public interface ArticleMapper {
      */
     @Select("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC")
     List<Article> findAllPublished();
+
+    /**
+     * 根據文章公開 UUID 查詢 DB 中儲存的瀏覽計數
+     *
+     * @param uuid 文章公開 UUID
+     * @return 瀏覽計數，若文章不存在則回傳 null
+     */
+    @Select("SELECT view_count FROM articles WHERE uuid = #{uuid}::uuid")
+    Long findViewCountByUuid(@Param("uuid") UUID uuid);
+
+    /**
+     * 以批次增量更新文章瀏覽計數（原子性加法）
+     *
+     * @param uuid  文章公開 UUID
+     * @param delta 要增加的數量
+     */
+    @Update("UPDATE articles SET view_count = view_count + #{delta} WHERE uuid = #{uuid}::uuid")
+    void incrementViewCountBatch(@Param("uuid") UUID uuid, @Param("delta") long delta);
 }

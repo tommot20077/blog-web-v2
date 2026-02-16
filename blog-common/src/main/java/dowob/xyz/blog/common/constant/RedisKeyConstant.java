@@ -86,6 +86,13 @@ public class RedisKeyConstant {
     }
 
     /**
+     * 文章瀏覽計數暫存 Key 前綴 (String)
+     * Key: article:views:{articleUuid}
+     * <p>用於批次累積瀏覽增量，由 {@code ViewCountFlushJob} 定期刷入 DB。</p>
+     */
+    public static final String ARTICLE_VIEWS_PREFIX = "article:views:";
+
+    /**
      * 登入失敗計數 Key 前綴 (String)
      * Key: login:fail:{userId}
      */
