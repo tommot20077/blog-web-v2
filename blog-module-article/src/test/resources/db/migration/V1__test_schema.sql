@@ -47,6 +47,26 @@ CREATE INDEX idx_articles_author_id ON articles (author_id);
 CREATE INDEX idx_articles_status ON articles (status);
 CREATE INDEX idx_articles_created_at ON articles (created_at DESC);
 
+-- 標籤表（ArticleMapper.findTagsByArticleId 查詢依賴）
+CREATE TABLE tags
+(
+    id          BIGSERIAL PRIMARY KEY,
+    name        VARCHAR(50)  NOT NULL UNIQUE,
+    slug        VARCHAR(60)  NOT NULL UNIQUE,
+    description VARCHAR(200),
+    color       VARCHAR(7),
+    usage_count INTEGER      NOT NULL DEFAULT 0,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 文章標籤關聯表
+CREATE TABLE article_tags
+(
+    article_id BIGINT REFERENCES articles (id) ON DELETE CASCADE,
+    tag_id     BIGINT REFERENCES tags (id) ON DELETE CASCADE,
+    PRIMARY KEY (article_id, tag_id)
+);
+
 -- 測試用預設作者
 INSERT INTO users (id, uuid, email, password_hash, nickname, role, status, email_verified)
 VALUES (1, uuid_generate_v4(), 'author@test.com', '$2a$10$dummy', 'TestAuthor', 'AUTHOR', 'ACTIVE', TRUE);

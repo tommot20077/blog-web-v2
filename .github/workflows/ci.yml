@@ -23,10 +23,10 @@ jobs:
           cache: maven
 
       - name: 執行所有測試
-        run: ./mvnw test -pl blog-infrastructure,blog-module-user,blog-module-article -am --no-transfer-progress
+        run: ./mvnw test --fail-at-end -T 2C --no-transfer-progress
 
       - name: 上傳測試報告（僅在失敗時）
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: surefire-reports

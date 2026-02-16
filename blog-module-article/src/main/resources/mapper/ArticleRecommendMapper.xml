@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper">
+
+    <!-- 查詢包含指定標籤的已發布文章（依瀏覽次數降冪） -->
+    <select id="findByTagIds"
+            resultType="dowob.xyz.blog.module.article.model.ArticleSummaryRow">
+        SELECT DISTINCT
+            a.id,
+            a.uuid,
+            a.title,
+            a.slug,
+            a.summary,
+            u.nickname AS authorNickname,
+            a.view_count AS viewCount,
+            a.like_count AS likeCount,
+            a.published_at AS publishedAt
+        FROM articles a
+        JOIN article_tags at ON a.id = at.article_id
+        JOIN users u ON a.author_id = u.id
+        WHERE at.tag_id IN
+            <foreach item="tagId" collection="tagIds" open="(" separator="," close=")">
+                #{tagId}
+            </foreach>
+          AND a.uuid != #{excludeUuid}::uuid
+          AND a.status = 'PUBLISHED'
+        ORDER BY a.view_count DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 批次查詢指定 UUID 的已發布文章 -->
+    <select id="findByUuids"
+            resultType="dowob.xyz.blog.module.article.model.ArticleSummaryRow">
+        SELECT
+            a.id,
+            a.uuid,
+            a.title,
+            a.slug,
+            a.summary,
+            u.nickname AS authorNickname,
+            a.view_count AS viewCount,
+            a.like_count AS likeCount,
+            a.published_at AS publishedAt
+        FROM articles a
+        JOIN users u ON a.author_id = u.id
+        WHERE a.uuid IN
+            <foreach item="uuid" collection="uuids" open="(" separator="," close=")">
+                #{uuid}::uuid
+            </foreach>
+          AND a.status = 'PUBLISHED'
+    </select>
+
+    <!-- 批次查詢文章標籤名稱 -->
+    <select id="findTagsByArticleIds"
+            resultType="dowob.xyz.blog.module.article.model.ArticleTagRow">
+        SELECT
+            at.article_id AS articleId,
+            t.name AS tagName
+        FROM article_tags at
+        JOIN tags t ON at.tag_id = t.id
+        WHERE at.article_id IN
+            <foreach item="articleId" collection="articleIds" open="(" separator="," close=")">
+                #{articleId}
+            </foreach>
+        ORDER BY at.article_id, t.name
+    </select>
+
+</mapper>

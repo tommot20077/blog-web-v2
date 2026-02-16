@@ -107,7 +107,7 @@ class UserControllerTest {
      * 驗證：未登入時存取應被拒絕（403 Forbidden）。
      */
     @Test
-    @DisplayName("PATCH /users/me/profile → 未登入 → 應回傳 403")
+    @DisplayName("PATCH /users/me/profile → 未登入 → 應回傳 401")
     void updateProfile_unauthenticated_shouldReturn403() throws Exception {
         UpdateProfileRequest request = new UpdateProfileRequest();
         request.setNickname("newNickname");
@@ -115,7 +115,7 @@ class UserControllerTest {
         mockMvc.perform(patch("/api/v1/users/me/profile")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     /**
@@ -183,7 +183,7 @@ class UserControllerTest {
      * 驗證：未登入時存取應被拒絕（403 Forbidden）。
      */
     @Test
-    @DisplayName("POST /users/me/change-password → 未登入 → 應回傳 403")
+    @DisplayName("POST /users/me/change-password → 未登入 → 應回傳 401")
     void changePassword_unauthenticated_shouldReturn403() throws Exception {
         ChangePasswordRequest request = new ChangePasswordRequest();
         request.setOldPassword("oldPass123");
@@ -192,7 +192,7 @@ class UserControllerTest {
         mockMvc.perform(post("/api/v1/users/me/change-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     /**
@@ -239,11 +239,11 @@ class UserControllerTest {
      * 驗證：未登入時存取應被拒絕（403 Forbidden）。
      */
     @Test
-    @DisplayName("DELETE /users/me → 未登入 → 應回傳 403")
+    @DisplayName("DELETE /users/me → 未登入 → 應回傳 401")
     void deleteAccount_unauthenticated_shouldReturn403() throws Exception {
         mockMvc.perform(delete("/api/v1/users/me")
                         .param("password", "somePassword"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     /**
