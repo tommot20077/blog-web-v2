@@ -27,6 +27,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
+import dowob.xyz.blog.module.article.event.TagInfo;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -43,6 +44,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.mockito.ArgumentCaptor;
 
 /**
  * ArticleService 單元測試
@@ -103,6 +105,7 @@ class ArticleServiceTest {
     void setUp() {
         when(userFacade.getUserUuidById(AUTHOR_ID)).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(AUTHOR_ID)).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(AUTHOR_ID)).thenReturn(Optional.of("testuser"));
     }
 
     /**
@@ -321,6 +324,36 @@ class ArticleServiceTest {
                     () -> articleService.publishArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("正常：發布事件包含 slug、摘要、純文字內容、作者資訊與標籤")
+        void publishArticle_eventContainsEnrichedData() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(userFacade.getUserUsernameById(AUTHOR_ID)).thenReturn(Optional.of("testuser"));
+            when(userFacade.getUserNicknameById(AUTHOR_ID)).thenReturn(Optional.of("TestAuthor"));
+            when(articleMapper.findTagsByArticleId(1L)).thenReturn(
+                    List.of(new TagInfo(10L, "Spring", "spring")));
+
+            articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            ArgumentCaptor<ArticlePublishedEvent> captor =
+                    ArgumentCaptor.forClass(ArticlePublishedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED),
+                    captor.capture());
+
+            ArticlePublishedEvent event = captor.getValue();
+            assertThat(event.slug()).isEqualTo(article.getSlug());
+            assertThat(event.summary()).isEqualTo("測試摘要");
+            assertThat(event.contentText()).isNotBlank();
+            assertThat(event.authorUsername()).isEqualTo("testuser");
+            assertThat(event.authorNickname()).isEqualTo("TestAuthor");
+            assertThat(event.tags()).hasSize(1);
+            assertThat(event.tags().get(0).name()).isEqualTo("Spring");
         }
 
         @Test

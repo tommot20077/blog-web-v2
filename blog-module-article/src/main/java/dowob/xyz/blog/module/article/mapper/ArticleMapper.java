@@ -1,7 +1,10 @@
 package dowob.xyz.blog.module.article.mapper;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.model.Article;
+import org.apache.ibatis.annotations.Arg;
+import org.apache.ibatis.annotations.ConstructorArgs;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -105,4 +108,35 @@ public interface ArticleMapper {
      */
     @Select("SELECT COUNT(*) FROM articles WHERE status = 'PENDING_REVIEW'")
     long countPendingReview();
+
+    /**
+     * 查詢文章的所有標籤
+     *
+     * <p>
+     * 透過 article_tags 關聯表查詢對應的 tags 資料，
+     * 供建立 {@link dowob.xyz.blog.module.article.event.ArticlePublishedEvent} 使用。
+     * 使用 {@link ConstructorArgs} 明確指定 Record 建構子參數對應，
+     * 因 Java Record 無無參建構子，MyBatis 需此提示才能正確映射。
+     * </p>
+     *
+     * @param articleId 文章資料庫主鍵
+     * @return 標籤資訊列表
+     */
+    @ConstructorArgs({
+            @Arg(column = "id", javaType = Long.class),
+            @Arg(column = "name", javaType = String.class),
+            @Arg(column = "slug", javaType = String.class)
+    })
+    @Select("SELECT t.id, t.name, t.slug FROM tags t " +
+            "INNER JOIN article_tags art ON t.id = art.tag_id " +
+            "WHERE art.article_id = #{articleId}")
+    List<TagInfo> findTagsByArticleId(@Param("articleId") Long articleId);
+
+    /**
+     * 查詢所有已發布文章（供全量重建 Elasticsearch 索引使用）
+     *
+     * @return 所有已發布文章列表
+     */
+    @Select("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC")
+    List<Article> findAllPublished();
 }
