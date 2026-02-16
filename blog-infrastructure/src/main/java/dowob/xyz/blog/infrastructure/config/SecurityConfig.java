@@ -58,6 +58,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
 
+                        // 推薦 API（公開）
+                        .requestMatchers(HttpMethod.GET, "/api/v1/recommend/**").permitAll()
+
                         // Admin 管理端點，僅 ADMIN 可存取
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
