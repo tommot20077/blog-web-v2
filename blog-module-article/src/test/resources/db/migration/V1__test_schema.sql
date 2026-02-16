@@ -31,6 +31,7 @@ CREATE TABLE articles
     slug            VARCHAR(250) NOT NULL UNIQUE,
     summary         VARCHAR(500),
     content_md      TEXT         NOT NULL,
+    content_html    TEXT,
     cover_image_url VARCHAR(512),
     status          VARCHAR(20)  NOT NULL DEFAULT 'DRAFT',
     view_count      BIGINT       NOT NULL DEFAULT 0,

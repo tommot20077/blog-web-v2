@@ -70,6 +70,12 @@ public class Article {
     private String coverImageUrl;
 
     /**
+     * 文章 HTML 預渲染內容（由 Service 層從 content_md 轉換）
+     */
+    @Column("content_html")
+    private String contentHtml;
+
+    /**
      * 文章狀態
      */
     private ArticleStatus status;

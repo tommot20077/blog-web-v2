@@ -37,6 +37,11 @@ public class ArticleResponse {
     private String content;
 
     /**
+     * 文章 HTML 預渲染內容
+     */
+    private String contentHtml;
+
+    /**
      * 文章摘要
      */
     private String summary;

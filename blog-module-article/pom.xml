@@ -32,6 +32,10 @@
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-infrastructure</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.commonmark</groupId>
+            <artifactId>commonmark</artifactId>
+        </dependency>
 
         <!-- Markdown 渲染 -->
         <dependency>
