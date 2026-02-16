@@ -30,7 +30,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -239,6 +243,8 @@ class TagControllerIT {
     @DisplayName("POST /api/v1/tags/{id}/follow - 已認證使用者追蹤標籤，回傳 200 成功")
     void followTag_authenticated_returns200() throws Exception {
         UUID tagId = insertTestTag("Kubernetes", "kubernetes", 5);
+        UUID userUuid = UUID.randomUUID();
+        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.of(userUuid));
 
         mockMvc.perform(post("/api/v1/tags/{id}/follow", tagId)
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
@@ -249,11 +255,24 @@ class TagControllerIT {
     }
 
     @Test
-    @DisplayName("POST /api/v1/tags/{id}/follow - 未認證使用者，回傳 403")
-    void followTag_unauthenticated_returns403() throws Exception {
+    @DisplayName("POST /api/v1/tags/{id}/follow - UserFacade 回傳 empty 時，回傳 404")
+    void followTag_userNotFound_returns404() throws Exception {
+        UUID tagId = insertTestTag("Docker", "docker", 3);
+        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/api/v1/tags/{id}/follow", tagId)
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "USER", "COMMENT_WRITE")))
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/tags/{id}/follow - 未認證使用者，回傳 401")
+    void followTag_unauthenticated_returns401() throws Exception {
         mockMvc.perform(post("/api/v1/tags/{id}/follow", UUID.randomUUID())
                         .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

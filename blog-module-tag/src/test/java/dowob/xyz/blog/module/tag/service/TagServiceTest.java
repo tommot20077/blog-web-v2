@@ -88,6 +88,20 @@ class TagServiceTest {
     }
 
     @Test
+    @DisplayName("getHotTags: limit <= 0 時回傳空列表")
+    void getHotTags_limitZero_returnsEmpty() {
+        List<Tag> result = tagService.getHotTags(0);
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("getHotTags: limit 負數時回傳空列表")
+    void getHotTags_limitNegative_returnsEmpty() {
+        List<Tag> result = tagService.getHotTags(-1);
+        assertThat(result).isEmpty();
+    }
+
+    @Test
     @DisplayName("getHotTags: cache hit returns from Redis")
     @SuppressWarnings("unchecked")
     void getHotTags_cacheHit_returnsFromRedis() {
@@ -130,6 +144,29 @@ class TagServiceTest {
         assertThat(result).hasSize(1);
         verify(tagRepository).findTop20ByOrderByUsageCountDesc();
         verify(zSetOps).add(eq("tag:hot"), anyString(), any(Double.class));
+    }
+
+    @Test
+    @DisplayName("getHotTags: cache miss 時 limit 參數截斷 DB 回傳結果")
+    @SuppressWarnings("unchecked")
+    void getHotTags_cacheMiss_respectsLimit() {
+        when(zSetOps.reverseRangeWithScores(anyString(), anyLong(), anyLong())).thenReturn(null);
+
+        List<Tag> dbTags = java.util.stream.IntStream.range(0, 20)
+                .mapToObj(i -> {
+                    Tag t = new Tag();
+                    t.setId(UUID.randomUUID());
+                    t.setName("tag-" + i);
+                    t.setSlug("tag-" + i);
+                    t.setUsageCount(20 - i);
+                    return t;
+                })
+                .toList();
+        when(tagRepository.findTop20ByOrderByUsageCountDesc()).thenReturn(dbTags);
+
+        List<Tag> result = tagService.getHotTags(5);
+
+        assertThat(result).hasSize(5);
     }
 
     @Test
