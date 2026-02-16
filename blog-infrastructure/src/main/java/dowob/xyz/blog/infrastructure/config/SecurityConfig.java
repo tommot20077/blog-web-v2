@@ -61,6 +61,10 @@ public class SecurityConfig {
                         // 推薦 API（公開）
                         .requestMatchers(HttpMethod.GET, "/api/v1/recommend/**").permitAll()
 
+                        // 搜尋 API（公開查詢與建議，歷史記錄仍需認證）
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
+
                         // Admin 管理端點，僅 ADMIN 可存取
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
