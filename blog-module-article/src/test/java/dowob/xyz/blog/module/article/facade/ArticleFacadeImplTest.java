@@ -1,9 +1,14 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
+import dowob.xyz.blog.module.article.event.TagInfo;
+import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
+import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +48,12 @@ import static org.mockito.Mockito.when;
 class ArticleFacadeImplTest {
 
     @Mock
+    private ArticleMapper articleMapper;
+
+    @Mock
+    private UserFacade userFacade;
+
+    @Mock
     private ArticleRecommendMapper recommendMapper;
 
     private ArticleFacadeImpl facade;
@@ -52,7 +63,7 @@ class ArticleFacadeImplTest {
 
     @BeforeEach
     void setUp() {
-        facade = new ArticleFacadeImpl(recommendMapper);
+        facade = new ArticleFacadeImpl(articleMapper, userFacade, recommendMapper);
     }
 
     private ArticleSummaryRow row(Long id, UUID uuid, String title) {
@@ -136,6 +147,43 @@ class ArticleFacadeImplTest {
 
             assertThat(result).isEmpty();
             verify(recommendMapper, never()).findByUuids(anyList());
+        }
+    }
+
+    @Nested
+    class FindAllPublishedForIndex {
+
+        @Test
+        void 正確呼叫Mapper並組裝索引資料() {
+            Article article = new Article();
+            article.setId(ARTICLE_ID);
+            article.setUuid(ARTICLE_UUID);
+            article.setTitle("Test Article");
+            article.setSlug("test-article");
+            article.setSummary("summary");
+            article.setContent("content");
+            article.setAuthorId(10L);
+
+            TagInfo tagInfo = new TagInfo(1L, "Java", "java");
+
+            when(articleMapper.findAllPublished()).thenReturn(List.of(article));
+            when(articleMapper.findTagsByArticleId(ARTICLE_ID)).thenReturn(List.of(tagInfo));
+            when(userFacade.getUserUsernameById(10L)).thenReturn(Optional.of("user1"));
+            when(userFacade.getUserNicknameById(10L)).thenReturn(Optional.of("User One"));
+
+            List<ArticleIndexData> result = facade.findAllPublishedForIndex();
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).articleUuid()).isEqualTo(ARTICLE_UUID);
+            assertThat(result.get(0).tags()).hasSize(1);
+            assertThat(result.get(0).tags().get(0).name()).isEqualTo("Java");
+        }
+
+        @Test
+        void 無已發布文章時回傳空列表() {
+            when(articleMapper.findAllPublished()).thenReturn(List.of());
+
+            assertThat(facade.findAllPublishedForIndex()).isEmpty();
         }
     }
 
