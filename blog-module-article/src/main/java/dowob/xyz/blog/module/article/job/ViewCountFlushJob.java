@@ -30,7 +30,7 @@ public class ViewCountFlushJob {
      *
      * <p>由 Spring Scheduling 每 300 秒執行一次（前次結束後延遲計算）。</p>
      */
-    @Scheduled(fixedDelay = 300_000)
+    @Scheduled(fixedDelay = 300_000, initialDelay = 60_000)
     public void flushViewCounts() {
         log.info("開始批次寫入文章瀏覽計數至資料庫");
         viewCountService.flushViewCounts();

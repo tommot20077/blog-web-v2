@@ -10,12 +10,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
-import java.util.Set;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
@@ -23,7 +25,8 @@ import static org.mockito.Mockito.*;
  * {@link ViewCountServiceImpl} 單元測試
  *
  * <p>驗證瀏覽計數服務的核心邏輯，包含：
- * DB + Redis 合計取值、Redis 增量、批次刷入 DB。</p>
+ * DB + Redis 合計取值、Redis 增量、批次刷入 DB、
+ * 以及錯誤情境（非法 UUID key、非數字值、DB 異常）的容錯行為。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -45,16 +48,24 @@ class ViewCountServiceTest {
     @Mock
     private ValueOperations<String, String> valueOps;
 
+    /** Redis SCAN Cursor（Mock） */
+    @SuppressWarnings("rawtypes")
+    @Mock
+    private Cursor cursor;
+
     /** 待測服務 */
     @InjectMocks
     private ViewCountServiceImpl viewCountService;
 
     /**
-     * 每個測試前注入 valueOps mock
+     * 每個測試前注入 valueOps mock 並設定 scan 的預設回傳
      */
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
+        when(stringRedisTemplate.scan(any(ScanOptions.class))).thenReturn(cursor);
+        when(cursor.hasNext()).thenReturn(false);
     }
 
     /**
@@ -121,26 +132,78 @@ class ViewCountServiceTest {
     @Test
     @DisplayName("flushViewCounts：Redis 無 key → 不寫入 DB")
     void flushViewCounts_noKeys_doesNothing() {
-        when(stringRedisTemplate.keys("article:views:*")).thenReturn(Set.of());
-
         viewCountService.flushViewCounts();
 
         verify(articleMapper, never()).incrementViewCountBatch(any(), anyLong());
     }
 
     /**
-     * 情境六：flushViewCounts 有 key → 正確刷入 DB 並清除 Redis
+     * 情境六：flushViewCounts 有 key → 先讀取，寫入 DB 後才刪除 Redis key
      */
     @Test
-    @DisplayName("flushViewCounts：Redis 有 key → 正確寫入 DB")
-    void flushViewCounts_withKeys_flushesToDb() {
+    @DisplayName("flushViewCounts：Redis 有 key → 先寫 DB 再刪 Redis key")
+    @SuppressWarnings("unchecked")
+    void flushViewCounts_withKeys_flushesToDbThenDeletesKey() {
         UUID uuid1 = UUID.randomUUID();
         String key = "article:views:" + uuid1;
-        when(stringRedisTemplate.keys("article:views:*")).thenReturn(Set.of(key));
-        when(valueOps.getAndDelete(key)).thenReturn("3");
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(key);
+        when(valueOps.get(key)).thenReturn("3");
 
         viewCountService.flushViewCounts();
 
         verify(articleMapper).incrementViewCountBatch(uuid1, 3L);
+        verify(stringRedisTemplate).delete(key);
+    }
+
+    /**
+     * 情境七：key 含非法 UUID → 跳過該 key，不中斷整個 flush
+     */
+    @Test
+    @DisplayName("flushViewCounts：key 含非法 UUID → 跳過不中斷")
+    @SuppressWarnings("unchecked")
+    void flushViewCounts_withMalformedUuidKey_ignoresEntry() {
+        String malformedKey = "article:views:not-a-uuid";
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(malformedKey);
+
+        assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
+        verify(articleMapper, never()).incrementViewCountBatch(any(), anyLong());
+    }
+
+    /**
+     * 情境八：Redis 值非數字 → 跳過該 key，不中斷整個 flush
+     */
+    @Test
+    @DisplayName("flushViewCounts：Redis 值非數字 → 跳過不中斷")
+    @SuppressWarnings("unchecked")
+    void flushViewCounts_withNonNumericValue_ignoresEntry() {
+        UUID uuid = UUID.randomUUID();
+        String key = "article:views:" + uuid;
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(key);
+        when(valueOps.get(key)).thenReturn("not-a-number");
+
+        assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
+        verify(articleMapper, never()).incrementViewCountBatch(any(), anyLong());
+    }
+
+    /**
+     * 情境九：DB 拋出異常 → 不刪除 Redis key（保留資料），不中斷整個 flush
+     */
+    @Test
+    @DisplayName("flushViewCounts：DB 拋出異常 → Redis key 不刪除，不中斷整個 flush")
+    @SuppressWarnings("unchecked")
+    void flushViewCounts_dbFailure_doesNotPropagateException() {
+        UUID uuid = UUID.randomUUID();
+        String key = "article:views:" + uuid;
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(key);
+        when(valueOps.get(key)).thenReturn("5");
+        doThrow(new RuntimeException("DB 寫入失敗")).when(articleMapper)
+                .incrementViewCountBatch(any(), anyLong());
+
+        assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
+        verify(stringRedisTemplate, never()).delete(key);
     }
 }

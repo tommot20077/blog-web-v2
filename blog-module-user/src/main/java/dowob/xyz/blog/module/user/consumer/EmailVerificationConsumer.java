@@ -42,7 +42,7 @@ public class EmailVerificationConsumer {
                                      @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
         log.info("收到用戶註冊事件 - userId={}, email={}, nickname={}",
                 event.userId(), event.email(), event.nickname());
-        log.info("驗證連結（開發模式）: /api/v1/auth/verify-email?token={}", event.verificationToken());
+        log.info("驗證信已排程發送 - userId={}", event.userId());
         channel.basicAck(deliveryTag, false);
     }
 }

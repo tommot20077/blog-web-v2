@@ -40,7 +40,7 @@ public class PasswordResetConsumer {
                                               Channel channel,
                                               @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
         log.info("收到密碼重設請求 - userId={}, email={}", event.userId(), event.email());
-        log.info("密碼重設連結（開發模式）: /api/v1/auth/reset-password?token={}", event.resetToken());
+        log.info("密碼重設連結已產生 - userId={}", event.userId());
         channel.basicAck(deliveryTag, false);
     }
 }
