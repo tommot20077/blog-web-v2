@@ -133,6 +133,29 @@ class TagServiceTest {
     }
 
     @Test
+    @DisplayName("getHotTags: cache miss 時 limit 參數截斷 DB 回傳結果")
+    @SuppressWarnings("unchecked")
+    void getHotTags_cacheMiss_respectsLimit() {
+        when(zSetOps.reverseRangeWithScores(anyString(), anyLong(), anyLong())).thenReturn(null);
+
+        List<Tag> dbTags = java.util.stream.IntStream.range(0, 20)
+                .mapToObj(i -> {
+                    Tag t = new Tag();
+                    t.setId(UUID.randomUUID());
+                    t.setName("tag-" + i);
+                    t.setSlug("tag-" + i);
+                    t.setUsageCount(20 - i);
+                    return t;
+                })
+                .toList();
+        when(tagRepository.findTop20ByOrderByUsageCountDesc()).thenReturn(dbTags);
+
+        List<Tag> result = tagService.getHotTags(5);
+
+        assertThat(result).hasSize(5);
+    }
+
+    @Test
     @DisplayName("getTagDetail: cache hit returns from Hash")
     @SuppressWarnings("unchecked")
     void getTagDetail_cacheHit_returnsFromHash() {

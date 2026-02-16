@@ -20,6 +20,7 @@ import java.io.IOException;
  * 監聽 {@link RecommendRabbitMqConfig#QUEUE_RECOMMEND_ARTICLE_PUBLISHED} 隊列，
  * 當文章發布後清除該文章的相關文章推薦快取（{@code recommend:related:{articleUuid}}），
  * 確保下次請求時重新計算推薦結果。
+ * 採用手動 ACK 模式：處理成功則 basicAck；ACK 失敗則 basicNack（不重新入隊，送 DLQ）。
  * </p>
  *
  * @author Yuan
@@ -47,7 +48,9 @@ public class ArticlePublishedConsumer {
      * @param channel    RabbitMQ Channel，用於手動 ACK
      * @param deliveryTag 消息遞送標籤
      */
-    @RabbitListener(queues = RecommendRabbitMqConfig.QUEUE_RECOMMEND_ARTICLE_PUBLISHED)
+    @RabbitListener(
+            queues = RecommendRabbitMqConfig.QUEUE_RECOMMEND_ARTICLE_PUBLISHED,
+            containerFactory = RecommendRabbitMqConfig.MANUAL_ACK_CONTAINER_FACTORY)
     public void handleArticlePublished(
             ArticlePublishedEvent event,
             Channel channel,
@@ -59,7 +62,12 @@ public class ArticlePublishedConsumer {
             log.debug("已清除文章推薦快取，articleUuid={}", event.articleUuid());
             channel.basicAck(deliveryTag, false);
         } catch (IOException e) {
-            log.error("ACK 失敗，articleUuid={}", event.articleUuid(), e);
+            log.error("ACK 失敗，訊息送往 DLQ，articleUuid={}", event.articleUuid(), e);
+            try {
+                channel.basicNack(deliveryTag, false, false);
+            } catch (IOException nackException) {
+                log.error("NACK 亦失敗，articleUuid={}", event.articleUuid(), nackException);
+            }
         }
     }
 }

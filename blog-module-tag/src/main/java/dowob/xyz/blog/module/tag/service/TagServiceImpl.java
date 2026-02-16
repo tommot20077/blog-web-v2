@@ -106,7 +106,7 @@ public class TagServiceImpl implements TagService {
         tags.forEach(tag -> stringRedisTemplate.opsForZSet()
                 .add(HOT_TAGS_KEY, tag.getId().toString(), (double) tag.getUsageCount()));
         stringRedisTemplate.expire(HOT_TAGS_KEY, HOT_TAGS_TTL_HOURS, TimeUnit.HOURS);
-        return tags;
+        return tags.subList(0, Math.min(limit, tags.size()));
     }
 
     @Override

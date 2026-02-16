@@ -4,6 +4,8 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -16,6 +18,7 @@ import java.util.Map;
  * 訂閱文章事件以清除推薦快取：
  * 當文章發布時，清除對應的相關文章推薦快取，
  * 確保推薦結果反映最新的文章索引狀態。
+ * 推薦模組的 Consumer 採用手動 ACK 模式，以防止訊息遺失。
  * </p>
  *
  * @author Yuan
@@ -40,6 +43,11 @@ public class RecommendRabbitMqConfig {
     public static final String ROUTING_KEY_ARTICLE_PUBLISHED = "article.published";
 
     /**
+     * 手動 ACK 容器工廠名稱常數
+     */
+    public static final String MANUAL_ACK_CONTAINER_FACTORY = "manualAckContainerFactory";
+
+    /**
      * 建立死信隊列（DLQ）參數
      *
      * @return 包含死信交換器與路由 Key 的 Map
@@ -49,6 +57,25 @@ public class RecommendRabbitMqConfig {
                 "x-dead-letter-exchange", "blog.dlq",
                 "x-dead-letter-routing-key", "dead-letter"
         );
+    }
+
+    /**
+     * 建立手動 ACK 模式的 RabbitListener 容器工廠
+     *
+     * <p>
+     * 僅推薦模組的 Consumer 使用此工廠，以實現精確的訊息確認控制。
+     * 其他模組（Tag、File 等）維持預設 AUTO ACK 模式。
+     * </p>
+     *
+     * @param connectionFactory RabbitMQ 連線工廠
+     * @return 手動 ACK 模式的容器工廠
+     */
+    @Bean(name = MANUAL_ACK_CONTAINER_FACTORY)
+    public SimpleRabbitListenerContainerFactory manualAckContainerFactory(ConnectionFactory connectionFactory) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setAcknowledgeMode(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
+        return factory;
     }
 
     /**
