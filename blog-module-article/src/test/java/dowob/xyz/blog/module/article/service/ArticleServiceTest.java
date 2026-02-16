@@ -556,7 +556,7 @@ class ArticleServiceTest {
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                     any(ArticleViewedEvent.class));
-            verify(articleMapper, never()).incrementViewCount(anyLong());
+            verify(articleMapper, never()).incrementViewCountBatch(any(UUID.class), anyLong());
         }
 
         @Test
