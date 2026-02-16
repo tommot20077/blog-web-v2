@@ -14,6 +14,7 @@ import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -89,6 +90,9 @@ public class TagServiceImpl implements TagService {
 
     @Override
     public List<Tag> getHotTags(int limit) {
+        if (limit <= 0) {
+            return Collections.emptyList();
+        }
         Set<ZSetOperations.TypedTuple<String>> cached = stringRedisTemplate.opsForZSet()
                 .reverseRangeWithScores(HOT_TAGS_KEY, 0L, (long) limit - 1);
 
@@ -106,7 +110,7 @@ public class TagServiceImpl implements TagService {
         tags.forEach(tag -> stringRedisTemplate.opsForZSet()
                 .add(HOT_TAGS_KEY, tag.getId().toString(), (double) tag.getUsageCount()));
         stringRedisTemplate.expire(HOT_TAGS_KEY, HOT_TAGS_TTL_HOURS, TimeUnit.HOURS);
-        return tags;
+        return tags.subList(0, Math.min(limit, tags.size()));
     }
 
     @Override

@@ -14,12 +14,14 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import jakarta.servlet.http.HttpServletResponse;
 import java.util.List;
 
 /**
@@ -56,11 +58,20 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
 
+                        // 推薦 API（公開）
+                        .requestMatchers(HttpMethod.GET, "/api/v1/recommend/**").permitAll()
+
+                        // 搜尋 API（公開查詢與建議，歷史記錄仍需認證）
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
+
                         // Admin 管理端點，僅 ADMIN 可存取
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
                         // 其他所有請求需認證
                         .anyRequest().authenticated())
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(unauthorizedEntryPoint()))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
@@ -69,6 +80,20 @@ public class SecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
+    }
+
+    /**
+     * 自訂未認證入口點，將未登入請求回傳 {@code 401 Unauthorized}。
+     *
+     * <p>Spring Security 預設對未認證請求回傳 403，此 Bean 覆寫該行為以符合 HTTP 語義：
+     * 401 代表未認證（需要登入），403 代表已認證但無權限。</p>
+     *
+     * @return 回傳 401 的 {@link AuthenticationEntryPoint}
+     */
+    @Bean
+    public AuthenticationEntryPoint unauthorizedEntryPoint() {
+        return (request, response, authException) ->
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Unauthorized");
     }
 
     @Bean

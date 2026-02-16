@@ -218,15 +218,15 @@ class FileControllerIT {
     }
 
     @Test
-    @DisplayName("POST /api/files/upload - 未認證應回傳 HTTP 403（Spring Security 預設行為）")
-    void uploadFile_withoutAuthentication_returns403() throws Exception {
+    @DisplayName("POST /api/files/upload - 未認證應回傳 HTTP 401")
+    void uploadFile_withoutAuthentication_returns401() throws Exception {
         MockMultipartFile file = createTestJpeg();
 
         mockMvc.perform(multipart("/api/v1/files/upload")
                 .file(file)
                 .param("usageType", "ARTICLE_CONTENT")
                 .contentType(MediaType.MULTIPART_FORM_DATA))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -328,10 +328,10 @@ class FileControllerIT {
     }
 
     @Test
-    @DisplayName("GET /api/users/me/files - 未認證存取應回傳 HTTP 403（Spring Security 預設行為）")
-    void getUserFiles_unauthenticated_returns403() throws Exception {
+    @DisplayName("GET /api/users/me/files - 未認證存取應回傳 HTTP 401")
+    void getUserFiles_unauthenticated_returns401() throws Exception {
         mockMvc.perform(get("/api/v1/users/me/files"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

@@ -9,6 +9,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
+import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
@@ -244,8 +245,18 @@ public class ArticleServiceImpl implements ArticleService {
 
         Article updated = articleRepository.save(article);
 
+        List<TagInfo> tags = articleMapper.findTagsByArticleId(updated.getId());
         ArticlePublishedEvent event = new ArticlePublishedEvent(
-                updated.getUuid(), updated.getAuthorId(), updated.getTitle(), updated.getPublishedAt());
+                updated.getUuid(),
+                updated.getAuthorId(),
+                updated.getTitle(),
+                updated.getPublishedAt(),
+                updated.getSlug(),
+                updated.getSummary(),
+                stripMarkdown(updated.getContent()),
+                userFacade.getUserUsernameById(updated.getAuthorId()).orElse(null),
+                resolveAuthorNickname(updated.getAuthorId()),
+                tags);
         rabbitTemplate.convertAndSend(ArticleRabbitMqConfig.EXCHANGE, ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED, event);
 
         return toResponse(updated);
@@ -342,6 +353,32 @@ public class ArticleServiceImpl implements ArticleService {
                 && operatorRole != Role.ADMIN) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
+    }
+
+    /**
+     * 去除 Markdown 格式，回傳純文字（供 Elasticsearch 索引）
+     *
+     * <p>
+     * 依序去除：程式碼區塊、行內程式碼、標題符號、粗體/斜體、連結、圖片、水平線，
+     * 最後收合多餘空白。
+     * </p>
+     *
+     * @param markdown Markdown 原文
+     * @return 純文字內容
+     */
+    private String stripMarkdown(String markdown) {
+        if (markdown == null) return "";
+        return markdown
+                .replaceAll("```[\\s\\S]*?```", "")
+                .replaceAll("`[^`]*`", "")
+                .replaceAll("(?m)^#{1,6}\\s*", "")
+                .replaceAll("\\*{1,2}([^*]+)\\*{1,2}", "$1")
+                .replaceAll("_{1,2}([^_]+)_{1,2}", "$1")
+                .replaceAll("!\\[[^]]*]\\([^)]*\\)", "")
+                .replaceAll("\\[([^]]+)]\\([^)]*\\)", "$1")
+                .replaceAll("(?m)^[-*_]{3,}$", "")
+                .replaceAll("\\s{2,}", " ")
+                .trim();
     }
 
     /**
