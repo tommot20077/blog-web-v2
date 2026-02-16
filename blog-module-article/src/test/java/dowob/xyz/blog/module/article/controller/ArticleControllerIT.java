@@ -622,7 +622,7 @@ class ArticleControllerIT {
     }
 
     @Test
-    @DisplayName("GET /api/v1/articles/{uuid} - 同 IP 連續兩次存取，viewCount 只增加 1")
+    @DisplayName("GET /api/v1/articles/{uuid} - 同 IP 連續兩次存取，MQ 瀏覽事件只發送一次（防刷）")
     void getArticle_shouldNotCountViewTwice_whenSameIpWithinWindow() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
@@ -645,14 +645,19 @@ class ArticleControllerIT {
                 .with(asUser(AUTHOR_ID, Role.AUTHOR)))
                 .andExpect(status().isOk());
 
-        /** 第一次存取 */
+        /** 第一次存取：應發送 MQ 瀏覽事件並回應 200 */
         mockMvc.perform(get("/api/v1/articles/" + uuid))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.viewCount").value(1));
+                .andExpect(status().isOk());
 
-        /** 第二次存取（同 IP，5 分鐘內） → viewCount 應維持 1 */
+        /** 第二次存取（同 IP，5 分鐘內）：不再發送 MQ 事件 */
         mockMvc.perform(get("/api/v1/articles/" + uuid))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.viewCount").value(1));
+                .andExpect(status().isOk());
+
+        /** 驗證 MQ 瀏覽事件（ArticleViewedEvent）整個流程只發送過一次 */
+        org.mockito.Mockito.verify(rabbitTemplate, org.mockito.Mockito.times(1))
+                .convertAndSend(
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.EXCHANGE),
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
+                        org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
     }
 }
