@@ -31,6 +31,8 @@ import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.event.TagInfo;
+import dowob.xyz.blog.module.article.mapper.CategoryMapper;
+import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import dowob.xyz.blog.module.article.service.ViewCountService;
 
 import java.time.LocalDateTime;
@@ -80,6 +82,12 @@ class ArticleServiceTest {
     @Mock
     private StringRedisTemplate stringRedisTemplate;
 
+    @Mock
+    private CategoryMapper categoryMapper;
+
+    @Mock
+    private CategoryRepository categoryRepository;
+
     @InjectMocks
     private ArticleServiceImpl articleService;
 
@@ -123,6 +131,7 @@ class ArticleServiceTest {
         when(userFacade.getUserUsernameById(AUTHOR_ID)).thenReturn(Optional.of("testuser"));
         when(viewCountService.getViewCount(any())).thenReturn(0L);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
+        when(categoryMapper.findCategoriesByArticleId(anyLong())).thenReturn(List.of());
     }
 
     /**

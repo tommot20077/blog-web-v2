@@ -5,6 +5,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * 建立文章請求 DTO
  *
@@ -37,4 +39,9 @@ public class CreateArticleRequest {
      * 初始狀態（預設為 DRAFT）
      */
     private ArticleStatus status = ArticleStatus.DRAFT;
+
+    /**
+     * 文章分類 UUID 列表（可選）
+     */
+    private List<java.util.UUID> categoryIds;
 }

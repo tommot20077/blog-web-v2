@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -80,4 +81,9 @@ public class ArticleResponse {
      * 最後更新時間
      */
     private LocalDateTime updatedAt;
+
+    /**
+     * 文章分類列表
+     */
+    private java.util.List<CategoryResponse> categories;
 }
