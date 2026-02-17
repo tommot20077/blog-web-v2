@@ -66,8 +66,8 @@ public class JwtService {
      * 初始化 EC 金鑰對。
      *
      * <p>
-     * 若 {@code jwt.private-key} 已設定（非空），則從 PKCS8 PEM 載入私鑰並推導公鑰（生產模式）；
-     * 否則每次啟動動態生成新的 256-bit EC 金鑰對（開發模式）。
+     * 若 {@code jwt.private-key} 已設定（非空），則從 PKCS8 PEM 載入私鑰並推導公鑰；
+     * 否則每次啟動動態生成新的 256-bit EC 金鑰對。
      * </p>
      */
     @PostConstruct

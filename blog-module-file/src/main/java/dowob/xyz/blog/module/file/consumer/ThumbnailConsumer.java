@@ -54,7 +54,7 @@ public class ThumbnailConsumer {
      *
      * @param event 圖片上傳事件
      */
-    @RabbitListener(queues = "file.thumbnail")
+    @RabbitListener(queues = "file.thumbnail", containerFactory = "autoAckContainerFactory")
     public void handleImageUploaded(ImageUploadedEvent event) {
         if (!event.contentType().startsWith("image/")) {
             log.debug("非圖片類型，跳過縮圖處理: {}", event.contentType());
