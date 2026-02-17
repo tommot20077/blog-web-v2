@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.model.FileErrorCode;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -24,6 +25,10 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import org.springframework.util.unit.DataSize;
+
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -54,14 +59,21 @@ class FileServiceTest {
     @Mock
     private RabbitTemplate rabbitTemplate;
 
+    @Mock
+    private FileProperties fileProperties;
+
     @InjectMocks
     private FileServiceImpl fileService;
 
-    /** 測試前設定 bucketName 與 minioEndpoint */
+    /** 測試前設定 bucketName、minioEndpoint 及 FileProperties mock */
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(fileService, "bucketName", "test-bucket");
         ReflectionTestUtils.setField(fileService, "minioEndpoint", "http://localhost:9000");
+        when(fileProperties.allowedMimeTypes())
+                .thenReturn(List.of("image/jpeg", "image/png", "image/webp", "image/gif"));
+        when(fileProperties.quotas())
+                .thenReturn(Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)));
     }
 
     /** 上傳相關測試 */
