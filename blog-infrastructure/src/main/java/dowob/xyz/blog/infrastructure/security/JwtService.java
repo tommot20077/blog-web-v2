@@ -8,19 +8,17 @@ import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.math.BigInteger;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.ECPublicKey;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.util.Base64;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.Map;
+
+import java.security.spec.*;
+import java.util.*;
 import java.util.function.Function;
 
 /**
@@ -116,11 +114,11 @@ public class JwtService {
      * @throws Exception 推導失敗時拋出
      */
     private ECPublicKey derivePublicKey(ECPrivateKey ecPrivateKey) throws Exception {
-        java.security.spec.ECParameterSpec params = ecPrivateKey.getParams();
-        java.security.spec.ECPoint point = params.getGenerator();
-        java.math.BigInteger s = ecPrivateKey.getS();
-        java.security.spec.ECPoint pubPoint = multiply(s, point, params.getCurve());
-        java.security.spec.ECPublicKeySpec pubSpec = new java.security.spec.ECPublicKeySpec(pubPoint, params);
+        ECParameterSpec params = ecPrivateKey.getParams();
+        ECPoint point = params.getGenerator();
+        BigInteger s = ecPrivateKey.getS();
+        ECPoint pubPoint = multiply(s, point, params.getCurve());
+        ECPublicKeySpec pubSpec = new ECPublicKeySpec(pubPoint, params);
         KeyFactory kf = KeyFactory.getInstance("EC");
         return (ECPublicKey) kf.generatePublic(pubSpec);
     }
@@ -128,21 +126,22 @@ public class JwtService {
     /**
      * EC 純量乘法：計算 k * P（使用 double-and-add 演算法）。
      *
-     * @param k     純量
-     * @param point 基點
+     * @param k     純量（Scalar），即私鑰的數值
+     * @param point 點（Point），即橢圓曲線上的基點
      * @param curve EC 曲線參數
-     * @return 結果點
+     * @return 計算後的結果點
      */
-    private java.security.spec.ECPoint multiply(java.math.BigInteger k,
-                                                java.security.spec.ECPoint point,
-                                                java.security.spec.EllipticCurve curve) {
-        java.security.spec.ECPoint result = java.security.spec.ECPoint.POINT_INFINITY;
-        java.security.spec.ECPoint addend = point;
+    private ECPoint multiply(BigInteger k, ECPoint point, EllipticCurve curve) {
+        ECPoint result = ECPoint.POINT_INFINITY; // 初始化為「無窮遠點」（加法單位元）
+        ECPoint addend = point;
         while (k.signum() > 0) {
+            // 若當前位元為 1
             if (k.testBit(0)) {
                 result = addPoints(result, addend, curve);
             }
+            // 每個位元循環都執行倍增
             addend = addPoints(addend, addend, curve);
+            // 位元右移，處理下一個位元
             k = k.shiftRight(1);
         }
         return result;
@@ -151,43 +150,56 @@ public class JwtService {
     /**
      * EC 點加法。
      *
+     * <p>
+     * 實作橢圓曲線上的兩點加法幾何運算。包含兩種情況：
+     * 1. 兩點不同：計算通過兩點的直線與曲線的第三交點。
+     * 2. 兩點相同：計算該點的切線（Point Doubling）。
+     * </p>
+     *
      * @param p1    第一點
      * @param p2    第二點
      * @param curve EC 曲線
      * @return 兩點之和
      */
-    private java.security.spec.ECPoint addPoints(java.security.spec.ECPoint p1,
-                                                 java.security.spec.ECPoint p2,
-                                                 java.security.spec.EllipticCurve curve) {
-        if (p1.equals(java.security.spec.ECPoint.POINT_INFINITY)) {
+    private ECPoint addPoints(ECPoint p1, ECPoint p2, EllipticCurve curve) {
+        // 若其中一點為無窮遠點，結果即為另一點
+        if (p1.equals(ECPoint.POINT_INFINITY)) {
             return p2;
         }
-        if (p2.equals(java.security.spec.ECPoint.POINT_INFINITY)) {
+        if (p2.equals(ECPoint.POINT_INFINITY)) {
             return p1;
         }
-        java.math.BigInteger p = ((java.security.spec.ECFieldFp) curve.getField()).getP();
-        java.math.BigInteger x1 = p1.getAffineX();
-        java.math.BigInteger y1 = p1.getAffineY();
-        java.math.BigInteger x2 = p2.getAffineX();
-        java.math.BigInteger y2 = p2.getAffineY();
 
-        java.math.BigInteger lambda;
-        if (x1.equals(x2)) {
-            if (!y1.equals(y2)) {
-                return java.security.spec.ECPoint.POINT_INFINITY;
+        BigInteger p = ((ECFieldFp) curve.getField()).getP(); // 有限體 p
+        BigInteger x1 = p1.getAffineX();
+        BigInteger y1 = p1.getAffineY();
+        BigInteger x2 = p2.getAffineX();
+        BigInteger y2 = p2.getAffineY();
+
+        BigInteger lambda;
+        if (Objects.equals(x1, x2)) {
+            // 兩點相同 (Point Doubling) 或互為負點
+            if (!Objects.equals(y1, y2)) {
+                return ECPoint.POINT_INFINITY; // 互為負點，結果為無窮遠
             }
-            lambda = x1.pow(2).multiply(java.math.BigInteger.valueOf(3))
+            // 斜率 lambda = (3 * x1^2 + a) / (2 * y1) mod p
+            lambda = x1.pow(2).multiply(BigInteger.valueOf(3))
                     .add(curve.getA())
-                    .multiply(y1.multiply(java.math.BigInteger.TWO).modInverse(p))
+                    .multiply(y1.multiply(BigInteger.TWO).modInverse(p))
                     .mod(p);
         } else {
+            // 兩點不同 (Point Addition)
+            // 斜率 lambda = (y2 - y1) / (x2 - x1) mod p
             lambda = y2.subtract(y1)
                     .multiply(x2.subtract(x1).modInverse(p))
                     .mod(p);
         }
-        java.math.BigInteger x3 = lambda.pow(2).subtract(x1).subtract(x2).mod(p);
-        java.math.BigInteger y3 = lambda.multiply(x1.subtract(x3)).subtract(y1).mod(p);
-        return new java.security.spec.ECPoint(x3, y3);
+        // 新點座標計算
+        // x3 = lambda^2 - x1 - x2 mod p
+        // y3 = lambda * (x1 - x3) - y1 mod p
+        BigInteger x3 = lambda.pow(2).subtract(x1).subtract(x2).mod(p);
+        BigInteger y3 = lambda.multiply(x1.subtract(x3)).subtract(y1).mod(p);
+        return new ECPoint(x3, y3);
     }
 
     /**
@@ -223,8 +235,10 @@ public class JwtService {
     /**
      * 生成 Refresh Token
      *
-     * <p>僅包含 type="refresh" claim 與 userId (subject)，不含 role 與 version，
-     * 過期時間為 7 天。</p>
+     * <p>
+     * 僅包含 type="refresh" claim 與 userId (subject)，不含 role 與 version，
+     * 過期時間為 7 天。
+     * </p>
      *
      * @param userId 用戶 ID
      * @return 已簽名的 JWT Refresh Token
@@ -246,13 +260,29 @@ public class JwtService {
     }
 
     private String createToken(Map<String, Object> claims, String subject, long ttl) {
+        long now = System.currentTimeMillis();
+
         return Jwts.builder()
                 .claims(claims)
                 .subject(subject)
-                .issuedAt(new Date(System.currentTimeMillis()))
-                .expiration(new Date(System.currentTimeMillis() + ttl))
+                .issuedAt(new Date(now))
+                .expiration(new Date(now + ttl))
                 .signWith(privateKey, Jwts.SIG.ES256)
                 .compact();
+    }
+
+    /**
+     * 驗證 Refresh Token
+     *
+     * <p>
+     * 組合驗證：簽名有效 且 type claim 為 "refresh"。
+     * </p>
+     *
+     * @param token JWT Token
+     * @return 若為有效的 Refresh Token 回傳 true，否則 false
+     */
+    public boolean validateRefreshToken(String token) {
+        return validateToken(token) && "refresh".equals(getTokenTypeFromToken(token));
     }
 
     public boolean validateToken(String token) {

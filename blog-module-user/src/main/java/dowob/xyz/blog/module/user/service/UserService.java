@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.UserStatus;
+import dowob.xyz.blog.module.user.util.TokenVersionUtils;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
@@ -81,7 +82,7 @@ public class UserService {
         }
 
         user.setPasswordHash(passwordEncoder.encode(newPassword));
-        String newVersion = AuthService.incrementVersion(user.getTokenVersion());
+        String newVersion = TokenVersionUtils.incrementVersion(user.getTokenVersion());
         user.setTokenVersion(newVersion);
         userRepository.save(user);
 

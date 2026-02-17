@@ -216,6 +216,46 @@ class JwtServiceTest {
     }
 
     /**
+     * 驗證：有效的 Refresh Token 應通過 validateRefreshToken 驗證。
+     */
+    @Test
+    @DisplayName("validateRefreshToken → 有效 Refresh Token 應回傳 true")
+    void validateRefreshToken_withValidRefreshToken_shouldReturnTrue() {
+        String refreshToken = jwtService.generateRefreshToken(TEST_USER_ID);
+
+        boolean result = jwtService.validateRefreshToken(refreshToken);
+
+        assertThat(result).isTrue();
+    }
+
+    /**
+     * 驗證：Access Token 傳入 validateRefreshToken 應回傳 false。
+     */
+    @Test
+    @DisplayName("validateRefreshToken → Access Token 應回傳 false")
+    void validateRefreshToken_withAccessToken_shouldReturnFalse() {
+        String accessToken = jwtService.generateAccessToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+
+        boolean result = jwtService.validateRefreshToken(accessToken);
+
+        assertThat(result).isFalse();
+    }
+
+    /**
+     * 驗證：竄改後的 Token 傳入 validateRefreshToken 應回傳 false。
+     */
+    @Test
+    @DisplayName("validateRefreshToken → 竄改 Token 應回傳 false")
+    void validateRefreshToken_withTamperedToken_shouldReturnFalse() {
+        String refreshToken = jwtService.generateRefreshToken(TEST_USER_ID);
+        String tampered = refreshToken + "tampered";
+
+        boolean result = jwtService.validateRefreshToken(tampered);
+
+        assertThat(result).isFalse();
+    }
+
+    /**
      * 驗證：未提供 PEM 私鑰時（空字串），JwtService 應動態生成金鑰對（開發模式）。
      */
     @Test
