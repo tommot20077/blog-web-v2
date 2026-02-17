@@ -39,8 +39,10 @@ public class ViewCountServiceImpl implements ViewCountService {
     /**
      * {@inheritDoc}
      *
-     * <p>先從 DB 取得基礎值，再加上 Redis 中的暫存增量。
-     * 若 Redis 值無法解析為數字，則視增量為 0。</p>
+     * <p>
+     * 先從 DB 取得基礎值，再加上 Redis 中的暫存增量。
+     * 若 Redis 值無法解析為數字，則視增量為 0。
+     * </p>
      *
      * @param articleUuid 文章公開 UUID
      * @return 總瀏覽數（DB 值 + Redis 增量）
@@ -64,7 +66,9 @@ public class ViewCountServiceImpl implements ViewCountService {
     /**
      * {@inheritDoc}
      *
-     * <p>對 Redis 對應 key 執行原子性自增操作。</p>
+     * <p>
+     * 對 Redis 對應 key 執行原子性自增操作。
+     * </p>
      *
      * @param articleUuid 文章公開 UUID
      */
@@ -95,13 +99,14 @@ public class ViewCountServiceImpl implements ViewCountService {
                 try {
                     String suffix = key.substring(RedisKeyConstant.ARTICLE_VIEWS_PREFIX.length());
                     UUID uuid = UUID.fromString(suffix);
-                    String val = stringRedisTemplate.opsForValue().get(key);
+                    String val = stringRedisTemplate.opsForValue().getAndDelete(key);
                     if (val == null) {
                         continue;
                     }
                     long delta = Long.parseLong(val);
-                    articleMapper.incrementViewCountBatch(uuid, delta);
-                    stringRedisTemplate.delete(key);
+                    if (delta > 0) {
+                        articleMapper.incrementViewCountBatch(uuid, delta);
+                    }
                 } catch (Exception e) {
                     log.warn("略過無效的瀏覽計數 key，將於下次排程重試 - key={}", key, e);
                 }
