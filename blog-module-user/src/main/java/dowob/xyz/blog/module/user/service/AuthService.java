@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
+import dowob.xyz.blog.module.user.util.TokenVersionUtils;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
@@ -353,14 +354,6 @@ public class AuthService {
      * @return 新的版本號，例如 "v2"
      */
     public static String incrementVersion(String currentVersion) {
-        if (currentVersion == null || !currentVersion.startsWith("v")) {
-            return "v1";
-        }
-        try {
-            int num = Integer.parseInt(currentVersion.substring(1));
-            return "v" + (num + 1);
-        } catch (NumberFormatException e) {
-            return "v1";
-        }
+        return TokenVersionUtils.incrementVersion(currentVersion);
     }
 }

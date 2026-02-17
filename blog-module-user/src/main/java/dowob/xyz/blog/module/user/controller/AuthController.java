@@ -104,11 +104,7 @@ public class AuthController {
             throw new BusinessException(UserErrorCode.TOKEN_INVALID);
         }
 
-        if (!jwtService.validateToken(refreshToken)) {
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
-        }
-
-        if (!"refresh".equals(jwtService.getTokenTypeFromToken(refreshToken))) {
+        if (!jwtService.validateRefreshToken(refreshToken)) {
             throw new BusinessException(UserErrorCode.TOKEN_INVALID);
         }
 

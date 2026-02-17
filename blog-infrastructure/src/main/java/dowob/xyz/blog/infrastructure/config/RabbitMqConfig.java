@@ -31,10 +31,10 @@ import org.springframework.retry.support.RetryTemplate;
  * </p>
  *
  * <ul>
- *   <li>消息序列化：JSON（跨語言相容）</li>
- *   <li>Publisher Confirm：CORRELATED 模式，記錄 nack 與 return</li>
- *   <li>DLQ：消費失敗訊息路由至 {@code queue.dead-letter}</li>
- *   <li>重試：最多 3 次，指數退避 1s→5s（乘數 5，上限 25s）</li>
+ * <li>消息序列化：JSON（跨語言相容）</li>
+ * <li>Publisher Confirm：CORRELATED 模式，記錄 nack 與 return</li>
+ * <li>DLQ：消費失敗訊息路由至 {@code queue.dead-letter}</li>
+ * <li>重試：最多 3 次，指數退避 1s→5s（乘數 5，上限 25s）</li>
  * </ul>
  *
  * @author Yuan
@@ -148,6 +148,31 @@ public class RabbitMqConfig {
         factory.setMessageConverter(converter);
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
         factory.setAdviceChain(buildRetryInterceptor());
+        return factory;
+    }
+
+    /**
+     * 自動確認模式的監聽容器工廠
+     *
+     * <p>
+     * 適用於非關鍵業務或無法處理重試的消費者（如日誌記錄、非同步統計）。
+     * 設置為 AUTO 模式，消費者無需手動調用 basicAck。
+     * </p>
+     *
+     * @param connectionFactory RabbitMQ 連接工廠
+     * @param converter         消息轉換器
+     * @return 已配置為 AUTO ACK 的 SimpleRabbitListenerContainerFactory
+     */
+    @Bean(name = "autoAckContainerFactory")
+    public SimpleRabbitListenerContainerFactory autoAckContainerFactory(ConnectionFactory connectionFactory,MessageConverter converter) {
+
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(converter);
+        factory.setAcknowledgeMode(AcknowledgeMode.AUTO);
+        // 對於 Auto Ack 模式，通常不建議配置複雜的 RetryInterceptor，
+        // 因為一旦拋出異常，Spring AMQP 預設行為是無限 Requeue (除非配置了 error handler)
+        // 這裡保持預設行為，若有需要可額外配置 ErrorHandler
         return factory;
     }
 

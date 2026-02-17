@@ -53,7 +53,7 @@ public class TagUsageConsumer {
      *
      * @param event 文章標籤事件
      */
-    @RabbitListener(queues = TagRabbitMqConfig.QUEUE_TAG_ARTICLE_TAGGED)
+    @RabbitListener(queues = TagRabbitMqConfig.QUEUE_TAG_ARTICLE_TAGGED, containerFactory = "autoAckContainerFactory")
     public void handleArticleTagged(ArticleTagEvent event) {
         for (UUID tagId : event.tagIds()) {
             Optional<Tag> tagOpt = tagRepository.findById(tagId);

@@ -10,6 +10,9 @@ jobs:
   test:
     name: 執行測試
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
 
     steps:
       - name: 取得程式碼
@@ -23,12 +26,27 @@ jobs:
           cache: maven
 
       - name: 執行所有測試
-        run: ./mvnw test --fail-at-end -T 2C --no-transfer-progress
+        run: ./mvnw -B verify --fail-at-end -T 2C --no-transfer-progress
 
-      - name: 上傳測試報告（僅在失敗時）
+      - name: 上傳測試報告到 Test Reporter
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Maven Tests
+          path: '**/target/surefire-reports/*.xml'
+          reporter: java-junit
+
+      - name: 上傳測試報告到 Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: surefire-reports
           path: '**/target/surefire-reports/'
           retention-days: 7
+
+      - name: 上傳 Jacoco 覆蓋率報告到 Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: '**/target/site/jacoco/'

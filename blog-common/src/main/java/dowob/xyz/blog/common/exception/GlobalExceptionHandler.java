@@ -3,6 +3,7 @@ package dowob.xyz.blog.common.exception;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
@@ -30,6 +31,25 @@ public class GlobalExceptionHandler {
     public ApiResponse<Void> handleBusinessException(BusinessException e, HttpServletRequest request) {
         log.warn("Business Exception: {} at {}", e.getMessage(), request.getRequestURI());
         return ApiResponse.failed(e.getCode(), e.getMessage());
+    }
+
+    /**
+     * 處理系統例外，回傳 HTTP 500 與結構化錯誤碼
+     *
+     * <p>
+     * {@link SystemException} 代表 B 類 / C 類系統內部錯誤，
+     * 以 ERROR 級別記錄完整 stack trace，並回傳 HTTP 500。
+     * </p>
+     *
+     * @param e       系統例外
+     * @param request 當前 HTTP 請求
+     * @return HTTP 500 回應，body 含錯誤碼與訊息
+     */
+    @ExceptionHandler(SystemException.class)
+    public ResponseEntity<ApiResponse<Void>> handleSystemException(SystemException e, HttpServletRequest request) {
+        log.error("System Exception: {} at {}", e.getMessage(), request.getRequestURI(), e);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.failed(e.getCode(), e.getMessage()));
     }
 
     /**
