@@ -182,4 +182,55 @@ class JwtServiceTest {
 
         assertThat(jwtService.getTokenTypeFromToken(token)).isEqualTo("refresh");
     }
+
+    /**
+     * 驗證：提供 PKCS8 PEM 格式的 EC 私鑰時，JwtService 應從 PEM 載入金鑰而非動態生成。
+     *
+     * <p>
+     * 預先使用 Java 產生一組 EC 金鑰對，將私鑰轉為 PKCS8 PEM 字串注入，
+     * 再驗證用該金鑰生成的 Token 仍可正確解析（公鑰由私鑰推導）。
+     * </p>
+     */
+    @Test
+    @DisplayName("提供 PEM 私鑰時，應從 PEM 載入金鑰而非動態生成")
+    void whenPrivateKeyPemProvided_shouldLoadFromPem() throws Exception {
+        java.security.KeyPairGenerator gen = java.security.KeyPairGenerator.getInstance("EC");
+        gen.initialize(256);
+        java.security.KeyPair pair = gen.generateKeyPair();
+        String pem = "-----BEGIN PRIVATE KEY-----\n"
+                + java.util.Base64.getMimeEncoder(64, new byte[]{'\n'})
+                .encodeToString(pair.getPrivate().getEncoded())
+                + "\n-----END PRIVATE KEY-----";
+
+        JwtService svcWithPem = new JwtService();
+        ReflectionTestUtils.setField(svcWithPem, "privateKeyPem", pem);
+        ReflectionTestUtils.setField(svcWithPem, "expiration", 3600000L);
+        ReflectionTestUtils.setField(svcWithPem, "accessTokenExpiration", 3600000L);
+        ReflectionTestUtils.setField(svcWithPem, "refreshTokenExpiration", 604800000L);
+        svcWithPem.init();
+
+        String token = svcWithPem.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+
+        assertThat(svcWithPem.validateToken(token)).isTrue();
+        assertThat(svcWithPem.getUserIdFromToken(token)).isEqualTo(String.valueOf(TEST_USER_ID));
+    }
+
+    /**
+     * 驗證：未提供 PEM 私鑰時（空字串），JwtService 應動態生成金鑰對（開發模式）。
+     */
+    @Test
+    @DisplayName("未提供 PEM 私鑰時，應動態生成金鑰對（開發模式）")
+    void whenPrivateKeyPemEmpty_shouldGenerateDynamically() {
+        JwtService svcNoPem = new JwtService();
+        ReflectionTestUtils.setField(svcNoPem, "privateKeyPem", "");
+        ReflectionTestUtils.setField(svcNoPem, "expiration", 3600000L);
+        ReflectionTestUtils.setField(svcNoPem, "accessTokenExpiration", 3600000L);
+        ReflectionTestUtils.setField(svcNoPem, "refreshTokenExpiration", 604800000L);
+        svcNoPem.init();
+
+        String token = svcNoPem.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+
+        assertThat(svcNoPem.validateToken(token)).isTrue();
+        assertThat(svcNoPem.getUserIdFromToken(token)).isEqualTo(String.valueOf(TEST_USER_ID));
+    }
 }
