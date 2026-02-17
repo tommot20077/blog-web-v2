@@ -37,12 +37,6 @@
             <artifactId>commonmark</artifactId>
         </dependency>
 
-        <!-- Markdown 渲染 -->
-        <dependency>
-            <groupId>org.commonmark</groupId>
-            <artifactId>commonmark</artifactId>
-        </dependency>
-
         <!-- Test Dependencies -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
