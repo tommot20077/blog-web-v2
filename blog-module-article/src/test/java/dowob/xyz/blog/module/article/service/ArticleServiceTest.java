@@ -31,6 +31,10 @@ import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.event.TagInfo;
+import dowob.xyz.blog.module.article.mapper.CategoryMapper;
+import dowob.xyz.blog.module.article.model.Category;
+import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
+import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import dowob.xyz.blog.module.article.service.ViewCountService;
 
 import java.time.LocalDateTime;
@@ -46,10 +50,12 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 
 /**
  * ArticleService 單元測試
@@ -79,6 +85,12 @@ class ArticleServiceTest {
 
     @Mock
     private StringRedisTemplate stringRedisTemplate;
+
+    @Mock
+    private CategoryMapper categoryMapper;
+
+    @Mock
+    private CategoryRepository categoryRepository;
 
     @InjectMocks
     private ArticleServiceImpl articleService;
@@ -123,6 +135,7 @@ class ArticleServiceTest {
         when(userFacade.getUserUsernameById(AUTHOR_ID)).thenReturn(Optional.of("testuser"));
         when(viewCountService.getViewCount(any())).thenReturn(0L);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
+        when(categoryMapper.findCategoriesByArticleIds(any())).thenReturn(List.of());
     }
 
     /**
@@ -310,6 +323,25 @@ class ArticleServiceTest {
         }
 
         @Test
+        @DisplayName("異常：updateArticle 時傳入不存在的 categoryUuid → CATEGORY_NOT_FOUND")
+        void updateArticle_withNonExistentCategoryUuid_throwsCategoryNotFound() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UUID nonExistentUuid = UUID.randomUUID();
+            when(categoryRepository.findByUuid(nonExistentUuid)).thenReturn(Optional.empty());
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setCategoryIds(List.of(nonExistentUuid));
+
+            assertThatThrownBy(
+                    () -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.CATEGORY_NOT_FOUND.getMessage());
+        }
+
+        @Test
         @DisplayName("正常：UpdateArticleRequest 全欄位為 null 時，現有資料不變")
         void updateArticle_allNullRequest_preservesExistingData() {
             Article article = buildArticle(ArticleStatus.DRAFT);
@@ -325,6 +357,29 @@ class ArticleServiceTest {
             verify(articleRepository).save(articleCaptor.capture());
             assertThat(articleCaptor.getValue().getTitle()).isEqualTo("測試標題");
             assertThat(articleCaptor.getValue().getContent()).isEqualTo("測試內容");
+        }
+
+        @Test
+        @DisplayName("異常：insertArticleCategory 拋出 DataIntegrityViolationException 時，syncCategories 應往外傳播")
+        void updateArticle_propagatesException_whenInsertCategoryFails() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UUID catUuid = UUID.randomUUID();
+            Category category = new Category();
+            category.setId(5L);
+            category.setUuid(catUuid);
+            when(categoryRepository.findByUuid(catUuid)).thenReturn(Optional.of(category));
+            doThrow(new DataIntegrityViolationException("duplicate key"))
+                    .when(categoryMapper).insertArticleCategory(anyLong(), anyLong());
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setCategoryIds(List.of(catUuid));
+
+            assertThatThrownBy(
+                    () -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(DataIntegrityViolationException.class);
         }
 
         @Test
@@ -572,6 +627,29 @@ class ArticleServiceTest {
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                     any(ArticleViewedEvent.class));
+        }
+
+        @Test
+        @DisplayName("正常：getArticleByUuid 應使用批次查詢 findCategoriesByArticleIds 取得分類")
+        void getArticleByUuid_shouldUseBatchCategoryQuery() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+
+            UUID catUuid = UUID.randomUUID();
+            CategoryWithArticleId catWithId = new CategoryWithArticleId();
+            catWithId.setId(10L);
+            catWithId.setUuid(catUuid);
+            catWithId.setName("技術");
+            catWithId.setSlug("tech");
+            catWithId.setArticleId(1L);
+            when(categoryMapper.findCategoriesByArticleIds(List.of(1L))).thenReturn(List.of(catWithId));
+
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            assertThat(response.getCategories()).hasSize(1);
+            assertThat(response.getCategories().get(0).getUuid()).isEqualTo(catUuid);
+            assertThat(response.getCategories().get(0).getName()).isEqualTo("技術");
         }
 
         @Test

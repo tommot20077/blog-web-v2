@@ -11,12 +11,17 @@ import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import dowob.xyz.blog.module.article.mapper.CategoryMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.Category;
+import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.commonmark.node.Node;
@@ -32,6 +37,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -83,6 +89,16 @@ public class ArticleServiceImpl implements ArticleService {
     private final StringRedisTemplate stringRedisTemplate;
 
     /**
+     * 分類 Mapper（同步 article_categories + 查詢分類）
+     */
+    private final CategoryMapper categoryMapper;
+
+    /**
+     * 分類 Repository（根據 UUID 查詢分類實體）
+     */
+    private final CategoryRepository categoryRepository;
+
+    /**
      * Redis 防刷 Key 前綴
      */
     private static final String VIEW_KEY_PREFIX = "view:";
@@ -121,6 +137,12 @@ public class ArticleServiceImpl implements ArticleService {
         article.setCommentCount(0);
 
         Article saved = articleRepository.save(article);
+
+        // 同步文章分類
+        if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
+            syncCategories(saved.getId(), request.getCategoryIds());
+        }
+
         return toResponse(saved);
     }
 
@@ -161,6 +183,12 @@ public class ArticleServiceImpl implements ArticleService {
         }
 
         Article updated = articleRepository.save(article);
+
+        // 同步文章分類（null 表示不更新，空列表表示清除）
+        if (request.getCategoryIds() != null) {
+            syncCategories(updated.getId(), request.getCategoryIds());
+        }
+
         return toResponse(updated);
     }
 
@@ -198,7 +226,7 @@ public class ArticleServiceImpl implements ArticleService {
         Article article = findByUuidOrThrow(articleUuid);
 
         boolean isAdmin = Role.ADMIN == viewerRole;
-        boolean isAuthor = article.getAuthorId().equals(viewerId);
+        boolean isAuthor = Objects.equals(article.getAuthorId(), viewerId);
         boolean isPublished = article.getStatus().isPubliclyVisible();
 
         if (!isPublished && !isAdmin && !isAuthor) {
@@ -233,6 +261,24 @@ public class ArticleServiceImpl implements ArticleService {
         long offset = (long) (pageNum - 1) * pageSize;
         List<Article> articles = articleMapper.findPublishedPage(offset, pageSize);
         long total = articleMapper.countPublished();
+        List<ArticleSummaryResponse> list = articles.stream().map(this::toSummaryResponse).collect(Collectors.toList());
+        return PageResult.of(pageNum, pageSize, total, list);
+    }
+
+    /**
+     * 根據分類 slug 分頁取得已發布文章列表
+     *
+     * @param categorySlug 分類 slug
+     * @param pageNum      頁碼（從 1 開始）
+     * @param pageSize     每頁筆數
+     * @return 分頁文章摘要列表
+     */
+    @Override
+    public PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(
+            String categorySlug, int pageNum, int pageSize) {
+        long offset = (long) (pageNum - 1) * pageSize;
+        List<Article> articles = articleMapper.findPublishedPageByCategorySlug(categorySlug, offset, pageSize);
+        long total = articleMapper.countPublishedByCategorySlug(categorySlug);
         List<ArticleSummaryResponse> list = articles.stream().map(this::toSummaryResponse).collect(Collectors.toList());
         return PageResult.of(pageNum, pageSize, total, list);
     }
@@ -510,6 +556,7 @@ public class ArticleServiceImpl implements ArticleService {
                 .viewCount(viewCountService.getViewCount(article.getUuid()))
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
+                .categories(toCategoryResponses(article.getId()))
                 .build();
     }
 
@@ -531,5 +578,60 @@ public class ArticleServiceImpl implements ArticleService {
                 .viewCount(article.getViewCount())
                 .createdAt(article.getCreatedAt())
                 .build();
+    }
+
+    /**
+     * 同步文章分類關聯
+     *
+     * <p>
+     * 先刪除文章現有所有分類關聯，再根據傳入的 UUID 列表重新建立。
+     * 空列表表示清除所有分類，null 由呼叫端決定是否進入此方法。
+     * </p>
+     *
+     * @param articleId   文章資料庫主鍵
+     * @param categoryIds 分類 UUID 列表（空列表表示清除所有）
+     */
+    private void syncCategories(Long articleId, List<UUID> categoryIds) {
+        categoryMapper.deleteArticleCategoriesByArticleId(articleId);
+        if (categoryIds != null && !categoryIds.isEmpty()) {
+            for (UUID categoryUuid : categoryIds) {
+                Category category = categoryRepository.findByUuid(categoryUuid)
+                        .orElseThrow(() -> new BusinessException(ArticleErrorCode.CATEGORY_NOT_FOUND));
+                categoryMapper.insertArticleCategory(articleId, category.getId());
+            }
+        }
+    }
+
+    /**
+     * 查詢文章分類並轉換為 Response（委派批次查詢，支援單篇使用）
+     *
+     * @param articleId 文章資料庫主鍵
+     * @return 分類回應列表
+     */
+    private List<CategoryResponse> toCategoryResponses(Long articleId) {
+        if (articleId == null) return List.of();
+        return batchToCategoryResponsesMap(List.of(articleId))
+                .getOrDefault(articleId, List.of());
+    }
+
+    /**
+     * 批次查詢多篇文章分類並轉換為 Map（供列表場景使用，避免 N+1）
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return Map&lt;articleId, 分類回應列表&gt;
+     */
+    private Map<Long, List<CategoryResponse>> batchToCategoryResponsesMap(List<Long> articleIds) {
+        if (articleIds == null || articleIds.isEmpty()) return Map.of();
+        List<CategoryWithArticleId> all = categoryMapper.findCategoriesByArticleIds(articleIds);
+        return all.stream().collect(Collectors.groupingBy(
+                CategoryWithArticleId::getArticleId,
+                Collectors.mapping(c -> CategoryResponse.builder()
+                        .uuid(c.getUuid())
+                        .name(c.getName())
+                        .slug(c.getSlug())
+                        .description(c.getDescription())
+                        .sortOrder(c.getSortOrder())
+                        .build(),
+                        Collectors.toList())));
     }
 }

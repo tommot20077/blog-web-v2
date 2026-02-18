@@ -52,14 +52,24 @@ public class ArticleController {
     /**
      * 分頁取得已發布文章列表（公開）
      *
-     * @param pageNum  頁碼，預設 1
-     * @param pageSize 每頁筆數，預設 10
+     * <p>
+     * 支援以 categorySlug 篩選特定分類下的文章。
+     * categorySlug 為 null 或空白時，回傳所有已發布文章。
+     * </p>
+     *
+     * @param pageNum      頁碼，預設 1
+     * @param pageSize     每頁筆數，預設 10
+     * @param categorySlug 分類 slug（可選）
      * @return 分頁文章摘要列表
      */
     @GetMapping
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPublishedArticles(
             @RequestParam(defaultValue = "1") int pageNum,
-            @RequestParam(defaultValue = "10") int pageSize) {
+            @RequestParam(defaultValue = "10") int pageSize,
+            @RequestParam(required = false) String categorySlug) {
+        if (categorySlug != null && !categorySlug.isBlank()) {
+            return ApiResponse.success(articleService.getPublishedArticlesByCategorySlug(categorySlug, pageNum, pageSize));
+        }
         return ApiResponse.success(articleService.getPublishedArticles(pageNum, pageSize));
     }
 

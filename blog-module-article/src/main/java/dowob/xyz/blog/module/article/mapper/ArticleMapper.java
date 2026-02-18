@@ -150,4 +150,34 @@ public interface ArticleMapper {
      */
     @Update("UPDATE articles SET view_count = view_count + #{delta} WHERE uuid = #{uuid}::uuid")
     void incrementViewCountBatch(@Param("uuid") UUID uuid, @Param("delta") long delta);
+
+    /**
+     * 根據分類 slug 分頁查詢已發布文章
+     *
+     * @param categorySlug 分類 slug
+     * @param offset       偏移量
+     * @param size         每頁筆數
+     * @return 文章列表
+     */
+    @Select("SELECT a.* FROM articles a " +
+            "INNER JOIN article_categories ac ON a.id = ac.article_id " +
+            "INNER JOIN categories c ON ac.category_id = c.id " +
+            "WHERE a.status = 'PUBLISHED' AND c.slug = #{categorySlug} " +
+            "ORDER BY a.created_at DESC LIMIT #{size} OFFSET #{offset}")
+    List<Article> findPublishedPageByCategorySlug(
+            @Param("categorySlug") String categorySlug,
+            @Param("offset") long offset,
+            @Param("size") int size);
+
+    /**
+     * 根據分類 slug 計算已發布文章總筆數
+     *
+     * @param categorySlug 分類 slug
+     * @return 總筆數
+     */
+    @Select("SELECT COUNT(DISTINCT a.id) FROM articles a " +
+            "INNER JOIN article_categories ac ON a.id = ac.article_id " +
+            "INNER JOIN categories c ON ac.category_id = c.id " +
+            "WHERE a.status = 'PUBLISHED' AND c.slug = #{categorySlug}")
+    long countPublishedByCategorySlug(@Param("categorySlug") String categorySlug);
 }

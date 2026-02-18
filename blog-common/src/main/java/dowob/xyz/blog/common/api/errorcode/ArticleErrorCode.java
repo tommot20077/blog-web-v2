@@ -31,7 +31,22 @@ public enum ArticleErrorCode implements IErrorCode {
     /**
      * 非法狀態轉換
      */
-    ARTICLE_STATUS_TRANSITION_INVALID("A0204", "文章狀態轉換不合法");
+    ARTICLE_STATUS_TRANSITION_INVALID("A0204", "文章狀態轉換不合法"),
+
+    /**
+     * 分類不存在
+     */
+    CATEGORY_NOT_FOUND("A0205", "分類不存在"),
+
+    /**
+     * 分類下仍有文章，無法刪除
+     */
+    CATEGORY_HAS_ARTICLES("A0206", "分類下仍有文章，無法刪除"),
+
+    /**
+     * 分類 slug 已被使用
+     */
+    CATEGORY_SLUG_DUPLICATE("A0207", "分類 slug 已被使用");
 
     /**
      * 錯誤碼

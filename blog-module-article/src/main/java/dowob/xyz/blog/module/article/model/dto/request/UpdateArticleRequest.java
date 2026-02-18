@@ -4,6 +4,9 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+import java.util.List;
+import java.util.UUID;
+
 /**
  * 更新文章請求 DTO
  *
@@ -38,4 +41,9 @@ public class UpdateArticleRequest {
      * 文章狀態（可選）
      */
     private ArticleStatus status;
+
+    /**
+     * 文章分類 UUID 列表（可選，null 表示不更新，空列表表示清除所有分類）
+     */
+    private List<UUID> categoryIds;
 }

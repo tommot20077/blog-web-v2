@@ -78,6 +78,16 @@ public interface ArticleService {
     PageResult<ArticleSummaryResponse> getPublishedArticles(int pageNum, int pageSize);
 
     /**
+     * 根據分類 slug 分頁取得已發布文章列表
+     *
+     * @param categorySlug 分類 slug
+     * @param pageNum      頁碼
+     * @param pageSize     每頁筆數
+     * @return 分頁文章摘要列表
+     */
+    PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(String categorySlug, int pageNum, int pageSize);
+
+    /**
      * 分頁取得當前登入用戶的文章列表
      *
      * @param authorId 作者資料庫主鍵
