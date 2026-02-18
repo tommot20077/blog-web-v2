@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 建立文章請求 DTO
@@ -43,5 +44,5 @@ public class CreateArticleRequest {
     /**
      * 文章分類 UUID 列表（可選）
      */
-    private List<java.util.UUID> categoryIds;
+    private List<UUID> categoryIds;
 }

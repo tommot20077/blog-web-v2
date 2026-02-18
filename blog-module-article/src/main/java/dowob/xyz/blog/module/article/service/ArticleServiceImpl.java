@@ -35,6 +35,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -223,7 +224,7 @@ public class ArticleServiceImpl implements ArticleService {
         Article article = findByUuidOrThrow(articleUuid);
 
         boolean isAdmin = Role.ADMIN == viewerRole;
-        boolean isAuthor = article.getAuthorId().equals(viewerId);
+        boolean isAuthor = Objects.equals(article.getAuthorId(), viewerId);
         boolean isPublished = article.getStatus().isPubliclyVisible();
 
         if (!isPublished && !isAdmin && !isAuthor) {

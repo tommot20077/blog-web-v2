@@ -74,12 +74,6 @@ public class CategoryServiceImpl implements CategoryService {
                 throw new BusinessException(ArticleErrorCode.CATEGORY_SLUG_DUPLICATE);
             }
             category.setSlug(request.getSlug());
-        } else if (request.getSlug() != null) {
-            // slug 相同，仍需檢查不與其他衝突（但自身排除）
-            if (categoryRepository.existsBySlugAndIdNot(request.getSlug(), category.getId())) {
-                throw new BusinessException(ArticleErrorCode.CATEGORY_SLUG_DUPLICATE);
-            }
-            category.setSlug(request.getSlug());
         }
 
         if (request.getName() != null) {

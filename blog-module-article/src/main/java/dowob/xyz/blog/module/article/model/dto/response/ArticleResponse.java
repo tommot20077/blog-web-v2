@@ -85,5 +85,5 @@ public class ArticleResponse {
     /**
      * 文章分類列表
      */
-    private java.util.List<CategoryResponse> categories;
+    private List<CategoryResponse> categories;
 }
