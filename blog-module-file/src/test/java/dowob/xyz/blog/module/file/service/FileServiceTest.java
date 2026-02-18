@@ -27,9 +27,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import org.springframework.util.unit.DataSize;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,21 +59,20 @@ class FileServiceTest {
     @Mock
     private RabbitTemplate rabbitTemplate;
 
-    @Mock
-    private FileProperties fileProperties;
+    private final FileProperties fileProperties = new FileProperties(
+            Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)),
+            Set.of("image/jpeg", "image/png", "image/webp", "image/gif")
+    );
 
     @InjectMocks
     private FileServiceImpl fileService;
 
-    /** 測試前設定 bucketName、minioEndpoint 及 FileProperties mock */
+    /** 測試前設定 bucketName、minioEndpoint 及 FileProperties 真實實例 */
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(fileService, "bucketName", "test-bucket");
         ReflectionTestUtils.setField(fileService, "minioEndpoint", "http://localhost:9000");
-        when(fileProperties.allowedMimeTypes())
-                .thenReturn(List.of("image/jpeg", "image/png", "image/webp", "image/gif"));
-        when(fileProperties.quotas())
-                .thenReturn(Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)));
+        ReflectionTestUtils.setField(fileService, "fileProperties", fileProperties);
     }
 
     /** 上傳相關測試 */

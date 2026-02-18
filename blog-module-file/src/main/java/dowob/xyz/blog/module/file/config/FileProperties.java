@@ -3,8 +3,8 @@ package dowob.xyz.blog.module.file.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.util.unit.DataSize;
 
-import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 檔案模組外部化設定
@@ -33,8 +33,14 @@ public record FileProperties(
         Map<String, DataSize> quotas,
 
         /**
-         * 允許上傳的 MIME 類型清單
+         * 允許上傳的 MIME 類型集合（使用 Set 確保無重複）
          */
-        List<String> allowedMimeTypes
+        Set<String> allowedMimeTypes
 
-) {}
+) {
+    /** 防禦性預設值：避免 YAML 未設定時的 NPE */
+    public FileProperties {
+        if (quotas == null) quotas = Map.of();
+        if (allowedMimeTypes == null) allowedMimeTypes = Set.of();
+    }
+}
