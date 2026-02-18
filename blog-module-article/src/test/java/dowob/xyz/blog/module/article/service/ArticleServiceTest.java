@@ -32,6 +32,7 @@ import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
+import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import dowob.xyz.blog.module.article.service.ViewCountService;
 
@@ -131,7 +132,7 @@ class ArticleServiceTest {
         when(userFacade.getUserUsernameById(AUTHOR_ID)).thenReturn(Optional.of("testuser"));
         when(viewCountService.getViewCount(any())).thenReturn(0L);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
-        when(categoryMapper.findCategoriesByArticleId(anyLong())).thenReturn(List.of());
+        when(categoryMapper.findCategoriesByArticleIds(any())).thenReturn(List.of());
     }
 
     /**
@@ -600,6 +601,29 @@ class ArticleServiceTest {
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                     any(ArticleViewedEvent.class));
+        }
+
+        @Test
+        @DisplayName("正常：getArticleByUuid 應使用批次查詢 findCategoriesByArticleIds 取得分類")
+        void getArticleByUuid_shouldUseBatchCategoryQuery() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+
+            UUID catUuid = UUID.randomUUID();
+            CategoryWithArticleId catWithId = new CategoryWithArticleId();
+            catWithId.setId(10L);
+            catWithId.setUuid(catUuid);
+            catWithId.setName("技術");
+            catWithId.setSlug("tech");
+            catWithId.setArticleId(1L);
+            when(categoryMapper.findCategoriesByArticleIds(List.of(1L))).thenReturn(List.of(catWithId));
+
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            assertThat(response.getCategories()).hasSize(1);
+            assertThat(response.getCategories().get(0).getUuid()).isEqualTo(catUuid);
+            assertThat(response.getCategories().get(0).getName()).isEqualTo("技術");
         }
 
         @Test

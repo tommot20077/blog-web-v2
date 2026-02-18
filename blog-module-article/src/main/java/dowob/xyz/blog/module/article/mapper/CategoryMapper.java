@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.article.mapper;
 
 import dowob.xyz.blog.module.article.model.Category;
+import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
@@ -51,6 +52,22 @@ public interface CategoryMapper {
             "WHERE ac.article_id = #{articleId} " +
             "ORDER BY c.sort_order ASC")
     List<Category> findCategoriesByArticleId(@Param("articleId") Long articleId);
+
+    /**
+     * 批次查詢多篇文章的分類（解決 N+1 問題）
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return 帶有 articleId 的分類列表
+     */
+    @Select("<script>" +
+            "SELECT c.id, c.uuid, c.name, c.slug, c.description, c.sort_order, ac.article_id " +
+            "FROM categories c " +
+            "INNER JOIN article_categories ac ON c.id = ac.category_id " +
+            "WHERE ac.article_id IN " +
+            "<foreach item='id' collection='articleIds' open='(' separator=',' close=')'>#{id}</foreach>" +
+            " ORDER BY c.sort_order ASC" +
+            "</script>")
+    List<CategoryWithArticleId> findCategoriesByArticleIds(@Param("articleIds") List<Long> articleIds);
 
     /**
      * 計算特定分類下的文章數量

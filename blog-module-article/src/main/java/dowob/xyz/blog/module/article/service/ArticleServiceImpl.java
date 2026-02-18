@@ -14,6 +14,7 @@ import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.Category;
+import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -602,21 +603,35 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
-     * 查詢文章分類並轉換為 Response
+     * 查詢文章分類並轉換為 Response（委派批次查詢，支援單篇使用）
      *
      * @param articleId 文章資料庫主鍵
      * @return 分類回應列表
      */
     private List<CategoryResponse> toCategoryResponses(Long articleId) {
         if (articleId == null) return List.of();
-        return categoryMapper.findCategoriesByArticleId(articleId).stream()
-                .map(c -> CategoryResponse.builder()
+        return batchToCategoryResponsesMap(List.of(articleId))
+                .getOrDefault(articleId, List.of());
+    }
+
+    /**
+     * 批次查詢多篇文章分類並轉換為 Map（供列表場景使用，避免 N+1）
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return Map&lt;articleId, 分類回應列表&gt;
+     */
+    private Map<Long, List<CategoryResponse>> batchToCategoryResponsesMap(List<Long> articleIds) {
+        if (articleIds == null || articleIds.isEmpty()) return Map.of();
+        List<CategoryWithArticleId> all = categoryMapper.findCategoriesByArticleIds(articleIds);
+        return all.stream().collect(Collectors.groupingBy(
+                CategoryWithArticleId::getArticleId,
+                Collectors.mapping(c -> CategoryResponse.builder()
                         .uuid(c.getUuid())
                         .name(c.getName())
                         .slug(c.getSlug())
                         .description(c.getDescription())
                         .sortOrder(c.getSortOrder())
-                        .build())
-                .collect(Collectors.toList());
+                        .build(),
+                        Collectors.toList())));
     }
 }
