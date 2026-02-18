@@ -13,6 +13,7 @@ import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.Category;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -593,8 +594,9 @@ public class ArticleServiceImpl implements ArticleService {
         categoryMapper.deleteArticleCategoriesByArticleId(articleId);
         if (categoryIds != null && !categoryIds.isEmpty()) {
             for (UUID categoryUuid : categoryIds) {
-                categoryRepository.findByUuid(categoryUuid)
-                        .ifPresent(category -> categoryMapper.insertArticleCategory(articleId, category.getId()));
+                Category category = categoryRepository.findByUuid(categoryUuid)
+                        .orElseThrow(() -> new BusinessException(ArticleErrorCode.CATEGORY_NOT_FOUND));
+                categoryMapper.insertArticleCategory(articleId, category.getId());
             }
         }
     }

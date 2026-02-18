@@ -319,6 +319,25 @@ class ArticleServiceTest {
         }
 
         @Test
+        @DisplayName("異常：updateArticle 時傳入不存在的 categoryUuid → CATEGORY_NOT_FOUND")
+        void updateArticle_withNonExistentCategoryUuid_throwsCategoryNotFound() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UUID nonExistentUuid = UUID.randomUUID();
+            when(categoryRepository.findByUuid(nonExistentUuid)).thenReturn(Optional.empty());
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setCategoryIds(List.of(nonExistentUuid));
+
+            assertThatThrownBy(
+                    () -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.CATEGORY_NOT_FOUND.getMessage());
+        }
+
+        @Test
         @DisplayName("正常：UpdateArticleRequest 全欄位為 null 時，現有資料不變")
         void updateArticle_allNullRequest_preservesExistingData() {
             Article article = buildArticle(ArticleStatus.DRAFT);
