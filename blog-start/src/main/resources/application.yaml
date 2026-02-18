@@ -51,6 +51,18 @@ minio:
   secret-key: ${MINIO_SECRET_KEY:minioadmin}
   bucket-name: ${MINIO_BUCKET:blog-files}
 
+# 檔案模組設定
+blog:
+  file:
+    quotas:
+      USER: 10MB
+      AUTHOR: 500MB
+    allowed-mime-types:
+      - image/jpeg
+      - image/png
+      - image/webp
+      - image/gif
+
 # SpringDoc OpenAPI 配置
 springdoc:
   swagger-ui:

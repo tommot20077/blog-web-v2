@@ -138,22 +138,21 @@ class ViewCountServiceTest {
     }
 
     /**
-     * 情境六：flushViewCounts 有 key → 先讀取，寫入 DB 後才刪除 Redis key
+     * 情境六：flushViewCounts 有 key → 原子讀取+刪除後寫入 DB
      */
     @Test
-    @DisplayName("flushViewCounts：Redis 有 key → 先寫 DB 再刪 Redis key")
+    @DisplayName("flushViewCounts：Redis 有 key → getAndDelete 原子操作後寫入 DB")
     @SuppressWarnings("unchecked")
     void flushViewCounts_withKeys_flushesToDbThenDeletesKey() {
         UUID uuid1 = UUID.randomUUID();
         String key = "article:views:" + uuid1;
         when(cursor.hasNext()).thenReturn(true, false);
         when(cursor.next()).thenReturn(key);
-        when(valueOps.get(key)).thenReturn("3");
+        when(valueOps.getAndDelete(key)).thenReturn("3");
 
         viewCountService.flushViewCounts();
 
         verify(articleMapper).incrementViewCountBatch(uuid1, 3L);
-        verify(stringRedisTemplate).delete(key);
     }
 
     /**
@@ -182,7 +181,7 @@ class ViewCountServiceTest {
         String key = "article:views:" + uuid;
         when(cursor.hasNext()).thenReturn(true, false);
         when(cursor.next()).thenReturn(key);
-        when(valueOps.get(key)).thenReturn("not-a-number");
+        when(valueOps.getAndDelete(key)).thenReturn("not-a-number");
 
         assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
         verify(articleMapper, never()).incrementViewCountBatch(any(), anyLong());
@@ -199,7 +198,7 @@ class ViewCountServiceTest {
         String key = "article:views:" + uuid;
         when(cursor.hasNext()).thenReturn(true, false);
         when(cursor.next()).thenReturn(key);
-        when(valueOps.get(key)).thenReturn("5");
+        when(valueOps.getAndDelete(key)).thenReturn("5");
         doThrow(new RuntimeException("DB 寫入失敗")).when(articleMapper)
                 .incrementViewCountBatch(any(), anyLong());
 

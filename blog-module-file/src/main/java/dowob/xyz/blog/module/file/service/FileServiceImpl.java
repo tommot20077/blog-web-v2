@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.file.model.FileErrorCode;
@@ -19,14 +20,16 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.Iterator;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -40,18 +43,11 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class FileServiceImpl implements FileService {
 
-    /** 支援的圖片 MIME 類型 */
-    private static final Set<String> ALLOWED_MIME_TYPES = Set.of(
-            "image/jpeg", "image/png", "image/webp", "image/gif");
-
     /** 單檔最大大小：5MB */
     private static final long MAX_FILE_SIZE = 5L * 1024 * 1024;
 
-    /** USER 角色配額：10MB */
-    private static final long USER_QUOTA = 10L * 1024 * 1024;
-
-    /** AUTHOR 角色配額：500MB */
-    private static final long AUTHOR_QUOTA = 500L * 1024 * 1024;
+    /** 檔案模組設定（配額、允許的 MIME 類型） */
+    private final FileProperties fileProperties;
 
     /** 檔案元資料 Repository */
     private final FileMetadataRepository fileMetadataRepository;
@@ -82,7 +78,7 @@ public class FileServiceImpl implements FileService {
     @Override
     public FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole) {
         String detectedMimeType = detectMimeType(file);
-        if (!ALLOWED_MIME_TYPES.contains(detectedMimeType)) {
+        if (!fileProperties.allowedMimeTypes().contains(detectedMimeType)) {
             throw new BusinessException(FileErrorCode.INVALID_FILE_TYPE);
         }
         if (file.getSize() > MAX_FILE_SIZE) {
@@ -112,11 +108,17 @@ public class FileServiceImpl implements FileService {
         }
         Integer width = null;
         Integer height = null;
-        try {
-            BufferedImage img = ImageIO.read(file.getInputStream());
-            if (img != null) {
-                width = img.getWidth();
-                height = img.getHeight();
+        try (ImageInputStream iis = ImageIO.createImageInputStream(file.getInputStream())) {
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
+            if (readers.hasNext()) {
+                ImageReader reader = readers.next();
+                try {
+                    reader.setInput(iis);
+                    width = reader.getWidth(0);
+                    height = reader.getHeight(0);
+                } finally {
+                    reader.dispose();
+                }
             }
         } catch (IOException e) {
             log.warn("無法讀取圖片尺寸: {}", e.getMessage());
@@ -240,10 +242,11 @@ public class FileServiceImpl implements FileService {
     private long resolveQuota(String role) {
         if ("ADMIN".equalsIgnoreCase(role)) {
             return Long.MAX_VALUE;
-        } else if ("AUTHOR".equalsIgnoreCase(role)) {
-            return AUTHOR_QUOTA;
         }
-        return USER_QUOTA;
+        String key = role.toUpperCase();
+        DataSize dataSize = fileProperties.quotas().getOrDefault(key,
+                fileProperties.quotas().getOrDefault("USER", DataSize.ofMegabytes(10)));
+        return dataSize.toBytes();
     }
 
     /**

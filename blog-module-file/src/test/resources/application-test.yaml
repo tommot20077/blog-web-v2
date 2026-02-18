@@ -3,6 +3,18 @@ minio:
   access-key: minioadmin
   secret-key: minioadmin
   bucket-name: blog-files
+
+blog:
+  file:
+    quotas:
+      USER: 10MB
+      AUTHOR: 500MB
+    allowed-mime-types:
+      - image/jpeg
+      - image/png
+      - image/webp
+      - image/gif
+
 spring:
   data:
     redis:
