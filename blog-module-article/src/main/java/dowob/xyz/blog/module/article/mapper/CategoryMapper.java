@@ -84,7 +84,7 @@ public interface CategoryMapper {
      * @param articleId  文章資料庫主鍵
      * @param categoryId 分類資料庫主鍵
      */
-    @Insert("INSERT INTO article_categories (article_id, category_id) VALUES (#{articleId}, #{categoryId}) ON CONFLICT DO NOTHING")
+    @Insert("INSERT INTO article_categories (article_id, category_id) VALUES (#{articleId}, #{categoryId})")
     void insertArticleCategory(@Param("articleId") Long articleId, @Param("categoryId") Long categoryId);
 
     /**

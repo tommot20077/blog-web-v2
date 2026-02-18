@@ -32,6 +32,7 @@ import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
+import dowob.xyz.blog.module.article.model.Category;
 import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import dowob.xyz.blog.module.article.service.ViewCountService;
@@ -49,10 +50,12 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 
 /**
  * ArticleService 單元測試
@@ -354,6 +357,29 @@ class ArticleServiceTest {
             verify(articleRepository).save(articleCaptor.capture());
             assertThat(articleCaptor.getValue().getTitle()).isEqualTo("測試標題");
             assertThat(articleCaptor.getValue().getContent()).isEqualTo("測試內容");
+        }
+
+        @Test
+        @DisplayName("異常：insertArticleCategory 拋出 DataIntegrityViolationException 時，syncCategories 應往外傳播")
+        void updateArticle_propagatesException_whenInsertCategoryFails() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UUID catUuid = UUID.randomUUID();
+            Category category = new Category();
+            category.setId(5L);
+            category.setUuid(catUuid);
+            when(categoryRepository.findByUuid(catUuid)).thenReturn(Optional.of(category));
+            doThrow(new DataIntegrityViolationException("duplicate key"))
+                    .when(categoryMapper).insertArticleCategory(anyLong(), anyLong());
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setCategoryIds(List.of(catUuid));
+
+            assertThatThrownBy(
+                    () -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(DataIntegrityViolationException.class);
         }
 
         @Test
