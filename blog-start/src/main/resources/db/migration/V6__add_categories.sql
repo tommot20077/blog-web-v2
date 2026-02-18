@@ -18,5 +18,5 @@ CREATE TABLE article_categories
     PRIMARY KEY (article_id, category_id)
 );
 
-CREATE INDEX idx_article_categories_article_id ON article_categories (article_id);
+-- idx_article_categories_article_id 已由複合主鍵 (article_id, category_id) 的首欄自動涵蓋，無需重複建立
 CREATE INDEX idx_article_categories_category_id ON article_categories (category_id);
