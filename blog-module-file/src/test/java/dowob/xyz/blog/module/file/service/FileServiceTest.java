@@ -24,6 +24,8 @@ import org.mockito.quality.Strictness;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -33,10 +35,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -62,6 +66,9 @@ class FileServiceTest {
     @Mock
     private RabbitTemplate rabbitTemplate;
 
+    @Mock
+    private TransactionTemplate transactionTemplate;
+
     private final FileProperties fileProperties = new FileProperties(
             Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)),
             Set.of("image/jpeg", "image/png", "image/webp", "image/gif")
@@ -76,6 +83,13 @@ class FileServiceTest {
         ReflectionTestUtils.setField(fileService, "bucketName", "test-bucket");
         ReflectionTestUtils.setField(fileService, "minioEndpoint", "http://localhost:9000");
         ReflectionTestUtils.setField(fileService, "fileProperties", fileProperties);
+        // 讓 transactionTemplate.executeWithoutResult() 實際執行 callback
+        doAnswer(inv -> {
+            @SuppressWarnings("unchecked")
+            Consumer<TransactionStatus> consumer = inv.getArgument(0);
+            consumer.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
     }
 
     /** 上傳相關測試 */
@@ -283,11 +297,11 @@ class FileServiceTest {
         }
 
         /**
-         * 驗證 MQ convertAndSend 失敗時，補償刪除 MinIO 已上傳的檔案且異常正確傳播
+         * 驗證 MQ convertAndSend 失敗時（best-effort），上傳仍成功、不觸發補償、回傳非 null 結果
          */
         @Test
-        @DisplayName("uploadFile_whenMqFails_compensatesMinioDelete")
-        void uploadFile_whenMqFails_compensatesMinioDelete() throws Exception {
+        @DisplayName("uploadFile_whenMqFails_uploadStillSucceeds")
+        void uploadFile_whenMqFails_uploadStillSucceeds() throws Exception {
             byte[] jpegBytes = minimalJpegBytes();
             MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
@@ -295,12 +309,12 @@ class FileServiceTest {
             org.mockito.Mockito.doThrow(new RuntimeException("MQ failure"))
                     .when(rabbitTemplate).convertAndSend(any(String.class), any(String.class), (Object) any());
 
-            assertThatThrownBy(() ->
-                    fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("MQ failure");
+            FileUploadResponse response = fileService.uploadFile(
+                    file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
 
-            verify(minioClient).removeObject(any(RemoveObjectArgs.class));
+            assertThat(response).isNotNull();
+            assertThat(response.getId()).isNotNull();
+            verify(minioClient, never()).removeObject(any(RemoveObjectArgs.class));
         }
 
         /**
