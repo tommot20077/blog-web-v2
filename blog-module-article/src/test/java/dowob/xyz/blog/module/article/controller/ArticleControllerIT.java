@@ -465,8 +465,8 @@ class ArticleControllerIT {
     }
 
     @Test
-    @DisplayName("POST /api/v1/articles/{uuid}/reject - AUTHOR（非 ADMIN）呼叫 → 業務錯誤 A0203")
-    void rejectArticle_authorForbidden_businessError() throws Exception {
+    @DisplayName("POST /api/v1/articles/{uuid}/reject - AUTHOR（非 ADMIN）呼叫 → 403 Forbidden")
+    void rejectArticle_authorForbidden_returns403() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
         when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
@@ -494,7 +494,7 @@ class ArticleControllerIT {
                 .content(objectMapper.writeValueAsString(submitRequest)))
                 .andExpect(status().isOk());
 
-        /** AUTHOR 嘗試駁回 → 應回傳業務錯誤（非 500） */
+        /** AUTHOR 嘗試駁回 → @PreAuthorize 攔截，回傳 403 */
         dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest rejectRequest =
                 new dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest();
         rejectRequest.setReason("想試試駁回");
@@ -503,8 +503,7 @@ class ArticleControllerIT {
                 .with(asUser(AUTHOR_ID, Role.AUTHOR))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(rejectRequest)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("A0203"));
+                .andExpect(status().isForbidden());
     }
 
     @Test

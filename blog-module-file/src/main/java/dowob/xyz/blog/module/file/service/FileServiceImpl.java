@@ -22,6 +22,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -77,6 +78,7 @@ public class FileServiceImpl implements FileService {
      * @param uploaderRole 上傳者角色字串
      * @return 上傳成功的檔案回應資訊
      */
+    @Transactional
     @Override
     public FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole) {
         // F-2: 一次性讀取 bytes，避免多次消耗 InputStream
@@ -168,6 +170,7 @@ public class FileServiceImpl implements FileService {
      * @param requesterId 請求刪除的使用者 UUID
      * @param isAdmin     是否為管理員
      */
+    @Transactional
     @Override
     public void deleteFile(UUID fileId, UUID requesterId, boolean isAdmin) {
         FileMetadata metadata = fileMetadataRepository.findById(fileId)

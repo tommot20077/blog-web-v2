@@ -283,6 +283,27 @@ class FileServiceTest {
         }
 
         /**
+         * 驗證 MQ convertAndSend 失敗時，補償刪除 MinIO 已上傳的檔案且異常正確傳播
+         */
+        @Test
+        @DisplayName("uploadFile_whenMqFails_compensatesMinioDelete")
+        void uploadFile_whenMqFails_compensatesMinioDelete() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            org.mockito.Mockito.doThrow(new RuntimeException("MQ failure"))
+                    .when(rabbitTemplate).convertAndSend(any(String.class), any(String.class), (Object) any());
+
+            assertThatThrownBy(() ->
+                    fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("MQ failure");
+
+            verify(minioClient).removeObject(any(RemoveObjectArgs.class));
+        }
+
+        /**
          * 驗證 DB save 成功時，不呼叫補償刪除
          */
         @Test
