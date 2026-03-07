@@ -105,7 +105,12 @@ public class ViewCountServiceImpl implements ViewCountService {
                     }
                     long delta = Long.parseLong(val);
                     if (delta > 0) {
-                        articleMapper.incrementViewCountBatch(uuid, delta);
+                        try {
+                            articleMapper.incrementViewCountBatch(uuid, delta);
+                        } catch (Exception e) {
+                            log.error("DB 更新失敗，還原 Redis 瀏覽計數 - key={}, delta={}", key, delta, e);
+                            stringRedisTemplate.opsForValue().increment(key, delta);
+                        }
                     }
                 } catch (Exception e) {
                     log.warn("略過無效的瀏覽計數 key，將於下次排程重試 - key={}", key, e);
