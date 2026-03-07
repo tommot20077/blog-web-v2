@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.file.consumer;
 
+import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
@@ -10,11 +11,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.coobird.thumbnailator.Thumbnails;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 
 /**
@@ -52,16 +56,21 @@ public class ThumbnailConsumer {
     /**
      * 處理圖片上傳事件，產生縮圖
      *
-     * @param event 圖片上傳事件
+     * @param event       圖片上傳事件
+     * @param channel     RabbitMQ Channel，用於手動 ACK
+     * @param deliveryTag 消息投遞標籤
      */
-    @RabbitListener(queues = "file.thumbnail", containerFactory = "autoAckContainerFactory")
-    public void handleImageUploaded(ImageUploadedEvent event) {
-        if (!event.contentType().startsWith("image/")) {
-            log.debug("非圖片類型，跳過縮圖處理: {}", event.contentType());
-            return;
-        }
-
+    @RabbitListener(queues = "file.thumbnail")
+    public void handleImageUploaded(ImageUploadedEvent event,
+                                    Channel channel,
+                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         try {
+            if (!event.contentType().startsWith("image/")) {
+                log.debug("非圖片類型，跳過縮圖處理: {}", event.contentType());
+                channel.basicAck(deliveryTag, false);
+                return;
+            }
+
             String ext = extractExtension(event.storagePath());
             String thumbPath = buildThumbPath(event.storagePath());
 
@@ -94,8 +103,14 @@ public class ThumbnailConsumer {
             });
 
             log.info("縮圖產生成功: {}", thumbPath);
+            channel.basicAck(deliveryTag, false);
         } catch (Exception e) {
             log.error("縮圖產生失敗，fileId={}: {}", event.fileId(), e.getMessage(), e);
+            try {
+                channel.basicNack(deliveryTag, false, false);
+            } catch (IOException nackEx) {
+                log.error("NACK 亦失敗，fileId={}", event.fileId(), nackEx);
+            }
         }
     }
 

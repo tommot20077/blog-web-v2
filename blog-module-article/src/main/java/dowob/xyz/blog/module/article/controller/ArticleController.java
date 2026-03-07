@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.controller;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
@@ -13,9 +14,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,7 +26,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -86,7 +84,7 @@ public class ArticleController {
     public ApiResponse<ArticleResponse> getArticle(@PathVariable UUID uuid, HttpServletRequest request,
                                                     @AuthenticationPrincipal Long viewerId,
                                                     Authentication authentication) {
-        Role viewerRole = resolveRole(authentication);
+        Role viewerRole = SecurityUtils.resolveRole(authentication);
         return ApiResponse.success(articleService.getArticleByUuid(uuid, viewerId, viewerRole, getClientIp(request)));
     }
 
@@ -117,7 +115,7 @@ public class ArticleController {
             @Valid @RequestBody UpdateArticleRequest request,
             @AuthenticationPrincipal Long operatorId,
             Authentication authentication) {
-        Role operatorRole = resolveRole(authentication);
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
         return ApiResponse.success(articleService.updateArticle(operatorId, operatorRole, uuid, request));
     }
 
@@ -132,7 +130,7 @@ public class ArticleController {
     public ApiResponse<Void> deleteArticle(@PathVariable UUID uuid,
                                            @AuthenticationPrincipal Long operatorId,
                                            Authentication authentication) {
-        Role operatorRole = resolveRole(authentication);
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
         articleService.deleteArticle(operatorId, operatorRole, uuid);
         return ApiResponse.success();
     }
@@ -144,6 +142,7 @@ public class ArticleController {
      * @param pageSize 每頁筆數，預設 10
      * @return 分頁文章摘要列表
      */
+    @PreAuthorize("isAuthenticated()")
     @GetMapping("/me")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getMyArticles(
             @RequestParam(defaultValue = "1") int pageNum,
@@ -163,7 +162,7 @@ public class ArticleController {
     public ApiResponse<ArticleResponse> publishArticle(@PathVariable UUID uuid,
                                                        @AuthenticationPrincipal Long operatorId,
                                                        Authentication authentication) {
-        Role operatorRole = resolveRole(authentication);
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
         return ApiResponse.success(articleService.publishArticle(operatorId, operatorRole, uuid));
     }
 
@@ -181,7 +180,7 @@ public class ArticleController {
             @RequestBody RejectArticleRequest request,
             @AuthenticationPrincipal Long operatorId,
             Authentication authentication) {
-        Role operatorRole = resolveRole(authentication);
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
         return ApiResponse.success(articleService.rejectArticle(operatorId, operatorRole, uuid, request.getReason()));
     }
 
@@ -202,28 +201,4 @@ public class ArticleController {
         return request.getRemoteAddr();
     }
 
-    /**
-     * 從 Authentication 解析用戶角色
-     *
-     * @param authentication Spring Security 認證物件（可為 null 或 AnonymousAuthenticationToken）
-     * @return 用戶角色，未登入或匿名則回傳 null
-     */
-    private Role resolveRole(Authentication authentication) {
-        if (authentication == null || !authentication.isAuthenticated()
-                || authentication instanceof AnonymousAuthenticationToken) {
-            return null;
-        }
-        return authentication.getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority)
-                .map(roleStr -> {
-                    try {
-                        return Role.fromSpringSecurityRole(roleStr);
-                    } catch (Exception e) {
-                        return null;
-                    }
-                })
-                .filter(Objects::nonNull)
-                .findFirst()
-                .orElse(null);
-    }
 }

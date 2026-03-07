@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.recommend.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.SearchFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
@@ -64,16 +65,6 @@ public class RecommendServiceImpl implements RecommendService {
     private final ObjectMapper objectMapper;
 
     /**
-     * 相關文章快取 Key 前綴
-     */
-    static final String RELATED_CACHE_KEY_PREFIX = "recommend:related:";
-
-    /**
-     * 熱門排行 ZSet Key 前綴
-     */
-    static final String TRENDING_KEY_PREFIX = "recommend:trending:";
-
-    /**
      * 相關文章快取 TTL
      */
     private static final Duration RELATED_CACHE_TTL = Duration.ofHours(1);
@@ -85,7 +76,7 @@ public class RecommendServiceImpl implements RecommendService {
      */
     @Override
     public List<RecommendArticleResponse> getRelatedArticles(UUID articleUuid, int limit) {
-        String cacheKey = RELATED_CACHE_KEY_PREFIX + articleUuid;
+        String cacheKey = RedisKeyConstant.getRelatedKey(articleUuid.toString());
 
         try {
             String cached = stringRedisTemplate.opsForValue().get(cacheKey);
@@ -118,7 +109,7 @@ public class RecommendServiceImpl implements RecommendService {
      */
     @Override
     public List<RecommendArticleResponse> getTrendingArticles(String period, int limit) {
-        String key = TRENDING_KEY_PREFIX + period;
+        String key = RedisKeyConstant.getTrendingKey(period);
         Set<String> uuidStrings = stringRedisTemplate.opsForZSet()
                 .reverseRange(key, 0, limit - 1L);
 

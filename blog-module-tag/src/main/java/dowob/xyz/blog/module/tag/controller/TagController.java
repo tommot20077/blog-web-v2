@@ -1,12 +1,14 @@
 package dowob.xyz.blog.module.tag.controller;
 
+import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.model.dto.TagDetailResponse;
 import dowob.xyz.blog.module.tag.service.TagService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,7 +17,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.UUID;
@@ -91,14 +92,15 @@ public class TagController {
      * @param id     標籤 ID
      * @param userId 當前登入使用者 ID（從 JWT 注入）
      * @return 成功回應
-     * @throws ResponseStatusException 404 若使用者不存在
+     * @throws BusinessException 若使用者不存在（UserErrorCode.USER_NOT_FOUND）
      */
+    @PreAuthorize("isAuthenticated()")
     @PostMapping("/{id}/follow")
     public ApiResponse<Void> followTag(
             @PathVariable UUID id,
             @AuthenticationPrincipal Long userId) {
         UUID userUuid = userFacade.getUserUuidById(userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
         tagService.followTag(id, userUuid);
         return ApiResponse.success();
     }
@@ -111,14 +113,15 @@ public class TagController {
      * @param id     標籤 ID
      * @param userId 當前登入使用者 ID（從 JWT 注入）
      * @return 成功回應
-     * @throws ResponseStatusException 404 若使用者不存在
+     * @throws BusinessException 若使用者不存在（UserErrorCode.USER_NOT_FOUND）
      */
+    @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/{id}/follow")
     public ApiResponse<Void> unfollowTag(
             @PathVariable UUID id,
             @AuthenticationPrincipal Long userId) {
         UUID userUuid = userFacade.getUserUuidById(userId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
         tagService.unfollowTag(id, userUuid);
         return ApiResponse.success();
     }

@@ -88,8 +88,8 @@ public class SearchController {
      *
      * @return 搜尋歷史列表（最新在前）
      */
-    @GetMapping("/history")
     @PreAuthorize("isAuthenticated()")
+    @GetMapping("/history")
     public ApiResponse<List<String>> getHistory(@AuthenticationPrincipal Long userId) {
         if (userId == null) {
             throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
@@ -106,8 +106,8 @@ public class SearchController {
      *
      * @return 成功回應
      */
-    @DeleteMapping("/history")
     @PreAuthorize("isAuthenticated()")
+    @DeleteMapping("/history")
     public ApiResponse<Void> clearHistory(@AuthenticationPrincipal Long userId) {
         if (userId == null) {
             throw new BusinessException(UserErrorCode.USER_NOT_FOUND);

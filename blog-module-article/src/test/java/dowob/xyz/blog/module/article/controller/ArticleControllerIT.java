@@ -465,41 +465,12 @@ class ArticleControllerIT {
     }
 
     @Test
-    @DisplayName("POST /api/v1/articles/{uuid}/reject - AUTHOR（非 ADMIN）呼叫 → 403 Forbidden")
+    @DisplayName("POST /api/v1/articles/{uuid}/reject - AUTHOR（無 SYSTEM_CONFIG 權限）→ 403")
     void rejectArticle_authorForbidden_returns403() throws Exception {
-        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
-        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
-
-        /** 建立文章並送審 */
-        CreateArticleRequest createRequest = new CreateArticleRequest();
-        createRequest.setTitle("待審文章");
-        createRequest.setContent("內容");
-
-        String createResponse = mockMvc.perform(post("/api/v1/articles")
-                .with(asUser(AUTHOR_ID, Role.AUTHOR))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(createRequest)))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-
-        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
-
-        /** 送審 */
-        UpdateArticleRequest submitRequest = new UpdateArticleRequest();
-        submitRequest.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PENDING_REVIEW);
-        mockMvc.perform(put("/api/v1/articles/" + uuid)
-                .with(asUser(AUTHOR_ID, Role.AUTHOR))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(submitRequest)))
-                .andExpect(status().isOk());
-
-        /** AUTHOR 嘗試駁回 → @PreAuthorize 攔截，回傳 403 */
-        dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest rejectRequest =
-                new dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest();
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
         rejectRequest.setReason("想試試駁回");
 
-        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/reject")
                 .with(asUser(AUTHOR_ID, Role.AUTHOR))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(rejectRequest)))
@@ -507,11 +478,10 @@ class ArticleControllerIT {
     }
 
     @Test
-    @DisplayName("GET /api/v1/articles/me - 匿名存取 → 回傳 total=0（文件化現有行為）")
-    void getMyArticles_anonymous_returnsEmpty() throws Exception {
+    @DisplayName("GET /api/v1/articles/me - 匿名存取 → 需登入，回傳 401")
+    void getMyArticles_anonymous_returns401() throws Exception {
         mockMvc.perform(get("/api/v1/articles/me"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.total").value(0));
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

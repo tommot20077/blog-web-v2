@@ -5,6 +5,7 @@ import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch._types.query_dsl.TextQueryType;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
@@ -61,16 +62,6 @@ public class SearchServiceImpl implements SearchService {
      * 文章 Facade（用於全量重建索引）
      */
     private final ArticleFacade articleFacade;
-
-    /**
-     * Redis Key：熱門搜尋詞 ZSet
-     */
-    private static final String KEY_HOT_SEARCH = "search:hot";
-
-    /**
-     * Redis Key 前綴：個人搜尋歷史 List
-     */
-    private static final String KEY_HISTORY_PREFIX = "search:history:";
 
     /**
      * 個人搜尋歷史最大保留筆數
@@ -158,7 +149,7 @@ public class SearchServiceImpl implements SearchService {
          * 因 ZINCRBY 使各元素分數不同，ZRANGEBYLEX 僅適用於同分 ZSet，
          * 故此處改以 ZREVRANGE 取熱門詞後進行前綴比對。
          */
-        Set<String> hot = redisTemplate.opsForZSet().reverseRange(KEY_HOT_SEARCH, 0, 99);
+        Set<String> hot = redisTemplate.opsForZSet().reverseRange(RedisKeyConstant.SEARCH_HOT_KEY, 0, 99);
         if (hot == null) return List.of();
         return hot.stream()
                 .filter(s -> s.startsWith(lower))
@@ -172,7 +163,7 @@ public class SearchServiceImpl implements SearchService {
     @Override
     public List<String> getHistory(Long userId) {
         List<String> history = redisTemplate.opsForList()
-                .range(KEY_HISTORY_PREFIX + userId, 0, HISTORY_MAX_SIZE - 1);
+                .range(RedisKeyConstant.getSearchHistoryKey(userId), 0, HISTORY_MAX_SIZE - 1);
         return history == null ? List.of() : history;
     }
 
@@ -181,7 +172,7 @@ public class SearchServiceImpl implements SearchService {
      */
     @Override
     public void clearHistory(Long userId) {
-        redisTemplate.delete(KEY_HISTORY_PREFIX + userId);
+        redisTemplate.delete(RedisKeyConstant.getSearchHistoryKey(userId));
     }
 
     /**
@@ -225,11 +216,11 @@ public class SearchServiceImpl implements SearchService {
     private void recordSearch(String keyword, Long userId) {
         String lower = keyword.toLowerCase();
         /** 更新熱門搜尋 ZSet（分數遞增） */
-        redisTemplate.opsForZSet().incrementScore(KEY_HOT_SEARCH, lower, 1.0);
+        redisTemplate.opsForZSet().incrementScore(RedisKeyConstant.SEARCH_HOT_KEY, lower, 1.0);
 
         /** 記錄個人搜尋歷史 */
         if (userId != null) {
-            String historyKey = KEY_HISTORY_PREFIX + userId;
+            String historyKey = RedisKeyConstant.getSearchHistoryKey(userId);
             redisTemplate.opsForList().leftPush(historyKey, lower);
             redisTemplate.opsForList().trim(historyKey, 0, HISTORY_MAX_SIZE - 1);
         }

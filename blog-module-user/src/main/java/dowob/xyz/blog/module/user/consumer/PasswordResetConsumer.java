@@ -33,14 +33,22 @@ public class PasswordResetConsumer {
      * @param event       密碼重設請求事件，包含用戶 ID、信箱與重設 Token
      * @param channel     RabbitMQ Channel（用於 Manual Ack）
      * @param deliveryTag 訊息投遞標籤
-     * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @RabbitListener(queues = UserRabbitMqConfig.QUEUE_PASSWORD_RESET)
     public void handlePasswordResetRequested(UserPasswordResetRequestedEvent event,
                                               Channel channel,
-                                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        log.info("收到密碼重設請求 - userId={}, email={}", event.userId(), event.email());
-        log.info("密碼重設連結已產生 - userId={}", event.userId());
-        channel.basicAck(deliveryTag, false);
+                                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+        try {
+            log.info("收到密碼重設請求 - userId={}, email={}", event.userId(), event.email());
+            log.info("密碼重設連結已產生 - userId={}", event.userId());
+            channel.basicAck(deliveryTag, false);
+        } catch (Exception e) {
+            log.error("處理密碼重設事件失敗，訊息送往 DLQ，userId={}", event.userId(), e);
+            try {
+                channel.basicNack(deliveryTag, false, false);
+            } catch (IOException nackEx) {
+                log.error("NACK 亦失敗，userId={}", event.userId(), nackEx);
+            }
+        }
     }
 }

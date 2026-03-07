@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.tag.service;
 
 import com.github.houbb.opencc4j.util.ZhConverterUtil;
 import dowob.xyz.blog.common.api.errorcode.TagErrorCode;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
@@ -40,11 +41,6 @@ public class TagNormalizationServiceImpl implements TagNormalizationService {
      */
     private final RedisTemplate<String, String> redisTemplate;
 
-    /**
-     * Redis 自動補全有序集合鍵名
-     */
-    private static final String AUTOCOMPLETE_KEY = "tag:autocomplete";
-
     @Override
     public String normalize(String rawName) {
         if (StringUtils.isBlank(rawName)) {
@@ -74,7 +70,7 @@ public class TagNormalizationServiceImpl implements TagNormalizationService {
         newTag.setCreatedAt(LocalDateTime.now());
         Tag saved = tagRepository.save(newTag);
 
-        redisTemplate.opsForZSet().add(AUTOCOMPLETE_KEY, slug, 0.0);
+        redisTemplate.opsForZSet().add(RedisKeyConstant.TAG_AUTOCOMPLETE_KEY, slug, 0.0);
 
         return saved;
     }

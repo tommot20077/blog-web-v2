@@ -34,15 +34,23 @@ public class EmailVerificationConsumer {
      * @param event       用戶已註冊事件，包含信箱、暱稱與驗證 Token
      * @param channel     RabbitMQ Channel（用於 Manual Ack）
      * @param deliveryTag 訊息投遞標籤
-     * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @RabbitListener(queues = UserRabbitMqConfig.QUEUE_EMAIL_VERIFICATION)
     public void handleUserRegistered(UserRegisteredEvent event,
                                      Channel channel,
-                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        log.info("收到用戶註冊事件 - userId={}, email={}, nickname={}",
-                event.userId(), event.email(), event.nickname());
-        log.info("驗證信已排程發送 - userId={}", event.userId());
-        channel.basicAck(deliveryTag, false);
+                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+        try {
+            log.info("收到用戶註冊事件 - userId={}, email={}, nickname={}",
+                    event.userId(), event.email(), event.nickname());
+            log.info("驗證信已排程發送 - userId={}", event.userId());
+            channel.basicAck(deliveryTag, false);
+        } catch (Exception e) {
+            log.error("處理用戶註冊事件失敗，訊息送往 DLQ，userId={}", event.userId(), e);
+            try {
+                channel.basicNack(deliveryTag, false, false);
+            } catch (IOException nackEx) {
+                log.error("NACK 亦失敗，userId={}", event.userId(), nackEx);
+            }
+        }
     }
 }

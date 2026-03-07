@@ -254,8 +254,8 @@ class TagControllerIT {
     }
 
     @Test
-    @DisplayName("POST /api/v1/tags/{id}/follow - UserFacade 回傳 empty 時，回傳 404")
-    void followTag_userNotFound_returns404() throws Exception {
+    @DisplayName("POST /api/v1/tags/{id}/follow - UserFacade 回傳 empty 時，回傳 400 且 code 為 A0101")
+    void followTag_userNotFound_returns400WithA0101() throws Exception {
         UUID tagId = insertTestTag("Docker", "docker", 3);
         when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.empty());
 
@@ -263,7 +263,8 @@ class TagControllerIT {
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
                                 buildAuth(1L, "USER", "COMMENT_WRITE")))
                         .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0101"));
     }
 
     @Test
