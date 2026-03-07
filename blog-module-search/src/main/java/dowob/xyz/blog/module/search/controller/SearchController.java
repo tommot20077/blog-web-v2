@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.service.SearchService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -85,6 +86,7 @@ public class SearchController {
      *
      * @return 搜尋歷史列表（最新在前）
      */
+    @PreAuthorize("isAuthenticated()")
     @GetMapping("/history")
     public ApiResponse<List<String>> getHistory(@AuthenticationPrincipal Long userId) {
         return ApiResponse.success(searchService.getHistory(userId));
@@ -99,6 +101,7 @@ public class SearchController {
      *
      * @return 成功回應
      */
+    @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/history")
     public ApiResponse<Void> clearHistory(@AuthenticationPrincipal Long userId) {
         searchService.clearHistory(userId);

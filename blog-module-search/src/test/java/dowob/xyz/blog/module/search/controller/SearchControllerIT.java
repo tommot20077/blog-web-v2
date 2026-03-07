@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.search.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.JwtService;
@@ -21,6 +22,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -104,10 +106,11 @@ class SearchControllerIT {
      * @return RequestPostProcessor，可注入至 MockMvc 請求
      */
     private RequestPostProcessor adminAuth(Long userId) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         return SecurityMockMvcRequestPostProcessors.authentication(
-                new UsernamePasswordAuthenticationToken(
-                        userId, null,
-                        List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))));
+                new UsernamePasswordAuthenticationToken(userId, null, authorities));
     }
 
     /**
