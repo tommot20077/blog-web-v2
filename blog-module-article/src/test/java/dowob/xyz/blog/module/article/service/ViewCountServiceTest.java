@@ -24,9 +24,11 @@ import static org.mockito.Mockito.*;
 /**
  * {@link ViewCountServiceImpl} 單元測試
  *
- * <p>驗證瀏覽計數服務的核心邏輯，包含：
+ * <p>
+ * 驗證瀏覽計數服務的核心邏輯，包含：
  * DB + Redis 合計取值、Redis 增量、批次刷入 DB、
- * 以及錯誤情境（非法 UUID key、非數字值、DB 異常）的容錯行為。</p>
+ * 以及錯誤情境（非法 UUID key、非數字值、DB 異常）的容錯行為。
+ * </p>
  *
  * @author Yuan
  * @version 1.0
@@ -188,12 +190,12 @@ class ViewCountServiceTest {
     }
 
     /**
-     * 情境九：DB 拋出異常 → 不刪除 Redis key（保留資料），不中斷整個 flush
+     * 情境九：DB 拋出異常 → 還原 Redis 的計數（Rollback），且不中斷整個 flush
      */
     @Test
-    @DisplayName("flushViewCounts：DB 拋出異常 → Redis key 不刪除，不中斷整個 flush")
+    @DisplayName("flushViewCounts：DB 拋出異常 → 還原 Redis 計數，不中斷整個 flush")
     @SuppressWarnings("unchecked")
-    void flushViewCounts_dbFailure_doesNotPropagateException() {
+    void flushViewCounts_dbFailure_rollsBackRedisCount() {
         UUID uuid = UUID.randomUUID();
         String key = "article:views:" + uuid;
         when(cursor.hasNext()).thenReturn(true, false);
@@ -203,6 +205,6 @@ class ViewCountServiceTest {
                 .incrementViewCountBatch(any(), anyLong());
 
         assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
-        verify(stringRedisTemplate, never()).delete(key);
+        verify(valueOps).increment(key, 5L);
     }
 }

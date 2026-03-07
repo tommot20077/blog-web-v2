@@ -13,9 +13,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -81,9 +83,10 @@ public class ArticleController {
      * @return 文章完整資訊
      */
     @GetMapping("/{uuid}")
-    public ApiResponse<ArticleResponse> getArticle(@PathVariable UUID uuid, HttpServletRequest request) {
-        Long viewerId = getCurrentUserId();
-        Role viewerRole = getCurrentUserRole();
+    public ApiResponse<ArticleResponse> getArticle(@PathVariable UUID uuid, HttpServletRequest request,
+                                                    @AuthenticationPrincipal Long viewerId,
+                                                    Authentication authentication) {
+        Role viewerRole = resolveRole(authentication);
         return ApiResponse.success(articleService.getArticleByUuid(uuid, viewerId, viewerRole, getClientIp(request)));
     }
 
@@ -95,8 +98,8 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @PostMapping
-    public ApiResponse<ArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request) {
-        Long authorId = getCurrentUserId();
+    public ApiResponse<ArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request,
+                                                       @AuthenticationPrincipal Long authorId) {
         return ApiResponse.success(articleService.createArticle(authorId, request));
     }
 
@@ -111,9 +114,10 @@ public class ArticleController {
     @PutMapping("/{uuid}")
     public ApiResponse<ArticleResponse> updateArticle(
             @PathVariable UUID uuid,
-            @Valid @RequestBody UpdateArticleRequest request) {
-        Long operatorId = getCurrentUserId();
-        Role operatorRole = getCurrentUserRole();
+            @Valid @RequestBody UpdateArticleRequest request,
+            @AuthenticationPrincipal Long operatorId,
+            Authentication authentication) {
+        Role operatorRole = resolveRole(authentication);
         return ApiResponse.success(articleService.updateArticle(operatorId, operatorRole, uuid, request));
     }
 
@@ -125,9 +129,10 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_DELETE')")
     @DeleteMapping("/{uuid}")
-    public ApiResponse<Void> deleteArticle(@PathVariable UUID uuid) {
-        Long operatorId = getCurrentUserId();
-        Role operatorRole = getCurrentUserRole();
+    public ApiResponse<Void> deleteArticle(@PathVariable UUID uuid,
+                                           @AuthenticationPrincipal Long operatorId,
+                                           Authentication authentication) {
+        Role operatorRole = resolveRole(authentication);
         articleService.deleteArticle(operatorId, operatorRole, uuid);
         return ApiResponse.success();
     }
@@ -142,8 +147,8 @@ public class ArticleController {
     @GetMapping("/me")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getMyArticles(
             @RequestParam(defaultValue = "1") int pageNum,
-            @RequestParam(defaultValue = "10") int pageSize) {
-        Long authorId = getCurrentUserId();
+            @RequestParam(defaultValue = "10") int pageSize,
+            @AuthenticationPrincipal Long authorId) {
         return ApiResponse.success(articleService.getMyArticles(authorId, pageNum, pageSize));
     }
 
@@ -155,9 +160,10 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/publish")
-    public ApiResponse<ArticleResponse> publishArticle(@PathVariable UUID uuid) {
-        Long operatorId = getCurrentUserId();
-        Role operatorRole = getCurrentUserRole();
+    public ApiResponse<ArticleResponse> publishArticle(@PathVariable UUID uuid,
+                                                       @AuthenticationPrincipal Long operatorId,
+                                                       Authentication authentication) {
+        Role operatorRole = resolveRole(authentication);
         return ApiResponse.success(articleService.publishArticle(operatorId, operatorRole, uuid));
     }
 
@@ -171,9 +177,10 @@ public class ArticleController {
     @PostMapping("/{uuid}/reject")
     public ApiResponse<ArticleResponse> rejectArticle(
             @PathVariable UUID uuid,
-            @RequestBody RejectArticleRequest request) {
-        Long operatorId = getCurrentUserId();
-        Role operatorRole = getCurrentUserRole();
+            @RequestBody RejectArticleRequest request,
+            @AuthenticationPrincipal Long operatorId,
+            Authentication authentication) {
+        Role operatorRole = resolveRole(authentication);
         return ApiResponse.success(articleService.rejectArticle(operatorId, operatorRole, uuid, request.getReason()));
     }
 
@@ -195,29 +202,17 @@ public class ArticleController {
     }
 
     /**
-     * 從 SecurityContextHolder 取得當前用戶 ID
+     * 從 Authentication 解析用戶角色
      *
-     * @return 用戶 ID，未登入則回傳 null
+     * @param authentication Spring Security 認證物件（可為 null 或 AnonymousAuthenticationToken）
+     * @return 用戶角色，未登入或匿名則回傳 null
      */
-    private Long getCurrentUserId() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated() || auth.getPrincipal() instanceof String) {
+    private Role resolveRole(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || authentication instanceof AnonymousAuthenticationToken) {
             return null;
         }
-        return (Long) auth.getPrincipal();
-    }
-
-    /**
-     * 從 SecurityContextHolder 取得當前用戶角色
-     *
-     * @return 用戶角色，未登入則回傳 null
-     */
-    private Role getCurrentUserRole() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated()) {
-            return null;
-        }
-        return auth.getAuthorities().stream()
+        return authentication.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
                 .map(roleStr -> {
                     try {
@@ -226,7 +221,7 @@ public class ArticleController {
                         return null;
                     }
                 })
-                .filter(r -> r != null)
+                .filter(Objects::nonNull)
                 .findFirst()
                 .orElse(null);
     }

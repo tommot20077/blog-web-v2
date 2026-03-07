@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.file.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.file.TestFileApplication;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import io.minio.BucketExistsArgs;
@@ -9,6 +10,7 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
@@ -35,7 +37,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+
+import static org.mockito.Mockito.when;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -143,6 +148,22 @@ class FileControllerIT {
     private UserAuthService userAuthService;
 
     /**
+     * Mock UserFacade（FileController 依賴，用於 userId → UUID 轉換）
+     */
+    @MockitoBean
+    private UserFacade userFacade;
+
+    /**
+     * 測試用使用者 A 的內部 ID
+     */
+    private static final Long USER_A_ID = 1L;
+
+    /**
+     * 測試用使用者 B 的內部 ID
+     */
+    private static final Long USER_B_ID = 2L;
+
+    /**
      * 測試用使用者 A 的 UUID
      */
     private static final UUID USER_A_UUID = UUID.randomUUID();
@@ -151,6 +172,15 @@ class FileControllerIT {
      * 測試用使用者 B 的 UUID
      */
     private static final UUID USER_B_UUID = UUID.randomUUID();
+
+    /**
+     * 每次測試前設定 UserFacade mock，回傳測試用 UUID
+     */
+    @BeforeEach
+    void setUpUserFacade() {
+        when(userFacade.getUserUuidById(USER_A_ID)).thenReturn(Optional.of(USER_A_UUID));
+        when(userFacade.getUserUuidById(USER_B_ID)).thenReturn(Optional.of(USER_B_UUID));
+    }
 
     /**
      * 在所有測試前初始化 MinIO 儲存桶
@@ -175,18 +205,18 @@ class FileControllerIT {
 
     /**
      * 建立具有指定角色及其對應所有 Permission 的模擬認證 RequestPostProcessor。
-     * Principal name 使用 UUID 字串，符合 FileController 的 UUID.fromString(authentication.getName()) 要求。
+     * Principal 為 Long userId，與生產環境 JwtAuthenticationFilter 一致。
      *
-     * @param userId 使用者 UUID
+     * @param userId 使用者內部 ID
      * @param role   角色
      * @return RequestPostProcessor
      */
-    private RequestPostProcessor asUser(UUID userId, Role role) {
+    private RequestPostProcessor asUser(Long userId, Role role) {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(userId.toString(), null, authorities);
+                new UsernamePasswordAuthenticationToken(userId, null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -210,7 +240,7 @@ class FileControllerIT {
         mockMvc.perform(multipart("/api/v1/files/upload")
                 .file(file)
                 .param("usageType", "ARTICLE_CONTENT")
-                .with(asUser(USER_A_UUID, Role.AUTHOR))
+                .with(asUser(USER_A_ID, Role.AUTHOR))
                 .contentType(MediaType.MULTIPART_FORM_DATA))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
@@ -237,7 +267,7 @@ class FileControllerIT {
         mockMvc.perform(multipart("/api/v1/files/upload")
                 .file(file)
                 .param("usageType", "AVATAR")
-                .with(asUser(USER_A_UUID, Role.USER))
+                .with(asUser(USER_A_ID, Role.USER))
                 .contentType(MediaType.MULTIPART_FORM_DATA))
                 .andExpect(status().isForbidden());
     }
@@ -250,13 +280,13 @@ class FileControllerIT {
         mockMvc.perform(multipart("/api/v1/files/upload")
                 .file(file)
                 .param("usageType", "ARTICLE_CONTENT")
-                .with(asUser(USER_A_UUID, Role.AUTHOR))
+                .with(asUser(USER_A_ID, Role.AUTHOR))
                 .contentType(MediaType.MULTIPART_FORM_DATA))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
         mockMvc.perform(get("/api/v1/users/me/files")
-                .with(asUser(USER_A_UUID, Role.AUTHOR)))
+                .with(asUser(USER_A_ID, Role.AUTHOR)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data").isArray())
@@ -272,7 +302,7 @@ class FileControllerIT {
         String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
                 .file(file)
                 .param("usageType", "ARTICLE_CONTENT")
-                .with(asUser(USER_A_UUID, Role.AUTHOR))
+                .with(asUser(USER_A_ID, Role.AUTHOR))
                 .contentType(MediaType.MULTIPART_FORM_DATA))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -280,7 +310,7 @@ class FileControllerIT {
         String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
 
         mockMvc.perform(delete("/api/v1/files/" + fileId)
-                .with(asUser(USER_A_UUID, Role.AUTHOR)))
+                .with(asUser(USER_A_ID, Role.AUTHOR)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
     }
@@ -293,7 +323,7 @@ class FileControllerIT {
         String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
                 .file(file)
                 .param("usageType", "ARTICLE_CONTENT")
-                .with(asUser(USER_A_UUID, Role.AUTHOR))
+                .with(asUser(USER_A_ID, Role.AUTHOR))
                 .contentType(MediaType.MULTIPART_FORM_DATA))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -301,8 +331,8 @@ class FileControllerIT {
         String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
 
         mockMvc.perform(delete("/api/v1/files/" + fileId)
-                .with(asUser(USER_B_UUID, Role.AUTHOR)))
-                .andExpect(status().isOk())
+                .with(asUser(USER_B_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("F005"));
     }
 
@@ -310,7 +340,7 @@ class FileControllerIT {
     @DisplayName("GET /api/users/me/files - 已認證用戶查詢，應回傳列表（可為空）")
     void getUserFiles_authenticated_returnsList() throws Exception {
         mockMvc.perform(get("/api/v1/users/me/files")
-                .with(asUser(USER_A_UUID, Role.AUTHOR)))
+                .with(asUser(USER_A_ID, Role.AUTHOR)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data").isArray());
@@ -320,7 +350,7 @@ class FileControllerIT {
     @DisplayName("GET /api/users/me/quota - 已認證用戶查詢配額，應回傳 usedBytes >= 0 且 limitBytes > 0")
     void getQuota_authenticated_returnsQuotaInfo() throws Exception {
         mockMvc.perform(get("/api/v1/users/me/quota")
-                .with(asUser(USER_A_UUID, Role.AUTHOR)))
+                .with(asUser(USER_A_ID, Role.AUTHOR)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.usedBytes").value(0))
@@ -338,8 +368,8 @@ class FileControllerIT {
     @DisplayName("DELETE /api/files/{id} - 刪除不存在的檔案，應回傳 F001 錯誤碼")
     void deleteFile_notFound_returnsF001() throws Exception {
         mockMvc.perform(delete("/api/v1/files/" + UUID.randomUUID())
-                .with(asUser(USER_A_UUID, Role.AUTHOR)))
-                .andExpect(status().isOk())
+                .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("F001"));
     }
 }

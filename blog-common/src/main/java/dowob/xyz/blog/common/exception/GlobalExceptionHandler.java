@@ -25,12 +25,22 @@ import java.util.stream.Collectors;
 public class GlobalExceptionHandler {
 
     /**
-     * 處理業務異常
+     * 處理業務異常，回傳 HTTP 400 與結構化錯誤碼
+     *
+     * <p>
+     * {@link BusinessException} 代表用戶端操作引發的業務規則違反，
+     * 以 WARN 級別記錄，並回傳 HTTP 400。
+     * </p>
+     *
+     * @param e       業務例外
+     * @param request 當前 HTTP 請求
+     * @return HTTP 400 回應，body 含錯誤碼與訊息
      */
     @ExceptionHandler(BusinessException.class)
-    public ApiResponse<Void> handleBusinessException(BusinessException e, HttpServletRequest request) {
+    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e, HttpServletRequest request) {
         log.warn("Business Exception: {} at {}", e.getMessage(), request.getRequestURI());
-        return ApiResponse.failed(e.getCode(), e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed(e.getCode(), e.getMessage()));
     }
 
     /**
@@ -53,27 +63,35 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 處理參數校驗異常 (JSON Body)
+     * 處理參數校驗異常 (JSON Body)，回傳 HTTP 400 與欄位錯誤訊息
+     *
+     * @param e 參數校驗例外
+     * @return HTTP 400 回應，body 含欄位錯誤描述
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ApiResponse<Void> handleValidationException(MethodArgumentNotValidException e) {
+    public ResponseEntity<ApiResponse<Void>> handleValidationException(MethodArgumentNotValidException e) {
         String message = e.getBindingResult().getFieldErrors().stream()
                 .map(fieldError -> fieldError.getField() + ": " + fieldError.getDefaultMessage())
                 .collect(Collectors.joining(", "));
         log.warn("Validation Exception: {}", message);
-        return ApiResponse.failed("400", message);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", message));
     }
 
     /**
-     * 處理參數校驗異常 (Form Data)
+     * 處理參數校驗異常 (Form Data)，回傳 HTTP 400 與欄位錯誤訊息
+     *
+     * @param e 綁定例外
+     * @return HTTP 400 回應，body 含欄位錯誤描述
      */
     @ExceptionHandler(BindException.class)
-    public ApiResponse<Void> handleBindException(BindException e) {
+    public ResponseEntity<ApiResponse<Void>> handleBindException(BindException e) {
         String message = e.getBindingResult().getFieldErrors().stream()
                 .map(fieldError -> fieldError.getField() + ": " + fieldError.getDefaultMessage())
                 .collect(Collectors.joining(", "));
         log.warn("Bind Exception: {}", message);
-        return ApiResponse.failed("400", message);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", message));
     }
 
     /**
@@ -113,11 +131,19 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 處理其他異常
+     * 處理其他未預期例外，回傳 HTTP 500 與通用錯誤訊息
+     *
+     * <p>
+     * 以 ERROR 級別記錄完整 stack trace，並回傳 HTTP 500。
+     * </p>
+     *
+     * @param e 未預期例外
+     * @return HTTP 500 回應，body 含系統錯誤訊息
      */
     @ExceptionHandler(Exception.class)
-    public ApiResponse<Void> handleException(Exception e) {
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception e) {
         log.error("Unhandled Exception", e);
-        return ApiResponse.failed("500", "系統內部錯誤: " + e.getMessage());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.failed("500", "系統內部錯誤"));
     }
 }

@@ -18,6 +18,7 @@
 
     <modules>
         <module>blog-common</module>
+        <module>blog-db-migration</module>
         <module>blog-infrastructure</module>
         <module>blog-module-user</module>
         <module>blog-module-article</module>
@@ -175,6 +176,11 @@
             <dependency>
                 <groupId>dowob.xyz</groupId>
                 <artifactId>blog-common</artifactId>
+                <version>${blog.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dowob.xyz</groupId>
+                <artifactId>blog-db-migration</artifactId>
                 <version>${blog.version}</version>
             </dependency>
             <dependency>

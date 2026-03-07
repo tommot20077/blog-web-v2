@@ -5,7 +5,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
-import dowob.xyz.blog.module.article.event.TagInfo;
+import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -166,10 +166,10 @@ class ArticleFacadeImplTest {
             article.setContent("content");
             article.setAuthorId(10L);
 
-            TagInfo tagInfo = new TagInfo(1L, "Java", "java");
+            TagInfo tagInfo = new TagInfo(UUID.randomUUID(), "Java", "java");
 
             when(articleMapper.findAllPublished()).thenReturn(List.of(article));
-            when(articleMapper.findTagsByArticleId(ARTICLE_ID)).thenReturn(List.of(tagInfo));
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of(tagInfo));
             when(userFacade.getUserUsernameById(10L)).thenReturn(Optional.of("user1"));
             when(userFacade.getUserNicknameById(10L)).thenReturn(Optional.of("User One"));
 

@@ -5,6 +5,7 @@ import lombok.Data;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.annotation.Version;
 import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
 
@@ -110,6 +111,12 @@ public class Article {
     @CreatedDate
     @Column("created_at")
     private LocalDateTime createdAt;
+
+    /**
+     * 樂觀鎖版本號
+     */
+    @Version
+    private Long version;
 
     /**
      * 最後更新時間

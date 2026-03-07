@@ -1,10 +1,11 @@
 package dowob.xyz.blog.module.tag.service;
 
+import dowob.xyz.blog.common.api.errorcode.TagErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.tag.model.Tag;
-import dowob.xyz.blog.module.tag.model.TagErrorCode;
 import dowob.xyz.blog.module.tag.model.dto.TagDetailResponse;
 import dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest;
+import dowob.xyz.blog.module.tag.repository.ArticleTagRepository;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
 import dowob.xyz.blog.module.tag.repository.UserTagFollowRepository;
 import lombok.RequiredArgsConstructor;
@@ -12,6 +13,7 @@ import org.springframework.data.redis.connection.RedisZSetCommands;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -53,6 +55,11 @@ public class TagServiceImpl implements TagService {
      * Redis 操作模板（String 類型）
      */
     private final RedisTemplate<String, String> stringRedisTemplate;
+
+    /**
+     * 文章標籤關聯資料存取物件（用於刪除前 FK 檢查）
+     */
+    private final ArticleTagRepository articleTagRepository;
 
     /**
      * 熱門標籤 Redis ZSet 鍵名
@@ -185,12 +192,17 @@ public class TagServiceImpl implements TagService {
     }
 
     @Override
+    @Transactional
     public void adminDeleteTag(UUID id) {
         Tag tag = tagRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(TagErrorCode.TAG_NOT_FOUND));
         if (tag.getUsageCount() > 0) {
             throw new BusinessException(TagErrorCode.TAG_IN_USE);
         }
+        if (articleTagRepository.countByTagId(id) > 0) {
+            throw new BusinessException(TagErrorCode.TAG_IN_USE);
+        }
+        userTagFollowRepository.deleteByTagId(id);
         stringRedisTemplate.delete("tag:" + tag.getSlug());
         stringRedisTemplate.opsForZSet().remove(HOT_TAGS_KEY, tag.getId().toString());
         tagRepository.deleteById(id);

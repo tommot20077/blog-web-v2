@@ -190,7 +190,7 @@ class CategoryControllerIT {
     @DisplayName("GET /api/v1/categories/{slug} - slug 不存在 → A0205")
     void getCategoryBySlug_notFound() throws Exception {
         mockMvc.perform(get("/api/v1/categories/nonexistent"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0205"));
     }
 
@@ -247,7 +247,7 @@ class CategoryControllerIT {
 
         // 確認已刪除
         mockMvc.perform(get("/api/v1/categories/test-cat"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0205"));
     }
 
@@ -287,7 +287,7 @@ class CategoryControllerIT {
         // 嘗試刪除有文章的分類 → A0206
         mockMvc.perform(delete("/api/admin/categories/" + categoryUuid)
                 .with(asUser(AUTHOR_ID, Role.ADMIN)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0206"));
     }
 
@@ -367,7 +367,7 @@ class CategoryControllerIT {
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(duplicateRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0207"));
     }
 

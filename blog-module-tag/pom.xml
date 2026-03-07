@@ -25,6 +25,11 @@
 
         <!-- Test dependencies -->
         <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-db-migration</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>

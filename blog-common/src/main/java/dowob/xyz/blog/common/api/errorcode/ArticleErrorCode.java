@@ -46,7 +46,12 @@ public enum ArticleErrorCode implements IErrorCode {
     /**
      * 分類 slug 已被使用
      */
-    CATEGORY_SLUG_DUPLICATE("A0207", "分類 slug 已被使用");
+    CATEGORY_SLUG_DUPLICATE("A0207", "分類 slug 已被使用"),
+
+    /**
+     * 文章並發更新（樂觀鎖衝突）
+     */
+    ARTICLE_CONCURRENT_UPDATE("A0208", "文章已被其他人修改，請重新整理後再試");
 
     /**
      * 錯誤碼

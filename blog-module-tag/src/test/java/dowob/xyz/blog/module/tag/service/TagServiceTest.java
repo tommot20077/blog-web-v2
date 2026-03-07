@@ -1,9 +1,10 @@
 package dowob.xyz.blog.module.tag.service;
 
+import dowob.xyz.blog.common.api.errorcode.TagErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.tag.model.Tag;
-import dowob.xyz.blog.module.tag.model.TagErrorCode;
 import dowob.xyz.blog.module.tag.model.dto.TagDetailResponse;
+import dowob.xyz.blog.module.tag.repository.ArticleTagRepository;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
 import dowob.xyz.blog.module.tag.repository.UserTagFollowRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -57,6 +58,9 @@ class TagServiceTest {
     @Mock
     private RedisTemplate<String, String> stringRedisTemplate;
 
+    @Mock
+    private ArticleTagRepository articleTagRepository;
+
     @SuppressWarnings("rawtypes")
     @Mock
     private ZSetOperations zSetOps;
@@ -71,7 +75,17 @@ class TagServiceTest {
     void setUp() {
         when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(stringRedisTemplate.opsForHash()).thenReturn(hashOps);
-        tagService = new TagServiceImpl(tagRepository, userTagFollowRepository, stringRedisTemplate);
+        tagService = new TagServiceImpl(tagRepository, userTagFollowRepository, stringRedisTemplate, articleTagRepository);
+    }
+
+    @Test
+    @DisplayName("TagErrorCode 格式符合 A03xx 規範")
+    void tagErrorCode_code_isA03xx() {
+        assertThat(TagErrorCode.TAG_NOT_FOUND.getCode()).startsWith("A03");
+        assertThat(TagErrorCode.TAG_IN_USE.getCode()).startsWith("A03");
+        assertThat(TagErrorCode.TAG_NAME_CONFLICT.getCode()).startsWith("A03");
+        assertThat(TagErrorCode.TAG_SLUG_CONFLICT.getCode()).startsWith("A03");
+        assertThat(TagErrorCode.TAG_INVALID_NAME.getCode()).startsWith("A03");
     }
 
     @Test
@@ -245,9 +259,43 @@ class TagServiceTest {
         tag.setSlug("java");
         tag.setUsageCount(0);
         when(tagRepository.findById(id)).thenReturn(Optional.of(tag));
+        when(articleTagRepository.countByTagId(id)).thenReturn(0);
 
         tagService.adminDeleteTag(id);
 
+        verify(tagRepository).deleteById(id);
+    }
+
+    @Test
+    @DisplayName("adminDeleteTag: usageCount=0 但 article_tags 有關聯 → throws TAG_IN_USE")
+    void adminDeleteTag_zeroUsageButHasArticleTags_throwsBusinessException() {
+        UUID id = UUID.randomUUID();
+        Tag tag = new Tag();
+        tag.setId(id);
+        tag.setSlug("java");
+        tag.setUsageCount(0);
+        when(tagRepository.findById(id)).thenReturn(Optional.of(tag));
+        when(articleTagRepository.countByTagId(id)).thenReturn(1);
+
+        assertThatThrownBy(() -> tagService.adminDeleteTag(id))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(TagErrorCode.TAG_IN_USE.getMessage());
+    }
+
+    @Test
+    @DisplayName("adminDeleteTag: 正常刪除時清除 user_tag_follows")
+    void adminDeleteTag_withZeroUsageAndNoArticleTags_cleansFollows() {
+        UUID id = UUID.randomUUID();
+        Tag tag = new Tag();
+        tag.setId(id);
+        tag.setSlug("java");
+        tag.setUsageCount(0);
+        when(tagRepository.findById(id)).thenReturn(Optional.of(tag));
+        when(articleTagRepository.countByTagId(id)).thenReturn(0);
+
+        tagService.adminDeleteTag(id);
+
+        verify(userTagFollowRepository).deleteByTagId(id);
         verify(tagRepository).deleteById(id);
     }
 }

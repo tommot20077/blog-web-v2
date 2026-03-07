@@ -50,6 +50,16 @@ public class ArticleRabbitMqConfig {
     public static final String ROUTING_KEY_VIEWED = "article.viewed";
 
     /**
+     * 文章已更新 Routing Key
+     */
+    public static final String ROUTING_KEY_UPDATED = "article.updated";
+
+    /**
+     * 文章已刪除 Routing Key
+     */
+    public static final String ROUTING_KEY_DELETED = "article.deleted";
+
+    /**
      * 建立死信隊列（DLQ）參數
      *
      * @return 包含死信交換器與路由 Key 的 Map
@@ -57,8 +67,7 @@ public class ArticleRabbitMqConfig {
     private Map<String, Object> dlqArgs() {
         return Map.of(
                 "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter"
-        );
+                "x-dead-letter-routing-key", "dead-letter");
     }
 
     /**
@@ -116,4 +125,5 @@ public class ArticleRabbitMqConfig {
                 .to(articleEventsExchange())
                 .with(ROUTING_KEY_VIEWED);
     }
+
 }

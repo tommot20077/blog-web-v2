@@ -27,10 +27,12 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
+import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
-import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
+import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
+import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
-import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
 import dowob.xyz.blog.module.article.model.Category;
 import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
@@ -46,7 +48,6 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -56,6 +57,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 /**
  * ArticleService 單元測試
@@ -352,8 +354,7 @@ class ArticleServiceTest {
 
             articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, emptyRequest);
 
-            org.mockito.ArgumentCaptor<Article> articleCaptor =
-                    org.mockito.ArgumentCaptor.forClass(Article.class);
+            org.mockito.ArgumentCaptor<Article> articleCaptor = org.mockito.ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(articleCaptor.capture());
             assertThat(articleCaptor.getValue().getTitle()).isEqualTo("測試標題");
             assertThat(articleCaptor.getValue().getContent()).isEqualTo("測試內容");
@@ -398,6 +399,22 @@ class ArticleServiceTest {
             verify(articleRepository).save(captor.capture());
             assertThat(captor.getValue().getContentHtml()).isNotNull();
             assertThat(captor.getValue().getContentHtml()).contains("<p>");
+        }
+
+        @Test
+        @DisplayName("異常：發生樂觀鎖例外時，應拋出 ARTICLE_CONCURRENT_UPDATE 業務例外")
+        void updateArticle_concurrentUpdate_throwsException() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class)))
+                    .thenThrow(new OptimisticLockingFailureException("Optimistic lock"));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("並發更新");
+
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getMessage());
         }
     }
 
@@ -480,13 +497,12 @@ class ArticleServiceTest {
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
             when(userFacade.getUserUsernameById(AUTHOR_ID)).thenReturn(Optional.of("testuser"));
             when(userFacade.getUserNicknameById(AUTHOR_ID)).thenReturn(Optional.of("TestAuthor"));
-            when(articleMapper.findTagsByArticleId(1L)).thenReturn(
-                    List.of(new TagInfo(10L, "Spring", "spring")));
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(
+                    List.of(new TagInfo(UUID.randomUUID(), "Spring", "spring")));
 
             articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
-            ArgumentCaptor<ArticlePublishedEvent> captor =
-                    ArgumentCaptor.forClass(ArticlePublishedEvent.class);
+            ArgumentCaptor<ArticlePublishedEvent> captor = ArgumentCaptor.forClass(ArticlePublishedEvent.class);
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED),
@@ -535,7 +551,8 @@ class ArticleServiceTest {
 
             assertThat(response).isNotNull();
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
-            verify(rabbitTemplate).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE), eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
+            verify(rabbitTemplate).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
         }
 
         @Test
@@ -544,10 +561,12 @@ class ArticleServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
-            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR,
+                    "127.0.0.1");
 
             assertThat(response).isNotNull();
-            verify(rabbitTemplate, never()).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE), eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
+            verify(rabbitTemplate, never()).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
         }
 
         @Test
@@ -556,7 +575,8 @@ class ArticleServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
-            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.ADMIN, "127.0.0.1");
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.ADMIN,
+                    "127.0.0.1");
 
             assertThat(response).isNotNull();
         }
@@ -579,11 +599,13 @@ class ArticleServiceTest {
             Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
-            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR,
+                    "127.0.0.1");
 
             assertThat(response).isNotNull();
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
-            verify(rabbitTemplate, never()).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE), eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
+            verify(rabbitTemplate, never()).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
         }
 
         @Test
@@ -828,6 +850,78 @@ class ArticleServiceTest {
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
 
             verify(articleRepository, never()).delete(any());
+        }
+
+        @Test
+        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent 至 MQ")
+        void deleteArticle_shouldPublishDeletedEvent() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
+                    captor.capture());
+
+            ArticleDeletedEvent event = captor.getValue();
+            assertThat(event.articleUuid()).isEqualTo(ARTICLE_UUID);
+            assertThat(event.deletedAt()).isNotNull();
+        }
+    }
+
+    /**
+     * 更新已發布文章時的搜尋同步測試
+     */
+    @Nested
+    @DisplayName("updateArticle - Search Sync")
+    class UpdateArticleSearchSyncTests {
+
+        @Test
+        @DisplayName("正常：更新已發布文章的標題時，應發送 ArticleUpdatedEvent")
+        void updatePublishedArticle_shouldPublishUpdatedEvent() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            article.setPublishedAt(LocalDateTime.now().minusDays(1));
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(
+                    List.of(new TagInfo(UUID.randomUUID(), "Spring", "spring")));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("更新後標題");
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            ArgumentCaptor<ArticleUpdatedEvent> captor = ArgumentCaptor.forClass(ArticleUpdatedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_UPDATED),
+                    captor.capture());
+
+            ArticleUpdatedEvent event = captor.getValue();
+            assertThat(event.articleUuid()).isEqualTo(ARTICLE_UUID);
+            assertThat(event.title()).isEqualTo("更新後標題");
+            assertThat(event.tags()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("正常：更新 DRAFT 文章時，不應發送 ArticleUpdatedEvent")
+        void updateDraftArticle_shouldNotPublishUpdatedEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("更新草稿標題");
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(rabbitTemplate, never()).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_UPDATED),
+                    any(ArticleUpdatedEvent.class));
         }
     }
 }

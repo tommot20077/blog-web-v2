@@ -1,7 +1,8 @@
 package dowob.xyz.blog.module.article.mapper;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.module.article.event.TagInfo;
+import dowob.xyz.blog.infrastructure.config.UUIDTypeHandler;
+import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.article.model.Article;
 import org.apache.ibatis.annotations.Arg;
 import org.apache.ibatis.annotations.ConstructorArgs;
@@ -107,23 +108,25 @@ public interface ArticleMapper {
      *
      * <p>
      * 透過 article_tags 關聯表查詢對應的 tags 資料，
-     * 供建立 {@link dowob.xyz.blog.module.article.event.ArticlePublishedEvent} 使用。
+     * 供建立 {@link dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent} 使用。
      * 使用 {@link ConstructorArgs} 明確指定 Record 建構子參數對應，
      * 因 Java Record 無無參建構子，MyBatis 需此提示才能正確映射。
+     * V9 migration 後 article_tags.article_id 改為 UUID 型別，
+     * 故改以文章公開 UUID 查詢並加上 ::uuid 強制轉型。
      * </p>
      *
-     * @param articleId 文章資料庫主鍵
+     * @param articleUuid 文章公開 UUID
      * @return 標籤資訊列表
      */
     @ConstructorArgs({
-            @Arg(column = "id", javaType = Long.class),
-            @Arg(column = "name", javaType = String.class),
-            @Arg(column = "slug", javaType = String.class)
+            @Arg(column = "id", javaType = UUID.class, typeHandler = UUIDTypeHandler.class, name = "id"),
+            @Arg(column = "name", javaType = String.class, name = "name"),
+            @Arg(column = "slug", javaType = String.class, name = "slug")
     })
     @Select("SELECT t.id, t.name, t.slug FROM tags t " +
             "INNER JOIN article_tags art ON t.id = art.tag_id " +
-            "WHERE art.article_id = #{articleId}")
-    List<TagInfo> findTagsByArticleId(@Param("articleId") Long articleId);
+            "WHERE art.article_id = #{articleUuid}::uuid")
+    List<TagInfo> findTagsByArticleUuid(@Param("articleUuid") UUID articleUuid);
 
     /**
      * 查詢所有已發布文章（供全量重建 Elasticsearch 索引使用）

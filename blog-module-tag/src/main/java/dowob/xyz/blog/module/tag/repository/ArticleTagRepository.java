@@ -51,4 +51,13 @@ public interface ArticleTagRepository extends Repository<ArticleTag, UUID> {
     @Modifying
     @Query("INSERT INTO article_tags (article_id, tag_id) VALUES (:articleId, :tagId)")
     void save(@Param("articleId") UUID articleId, @Param("tagId") UUID tagId);
+
+    /**
+     * 計算指定標籤被文章使用的次數（用於刪除前 FK 檢查）
+     *
+     * @param tagId 標籤 ID
+     * @return 關聯的文章數量
+     */
+    @Query("SELECT COUNT(*) FROM article_tags WHERE tag_id = :tagId")
+    int countByTagId(@Param("tagId") UUID tagId);
 }

@@ -50,4 +50,13 @@ public interface UserTagFollowRepository extends Repository<UserTagFollow, UUID>
      */
     @Query("SELECT COUNT(*) FROM user_tag_follows WHERE user_id = :userId AND tag_id = :tagId")
     int countByUserIdAndTagId(@Param("userId") UUID userId, @Param("tagId") UUID tagId);
+
+    /**
+     * 刪除指定標籤的所有使用者追蹤記錄（標籤刪除前清理）
+     *
+     * @param tagId 標籤 ID
+     */
+    @Modifying
+    @Query("DELETE FROM user_tag_follows WHERE tag_id = :tagId")
+    void deleteByTagId(@Param("tagId") UUID tagId);
 }
