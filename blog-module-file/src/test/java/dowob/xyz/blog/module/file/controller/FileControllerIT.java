@@ -316,7 +316,7 @@ class FileControllerIT {
     }
 
     @Test
-    @DisplayName("DELETE /api/files/{id} - 非擁有者刪除他人檔案，應回傳 F005 錯誤碼")
+    @DisplayName("DELETE /api/files/{id} - 非擁有者刪除他人檔案，應回傳 A0405 錯誤碼")
     void deleteFile_byNonOwner_returns403ErrorCode() throws Exception {
         MockMultipartFile file = createTestJpeg();
 
@@ -333,7 +333,7 @@ class FileControllerIT {
         mockMvc.perform(delete("/api/v1/files/" + fileId)
                 .with(asUser(USER_B_ID, Role.AUTHOR)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("F005"));
+                .andExpect(jsonPath("$.code").value("A0405"));
     }
 
     @Test
@@ -365,11 +365,11 @@ class FileControllerIT {
     }
 
     @Test
-    @DisplayName("DELETE /api/files/{id} - 刪除不存在的檔案，應回傳 F001 錯誤碼")
-    void deleteFile_notFound_returnsF001() throws Exception {
+    @DisplayName("DELETE /api/files/{id} - 刪除不存在的檔案，應回傳 A0401 錯誤碼")
+    void deleteFile_notFound_returnsA0401() throws Exception {
         mockMvc.perform(delete("/api/v1/files/" + UUID.randomUUID())
                 .with(asUser(USER_A_ID, Role.AUTHOR)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("F001"));
+                .andExpect(jsonPath("$.code").value("A0401"));
     }
 }

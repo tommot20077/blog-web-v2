@@ -2,7 +2,7 @@ package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.file.config.FileProperties;
-import dowob.xyz.blog.module.file.model.FileErrorCode;
+import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
