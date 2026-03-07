@@ -28,6 +28,10 @@
         <!-- Modules -->
         <dependency>
             <groupId>dowob.xyz</groupId>
+            <artifactId>blog-db-migration</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-user</artifactId>
         </dependency>
         <dependency>
