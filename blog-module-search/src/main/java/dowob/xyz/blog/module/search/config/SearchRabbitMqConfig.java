@@ -7,6 +7,8 @@ import org.springframework.amqp.core.TopicExchange;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.Map;
+
 /**
  * 搜尋模組 RabbitMQ 設定
  *
@@ -38,13 +40,64 @@ public class SearchRabbitMqConfig {
     public static final String ROUTING_KEY_PUBLISHED = "article.published";
 
     /**
-     * 宣告搜尋索引 Queue（持久化）
+     * 文章更新 Routing Key
+     */
+    public static final String ROUTING_KEY_UPDATED = "article.updated";
+
+    /**
+     * 文章刪除 Routing Key
+     */
+    public static final String ROUTING_KEY_DELETED = "article.deleted";
+
+    /**
+     * 搜尋索引更新 Queue 名稱
+     */
+    public static final String QUEUE_SEARCH_INDEX_UPDATE = "queue.search.index.update";
+
+    /**
+     * 搜尋索引刪除 Queue 名稱
+     */
+    public static final String QUEUE_SEARCH_INDEX_DELETE = "queue.search.index.delete";
+
+    /**
+     * 建立死信隊列（DLQ）參數
+     *
+     * @return 包含死信交換器與路由 Key 的 Map
+     */
+    private Map<String, Object> dlqArgs() {
+        return Map.of(
+                "x-dead-letter-exchange", "blog.dlq",
+                "x-dead-letter-routing-key", "dead-letter");
+    }
+
+    /**
+     * 宣告搜尋索引 Queue（持久化，含 DLQ 設定）
      *
      * @return Queue 實例
      */
     @Bean
     public Queue searchIndexQueue() {
-        return new Queue(QUEUE_SEARCH_INDEX, true);
+        return new Queue(QUEUE_SEARCH_INDEX, true, false, false, dlqArgs());
+    }
+
+    /**
+     * 宣告搜尋索引更新 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue searchIndexUpdateQueue() {
+        return new Queue(QUEUE_SEARCH_INDEX_UPDATE, true, false, false, dlqArgs());
+    }
+
+    /**
+     * 宣告搜尋索引刪除 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue searchIndexDeleteQueue() {
+        return new Queue(QUEUE_SEARCH_INDEX_DELETE, true, false, false, dlqArgs());
     }
 
     /**
@@ -63,7 +116,7 @@ public class SearchRabbitMqConfig {
     }
 
     /**
-     * 將搜尋索引 Queue 綁定至文章事件 Exchange
+     * 將搜尋索引 Queue 綁定至文章事件 Exchange（Published）
      *
      * @return Binding 實例
      */
@@ -73,5 +126,31 @@ public class SearchRabbitMqConfig {
                 .bind(searchIndexQueue())
                 .to(searchArticleEventsExchange())
                 .with(ROUTING_KEY_PUBLISHED);
+    }
+
+    /**
+     * 將搜尋索引更新 Queue 綁定至文章事件 Exchange（Updated）
+     *
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding searchIndexUpdateBinding() {
+        return BindingBuilder
+                .bind(searchIndexUpdateQueue())
+                .to(searchArticleEventsExchange())
+                .with(ROUTING_KEY_UPDATED);
+    }
+
+    /**
+     * 將搜尋索引刪除 Queue 綁定至文章事件 Exchange（Deleted）
+     *
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding searchIndexDeleteBinding() {
+        return BindingBuilder
+                .bind(searchIndexDeleteQueue())
+                .to(searchArticleEventsExchange())
+                .with(ROUTING_KEY_DELETED);
     }
 }

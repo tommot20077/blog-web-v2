@@ -13,7 +13,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
+
+import java.util.concurrent.TimeUnit;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -45,12 +48,16 @@ class TrendingRefreshJobTest {
     @Mock
     private ZSetOperations<String, String> zSetOperations;
 
+    @Mock
+    private ValueOperations<String, String> valueOperations;
+
     private TrendingRefreshJob job;
 
     @BeforeEach
     void setUp() {
         job = new TrendingRefreshJob(articleFacade, stringRedisTemplate);
         when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
     @Nested
@@ -176,6 +183,45 @@ class TrendingRefreshJobTest {
                     .findFirst().orElseThrow();
 
             assertThat(highScore).isGreaterThan(lowScore);
+        }
+    }
+
+    @Nested
+    @DisplayName("refreshTrending 分散式鎖測試 (R-2)")
+    class RefreshTrendingLockTests {
+
+        @Test
+        @DisplayName("未取得分散式鎖時跳過業務邏輯")
+        void whenLockNotAcquired_skipsExecution() {
+            when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(false);
+
+            job.refreshTrending();
+
+            verify(articleFacade, never()).getArticlesPublishedAfter(any());
+        }
+
+        @Test
+        @DisplayName("取得分散式鎖後正常執行並在 finally 釋放鎖")
+        void whenLockAcquired_executesAndReleasesLock() {
+            when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true);
+            when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of());
+
+            job.refreshTrending();
+
+            verify(stringRedisTemplate).delete("lock:trending-refresh");
+        }
+
+        @Test
+        @DisplayName("setIfAbsent 回傳 null 時當作未取得鎖，跳過業務邏輯")
+        void whenLockReturnNull_skipsExecution() {
+            when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(null);
+
+            job.refreshTrending();
+
+            verify(articleFacade, never()).getArticlesPublishedAfter(any());
         }
     }
 }
