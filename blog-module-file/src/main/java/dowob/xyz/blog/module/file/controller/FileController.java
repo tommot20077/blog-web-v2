@@ -1,8 +1,10 @@
 package dowob.xyz.blog.module.file.controller;
 
+import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -66,7 +68,8 @@ public class FileController {
             @AuthenticationPrincipal Long userId,
             Authentication authentication) {
         UUID uploaderId = resolveUserUuid(userId);
-        String role = resolveRole(authentication);
+        Role roleEnum = SecurityUtils.resolveRole(authentication);
+        String role = roleEnum != null ? roleEnum.name() : "USER";
         return ApiResponse.success(fileService.uploadFile(file, usageType, uploaderId, role));
     }
 
@@ -129,7 +132,8 @@ public class FileController {
             @AuthenticationPrincipal Long userId,
             Authentication authentication) {
         UUID uploaderId = resolveUserUuid(userId);
-        String role = resolveRole(authentication);
+        Role roleEnum = SecurityUtils.resolveRole(authentication);
+        String role = roleEnum != null ? roleEnum.name() : "USER";
         return ApiResponse.success(fileService.getQuota(uploaderId, role));
     }
 
@@ -145,18 +149,4 @@ public class FileController {
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
     }
 
-    /**
-     * 從 Authentication 中解析使用者角色字串
-     *
-     * @param authentication 當前認證資訊
-     * @return 角色字串（USER / AUTHOR / ADMIN）
-     */
-    private String resolveRole(Authentication authentication) {
-        return authentication.getAuthorities().stream()
-                .map(a -> a.getAuthority())
-                .filter(a -> a.startsWith("ROLE_"))
-                .map(a -> a.substring(5))
-                .findFirst()
-                .orElse("USER");
-    }
 }
