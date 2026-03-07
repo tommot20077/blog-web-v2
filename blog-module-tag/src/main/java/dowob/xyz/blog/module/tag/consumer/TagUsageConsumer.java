@@ -57,12 +57,11 @@ public class TagUsageConsumer {
      * @param event       文章標籤事件
      * @param channel     RabbitMQ Channel，用於手動 ACK
      * @param deliveryTag 消息投遞標籤
-     * @throws IOException 手動 ACK 時可能拋出的 IO 異常
      */
     @RabbitListener(queues = TagRabbitMqConfig.QUEUE_TAG_ARTICLE_TAGGED)
     public void handleArticleTagged(ArticleTagEvent event,
                                     Channel channel,
-                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         try {
             for (UUID tagId : event.tagIds()) {
                 Optional<Tag> tagOpt = tagRepository.findById(tagId);

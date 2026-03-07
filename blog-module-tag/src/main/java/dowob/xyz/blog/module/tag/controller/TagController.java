@@ -92,7 +92,7 @@ public class TagController {
      * @param id     標籤 ID
      * @param userId 當前登入使用者 ID（從 JWT 注入）
      * @return 成功回應
-     * @throws ResponseStatusException 404 若使用者不存在
+     * @throws BusinessException 若使用者不存在（UserErrorCode.USER_NOT_FOUND）
      */
     @PreAuthorize("isAuthenticated()")
     @PostMapping("/{id}/follow")
@@ -113,7 +113,7 @@ public class TagController {
      * @param id     標籤 ID
      * @param userId 當前登入使用者 ID（從 JWT 注入）
      * @return 成功回應
-     * @throws ResponseStatusException 404 若使用者不存在
+     * @throws BusinessException 若使用者不存在（UserErrorCode.USER_NOT_FOUND）
      */
     @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/{id}/follow")

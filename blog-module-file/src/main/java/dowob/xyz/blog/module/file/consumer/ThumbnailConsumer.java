@@ -59,12 +59,11 @@ public class ThumbnailConsumer {
      * @param event       圖片上傳事件
      * @param channel     RabbitMQ Channel，用於手動 ACK
      * @param deliveryTag 消息投遞標籤
-     * @throws IOException 手動 ACK 時可能拋出的 IO 異常
      */
     @RabbitListener(queues = "file.thumbnail")
     public void handleImageUploaded(ImageUploadedEvent event,
                                     Channel channel,
-                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         try {
             if (!event.contentType().startsWith("image/")) {
                 log.debug("非圖片類型，跳過縮圖處理: {}", event.contentType());

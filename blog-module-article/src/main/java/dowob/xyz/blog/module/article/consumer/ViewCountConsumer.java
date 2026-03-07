@@ -39,12 +39,11 @@ public class ViewCountConsumer {
      * @param event       文章瀏覽事件
      * @param channel     RabbitMQ Channel，用於手動 ACK
      * @param deliveryTag 消息投遞標籤
-     * @throws IOException 手動 ACK 時可能拋出的 IO 異常
      */
     @RabbitListener(queues = ArticleRabbitMqConfig.QUEUE_VIEW_COUNT)
     public void handleArticleViewed(ArticleViewedEvent event,
                                     Channel channel,
-                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         try {
             viewCountService.incrementRedisViewCount(event.articleUuid());
             log.debug("文章 {} 瀏覽計數已增加", event.articleUuid());

@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.tag.consumer;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.tag.event.ArticleTagEvent;
 import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
@@ -70,7 +71,7 @@ class TagUsageConsumerTest {
 
         assertThat(tag.getUsageCount()).isEqualTo(1);
         verify(tagRepository).save(tag);
-        verify(zSetOps).incrementScore(eq("tag:hot"), eq(tagId.toString()), eq(1.0));
+        verify(zSetOps).incrementScore(eq(RedisKeyConstant.TAG_HOT_KEY), eq(tagId.toString()), eq(1.0));
         verify(channel).basicAck(10L, false);
     }
 
