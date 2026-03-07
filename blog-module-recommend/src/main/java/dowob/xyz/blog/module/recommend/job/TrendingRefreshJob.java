@@ -75,7 +75,7 @@ public class TrendingRefreshJob {
     public void refreshTrending() {
         String lockValue = UUID.randomUUID().toString();
         Boolean acquired = stringRedisTemplate.opsForValue()
-                .setIfAbsent(RedisKeyConstant.LOCK_TRENDING_REFRESH, UUID.randomUUID().toString(), LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+                .setIfAbsent(RedisKeyConstant.LOCK_TRENDING_REFRESH, lockValue, LOCK_TTL_SECONDS, TimeUnit.SECONDS);
         if (!Boolean.TRUE.equals(acquired)) {
             log.debug("未取得分散式鎖，跳過本次熱門排行更新");
             return;
@@ -91,7 +91,7 @@ public class TrendingRefreshJob {
             });
             log.info("熱門文章排行更新完成");
         } finally {
-            stringRedisTemplate.delete(RedisKeyConstant.LOCK_TRENDING_REFRESH);
+            stringRedisTemplate.execute(UNLOCK_SCRIPT, List.of(RedisKeyConstant.LOCK_TRENDING_REFRESH), lockValue);
         }
     }
 

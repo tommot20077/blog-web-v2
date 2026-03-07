@@ -90,7 +90,6 @@ public class SearchController {
      */
     @PreAuthorize("isAuthenticated()")
     @GetMapping("/history")
-    @PreAuthorize("isAuthenticated()")
     public ApiResponse<List<String>> getHistory(@AuthenticationPrincipal Long userId) {
         if (userId == null) {
             throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
@@ -109,7 +108,6 @@ public class SearchController {
      */
     @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/history")
-    @PreAuthorize("isAuthenticated()")
     public ApiResponse<Void> clearHistory(@AuthenticationPrincipal Long userId) {
         if (userId == null) {
             throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
