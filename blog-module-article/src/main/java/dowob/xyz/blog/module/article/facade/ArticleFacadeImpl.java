@@ -6,7 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
-import dowob.xyz.blog.module.article.event.TagInfo;
+import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -134,7 +134,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * @return ArticleIndexData
      */
     private ArticleIndexData toIndexData(Article article) {
-        List<TagInfo> tags = articleMapper.findTagsByArticleId(article.getId());
+        List<TagInfo> tags = articleMapper.findTagsByArticleUuid(article.getUuid());
         List<ArticleIndexData.TagData> tagData = tags.stream()
                 .map(t -> new ArticleIndexData.TagData(t.id(), t.name(), t.slug()))
                 .toList();

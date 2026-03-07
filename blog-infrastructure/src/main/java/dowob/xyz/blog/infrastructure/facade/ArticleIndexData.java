@@ -45,10 +45,10 @@ public record ArticleIndexData(
     /**
      * 文章標籤簡要資訊
      *
-     * @param id   標籤資料庫主鍵
+     * @param id   標籤公開 UUID
      * @param name 標籤名稱
      * @param slug 標籤 URL slug
      */
-    public record TagData(Long id, String name, String slug) {
+    public record TagData(UUID id, String name, String slug) {
     }
 }

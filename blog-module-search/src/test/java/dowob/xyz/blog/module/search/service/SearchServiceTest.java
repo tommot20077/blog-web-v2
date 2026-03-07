@@ -141,7 +141,7 @@ class SearchServiceTest {
                 .content("Spring Boot 是一個 Java 框架...")
                 .slug("spring-boot-tutorial")
                 .author(new ArticleDocument.AuthorInfo(1L, "yuan", "Yuan"))
-                .tags(List.of(new ArticleDocument.TagInfo(1L, "Java", "java")))
+                .tags(List.of(new ArticleDocument.TagInfo(UUID.randomUUID(), "Java", "java")))
                 .publishedAt(LocalDateTime.now())
                 .viewCount(100L)
                 .likeCount(50L)

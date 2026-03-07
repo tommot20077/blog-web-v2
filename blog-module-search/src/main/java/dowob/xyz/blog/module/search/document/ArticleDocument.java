@@ -12,6 +12,7 @@ import org.springframework.data.elasticsearch.annotations.FieldType;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 文章 Elasticsearch Document
@@ -135,10 +136,10 @@ public class ArticleDocument {
     public static class TagInfo {
 
         /**
-         * 標籤資料庫主鍵
+         * 標籤公開 UUID
          */
         @Field(type = FieldType.Keyword)
-        private Long id;
+        private UUID id;
 
         /**
          * 標籤名稱

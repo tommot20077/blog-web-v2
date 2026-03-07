@@ -81,9 +81,9 @@ public class ArticlePublishedMessage {
     public static class TagInfoMessage {
 
         /**
-         * 標籤資料庫主鍵
+         * 標籤公開 UUID
          */
-        private Long id;
+        private UUID id;
 
         /**
          * 標籤名稱

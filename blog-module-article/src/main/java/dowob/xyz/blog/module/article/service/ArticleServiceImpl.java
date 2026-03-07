@@ -7,9 +7,11 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
-import dowob.xyz.blog.module.article.event.ArticlePublishedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
+import dowob.xyz.blog.infrastructure.event.TagInfo;
+import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
+import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
-import dowob.xyz.blog.module.article.event.TagInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -182,11 +184,21 @@ public class ArticleServiceImpl implements ArticleService {
             }
         }
 
-        Article updated = articleRepository.save(article);
+        Article updated;
+        try {
+            updated = articleRepository.save(article);
+        } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE);
+        }
 
         // 同步文章分類（null 表示不更新，空列表表示清除）
         if (request.getCategoryIds() != null) {
             syncCategories(updated.getId(), request.getCategoryIds());
+        }
+
+        /** 若文章狀態為 PUBLISHED，發送更新事件通知搜尋模組 */
+        if (updated.getStatus() == ArticleStatus.PUBLISHED) {
+            publishUpdatedEvent(updated);
         }
 
         return toResponse(updated);
@@ -205,6 +217,12 @@ public class ArticleServiceImpl implements ArticleService {
         Article article = findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
         articleRepository.delete(article);
+
+        /** 發送刪除事件通知搜尋模組移除索引 */
+        rabbitTemplate.convertAndSend(
+                ArticleRabbitMqConfig.EXCHANGE,
+                ArticleRabbitMqConfig.ROUTING_KEY_DELETED,
+                new ArticleDeletedEvent(article.getUuid(), Instant.now()));
     }
 
     /**
@@ -322,7 +340,7 @@ public class ArticleServiceImpl implements ArticleService {
 
         Article updated = articleRepository.save(article);
 
-        List<TagInfo> tags = articleMapper.findTagsByArticleId(updated.getId());
+        List<TagInfo> tags = articleMapper.findTagsByArticleUuid(updated.getUuid());
         ArticlePublishedEvent event = new ArticlePublishedEvent(
                 updated.getUuid(),
                 updated.getAuthorId(),
@@ -334,7 +352,8 @@ public class ArticleServiceImpl implements ArticleService {
                 userFacade.getUserUsernameById(updated.getAuthorId()).orElse(null),
                 resolveAuthorNickname(updated.getAuthorId()),
                 tags);
-        rabbitTemplate.convertAndSend(ArticleRabbitMqConfig.EXCHANGE, ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED, event);
+        rabbitTemplate.convertAndSend(ArticleRabbitMqConfig.EXCHANGE, ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED,
+                event);
 
         return toResponse(updated);
     }
@@ -444,7 +463,8 @@ public class ArticleServiceImpl implements ArticleService {
      * @return 純文字內容
      */
     private String stripMarkdown(String markdown) {
-        if (markdown == null) return "";
+        if (markdown == null)
+            return "";
         return markdown
                 .replaceAll("```[\\s\\S]*?```", "")
                 .replaceAll("`[^`]*`", "")
@@ -609,7 +629,8 @@ public class ArticleServiceImpl implements ArticleService {
      * @return 分類回應列表
      */
     private List<CategoryResponse> toCategoryResponses(Long articleId) {
-        if (articleId == null) return List.of();
+        if (articleId == null)
+            return List.of();
         return batchToCategoryResponsesMap(List.of(articleId))
                 .getOrDefault(articleId, List.of());
     }
@@ -621,7 +642,8 @@ public class ArticleServiceImpl implements ArticleService {
      * @return Map&lt;articleId, 分類回應列表&gt;
      */
     private Map<Long, List<CategoryResponse>> batchToCategoryResponsesMap(List<Long> articleIds) {
-        if (articleIds == null || articleIds.isEmpty()) return Map.of();
+        if (articleIds == null || articleIds.isEmpty())
+            return Map.of();
         List<CategoryWithArticleId> all = categoryMapper.findCategoriesByArticleIds(articleIds);
         return all.stream().collect(Collectors.groupingBy(
                 CategoryWithArticleId::getArticleId,
@@ -633,5 +655,33 @@ public class ArticleServiceImpl implements ArticleService {
                         .sortOrder(c.getSortOrder())
                         .build(),
                         Collectors.toList())));
+    }
+
+    /**
+     * 發送文章更新事件至 RabbitMQ
+     *
+     * <p>
+     * 供已發布文章內容修改後通知搜尋模組同步索引。
+     * </p>
+     *
+     * @param article 更新後的文章實體
+     */
+    private void publishUpdatedEvent(Article article) {
+        List<TagInfo> tags = articleMapper.findTagsByArticleUuid(article.getUuid());
+        ArticleUpdatedEvent event = new ArticleUpdatedEvent(
+                article.getUuid(),
+                article.getAuthorId(),
+                article.getTitle(),
+                article.getPublishedAt(),
+                article.getSlug(),
+                article.getSummary(),
+                stripMarkdown(article.getContent()),
+                userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
+                resolveAuthorNickname(article.getAuthorId()),
+                tags);
+        rabbitTemplate.convertAndSend(
+                ArticleRabbitMqConfig.EXCHANGE,
+                ArticleRabbitMqConfig.ROUTING_KEY_UPDATED,
+                event);
     }
 }
