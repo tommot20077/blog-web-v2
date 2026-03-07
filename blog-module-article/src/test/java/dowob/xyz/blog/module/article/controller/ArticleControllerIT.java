@@ -301,7 +301,7 @@ class ArticleControllerIT {
 
         /** 確認已刪除（匿名也找不到） */
         mockMvc.perform(get("/api/v1/articles/" + uuid))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0201"));
     }
 
@@ -342,7 +342,7 @@ class ArticleControllerIT {
                 .with(asUser(AUTHOR_ID, Role.AUTHOR))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
     }
 
@@ -373,7 +373,7 @@ class ArticleControllerIT {
         /** 嘗試再次發布 → 非法狀態轉換 */
         mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
                 .with(asUser(AUTHOR_ID, Role.AUTHOR)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0204"));
     }
 
@@ -503,7 +503,7 @@ class ArticleControllerIT {
                 .with(asUser(AUTHOR_ID, Role.AUTHOR))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(rejectRequest)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0203"));
     }
 

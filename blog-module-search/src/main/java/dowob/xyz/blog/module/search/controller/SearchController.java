@@ -5,8 +5,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.service.SearchService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -56,8 +55,8 @@ public class SearchController {
             @RequestParam(required = false) String tag,
             @RequestParam(defaultValue = "relevance") String sort,
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size) {
-        Long userId = resolveUserId();
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal Long userId) {
         return ApiResponse.success(searchService.search(q, tag, sort, page, size, userId));
     }
 
@@ -87,8 +86,8 @@ public class SearchController {
      * @return 搜尋歷史列表（最新在前）
      */
     @GetMapping("/history")
-    public ApiResponse<List<String>> getHistory() {
-        return ApiResponse.success(searchService.getHistory(requireUserId()));
+    public ApiResponse<List<String>> getHistory(@AuthenticationPrincipal Long userId) {
+        return ApiResponse.success(searchService.getHistory(userId));
     }
 
     /**
@@ -101,35 +100,8 @@ public class SearchController {
      * @return 成功回應
      */
     @DeleteMapping("/history")
-    public ApiResponse<Void> clearHistory() {
-        searchService.clearHistory(requireUserId());
+    public ApiResponse<Void> clearHistory(@AuthenticationPrincipal Long userId) {
+        searchService.clearHistory(userId);
         return ApiResponse.success();
-    }
-
-    /**
-     * 從 SecurityContextHolder 取得當前用戶 ID（可能為 null）
-     *
-     * @return 用戶 ID，匿名為 null
-     */
-    private Long resolveUserId() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated() || auth.getPrincipal() instanceof String) {
-            return null;
-        }
-        try {
-            return (Long) auth.getPrincipal();
-        } catch (ClassCastException e) {
-            return null;
-        }
-    }
-
-    /**
-     * 取得當前用戶 ID，需登入（由 Security 設定確保路由認證）
-     *
-     * @return 用戶 ID
-     */
-    private Long requireUserId() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return (Long) auth.getPrincipal();
     }
 }
