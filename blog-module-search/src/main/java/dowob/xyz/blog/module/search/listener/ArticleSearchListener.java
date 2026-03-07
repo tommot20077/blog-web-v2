@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.search.listener;
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.module.search.config.SearchRabbitMqConfig;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.listener.dto.ArticleDeletedMessage;
 import dowob.xyz.blog.module.search.listener.dto.ArticlePublishedMessage;
 import dowob.xyz.blog.module.search.service.SearchService;
 import lombok.RequiredArgsConstructor;
@@ -20,8 +21,8 @@ import java.util.stream.Collectors;
  * 文章搜尋索引監聽器
  *
  * <p>
- * 消費 RabbitMQ {@value SearchRabbitMqConfig#QUEUE_SEARCH_INDEX} Queue，
- * 接收文章發布事件後，將文章資料索引至 Elasticsearch。
+ * 消費 RabbitMQ 隊列，接收文章發布、更新、刪除事件，
+ * 同步維護 Elasticsearch 索引。
  * </p>
  *
  * @author Yuan
@@ -40,13 +41,6 @@ public class ArticleSearchListener {
     /**
      * 接收文章發布事件，建立 Elasticsearch 索引
      *
-     * <p>
-     * 訊息由 {@code article.events} Exchange 透過 {@code article.published} routing key
-     * 路由，
-     * Jackson2JsonMessageConverter 自動反序列化為 {@link ArticlePublishedMessage}。
-     * 使用手動確認機制 (MANUAL ACK) 確保索引建立成功。
-     * </p>
-     *
      * @param message     文章發布訊息
      * @param channel     RabbitMQ Channel
      * @param deliveryTag 訊息標籤
@@ -64,7 +58,58 @@ public class ArticleSearchListener {
             log.debug("文章索引建立成功並已 ACK：uuid={}", message.getArticleUuid());
         } catch (Exception e) {
             log.error("文章索引失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
-            // 發生異常時拒絕訊息並不重新入隊 (requeue=false)，讓它進入 DLQ
+            channel.basicNack(deliveryTag, false, false);
+        }
+    }
+
+    /**
+     * 接收文章更新事件，重新索引已發布文章
+     *
+     * <p>
+     * 使用與 {@link #onArticlePublished} 相同的 DTO 結構（ArticlePublishedMessage），
+     * 因為更新事件攜帶完整文章資料。
+     * </p>
+     *
+     * @param message     文章更新訊息（結構同發布訊息）
+     * @param channel     RabbitMQ Channel
+     * @param deliveryTag 訊息標籤
+     * @throws IOException 處理 ACK/NACK 時的 IO 異常
+     */
+    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_UPDATE)
+    public void onArticleUpdated(ArticlePublishedMessage message,
+            Channel channel,
+            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        log.info("收到文章更新事件，重新索引：uuid={}", message.getArticleUuid());
+        try {
+            ArticleDocument document = toDocument(message);
+            searchService.indexArticle(document);
+            channel.basicAck(deliveryTag, false);
+            log.debug("文章索引更新成功並已 ACK：uuid={}", message.getArticleUuid());
+        } catch (Exception e) {
+            log.error("文章索引更新失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
+            channel.basicNack(deliveryTag, false, false);
+        }
+    }
+
+    /**
+     * 接收文章刪除事件，從 Elasticsearch 移除索引
+     *
+     * @param message     文章刪除訊息
+     * @param channel     RabbitMQ Channel
+     * @param deliveryTag 訊息標籤
+     * @throws IOException 處理 ACK/NACK 時的 IO 異常
+     */
+    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_DELETE)
+    public void onArticleDeleted(ArticleDeletedMessage message,
+            Channel channel,
+            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        log.info("收到文章刪除事件，移除索引：uuid={}", message.getArticleUuid());
+        try {
+            searchService.deleteIndex(message.getArticleUuid().toString());
+            channel.basicAck(deliveryTag, false);
+            log.debug("文章索引移除成功並已 ACK：uuid={}", message.getArticleUuid());
+        } catch (Exception e) {
+            log.error("文章索引移除失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
             channel.basicNack(deliveryTag, false, false);
         }
     }
@@ -72,7 +117,7 @@ public class ArticleSearchListener {
     /**
      * 將訊息 DTO 轉換為 Elasticsearch Document
      *
-     * @param message 文章發布訊息
+     * @param message 文章發布/更新訊息
      * @return ArticleDocument
      */
     private ArticleDocument toDocument(ArticlePublishedMessage message) {

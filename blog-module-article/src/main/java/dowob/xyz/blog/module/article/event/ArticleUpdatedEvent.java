@@ -1,15 +1,18 @@
 package dowob.xyz.blog.module.article.event;
 
+import dowob.xyz.blog.infrastructure.event.TagInfo;
+
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * 文章發布事件
+ * 文章更新事件
  *
  * <p>
- * 文章成功發布後，透過 RabbitMQ 廣播此事件，
- * 供搜尋模組索引、推薦模組更新等下游消費。
+ * 已發布文章的內容被修改後，透過 RabbitMQ 廣播此事件，
+ * 供搜尋模組更新索引等下游消費。
+ * 僅在文章狀態為 PUBLISHED 時才發送。
  * </p>
  *
  * @param articleUuid    文章公開 UUID
@@ -26,7 +29,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
-public record ArticlePublishedEvent(
+public record ArticleUpdatedEvent(
         UUID articleUuid,
         Long authorId,
         String title,

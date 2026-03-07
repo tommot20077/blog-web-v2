@@ -12,6 +12,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.anyString;
@@ -56,7 +57,10 @@ class ArticlePublishedConsumerTest {
     }
 
     private ArticlePublishedEvent event() {
-        return new ArticlePublishedEvent(ARTICLE_UUID, 1L, "Test Article", LocalDateTime.now());
+        return new ArticlePublishedEvent(
+                ARTICLE_UUID, 1L, "Test Article", LocalDateTime.now(),
+                "test-slug", "Test summary", "content text",
+                "testuser", "Test User", List.of());
     }
 
     @Test

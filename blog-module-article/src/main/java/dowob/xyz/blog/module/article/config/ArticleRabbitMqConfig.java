@@ -50,6 +50,16 @@ public class ArticleRabbitMqConfig {
     public static final String ROUTING_KEY_VIEWED = "article.viewed";
 
     /**
+     * 文章已更新 Routing Key
+     */
+    public static final String ROUTING_KEY_UPDATED = "article.updated";
+
+    /**
+     * 文章已刪除 Routing Key
+     */
+    public static final String ROUTING_KEY_DELETED = "article.deleted";
+
+    /**
      * 建立死信隊列（DLQ）參數
      *
      * @return 包含死信交換器與路由 Key 的 Map
@@ -57,8 +67,7 @@ public class ArticleRabbitMqConfig {
     private Map<String, Object> dlqArgs() {
         return Map.of(
                 "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter"
-        );
+                "x-dead-letter-routing-key", "dead-letter");
     }
 
     /**
@@ -115,5 +124,51 @@ public class ArticleRabbitMqConfig {
                 .bind(articleViewCountQueue())
                 .to(articleEventsExchange())
                 .with(ROUTING_KEY_VIEWED);
+    }
+
+    /**
+     * 建立文章已更新 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue articleUpdatedQueue() {
+        return new Queue("article.updated", true, false, false, dlqArgs());
+    }
+
+    /**
+     * 建立文章已更新 Queue 與 Exchange 的綁定
+     *
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding articleUpdatedBinding() {
+        return BindingBuilder
+                .bind(articleUpdatedQueue())
+                .to(articleEventsExchange())
+                .with(ROUTING_KEY_UPDATED);
+    }
+
+    /**
+     * 建立文章已刪除 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue articleDeletedQueue() {
+        return new Queue("article.deleted", true, false, false, dlqArgs());
+    }
+
+    /**
+     * 建立文章已刪除 Queue 與 Exchange 的綁定
+     *
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding articleDeletedBinding() {
+        return BindingBuilder
+                .bind(articleDeletedQueue())
+                .to(articleEventsExchange())
+                .with(ROUTING_KEY_DELETED);
     }
 }

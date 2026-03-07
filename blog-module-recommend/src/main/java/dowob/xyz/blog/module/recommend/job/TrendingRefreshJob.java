@@ -13,6 +13,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 熱門文章排行定期更新排程
@@ -48,6 +50,16 @@ public class TrendingRefreshJob {
     private static final String TRENDING_KEY_PREFIX = "recommend:trending:";
 
     /**
+     * 分散式鎖 Key
+     */
+    private static final String LOCK_KEY = "lock:trending-refresh";
+
+    /**
+     * 分散式鎖 TTL（秒）
+     */
+    private static final long LOCK_TTL_SECONDS = 120L;
+
+    /**
      * 各週期配置：period 名稱 → 查詢天數範圍（天）與半衰期（天）
      */
     private static final Map<String, long[]> PERIOD_CONFIG = Map.of(
@@ -59,19 +71,29 @@ public class TrendingRefreshJob {
     /**
      * 定期重新計算各週期熱門文章排行分數
      *
-     * <p>每 30 分鐘執行，覆蓋 Redis ZSet 中的舊分數。</p>
+     * <p>每 30 分鐘執行，使用 Redis 分散式鎖確保多實例環境下只有一個實例執行。</p>
      */
     @Scheduled(fixedDelay = 1800000)
     public void refreshTrending() {
-        log.info("開始更新熱門文章排行...");
-        PERIOD_CONFIG.forEach((period, config) -> {
-            try {
-                refreshPeriod(period, config[0], config[1]);
-            } catch (Exception e) {
-                log.error("更新熱門排行失敗，period={}: {}", period, e.getMessage(), e);
-            }
-        });
-        log.info("熱門文章排行更新完成");
+        Boolean acquired = stringRedisTemplate.opsForValue()
+                .setIfAbsent(LOCK_KEY, UUID.randomUUID().toString(), LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+        if (!Boolean.TRUE.equals(acquired)) {
+            log.debug("未取得分散式鎖，跳過本次熱門排行更新");
+            return;
+        }
+        try {
+            log.info("開始更新熱門文章排行...");
+            PERIOD_CONFIG.forEach((period, config) -> {
+                try {
+                    refreshPeriod(period, config[0], config[1]);
+                } catch (Exception e) {
+                    log.error("更新熱門排行失敗，period={}: {}", period, e.getMessage(), e);
+                }
+            });
+            log.info("熱門文章排行更新完成");
+        } finally {
+            stringRedisTemplate.delete(LOCK_KEY);
+        }
     }
 
     /**
