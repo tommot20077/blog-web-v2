@@ -45,8 +45,17 @@ public class ViewCountConsumer {
     public void handleArticleViewed(ArticleViewedEvent event,
                                     Channel channel,
                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        viewCountService.incrementRedisViewCount(event.articleUuid());
-        log.debug("文章 {} 瀏覽計數已增加", event.articleUuid());
-        channel.basicAck(deliveryTag, false);
+        try {
+            viewCountService.incrementRedisViewCount(event.articleUuid());
+            log.debug("文章 {} 瀏覽計數已增加", event.articleUuid());
+            channel.basicAck(deliveryTag, false);
+        } catch (Exception e) {
+            log.error("處理文章瀏覽事件失敗，訊息送往 DLQ，articleUuid={}", event.articleUuid(), e);
+            try {
+                channel.basicNack(deliveryTag, false, false);
+            } catch (IOException nackEx) {
+                log.error("NACK 亦失敗，articleUuid={}", event.articleUuid(), nackEx);
+            }
+        }
     }
 }

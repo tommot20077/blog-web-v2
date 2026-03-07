@@ -14,6 +14,8 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -54,5 +56,22 @@ class ViewCountConsumerTest {
 
         verify(viewCountService).incrementRedisViewCount(uuid);
         verify(channel).basicAck(deliveryTag, false);
+    }
+
+    /**
+     * 情境：處理失敗（Redis 拋出例外）→ 呼叫 basicNack
+     */
+    @Test
+    @DisplayName("handleArticleViewed：處理失敗時呼叫 basicNack")
+    void handleArticleViewed_onFailure_callsBasicNack() throws IOException {
+        UUID uuid = UUID.randomUUID();
+        ArticleViewedEvent event = new ArticleViewedEvent(uuid, Instant.now());
+        long deliveryTag = 99L;
+
+        doThrow(new RuntimeException("Redis error")).when(viewCountService).incrementRedisViewCount(uuid);
+
+        viewCountConsumer.handleArticleViewed(event, channel, deliveryTag);
+
+        verify(channel).basicNack(eq(deliveryTag), eq(false), eq(false));
     }
 }

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.file.consumer;
 
+import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
@@ -18,6 +19,7 @@ import org.mockito.quality.Strictness;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.Optional;
 import java.util.UUID;
@@ -45,22 +47,45 @@ class ThumbnailConsumerTest {
     @Mock
     private FileMetadataRepository fileMetadataRepository;
 
+    @Mock
+    private Channel channel;
+
     @InjectMocks
     private ThumbnailConsumer thumbnailConsumer;
 
     /**
-     * 驗證收到非圖片類型事件時跳過縮圖處理
+     * 驗證收到非圖片類型事件時跳過縮圖處理，並發送 ACK
      */
     @Test
-    @DisplayName("handleImageUploaded_withNonImageType_skips")
+    @DisplayName("handleImageUploaded_withNonImageType_skips_andAcks")
     void handleImageUploaded_withNonImageType_skips() throws Exception {
         ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
         ImageUploadedEvent event = new ImageUploadedEvent(
                 UUID.randomUUID(), "files/test.pdf", "application/pdf");
 
-        thumbnailConsumer.handleImageUploaded(event);
+        thumbnailConsumer.handleImageUploaded(event, channel, 1L);
 
         verify(minioClient, never()).getObject(any(GetObjectArgs.class));
+        verify(channel).basicAck(1L, false);
+    }
+
+    /**
+     * 驗證處理失敗時呼叫 basicNack
+     */
+    @Test
+    @DisplayName("handleImageUploaded_onFailure_callsBasicNack")
+    void handleImageUploaded_onFailure_callsBasicNack() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), "files/error.jpg", "image/jpeg");
+
+        // minioClient.getObject 拋出例外以模擬失敗
+        when(minioClient.getObject(any(GetObjectArgs.class)))
+                .thenThrow(new RuntimeException("MinIO connection failed"));
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 42L);
+
+        verify(channel).basicNack(42L, false, false);
     }
 
     /**
@@ -97,10 +122,11 @@ class ThumbnailConsumerTest {
                 .thenAnswer(inv -> bais.read());
         when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
 
-        thumbnailConsumer.handleImageUploaded(event);
+        thumbnailConsumer.handleImageUploaded(event, channel, 99L);
 
         ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
         verify(fileMetadataRepository).save(captor.capture());
         assertThat(captor.getValue().getHasThumbnail()).isTrue();
+        verify(channel).basicAck(99L, false);
     }
 }

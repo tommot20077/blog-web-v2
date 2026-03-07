@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.tag.config;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -47,13 +48,16 @@ public class TagRabbitMqConfig {
     }
 
     /**
-     * 建立標籤模組消費用 Queue（持久化）
+     * 建立標籤模組消費用 Queue（持久化，含 DLQ 設定）
      *
      * @return Queue 實例
      */
     @Bean
     public Queue tagArticleTaggedQueue() {
-        return new Queue(QUEUE_TAG_ARTICLE_TAGGED, true);
+        return QueueBuilder.durable(QUEUE_TAG_ARTICLE_TAGGED)
+                .withArgument("x-dead-letter-exchange", "blog.dlq")
+                .withArgument("x-dead-letter-routing-key", "dead-letter")
+                .build();
     }
 
     /**

@@ -39,8 +39,17 @@ public class PasswordResetConsumer {
     public void handlePasswordResetRequested(UserPasswordResetRequestedEvent event,
                                               Channel channel,
                                               @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        log.info("收到密碼重設請求 - userId={}, email={}", event.userId(), event.email());
-        log.info("密碼重設連結已產生 - userId={}", event.userId());
-        channel.basicAck(deliveryTag, false);
+        try {
+            log.info("收到密碼重設請求 - userId={}, email={}", event.userId(), event.email());
+            log.info("密碼重設連結已產生 - userId={}", event.userId());
+            channel.basicAck(deliveryTag, false);
+        } catch (Exception e) {
+            log.error("處理密碼重設事件失敗，訊息送往 DLQ，userId={}", event.userId(), e);
+            try {
+                channel.basicNack(deliveryTag, false, false);
+            } catch (IOException nackEx) {
+                log.error("NACK 亦失敗，userId={}", event.userId(), nackEx);
+            }
+        }
     }
 }

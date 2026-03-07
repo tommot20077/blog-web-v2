@@ -4,9 +4,6 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
-import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
-import org.springframework.amqp.rabbit.connection.ConnectionFactory;
-import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -44,11 +41,6 @@ public class RecommendRabbitMqConfig {
     public static final String ROUTING_KEY_ARTICLE_PUBLISHED = "article.published";
 
     /**
-     * 手動 ACK 容器工廠名稱常數
-     */
-    public static final String MANUAL_ACK_CONTAINER_FACTORY = "manualAckContainerFactory";
-
-    /**
      * 建立死信隊列（DLQ）參數
      *
      * @return 包含死信交換器與路由 Key 的 Map
@@ -58,30 +50,6 @@ public class RecommendRabbitMqConfig {
                 "x-dead-letter-exchange", "blog.dlq",
                 "x-dead-letter-routing-key", "dead-letter"
         );
-    }
-
-    /**
-     * 建立手動 ACK 模式的 RabbitListener 容器工廠
-     *
-     * <p>
-     * 僅推薦模組的 Consumer 使用此工廠，以實現精確的訊息確認控制。
-     * 其他模組（Tag、File 等）維持預設 AUTO ACK 模式。
-     * 必須注入 {@link MessageConverter} 以確保 JSON 格式的訊息能正確反序列化。
-     * </p>
-     *
-     * @param connectionFactory RabbitMQ 連線工廠
-     * @param messageConverter  訊息轉換器（JSON 反序列化用）
-     * @return 手動 ACK 模式的容器工廠
-     */
-    @Bean(name = MANUAL_ACK_CONTAINER_FACTORY)
-    public SimpleRabbitListenerContainerFactory manualAckContainerFactory(
-            ConnectionFactory connectionFactory,
-            MessageConverter messageConverter) {
-        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
-        factory.setMessageConverter(messageConverter);
-        factory.setAcknowledgeMode(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
-        return factory;
     }
 
     /**

@@ -12,6 +12,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
 
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -49,5 +51,19 @@ class PasswordResetConsumerTest {
         consumer.handlePasswordResetRequested(event, channel, deliveryTag);
 
         verify(channel).basicAck(deliveryTag, false);
+    }
+
+    @Test
+    @DisplayName("basicAck 失敗時呼叫 basicNack")
+    void handlePasswordResetRequested_onAckFailure_callsBasicNack() throws IOException {
+        UserPasswordResetRequestedEvent event =
+                new UserPasswordResetRequestedEvent(1L, "test@example.com", "reset-token-abc");
+        long deliveryTag = 99L;
+
+        doThrow(new IOException("ACK failed")).when(channel).basicAck(deliveryTag, false);
+
+        consumer.handlePasswordResetRequested(event, channel, deliveryTag);
+
+        verify(channel).basicNack(eq(deliveryTag), eq(false), eq(false));
     }
 }

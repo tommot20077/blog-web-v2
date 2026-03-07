@@ -40,9 +40,18 @@ public class EmailVerificationConsumer {
     public void handleUserRegistered(UserRegisteredEvent event,
                                      Channel channel,
                                      @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
-        log.info("收到用戶註冊事件 - userId={}, email={}, nickname={}",
-                event.userId(), event.email(), event.nickname());
-        log.info("驗證信已排程發送 - userId={}", event.userId());
-        channel.basicAck(deliveryTag, false);
+        try {
+            log.info("收到用戶註冊事件 - userId={}, email={}, nickname={}",
+                    event.userId(), event.email(), event.nickname());
+            log.info("驗證信已排程發送 - userId={}", event.userId());
+            channel.basicAck(deliveryTag, false);
+        } catch (Exception e) {
+            log.error("處理用戶註冊事件失敗，訊息送往 DLQ，userId={}", event.userId(), e);
+            try {
+                channel.basicNack(deliveryTag, false, false);
+            } catch (IOException nackEx) {
+                log.error("NACK 亦失敗，userId={}", event.userId(), nackEx);
+            }
+        }
     }
 }

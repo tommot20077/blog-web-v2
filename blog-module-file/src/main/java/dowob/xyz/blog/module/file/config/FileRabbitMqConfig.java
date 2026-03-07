@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.file.config;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -48,13 +49,16 @@ public class FileRabbitMqConfig {
     }
 
     /**
-     * 宣告 file.thumbnail Queue
+     * 宣告 file.thumbnail Queue（持久化，含 DLQ 設定）
      *
      * @return Queue 實例
      */
     @Bean
     public Queue thumbnailQueue() {
-        return new Queue(THUMBNAIL_QUEUE);
+        return QueueBuilder.durable(THUMBNAIL_QUEUE)
+                .withArgument("x-dead-letter-exchange", "blog.dlq")
+                .withArgument("x-dead-letter-routing-key", "dead-letter")
+                .build();
     }
 
     /**
