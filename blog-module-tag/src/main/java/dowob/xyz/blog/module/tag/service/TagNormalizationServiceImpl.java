@@ -1,9 +1,9 @@
 package dowob.xyz.blog.module.tag.service;
 
 import com.github.houbb.opencc4j.util.ZhConverterUtil;
+import dowob.xyz.blog.common.api.errorcode.TagErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.tag.model.Tag;
-import dowob.xyz.blog.module.tag.model.TagErrorCode;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
 import dowob.xyz.blog.module.tag.util.SlugUtils;
 import lombok.RequiredArgsConstructor;

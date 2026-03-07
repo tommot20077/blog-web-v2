@@ -24,9 +24,11 @@ import org.mockito.quality.Strictness;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
-
 import org.springframework.util.unit.DataSize;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -35,6 +37,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -228,6 +231,145 @@ class FileServiceTest {
             assertThat(quota.getLimitBytes()).isEqualTo(expectedLimit);
             assertThat(quota.getUsedBytes()).isEqualTo(usedBytes);
             assertThat(quota.getRemainingBytes()).isEqualTo(expectedLimit - usedBytes);
+        }
+    }
+
+    /** Issue F-2: InputStream 只允許單次讀取的相容性測試 */
+    @Nested
+    @DisplayName("uploadFile InputStream 單次讀取測試 (F-2)")
+    class SingleStreamReadTests {
+
+        /**
+         * 驗證 uploadFile 在 InputStream 只能讀取一次的限制下仍能正常運作
+         * Red: 目前實作呼叫 getInputStream() 多次，此測試會失敗
+         */
+        @Test
+        @DisplayName("uploadFile_withSingleReadStream_succeeds")
+        void uploadFile_withSingleReadStream_succeeds() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            SingleReadMultipartFile file = new SingleReadMultipartFile("test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            assertThat(response).isNotNull();
+            assertThat(response.getId()).isNotNull();
+        }
+    }
+
+    /** Issue F-3: DB 失敗時補償刪除 MinIO 檔案 */
+    @Nested
+    @DisplayName("uploadFile 補償刪除測試 (F-3)")
+    class CompensationTests {
+
+        /**
+         * 驗證 DB save 失敗時，補償刪除 MinIO 已上傳的檔案
+         * Red: 目前實作不呼叫 removeObject，此測試會失敗
+         */
+        @Test
+        @DisplayName("uploadFile_whenDbSaveFails_compensatesMinioDelete")
+        void uploadFile_whenDbSaveFails_compensatesMinioDelete() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenThrow(new RuntimeException("DB failure"));
+
+            assertThatThrownBy(() ->
+                    fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
+                    .isInstanceOf(RuntimeException.class);
+
+            verify(minioClient).removeObject(any(RemoveObjectArgs.class));
+        }
+
+        /**
+         * 驗證 DB save 成功時，不呼叫補償刪除
+         */
+        @Test
+        @DisplayName("uploadFile_whenDbSaveSucceeds_noCompensation")
+        void uploadFile_whenDbSaveSucceeds_noCompensation() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            verify(minioClient, never()).removeObject(any(RemoveObjectArgs.class));
+        }
+    }
+
+    /** Issue F-4: originalName null 檢查與長度截斷 */
+    @Nested
+    @DisplayName("uploadFile originalName 驗證測試 (F-4)")
+    class OriginalNameValidationTests {
+
+        /**
+         * 驗證 null filename 使用預設名稱 "unnamed"
+         * Red: 目前實作 setOriginalName(null)，此測試會失敗
+         */
+        @Test
+        @DisplayName("uploadFile_withNullFilename_usesDefaultName")
+        void uploadFile_withNullFilename_usesDefaultName() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", null, "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getOriginalName()).isEqualTo("unnamed");
+        }
+
+        /**
+         * 驗證超過 255 字元的 filename 被截斷
+         * Red: 目前實作儲存完整長名，此測試會失敗
+         */
+        @Test
+        @DisplayName("uploadFile_withLongFilename_truncatesTo255")
+        void uploadFile_withLongFilename_truncatesTo255() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            String longName = "a".repeat(300) + ".jpg";
+            MockMultipartFile file = new MockMultipartFile("file", longName, "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getOriginalName()).hasSizeLessThanOrEqualTo(255);
+        }
+    }
+
+    /** 最小合法 JPEG bytes（Magic number + EOI） */
+    private static byte[] minimalJpegBytes() {
+        return new byte[]{
+            (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0,
+            0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
+            0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+            (byte) 0xFF, (byte) 0xD9
+        };
+    }
+
+    /**
+     * 僅允許一次 getInputStream() 呼叫的 MultipartFile wrapper（測試 F-2 用）
+     */
+    static class SingleReadMultipartFile extends MockMultipartFile {
+        private int readCount = 0;
+
+        SingleReadMultipartFile(String originalFilename, String contentType, byte[] content) {
+            super("file", originalFilename, contentType, content);
+        }
+
+        @Override
+        public InputStream getInputStream() throws IOException {
+            if (readCount++ > 0) {
+                throw new IOException("InputStream already consumed - single read only");
+            }
+            return super.getInputStream();
         }
     }
 }

@@ -131,7 +131,7 @@ class UserControllerTest {
                         .with(authentication(USER_AUTH))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
     }
 
@@ -151,7 +151,7 @@ class UserControllerTest {
                         .with(authentication(USER_AUTH))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
     }
 
@@ -212,7 +212,7 @@ class UserControllerTest {
                         .with(authentication(USER_AUTH))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.USER_PASSWORD_ERROR.getCode()));
     }
 
@@ -258,7 +258,7 @@ class UserControllerTest {
         mockMvc.perform(delete("/api/v1/users/me")
                         .with(authentication(USER_AUTH))
                         .param("password", "wrongPassword"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.USER_PASSWORD_ERROR.getCode()));
     }
 }

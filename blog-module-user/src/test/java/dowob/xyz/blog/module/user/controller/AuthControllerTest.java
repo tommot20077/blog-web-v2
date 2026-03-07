@@ -127,7 +127,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
     }
 
@@ -145,7 +145,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
     }
 
@@ -167,7 +167,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.EMAIL_DUPLICATED.getCode()));
     }
 
@@ -213,7 +213,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.ACCOUNT_LOCKED.getCode()));
     }
 
@@ -233,7 +233,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.USER_PASSWORD_ERROR.getCode()));
     }
 
@@ -248,7 +248,7 @@ class AuthControllerTest {
     @DisplayName("POST /refresh → 缺少 refreshToken Cookie → 應回傳 TOKEN_INVALID 錯誤碼")
     void refresh_missingCookie_shouldReturnTokenInvalid() throws Exception {
         mockMvc.perform(post("/api/v1/auth/refresh"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
@@ -262,7 +262,7 @@ class AuthControllerTest {
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "invalid.token")))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
@@ -317,7 +317,7 @@ class AuthControllerTest {
 
         mockMvc.perform(get("/api/v1/auth/verify-email")
                         .param("token", "invalid-token"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
@@ -355,7 +355,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/forgot-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
     }
 
@@ -420,7 +420,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/reset-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
@@ -437,7 +437,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/reset-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
     }
 }

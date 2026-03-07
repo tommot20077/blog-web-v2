@@ -13,6 +13,8 @@ import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+
+import java.io.ByteArrayInputStream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.Tika;
@@ -77,16 +79,24 @@ public class FileServiceImpl implements FileService {
      */
     @Override
     public FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole) {
-        String detectedMimeType = detectMimeType(file);
+        // F-2: 一次性讀取 bytes，避免多次消耗 InputStream
+        byte[] fileBytes;
+        try {
+            fileBytes = file.getBytes();
+        } catch (IOException e) {
+            throw new RuntimeException("無法讀取檔案內容", e);
+        }
+
+        String detectedMimeType = detectMimeType(fileBytes, file.getOriginalFilename());
         if (!fileProperties.allowedMimeTypes().contains(detectedMimeType)) {
             throw new BusinessException(FileErrorCode.INVALID_FILE_TYPE);
         }
-        if (file.getSize() > MAX_FILE_SIZE) {
+        if (fileBytes.length > MAX_FILE_SIZE) {
             throw new BusinessException(FileErrorCode.FILE_TOO_LARGE);
         }
         long quota = resolveQuota(uploaderRole);
         long used = fileMetadataRepository.sumSizeByUploaderId(uploaderId);
-        if (quota != Long.MAX_VALUE && (used + file.getSize()) > quota) {
+        if (quota != Long.MAX_VALUE && (used + fileBytes.length) > quota) {
             throw new BusinessException(FileErrorCode.QUOTA_EXCEEDED);
         }
         String ext = extractExtension(file.getOriginalFilename());
@@ -100,7 +110,7 @@ public class FileServiceImpl implements FileService {
                     PutObjectArgs.builder()
                             .bucket(bucketName)
                             .object(storagePath)
-                            .stream(file.getInputStream(), file.getSize(), -1)
+                            .stream(new ByteArrayInputStream(fileBytes), fileBytes.length, -1)
                             .contentType(detectedMimeType)
                             .build());
         } catch (Exception e) {
@@ -108,7 +118,7 @@ public class FileServiceImpl implements FileService {
         }
         Integer width = null;
         Integer height = null;
-        try (ImageInputStream iis = ImageIO.createImageInputStream(file.getInputStream())) {
+        try (ImageInputStream iis = ImageIO.createImageInputStream(new ByteArrayInputStream(fileBytes))) {
             Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
             if (readers.hasNext()) {
                 ImageReader reader = readers.next();
@@ -125,10 +135,10 @@ public class FileServiceImpl implements FileService {
         }
         FileMetadata metadata = new FileMetadata();
         metadata.setId(fileId);
-        metadata.setOriginalName(file.getOriginalFilename());
+        metadata.setOriginalName(sanitizeOriginalName(file.getOriginalFilename()));  // F-4
         metadata.setStoragePath(storagePath);
         metadata.setContentType(detectedMimeType);
-        metadata.setSize(file.getSize());
+        metadata.setSize((long) fileBytes.length);
         metadata.setWidth(width);
         metadata.setHeight(height);
         metadata.setUsageType(usageType);
@@ -136,13 +146,19 @@ public class FileServiceImpl implements FileService {
         metadata.setUploaderId(uploaderId);
         metadata.setCreatedAt(now);
         metadata.setNewEntity(true);
-        fileMetadataRepository.save(metadata);
-        rabbitTemplate.convertAndSend(
-                FileRabbitMqConfig.EXCHANGE,
-                FileRabbitMqConfig.IMAGE_UPLOADED_KEY,
-                new ImageUploadedEvent(fileId, storagePath, detectedMimeType));
+        // F-3: DB 失敗時補償刪除 MinIO 檔案
+        try {
+            fileMetadataRepository.save(metadata);
+            rabbitTemplate.convertAndSend(
+                    FileRabbitMqConfig.EXCHANGE,
+                    FileRabbitMqConfig.IMAGE_UPLOADED_KEY,
+                    new ImageUploadedEvent(fileId, storagePath, detectedMimeType));
+        } catch (Exception e) {
+            compensateMinioDelete(storagePath);
+            throw e;
+        }
         String url = minioEndpoint + "/" + bucketName + "/" + storagePath;
-        return new FileUploadResponse(fileId, url, width, height, file.getSize(), usageType);
+        return new FileUploadResponse(fileId, url, width, height, (long) fileBytes.length, usageType);
     }
 
     /**
@@ -159,6 +175,8 @@ public class FileServiceImpl implements FileService {
         if (!isAdmin && !metadata.belongsTo(requesterId)) {
             throw new BusinessException(FileErrorCode.FILE_ACCESS_DENIED);
         }
+        // F-3: DB 先刪除，MinIO 後刪除（接受孤兒檔案風險，可由排程清理）
+        fileMetadataRepository.deleteById(fileId);
         try {
             minioClient.removeObject(
                     RemoveObjectArgs.builder()
@@ -174,9 +192,8 @@ public class FileServiceImpl implements FileService {
                                 .build());
             }
         } catch (Exception e) {
-            throw new RuntimeException("MinIO 刪除失敗", e);
+            log.error("MinIO 刪除失敗，可能產生孤兒檔案: {}", metadata.getStoragePath(), e);
         }
-        fileMetadataRepository.deleteById(fileId);
     }
 
     /**
@@ -219,18 +236,60 @@ public class FileServiceImpl implements FileService {
     }
 
     /**
-     * 使用 Apache Tika 偵測 MIME 類型
+     * 使用 Apache Tika 偵測 MIME 類型（F-2：改用 byte[] 避免重複消耗 InputStream）
      *
-     * @param file 上傳的檔案
+     * @param fileBytes 檔案位元組陣列
+     * @param filename  原始檔案名稱（供 Tika 輔助判斷）
      * @return 偵測到的 MIME 類型字串
      */
-    private String detectMimeType(MultipartFile file) {
+    private String detectMimeType(byte[] fileBytes, String filename) {
         try {
             Tika tika = new Tika();
-            return tika.detect(file.getInputStream(), file.getOriginalFilename());
+            return tika.detect(new ByteArrayInputStream(fileBytes), filename);
         } catch (IOException e) {
             throw new RuntimeException("MIME 類型偵測失敗", e);
         }
+    }
+
+    /**
+     * F-3: MinIO 上傳成功但 DB 儲存失敗時的補償刪除
+     *
+     * @param storagePath MinIO 物件路徑
+     */
+    private void compensateMinioDelete(String storagePath) {
+        try {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(bucketName).object(storagePath).build());
+            log.info("補償刪除 MinIO 檔案成功: {}", storagePath);
+        } catch (Exception ex) {
+            log.error("補償刪除 MinIO 檔案失敗，產生孤兒: {}", storagePath, ex);
+        }
+    }
+
+    /**
+     * F-4: 正規化 originalName：null/blank → "unnamed"；超過 255 字元 → 保留副檔名截斷
+     *
+     * @param originalFilename 原始檔案名稱（可能為 null）
+     * @return 安全的檔案名稱（不超過 255 字元）
+     */
+    private String sanitizeOriginalName(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return "unnamed";
+        }
+        if (originalFilename.length() <= 255) {
+            return originalFilename;
+        }
+        int dotIndex = originalFilename.lastIndexOf('.');
+        if (dotIndex < 0) {
+            return originalFilename.substring(0, 255);
+        }
+        String ext = originalFilename.substring(dotIndex);
+        String base = originalFilename.substring(0, dotIndex);
+        int allowedBase = 255 - ext.length();
+        if (allowedBase <= 0) {
+            return originalFilename.substring(0, 255);
+        }
+        return base.substring(0, Math.min(base.length(), allowedBase)) + ext;
     }
 
     /**

@@ -20,7 +20,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
-import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -147,10 +147,9 @@ public class AuthController {
      */
     @Operation(summary = "用戶登出", description = "清除 Refresh Token，使 Cookie 失效")
     @PostMapping("/logout")
-    public ApiResponse<Void> logout(Authentication authentication,
+    public ApiResponse<Void> logout(@AuthenticationPrincipal Long userId,
                                     @CookieValue(name = "refreshToken", required = false) String refreshToken,
                                     HttpServletResponse response) {
-        Long userId = (Long) authentication.getPrincipal();
         authService.logout(userId, refreshToken);
 
         ResponseCookie clearCookie = ResponseCookie.from("refreshToken", "")

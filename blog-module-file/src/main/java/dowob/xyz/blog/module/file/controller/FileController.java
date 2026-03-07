@@ -1,6 +1,9 @@
 package dowob.xyz.blog.module.file.controller;
 
+import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
@@ -10,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -42,6 +46,11 @@ public class FileController {
     private final FileService fileService;
 
     /**
+     * 用戶 Facade（用於將 userId 轉換為 UUID）
+     */
+    private final UserFacade userFacade;
+
+    /**
      * 上傳檔案（需要 FILE_UPLOAD 權限）
      *
      * @param file        上傳的檔案
@@ -54,8 +63,9 @@ public class FileController {
     public ApiResponse<FileUploadResponse> uploadFile(
             @RequestParam("file") MultipartFile file,
             @RequestParam("usageType") UsageType usageType,
+            @AuthenticationPrincipal Long userId,
             Authentication authentication) {
-        UUID uploaderId = UUID.fromString(authentication.getName());
+        UUID uploaderId = resolveUserUuid(userId);
         String role = resolveRole(authentication);
         return ApiResponse.success(fileService.uploadFile(file, usageType, uploaderId, role));
     }
@@ -82,8 +92,9 @@ public class FileController {
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<Void> deleteFile(
             @PathVariable UUID id,
+            @AuthenticationPrincipal Long userId,
             Authentication authentication) {
-        UUID requesterId = UUID.fromString(authentication.getName());
+        UUID requesterId = resolveUserUuid(userId);
         boolean isAdmin = authentication.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
         fileService.deleteFile(id, requesterId, isAdmin);
@@ -100,9 +111,9 @@ public class FileController {
     @GetMapping("/api/v1/users/me/files")
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<List<FileMetadata>> getUserFiles(
-            Authentication authentication,
+            @AuthenticationPrincipal Long userId,
             Pageable pageable) {
-        UUID uploaderId = UUID.fromString(authentication.getName());
+        UUID uploaderId = resolveUserUuid(userId);
         return ApiResponse.success(fileService.getUserFiles(uploaderId, pageable));
     }
 
@@ -114,10 +125,24 @@ public class FileController {
      */
     @GetMapping("/api/v1/users/me/quota")
     @PreAuthorize("isAuthenticated()")
-    public ApiResponse<QuotaResponse> getQuota(Authentication authentication) {
-        UUID uploaderId = UUID.fromString(authentication.getName());
+    public ApiResponse<QuotaResponse> getQuota(
+            @AuthenticationPrincipal Long userId,
+            Authentication authentication) {
+        UUID uploaderId = resolveUserUuid(userId);
         String role = resolveRole(authentication);
         return ApiResponse.success(fileService.getQuota(uploaderId, role));
+    }
+
+    /**
+     * 根據 userId 查詢使用者 UUID（供 FileService 使用）
+     *
+     * @param userId 用戶內部 ID
+     * @return 用戶 UUID
+     * @throws BusinessException 若使用者不存在
+     */
+    private UUID resolveUserUuid(Long userId) {
+        return userFacade.getUserUuidById(userId)
+                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
     }
 
     /**

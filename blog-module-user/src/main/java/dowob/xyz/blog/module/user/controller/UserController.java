@@ -8,7 +8,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -38,9 +38,8 @@ public class UserController {
      */
     @Operation(summary = "更新個人資料", description = "更新當前登入用戶的暱稱與個人簡介")
     @PatchMapping("/me/profile")
-    public ApiResponse<Void> updateProfile(Authentication authentication,
+    public ApiResponse<Void> updateProfile(@AuthenticationPrincipal Long userId,
                                             @Valid @RequestBody UpdateProfileRequest request) {
-        Long userId = (Long) authentication.getPrincipal();
         userService.updateProfile(userId, request.getNickname(), request.getBio(), request.getWebsite(), request.getSocialLinks());
         return ApiResponse.success();
     }
@@ -54,9 +53,8 @@ public class UserController {
      */
     @Operation(summary = "修改密碼", description = "驗證舊密碼後更新密碼，所有現有 Token 將立即失效")
     @PostMapping("/me/change-password")
-    public ApiResponse<Void> changePassword(Authentication authentication,
+    public ApiResponse<Void> changePassword(@AuthenticationPrincipal Long userId,
                                              @Valid @RequestBody ChangePasswordRequest request) {
-        Long userId = (Long) authentication.getPrincipal();
         userService.changePassword(userId, request.getOldPassword(), request.getNewPassword());
         return ApiResponse.success();
     }
@@ -70,9 +68,8 @@ public class UserController {
      */
     @Operation(summary = "刪除帳號", description = "驗證密碼後將帳號標記為已刪除，所有現有 Token 將立即失效")
     @DeleteMapping("/me")
-    public ApiResponse<Void> deleteAccount(Authentication authentication,
+    public ApiResponse<Void> deleteAccount(@AuthenticationPrincipal Long userId,
                                             @RequestParam String password) {
-        Long userId = (Long) authentication.getPrincipal();
         userService.deleteAccount(userId, password);
         return ApiResponse.success();
     }
