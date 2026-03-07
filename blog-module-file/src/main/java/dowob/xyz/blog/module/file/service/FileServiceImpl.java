@@ -23,6 +23,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -60,6 +61,9 @@ public class FileServiceImpl implements FileService {
 
     /** RabbitMQ 訊息發送模板 */
     private final RabbitTemplate rabbitTemplate;
+
+    /** Spring 宣告式事務模板（用於縮小 uploadFile 的事務範圍） */
+    private final TransactionTemplate transactionTemplate;
 
     /** MinIO 儲存桶名稱 */
     @Value("${minio.bucket-name}")
@@ -147,16 +151,21 @@ public class FileServiceImpl implements FileService {
         metadata.setUploaderId(uploaderId);
         metadata.setCreatedAt(now);
         metadata.setNewEntity(true);
-        // F-3: DB 失敗時補償刪除 MinIO 檔案
+        // F-3: 僅 DB 操作在事務內；DB 失敗時補償刪除 MinIO 檔案
         try {
-            fileMetadataRepository.save(metadata);
+            transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.save(metadata));
+        } catch (Exception e) {
+            compensateMinioDelete(storagePath);
+            throw e;
+        }
+        // DB 已 commit，best-effort 發 MQ（失敗不影響上傳結果）
+        try {
             rabbitTemplate.convertAndSend(
                     FileRabbitMqConfig.EXCHANGE,
                     FileRabbitMqConfig.IMAGE_UPLOADED_KEY,
                     new ImageUploadedEvent(fileId, storagePath, detectedMimeType));
         } catch (Exception e) {
-            compensateMinioDelete(storagePath);
-            throw e;
+            log.warn("MQ 發送失敗（best-effort），不影響上傳結果: {}", storagePath, e);
         }
         String url = minioEndpoint + "/" + bucketName + "/" + storagePath;
         return new FileUploadResponse(fileId, url, width, height, (long) fileBytes.length, usageType);

@@ -174,6 +174,7 @@ public class ArticleController {
      * @param request 駁回請求（含原因）
      * @return 駁回後的文章完整資訊
      */
+    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
     @PostMapping("/{uuid}/reject")
     public ApiResponse<ArticleResponse> rejectArticle(
             @PathVariable UUID uuid,
