@@ -1,14 +1,20 @@
 package dowob.xyz.blog.module.tag.consumer;
 
+import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
 import dowob.xyz.blog.module.tag.event.ArticleTagEvent;
 import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -24,6 +30,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class TagUsageConsumer {
@@ -39,31 +46,42 @@ public class TagUsageConsumer {
     private final RedisTemplate<String, String> stringRedisTemplate;
 
     /**
-     * 熱門標籤 Redis ZSet 鍵名
-     */
-    private static final String HOT_TAGS_KEY = "tag:hot";
-
-    /**
      * 處理文章標籤事件，遞增對應標籤的使用計數
      *
      * <p>
      * 對事件中每個標籤 ID：查找標籤 → 遞增 usageCount → 儲存至資料庫 → 更新 Redis ZSet 分數。
      * 不存在的標籤 ID 將被靜默忽略。
+     * 採用手動 ACK 模式：處理成功則 basicAck；失敗則 basicNack（送 DLQ）。
      * </p>
      *
-     * @param event 文章標籤事件
+     * @param event       文章標籤事件
+     * @param channel     RabbitMQ Channel，用於手動 ACK
+     * @param deliveryTag 消息投遞標籤
+     * @throws IOException 手動 ACK 時可能拋出的 IO 異常
      */
-    @RabbitListener(queues = TagRabbitMqConfig.QUEUE_TAG_ARTICLE_TAGGED, containerFactory = "autoAckContainerFactory")
-    public void handleArticleTagged(ArticleTagEvent event) {
-        for (UUID tagId : event.tagIds()) {
-            Optional<Tag> tagOpt = tagRepository.findById(tagId);
-            if (tagOpt.isEmpty()) {
-                continue;
+    @RabbitListener(queues = TagRabbitMqConfig.QUEUE_TAG_ARTICLE_TAGGED)
+    public void handleArticleTagged(ArticleTagEvent event,
+                                    Channel channel,
+                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        try {
+            for (UUID tagId : event.tagIds()) {
+                Optional<Tag> tagOpt = tagRepository.findById(tagId);
+                if (tagOpt.isEmpty()) {
+                    continue;
+                }
+                Tag tag = tagOpt.get();
+                tag.incrementUsage();
+                tagRepository.save(tag);
+                stringRedisTemplate.opsForZSet().incrementScore(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 1.0);
             }
-            Tag tag = tagOpt.get();
-            tag.incrementUsage();
-            tagRepository.save(tag);
-            stringRedisTemplate.opsForZSet().incrementScore(HOT_TAGS_KEY, tagId.toString(), 1.0);
+            channel.basicAck(deliveryTag, false);
+        } catch (Exception e) {
+            log.error("處理文章標籤事件失敗，訊息送往 DLQ: {}", e.getMessage(), e);
+            try {
+                channel.basicNack(deliveryTag, false, false);
+            } catch (IOException nackEx) {
+                log.error("NACK 亦失敗", nackEx);
+            }
         }
     }
 }

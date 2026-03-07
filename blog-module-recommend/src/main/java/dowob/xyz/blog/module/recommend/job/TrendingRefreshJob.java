@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.recommend.job;
 
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import lombok.RequiredArgsConstructor;
@@ -45,16 +46,6 @@ public class TrendingRefreshJob {
     private final StringRedisTemplate stringRedisTemplate;
 
     /**
-     * 熱門排行 ZSet Key 前綴
-     */
-    private static final String TRENDING_KEY_PREFIX = "recommend:trending:";
-
-    /**
-     * 分散式鎖 Key
-     */
-    private static final String LOCK_KEY = "lock:trending-refresh";
-
-    /**
      * 分散式鎖 TTL（秒）
      */
     private static final long LOCK_TTL_SECONDS = 120L;
@@ -76,7 +67,7 @@ public class TrendingRefreshJob {
     @Scheduled(fixedDelay = 1800000)
     public void refreshTrending() {
         Boolean acquired = stringRedisTemplate.opsForValue()
-                .setIfAbsent(LOCK_KEY, UUID.randomUUID().toString(), LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+                .setIfAbsent(RedisKeyConstant.LOCK_TRENDING_REFRESH, UUID.randomUUID().toString(), LOCK_TTL_SECONDS, TimeUnit.SECONDS);
         if (!Boolean.TRUE.equals(acquired)) {
             log.debug("未取得分散式鎖，跳過本次熱門排行更新");
             return;
@@ -92,7 +83,7 @@ public class TrendingRefreshJob {
             });
             log.info("熱門文章排行更新完成");
         } finally {
-            stringRedisTemplate.delete(LOCK_KEY);
+            stringRedisTemplate.delete(RedisKeyConstant.LOCK_TRENDING_REFRESH);
         }
     }
 
@@ -113,7 +104,7 @@ public class TrendingRefreshJob {
 
         double lambda = Math.log(2.0) / halfLifeDays;
         LocalDateTime now = LocalDateTime.now();
-        String key = TRENDING_KEY_PREFIX + period;
+        String key = RedisKeyConstant.getTrendingKey(period);
 
         Set<ZSetOperations.TypedTuple<String>> tuples = new java.util.HashSet<>();
         for (ArticleTrendingData data : articles) {

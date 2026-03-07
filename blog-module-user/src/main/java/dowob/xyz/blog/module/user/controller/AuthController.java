@@ -125,7 +125,7 @@ public class AuthController {
         }
 
         String roleStr = (String) redisTemplate.opsForHash()
-                .get(RedisKeyConstant.getUserAuthKey(userId), "role");
+                .get(RedisKeyConstant.getUserAuthKey(userId), RedisKeyConstant.FIELD_ROLE);
 
         String newAccessToken = jwtService.generateAccessToken(
                 userId,

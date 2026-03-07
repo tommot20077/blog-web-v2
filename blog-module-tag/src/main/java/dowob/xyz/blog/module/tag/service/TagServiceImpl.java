@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.tag.service;
 
 import dowob.xyz.blog.common.api.errorcode.TagErrorCode;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.model.dto.TagDetailResponse;
@@ -62,16 +63,6 @@ public class TagServiceImpl implements TagService {
     private final ArticleTagRepository articleTagRepository;
 
     /**
-     * 熱門標籤 Redis ZSet 鍵名
-     */
-    private static final String HOT_TAGS_KEY = "tag:hot";
-
-    /**
-     * 自動補全 Redis ZSet 鍵名
-     */
-    private static final String AUTOCOMPLETE_KEY = "tag:autocomplete";
-
-    /**
      * 熱門標籤快取過期時間（小時）
      */
     private static final long HOT_TAGS_TTL_HOURS = 1L;
@@ -88,7 +79,7 @@ public class TagServiceImpl implements TagService {
                 org.springframework.data.domain.Range.Bound.inclusive(prefix + "\uffff")
         );
         org.springframework.data.redis.connection.Limit redisLimit = org.springframework.data.redis.connection.Limit.limit().count(limit);
-        Set<String> results = stringRedisTemplate.opsForZSet().rangeByLex(AUTOCOMPLETE_KEY, range, redisLimit);
+        Set<String> results = stringRedisTemplate.opsForZSet().rangeByLex(RedisKeyConstant.TAG_AUTOCOMPLETE_KEY, range, redisLimit);
         if (results == null) {
             return List.of();
         }
@@ -101,7 +92,7 @@ public class TagServiceImpl implements TagService {
             return Collections.emptyList();
         }
         Set<ZSetOperations.TypedTuple<String>> cached = stringRedisTemplate.opsForZSet()
-                .reverseRangeWithScores(HOT_TAGS_KEY, 0L, (long) limit - 1);
+                .reverseRangeWithScores(RedisKeyConstant.TAG_HOT_KEY, 0L, (long) limit - 1);
 
         if (cached != null && !cached.isEmpty()) {
             return cached.stream()
@@ -115,14 +106,14 @@ public class TagServiceImpl implements TagService {
 
         List<Tag> tags = tagRepository.findTop20ByOrderByUsageCountDesc();
         tags.forEach(tag -> stringRedisTemplate.opsForZSet()
-                .add(HOT_TAGS_KEY, tag.getId().toString(), (double) tag.getUsageCount()));
-        stringRedisTemplate.expire(HOT_TAGS_KEY, HOT_TAGS_TTL_HOURS, TimeUnit.HOURS);
+                .add(RedisKeyConstant.TAG_HOT_KEY, tag.getId().toString(), (double) tag.getUsageCount()));
+        stringRedisTemplate.expire(RedisKeyConstant.TAG_HOT_KEY, HOT_TAGS_TTL_HOURS, TimeUnit.HOURS);
         return tags.subList(0, Math.min(limit, tags.size()));
     }
 
     @Override
     public TagDetailResponse getTagDetail(String slug) {
-        String cacheKey = "tag:" + slug;
+        String cacheKey = RedisKeyConstant.getTagDetailKey(slug);
         Map<Object, Object> cached = stringRedisTemplate.opsForHash().entries(cacheKey);
 
         if (cached != null && !cached.isEmpty()) {
@@ -187,7 +178,7 @@ public class TagServiceImpl implements TagService {
             tag.setDescription(request.getDescription());
         }
         Tag saved = tagRepository.save(tag);
-        stringRedisTemplate.delete("tag:" + tag.getSlug());
+        stringRedisTemplate.delete(RedisKeyConstant.getTagDetailKey(tag.getSlug()));
         return saved;
     }
 
@@ -203,8 +194,8 @@ public class TagServiceImpl implements TagService {
             throw new BusinessException(TagErrorCode.TAG_IN_USE);
         }
         userTagFollowRepository.deleteByTagId(id);
-        stringRedisTemplate.delete("tag:" + tag.getSlug());
-        stringRedisTemplate.opsForZSet().remove(HOT_TAGS_KEY, tag.getId().toString());
+        stringRedisTemplate.delete(RedisKeyConstant.getTagDetailKey(tag.getSlug()));
+        stringRedisTemplate.opsForZSet().remove(RedisKeyConstant.TAG_HOT_KEY, tag.getId().toString());
         tagRepository.deleteById(id);
     }
 }

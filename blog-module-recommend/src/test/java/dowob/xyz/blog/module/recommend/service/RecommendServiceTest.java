@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.recommend.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.SearchFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
@@ -200,7 +201,7 @@ class RecommendServiceTest {
             );
             String cacheJson = mapper.writeValueAsString(cached);
 
-            when(valueOperations.get(RecommendServiceImpl.RELATED_CACHE_KEY_PREFIX + ARTICLE_UUID))
+            when(valueOperations.get(RedisKeyConstant.getRelatedKey(ARTICLE_UUID.toString())))
                     .thenReturn(cacheJson);
 
             List<RecommendArticleResponse> result = service.getRelatedArticles(ARTICLE_UUID, 5);
@@ -229,7 +230,7 @@ class RecommendServiceTest {
         void returnsTrendingArticlesFromZSet() {
             UUID uuid1 = UUID.randomUUID();
             when(zSetOperations.reverseRange(
-                    eq(RecommendServiceImpl.TRENDING_KEY_PREFIX + "7d"), eq(0L), eq(4L)))
+                    eq(RedisKeyConstant.getTrendingKey("7d")), eq(0L), eq(4L)))
                     .thenReturn(new java.util.LinkedHashSet<>(List.of(uuid1.toString())));
             when(articleFacade.getPublishedArticlesByUuids(List.of(uuid1)))
                     .thenReturn(List.of(summary(uuid1, "Hot")));

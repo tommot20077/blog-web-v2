@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.recommend.consumer;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
 import dowob.xyz.blog.module.recommend.config.RecommendRabbitMqConfig;
 import lombok.RequiredArgsConstructor;
@@ -37,27 +38,20 @@ public class ArticlePublishedConsumer {
     private final StringRedisTemplate stringRedisTemplate;
 
     /**
-     * 推薦相關文章快取 Key 前綴
-     */
-    private static final String RELATED_CACHE_KEY_PREFIX = "recommend:related:";
-
-    /**
      * 處理文章發布事件，清除相關文章推薦快取
      *
      * @param event      文章發布事件
      * @param channel    RabbitMQ Channel，用於手動 ACK
      * @param deliveryTag 消息遞送標籤
      */
-    @RabbitListener(
-            queues = RecommendRabbitMqConfig.QUEUE_RECOMMEND_ARTICLE_PUBLISHED,
-            containerFactory = RecommendRabbitMqConfig.MANUAL_ACK_CONTAINER_FACTORY)
+    @RabbitListener(queues = RecommendRabbitMqConfig.QUEUE_RECOMMEND_ARTICLE_PUBLISHED)
     public void handleArticlePublished(
             ArticlePublishedEvent event,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
 
         try {
-            String cacheKey = RELATED_CACHE_KEY_PREFIX + event.articleUuid();
+            String cacheKey = RedisKeyConstant.getRelatedKey(event.articleUuid().toString());
             stringRedisTemplate.delete(cacheKey);
             log.debug("已清除文章推薦快取，articleUuid={}", event.articleUuid());
             channel.basicAck(deliveryTag, false);
