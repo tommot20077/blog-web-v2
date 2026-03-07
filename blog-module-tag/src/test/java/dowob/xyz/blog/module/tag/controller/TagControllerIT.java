@@ -89,7 +89,6 @@ class TagControllerIT {
         registry.add("spring.datasource.password", postgres::getPassword);
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
-        registry.add("spring.flyway.locations", () -> "classpath:db/it-migration");
     }
 
     /**
@@ -235,8 +234,8 @@ class TagControllerIT {
         mockMvc.perform(get("/api/v1/tags/nonexistent-tag-xyz")
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
                                 buildAuth(1L, "USER", "COMMENT_WRITE"))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("T001"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0301"));
     }
 
     @Test
