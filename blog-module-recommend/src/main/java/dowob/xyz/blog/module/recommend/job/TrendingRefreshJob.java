@@ -10,6 +10,9 @@ import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
+
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -64,8 +67,13 @@ public class TrendingRefreshJob {
      *
      * <p>每 30 分鐘執行，使用 Redis 分散式鎖確保多實例環境下只有一個實例執行。</p>
      */
+    private static final RedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end",
+            Long.class);
+
     @Scheduled(fixedDelay = 1800000)
     public void refreshTrending() {
+        String lockValue = UUID.randomUUID().toString();
         Boolean acquired = stringRedisTemplate.opsForValue()
                 .setIfAbsent(RedisKeyConstant.LOCK_TRENDING_REFRESH, UUID.randomUUID().toString(), LOCK_TTL_SECONDS, TimeUnit.SECONDS);
         if (!Boolean.TRUE.equals(acquired)) {

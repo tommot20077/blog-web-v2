@@ -144,6 +144,6 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleException(Exception e) {
         log.error("Unhandled Exception", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.failed("500", "系統內部錯誤: " + e.getMessage()));
+                .body(ApiResponse.failed("500", "系統內部錯誤"));
     }
 }

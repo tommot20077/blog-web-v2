@@ -1,7 +1,9 @@
 package dowob.xyz.blog.module.search.controller;
 
+import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.service.SearchService;
 import lombok.RequiredArgsConstructor;
@@ -88,7 +90,11 @@ public class SearchController {
      */
     @PreAuthorize("isAuthenticated()")
     @GetMapping("/history")
+    @PreAuthorize("isAuthenticated()")
     public ApiResponse<List<String>> getHistory(@AuthenticationPrincipal Long userId) {
+        if (userId == null) {
+            throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
+        }
         return ApiResponse.success(searchService.getHistory(userId));
     }
 
@@ -103,7 +109,11 @@ public class SearchController {
      */
     @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/history")
+    @PreAuthorize("isAuthenticated()")
     public ApiResponse<Void> clearHistory(@AuthenticationPrincipal Long userId) {
+        if (userId == null) {
+            throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
+        }
         searchService.clearHistory(userId);
         return ApiResponse.success();
     }

@@ -145,6 +145,9 @@ public class FileController {
      * @throws BusinessException 若使用者不存在
      */
     private UUID resolveUserUuid(Long userId) {
+        if (userId == null) {
+            throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
+        }
         return userFacade.getUserUuidById(userId)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
     }

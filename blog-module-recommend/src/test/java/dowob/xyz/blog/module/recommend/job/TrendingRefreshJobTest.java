@@ -15,6 +15,7 @@ import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.concurrent.TimeUnit;
 
@@ -202,15 +203,15 @@ class TrendingRefreshJobTest {
         }
 
         @Test
-        @DisplayName("取得分散式鎖後正常執行並在 finally 釋放鎖")
-        void whenLockAcquired_executesAndReleasesLock() {
+        @DisplayName("取得分散式鎖後正常執行並在 finally 以 Lua script 原子釋放鎖")
+        void whenLockAcquired_executesAndReleasesLockWithLuaScript() {
             when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
                     .thenReturn(true);
             when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of());
 
             job.refreshTrending();
 
-            verify(stringRedisTemplate).delete("lock:trending-refresh");
+            verify(stringRedisTemplate).execute(any(RedisScript.class), anyList(), (Object) any());
         }
 
         @Test

@@ -17,7 +17,7 @@ CREATE TABLE tags (
 
 -- Recreate article_tags with UUID FKs
 CREATE TABLE article_tags (
-    article_id UUID NOT NULL,
+    article_id UUID NOT NULL REFERENCES articles (uuid) ON DELETE CASCADE,
     tag_id     UUID NOT NULL REFERENCES tags (id),
     PRIMARY KEY (article_id, tag_id)
 );
