@@ -124,8 +124,8 @@ class GlobalExceptionHandlerTest {
      * 驗證未處理例外由 handleException 捕獲，回傳 HTTP 500 及系統錯誤訊息
      */
     @Test
-    @DisplayName("未處理 Exception 應回傳 HTTP 500")
-    void whenUnhandledException_returns500() {
+    @DisplayName("未處理 Exception 應回傳 HTTP 500 且訊息不包含例外細節")
+    void whenUnhandledException_returns500WithGenericMessage() {
         Exception ex = new RuntimeException("Unexpected error");
 
         ResponseEntity<ApiResponse<Void>> response = handler.handleException(ex);
@@ -133,5 +133,7 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getCode()).isEqualTo("500");
+        assertThat(response.getBody().getMessage()).isEqualTo("系統內部錯誤");
+        assertThat(response.getBody().getMessage()).doesNotContain("Unexpected error");
     }
 }

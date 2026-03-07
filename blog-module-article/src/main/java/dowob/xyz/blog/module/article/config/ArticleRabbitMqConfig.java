@@ -126,49 +126,4 @@ public class ArticleRabbitMqConfig {
                 .with(ROUTING_KEY_VIEWED);
     }
 
-    /**
-     * 建立文章已更新 Queue（持久化，含 DLQ 設定）
-     *
-     * @return Queue 實例
-     */
-    @Bean
-    public Queue articleUpdatedQueue() {
-        return new Queue("article.updated", true, false, false, dlqArgs());
-    }
-
-    /**
-     * 建立文章已更新 Queue 與 Exchange 的綁定
-     *
-     * @return Binding 實例
-     */
-    @Bean
-    public Binding articleUpdatedBinding() {
-        return BindingBuilder
-                .bind(articleUpdatedQueue())
-                .to(articleEventsExchange())
-                .with(ROUTING_KEY_UPDATED);
-    }
-
-    /**
-     * 建立文章已刪除 Queue（持久化，含 DLQ 設定）
-     *
-     * @return Queue 實例
-     */
-    @Bean
-    public Queue articleDeletedQueue() {
-        return new Queue("article.deleted", true, false, false, dlqArgs());
-    }
-
-    /**
-     * 建立文章已刪除 Queue 與 Exchange 的綁定
-     *
-     * @return Binding 實例
-     */
-    @Bean
-    public Binding articleDeletedBinding() {
-        return BindingBuilder
-                .bind(articleDeletedQueue())
-                .to(articleEventsExchange())
-                .with(ROUTING_KEY_DELETED);
-    }
 }

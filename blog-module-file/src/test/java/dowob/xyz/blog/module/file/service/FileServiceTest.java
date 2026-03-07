@@ -41,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -208,6 +209,25 @@ class FileServiceTest {
             assertThatThrownBy(() -> fileService.deleteFile(fileId, otherUserId, false))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(FileErrorCode.FILE_ACCESS_DENIED.getMessage());
+        }
+
+        /** 驗證 MinIO 刪除失敗時拋出異常（不再吞掉），讓 @Transactional 可回滾 DB */
+        @Test
+        @DisplayName("deleteFile_whenMinioFails_throwsException")
+        void deleteFile_whenMinioFails_throwsException() throws Exception {
+            UUID ownerId = UUID.randomUUID();
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/test.jpg");
+            metadata.setUploaderId(ownerId);
+            metadata.setHasThumbnail(false);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            doThrow(new RuntimeException("MinIO error")).when(minioClient).removeObject(any(RemoveObjectArgs.class));
+
+            assertThatThrownBy(() -> fileService.deleteFile(fileId, ownerId, false))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("MinIO 刪除失敗");
         }
 
         /** 驗證刪除有縮圖的檔案時同時刪除縮圖 */

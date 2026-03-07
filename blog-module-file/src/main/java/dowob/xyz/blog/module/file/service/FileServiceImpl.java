@@ -186,7 +186,6 @@ public class FileServiceImpl implements FileService {
         if (!isAdmin && !metadata.belongsTo(requesterId)) {
             throw new BusinessException(FileErrorCode.FILE_ACCESS_DENIED);
         }
-        // F-3: DB 先刪除，MinIO 後刪除（接受孤兒檔案風險，可由排程清理）
         fileMetadataRepository.deleteById(fileId);
         try {
             minioClient.removeObject(
@@ -203,7 +202,8 @@ public class FileServiceImpl implements FileService {
                                 .build());
             }
         } catch (Exception e) {
-            log.error("MinIO 刪除失敗，可能產生孤兒檔案: {}", metadata.getStoragePath(), e);
+            log.error("MinIO 刪除失敗: {}", metadata.getStoragePath(), e);
+            throw new RuntimeException("MinIO 刪除失敗", e);
         }
     }
 

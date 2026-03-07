@@ -46,7 +46,7 @@ public class ArticleSearchListener {
      * @param deliveryTag 訊息標籤
      * @throws IOException 處理 ACK/NACK 時的 IO 異常
      */
-    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX)
+    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX, containerFactory = "rabbitListenerContainerFactory")
     public void onArticlePublished(ArticlePublishedMessage message,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
@@ -75,7 +75,7 @@ public class ArticleSearchListener {
      * @param deliveryTag 訊息標籤
      * @throws IOException 處理 ACK/NACK 時的 IO 異常
      */
-    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_UPDATE)
+    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_UPDATE, containerFactory = "rabbitListenerContainerFactory")
     public void onArticleUpdated(ArticlePublishedMessage message,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
@@ -99,7 +99,7 @@ public class ArticleSearchListener {
      * @param deliveryTag 訊息標籤
      * @throws IOException 處理 ACK/NACK 時的 IO 異常
      */
-    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_DELETE)
+    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_DELETE, containerFactory = "rabbitListenerContainerFactory")
     public void onArticleDeleted(ArticleDeletedMessage message,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
