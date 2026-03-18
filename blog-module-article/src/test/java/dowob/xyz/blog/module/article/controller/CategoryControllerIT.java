@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleTestApplication;
@@ -98,6 +99,9 @@ class CategoryControllerIT {
 
     @MockitoBean
     private RabbitTemplate rabbitTemplate;
+
+    @MockitoBean
+    private TagFacade tagFacade;
 
     @MockitoBean
     private UserFacade userFacade;

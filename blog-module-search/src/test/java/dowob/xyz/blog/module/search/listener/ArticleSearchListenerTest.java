@@ -43,6 +43,79 @@ class ArticleSearchListenerTest {
     private ArticleSearchListener listener;
 
     /**
+     * 建立完整 ArticlePublishedMessage 測試資料
+     */
+    private ArticlePublishedMessage buildPublishedMessage() {
+        ArticlePublishedMessage message = new ArticlePublishedMessage();
+        message.setArticleUuid(UUID.randomUUID());
+        message.setAuthorId(1L);
+        message.setTitle("測試標題");
+        message.setSummary("測試摘要");
+        message.setContentText("測試內容純文字");
+        message.setSlug("test-slug");
+        message.setPublishedAt(LocalDateTime.now());
+        message.setAuthorUsername("yuan");
+        message.setAuthorNickname("Yuan");
+        message.setTags(List.of());
+        return message;
+    }
+
+    /**
+     * 文章發布事件測試
+     */
+    @Nested
+    @DisplayName("onArticlePublished")
+    class OnArticlePublishedTests {
+
+        @Test
+        @DisplayName("正常：收到發布訊息時，應建立 ES 索引並 ACK")
+        void onArticlePublished_shouldIndexAndAck() throws IOException {
+            ArticlePublishedMessage message = buildPublishedMessage();
+
+            listener.onArticlePublished(message, channel, 1L);
+
+            verify(searchService).indexArticle(any(ArticleDocument.class));
+            verify(channel).basicAck(1L, false);
+        }
+
+        @Test
+        @DisplayName("正常：標籤為 null 時，應正常建立索引（不拋出例外）")
+        void onArticlePublished_withNullTags_shouldIndexAndAck() throws IOException {
+            ArticlePublishedMessage message = buildPublishedMessage();
+            message.setTags(null);
+
+            listener.onArticlePublished(message, channel, 2L);
+
+            verify(searchService).indexArticle(any(ArticleDocument.class));
+            verify(channel).basicAck(2L, false);
+        }
+
+        @Test
+        @DisplayName("異常：ES 索引失敗時，應 NACK 至 DLQ（不重排隊）")
+        void onArticlePublished_onEsException_shouldNack() throws IOException {
+            ArticlePublishedMessage message = buildPublishedMessage();
+
+            doThrow(new RuntimeException("ES cluster unavailable")).when(searchService).indexArticle(any());
+
+            listener.onArticlePublished(message, channel, 3L);
+
+            verify(channel).basicNack(3L, false, false);
+        }
+
+        @Test
+        @DisplayName("異常：basicAck 拋出 IOException 時，應觸發 basicNack")
+        void onArticlePublished_onAckIoException_shouldNack() throws IOException {
+            ArticlePublishedMessage message = buildPublishedMessage();
+
+            doThrow(new IOException("channel broken")).when(channel).basicAck(4L, false);
+
+            listener.onArticlePublished(message, channel, 4L);
+
+            verify(channel).basicNack(4L, false, false);
+        }
+    }
+
+    /**
      * 文章更新事件測試
      */
     @Nested

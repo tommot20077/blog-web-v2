@@ -9,6 +9,7 @@ import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import io.minio.MinioClient;
+import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -407,6 +408,401 @@ class FileServiceTest {
             0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
             (byte) 0xFF, (byte) 0xD9
         };
+    }
+
+    // ===========================
+    // 邊界測試：uploadFile 邊界分支
+    // ===========================
+
+    /** uploadFile：file.getBytes() 拋出 IOException */
+    @Nested
+    @DisplayName("uploadFile getBytes IOException 測試")
+    class UploadFileGetBytesExceptionTests {
+
+        @Test
+        @DisplayName("uploadFile_whenGetBytesFails_throwsRuntimeException")
+        void uploadFile_whenGetBytesFails_throwsRuntimeException() throws Exception {
+            MultipartFile brokenFile = org.mockito.Mockito.mock(MultipartFile.class);
+            when(brokenFile.getBytes()).thenThrow(new IOException("disk read error"));
+            when(brokenFile.getOriginalFilename()).thenReturn("test.jpg");
+
+            assertThatThrownBy(() ->
+                    fileService.uploadFile(brokenFile, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("無法讀取檔案內容");
+        }
+    }
+
+    /** uploadFile：usageType = AVATAR → storagePath prefix 應為 avatars */
+    @Nested
+    @DisplayName("uploadFile AVATAR 類型路徑前綴測試")
+    class UploadFileAvatarPrefixTests {
+
+        @Test
+        @DisplayName("uploadFile_withAvatarUsageType_usesAvatarPrefix")
+        void uploadFile_withAvatarUsageType_usesAvatarPrefix() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "avatar.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.AVATAR, UUID.randomUUID(), "USER");
+
+            assertThat(response).isNotNull();
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getStoragePath()).startsWith("avatars/");
+        }
+
+        @Test
+        @DisplayName("uploadFile_withArticleCoverUsageType_usesArticlesPrefix")
+        void uploadFile_withArticleCoverUsageType_usesArticlesPrefix() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "cover.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_COVER, UUID.randomUUID(), "USER");
+
+            assertThat(response).isNotNull();
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getStoragePath()).startsWith("articles/");
+        }
+    }
+
+    /** uploadFile：MinIO putObject 拋出 Exception */
+    @Nested
+    @DisplayName("uploadFile MinIO putObject 失敗測試")
+    class UploadFileMinioFailTests {
+
+        @Test
+        @DisplayName("uploadFile_whenMinioPutFails_throwsRuntimeException")
+        void uploadFile_whenMinioPutFails_throwsRuntimeException() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            doThrow(new RuntimeException("MinIO connection refused"))
+                    .when(minioClient).putObject(any(PutObjectArgs.class));
+
+            assertThatThrownBy(() ->
+                    fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("MinIO 上傳失敗");
+        }
+    }
+
+    /** uploadFile：ADMIN 角色配額為 Long.MAX_VALUE，不受配額限制 */
+    @Nested
+    @DisplayName("uploadFile ADMIN 角色無配額限制測試")
+    class UploadFileAdminQuotaTests {
+
+        @Test
+        @DisplayName("uploadFile_withAdminRole_neverExceedsQuota")
+        void uploadFile_withAdminRole_neverExceedsQuota() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            // 模擬已用空間遠超過一般使用者配額
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(Long.MAX_VALUE / 2);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "ADMIN");
+
+            assertThat(response).isNotNull();
+        }
+    }
+
+    /** uploadFile：未知角色 → fallback USER 配額 */
+    @Nested
+    @DisplayName("uploadFile 未知角色 fallback 配額測試")
+    class UploadFileUnknownRoleQuotaTests {
+
+        @Test
+        @DisplayName("uploadFile_withUnknownRole_fallsBackToUserQuota")
+        void uploadFile_withUnknownRole_fallsBackToUserQuota() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            // 剩餘空間充足（USER 配額 10MB，已用 0）
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            // GUEST 角色在 quotas map 不存在，應 fallback USER 配額（10MB）
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "GUEST");
+
+            assertThat(response).isNotNull();
+        }
+
+        @Test
+        @DisplayName("uploadFile_withUnknownRole_quotaExceeded_throwsException")
+        void uploadFile_withUnknownRole_quotaExceeded_throwsException() {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            // 已用空間等於 USER fallback 配額（10MB），再上傳會超限
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(10L * 1024 * 1024);
+
+            assertThatThrownBy(() ->
+                    fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "GUEST"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(FileErrorCode.QUOTA_EXCEEDED.getMessage());
+        }
+    }
+
+    /** uploadFile：filename 無副檔名 → extractExtension 返回 "bin" */
+    @Nested
+    @DisplayName("uploadFile 無副檔名 extractExtension 測試")
+    class UploadFileNoExtensionTests {
+
+        @Test
+        @DisplayName("uploadFile_withNoExtensionFilename_usesBinExtension")
+        void uploadFile_withNoExtensionFilename_usesBinExtension() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            // filename 無 dot
+            MockMultipartFile file = new MockMultipartFile("file", "testfile", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getStoragePath()).endsWith(".bin");
+        }
+
+        @Test
+        @DisplayName("uploadFile_withNullFilenameForExtension_usesBinExtension")
+        void uploadFile_withNullFilenameForExtension_usesBinExtension() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", null, "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getStoragePath()).endsWith(".bin");
+        }
+    }
+
+    /** uploadFile：originalName 空白字串 → "unnamed" */
+    @Nested
+    @DisplayName("uploadFile 空白 filename 轉 unnamed 測試")
+    class UploadFileBlankFilenameTests {
+
+        @Test
+        @DisplayName("uploadFile_withBlankFilename_usesDefaultName")
+        void uploadFile_withBlankFilename_usesDefaultName() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "   ", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getOriginalName()).isEqualTo("unnamed");
+        }
+    }
+
+    /** uploadFile：超長 filename 無 dot → 截斷前 255 字元 */
+    @Nested
+    @DisplayName("uploadFile 超長 filename 無 dot 截斷測試")
+    class UploadFileLongFilenameNoDotTests {
+
+        @Test
+        @DisplayName("uploadFile_withLongFilenameNoDot_truncatesTo255")
+        void uploadFile_withLongFilenameNoDot_truncatesTo255() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            String longName = "a".repeat(300); // 無副檔名
+            MockMultipartFile file = new MockMultipartFile("file", longName, "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getOriginalName()).hasSize(255);
+        }
+
+        @Test
+        @DisplayName("uploadFile_withLongFilenameVeryLongExt_truncatesTo255")
+        void uploadFile_withLongFilenameVeryLongExt_truncatesTo255() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            // ext 長度 260 chars，allowedBase <= 0 → 直接截斷 255
+            String longExt = "." + "e".repeat(260);
+            String longName = "base" + longExt;
+            MockMultipartFile file = new MockMultipartFile("file", longName, "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getOriginalName()).hasSizeLessThanOrEqualTo(255);
+        }
+    }
+
+    /** deleteFile：fileId 不存在 → FILE_NOT_FOUND */
+    @Nested
+    @DisplayName("deleteFile 不存在檔案測試")
+    class DeleteFileNotFoundTests {
+
+        @Test
+        @DisplayName("deleteFile_whenFileNotFound_throwsBusinessException")
+        void deleteFile_whenFileNotFound_throwsBusinessException() {
+            UUID fileId = UUID.randomUUID();
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> fileService.deleteFile(fileId, UUID.randomUUID(), false))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(FileErrorCode.FILE_NOT_FOUND.getMessage());
+        }
+    }
+
+    /** deleteFile：isAdmin=true 可刪除他人檔案 */
+    @Nested
+    @DisplayName("deleteFile 管理員刪除他人檔案測試")
+    class DeleteFileAdminTests {
+
+        @Test
+        @DisplayName("deleteFile_byAdmin_canDeleteOtherUserFile")
+        void deleteFile_byAdmin_canDeleteOtherUserFile() throws Exception {
+            UUID ownerId = UUID.randomUUID();
+            UUID adminId = UUID.randomUUID(); // 不同使用者
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/test.jpg");
+            metadata.setUploaderId(ownerId);
+            metadata.setHasThumbnail(false);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            // admin 可以刪除非自己的檔案
+            fileService.deleteFile(fileId, adminId, true);
+
+            verify(fileMetadataRepository).deleteById(fileId);
+        }
+    }
+
+    /** deleteFile：有縮圖且 storagePath 無 dot → buildThumbPath 產生 _thumb 後綴，仍執行兩次 removeObject */
+    @Nested
+    @DisplayName("deleteFile 縮圖路徑無 dot 分支測試")
+    class DeleteFileThumbNoDotTests {
+
+        @Test
+        @DisplayName("deleteFile_withThumbnailAndNoDotInPath_callsRemoveObjectTwice")
+        void deleteFile_withThumbnailAndNoDotInPath_callsRemoveObjectTwice() throws Exception {
+            UUID ownerId = UUID.randomUUID();
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/uuidnodot"); // 無 dot
+            metadata.setUploaderId(ownerId);
+            metadata.setHasThumbnail(true);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            fileService.deleteFile(fileId, ownerId, false);
+
+            // buildThumbPath 無 dot 分支：storagePath + "_thumb"，仍應呼叫兩次 removeObject
+            verify(minioClient, times(2)).removeObject(any(RemoveObjectArgs.class));
+        }
+    }
+
+    /** getFileMetadata：fileId 不存在 → FILE_NOT_FOUND */
+    @Nested
+    @DisplayName("getFileMetadata 不存在檔案測試")
+    class GetFileMetadataNotFoundTests {
+
+        @Test
+        @DisplayName("getFileMetadata_whenFileNotFound_throwsBusinessException")
+        void getFileMetadata_whenFileNotFound_throwsBusinessException() {
+            UUID fileId = UUID.randomUUID();
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> fileService.getFileMetadata(fileId))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(FileErrorCode.FILE_NOT_FOUND.getMessage());
+        }
+
+        @Test
+        @DisplayName("getFileMetadata_whenFileExists_returnsMetadata")
+        void getFileMetadata_whenFileExists_returnsMetadata() {
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/test.jpg");
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            FileMetadata result = fileService.getFileMetadata(fileId);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getId()).isEqualTo(fileId);
+        }
+    }
+
+    /** getQuota：ADMIN 角色 → limit=Long.MAX_VALUE，remaining=Long.MAX_VALUE */
+    @Nested
+    @DisplayName("getQuota ADMIN 角色配額測試")
+    class GetQuotaAdminTests {
+
+        @Test
+        @DisplayName("getQuota_forAdmin_returnsUnlimitedQuota")
+        void getQuota_forAdmin_returnsUnlimitedQuota() {
+            UUID adminId = UUID.randomUUID();
+            when(fileMetadataRepository.sumSizeByUploaderId(adminId)).thenReturn(100L * 1024 * 1024);
+
+            QuotaResponse quota = fileService.getQuota(adminId, "ADMIN");
+
+            assertThat(quota.getLimitBytes()).isEqualTo(Long.MAX_VALUE);
+            assertThat(quota.getRemainingBytes()).isEqualTo(Long.MAX_VALUE);
+        }
+    }
+
+    /** getQuota：已用量超過配額 → remaining=0（不為負數） */
+    @Nested
+    @DisplayName("getQuota 配額用盡 remaining 為零測試")
+    class GetQuotaOverusedTests {
+
+        @Test
+        @DisplayName("getQuota_whenUsedExceedsLimit_remainingIsZero")
+        void getQuota_whenUsedExceedsLimit_remainingIsZero() {
+            UUID userId = UUID.randomUUID();
+            // 已用量超過 10MB USER 配額
+            long usedBytes = 12L * 1024 * 1024;
+            when(fileMetadataRepository.sumSizeByUploaderId(userId)).thenReturn(usedBytes);
+
+            QuotaResponse quota = fileService.getQuota(userId, "USER");
+
+            assertThat(quota.getRemainingBytes()).isEqualTo(0L);
+            assertThat(quota.getUsedBytes()).isEqualTo(usedBytes);
+        }
+    }
+
+    /** uploadFile：DB 失敗時補償刪除 MinIO 也失敗（只 log，不再拋出額外異常） */
+    @Nested
+    @DisplayName("uploadFile 補償刪除 MinIO 也失敗測試")
+    class CompensationMinioAlsoFailsTests {
+
+        @Test
+        @DisplayName("uploadFile_whenDbFailsAndCompensationAlsoFails_throwsOriginalDbException")
+        void uploadFile_whenDbFailsAndCompensationAlsoFails_throwsOriginalDbException() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenThrow(new RuntimeException("DB failure"));
+            // 補償刪除 MinIO 也拋出異常
+            doThrow(new RuntimeException("MinIO compensation failed"))
+                    .when(minioClient).removeObject(any(RemoveObjectArgs.class));
+
+            // 應拋出原始 DB 例外（補償失敗只 log，不蓋過原始例外）
+            assertThatThrownBy(() ->
+                    fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("DB failure");
+        }
     }
 
     /**

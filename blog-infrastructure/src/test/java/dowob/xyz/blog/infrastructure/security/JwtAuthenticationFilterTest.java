@@ -25,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -159,5 +160,125 @@ class JwtAuthenticationFilterTest {
                     .as("ADMIN 應包含權限 %s", permission)
                     .contains(permission.name());
         }
+    }
+
+    // ===== 未覆蓋路徑 =====
+
+    @Test
+    @DisplayName("請求無 Authorization Header 時，應直接放行至下一個 Filter，SecurityContext 保持空白")
+    @SuppressWarnings("unchecked")
+    void noAuthorizationHeader_shouldPassThroughWithoutSettingAuthentication() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+
+        when(request.getHeader("Authorization")).thenReturn(null);
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    @DisplayName("JWT 驗證失敗時，應直接放行至下一個 Filter，SecurityContext 保持空白")
+    @SuppressWarnings("unchecked")
+    void invalidJwt_shouldPassThroughWithoutSettingAuthentication() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+
+        when(request.getHeader("Authorization")).thenReturn("Bearer invalid.token.here");
+        when(jwtService.validateToken("invalid.token.here")).thenReturn(false);
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    @DisplayName("Redis Miss 且 DB 查無用戶時，應放行請求至下一個 Filter，SecurityContext 保持空白")
+    @SuppressWarnings("unchecked")
+    void redisMiss_userNotFound_shouldPassThroughWithoutSettingAuthentication() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
+        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
+        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
+        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
+        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        // Redis miss: both fields return null
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
+        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
+        when(userAuthService.getUserDetail(USER_ID)).thenReturn(null);
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    @DisplayName("Redis Miss 且用戶狀態為 disabled 時，應放行請求至下一個 Filter，SecurityContext 保持空白")
+    @SuppressWarnings("unchecked")
+    void redisMiss_userDisabled_shouldPassThroughWithoutSettingAuthentication() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        UserAuthService.SimpleUserDetail disabledUser =
+                new UserAuthService.SimpleUserDetail(USER_ID, "user@test.com", "USER", false);
+
+        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
+        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
+        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
+        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
+        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        // Redis miss: version field returns null, triggering DB fallback
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
+        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
+        when(userAuthService.getUserDetail(USER_ID)).thenReturn(disabledUser);
+
+        filter.doFilterInternal(request, response, chain);
+
+        // disabled user → status="SUSPENDED" → no auth set, but chain still called
+        verify(chain).doFilter(request, response);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    @DisplayName("JWT 版本號與 Redis 儲存版本不一致時，應放行請求但 SecurityContext 保持空白")
+    @SuppressWarnings("unchecked")
+    void tokenVersionMismatch_shouldPassThroughWithoutSettingAuthentication() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        String jwtVersion = "1";
+        String serverVersion = "2"; // mismatch
+
+        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
+        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
+        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
+        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(jwtVersion);
+        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(serverVersion);
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn("ACTIVE");
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(chain).doFilter(request, response);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 }
