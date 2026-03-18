@@ -86,4 +86,34 @@ public class ArticleResponse {
      * 文章分類列表
      */
     private List<CategoryResponse> categories;
+
+    /**
+     * URL slug（SEO 友善網址）
+     */
+    private String slug;
+
+    /**
+     * 按讚次數
+     */
+    private long likeCount;
+
+    /**
+     * 留言數量
+     */
+    private int commentCount;
+
+    /**
+     * 發布時間
+     */
+    private LocalDateTime publishedAt;
+
+    /**
+     * 文章標籤列表
+     */
+    private List<TagSummaryResponse> tags;
+
+    /**
+     * 駁回原因（Phase 3 實作後才有值）
+     */
+    private String rejectReason;
 }

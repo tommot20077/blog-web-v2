@@ -124,4 +124,10 @@ public class Article {
     @LastModifiedDate
     @Column("updated_at")
     private LocalDateTime updatedAt;
+
+    /**
+     * 駁回原因（由管理員設定）
+     */
+    @Column("reject_reason")
+    private String rejectReason;
 }

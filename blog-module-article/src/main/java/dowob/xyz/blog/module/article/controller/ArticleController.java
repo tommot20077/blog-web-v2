@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
@@ -74,6 +75,22 @@ public class ArticleController {
     }
 
     /**
+     * 根據 slug 取得單篇文章詳情（公開）
+     *
+     * @param slug    文章 URL slug
+     * @param request HTTP 請求（用於取得客戶端 IP）
+     * @return 文章完整資訊
+     */
+    @GetMapping("/slug/{slug}")
+    public ApiResponse<ArticleResponse> getArticleBySlug(@PathVariable String slug,
+                                                          HttpServletRequest request,
+                                                          @AuthenticationPrincipal Long viewerId,
+                                                          Authentication authentication) {
+        Role viewerRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleService.getArticleBySlug(slug, viewerId, viewerRole, getClientIp(request)));
+    }
+
+    /**
      * 取得單篇文章詳情
      *
      * @param uuid    文章公開 UUID
@@ -140,6 +157,7 @@ public class ArticleController {
      *
      * @param pageNum  頁碼，預設 1
      * @param pageSize 每頁筆數，預設 10
+     * @param status   文章狀態篩選（可選）
      * @return 分頁文章摘要列表
      */
     @PreAuthorize("isAuthenticated()")
@@ -147,8 +165,24 @@ public class ArticleController {
     public ApiResponse<PageResult<ArticleSummaryResponse>> getMyArticles(
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "10") int pageSize,
+            @RequestParam(required = false) ArticleStatus status,
             @AuthenticationPrincipal Long authorId) {
-        return ApiResponse.success(articleService.getMyArticles(authorId, pageNum, pageSize));
+        return ApiResponse.success(articleService.getMyArticles(authorId, pageNum, pageSize, status));
+    }
+
+    /**
+     * 提交文章審核（需 AUTHOR 本人或 ADMIN）
+     *
+     * @param uuid 文章公開 UUID
+     * @return 提交審核後的文章完整資訊
+     */
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
+    @PostMapping("/{uuid}/submit")
+    public ApiResponse<ArticleResponse> submitForReview(@PathVariable UUID uuid,
+                                                         @AuthenticationPrincipal Long operatorId,
+                                                         Authentication authentication) {
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleService.submitForReview(operatorId, operatorRole, uuid));
     }
 
     /**

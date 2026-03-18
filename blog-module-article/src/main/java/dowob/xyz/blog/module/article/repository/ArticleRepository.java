@@ -30,6 +30,14 @@ public interface ArticleRepository extends CrudRepository<Article, Long> {
     Optional<Article> findByUuid(UUID uuid);
 
     /**
+     * 根據 slug 查詢文章
+     *
+     * @param slug 文章 URL slug
+     * @return 文章 Optional
+     */
+    Optional<Article> findBySlug(String slug);
+
+    /**
      * 根據作者 ID 查詢所有文章
      *
      * @param authorId 作者資料庫主鍵

@@ -4,10 +4,13 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.config.UUIDTypeHandler;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.TagWithArticleUuid;
 import org.apache.ibatis.annotations.Arg;
 import org.apache.ibatis.annotations.ConstructorArgs;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Result;
+import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
@@ -84,6 +87,16 @@ public interface ArticleMapper {
      */
     @Select("SELECT COUNT(*) FROM articles WHERE author_id = #{authorId}")
     long countByAuthorId(@Param("authorId") Long authorId);
+
+    /**
+     * 計算作者在特定狀態下的文章總筆數
+     *
+     * @param authorId 作者資料庫主鍵
+     * @param status   文章狀態
+     * @return 總筆數
+     */
+    @Select("SELECT COUNT(*) FROM articles WHERE author_id = #{authorId} AND status = #{status}")
+    long countByAuthorIdAndStatus(@Param("authorId") Long authorId, @Param("status") ArticleStatus status);
 
     /**
      * 分頁查詢待審文章（按提交時間升冪，供管理員審核）
@@ -183,4 +196,30 @@ public interface ArticleMapper {
             "INNER JOIN categories c ON ac.category_id = c.id " +
             "WHERE a.status = 'PUBLISHED' AND c.slug = #{categorySlug}")
     long countPublishedByCategorySlug(@Param("categorySlug") String categorySlug);
+
+    /**
+     * 批次查詢多篇文章的標籤（含所屬文章 UUID）
+     *
+     * <p>
+     * 供列表場景使用，一次查詢所有文章的標籤，避免 N+1 查詢問題。
+     * 使用 PostgreSQL ::uuid 強制轉型以確保 UUID 比對正確。
+     * </p>
+     *
+     * @param articleUuids 文章公開 UUID 列表
+     * @return 標籤與文章 UUID 關聯列表
+     */
+    @Results(id = "tagWithArticleUuidMap", value = {
+            @Result(property = "id", column = "id", javaType = UUID.class, typeHandler = UUIDTypeHandler.class),
+            @Result(property = "name", column = "name"),
+            @Result(property = "slug", column = "slug"),
+            @Result(property = "articleUuid", column = "article_uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class)
+    })
+    @Select("<script>" +
+            "SELECT t.id, t.name, t.slug, art.article_id AS article_uuid " +
+            "FROM tags t " +
+            "INNER JOIN article_tags art ON t.id = art.tag_id " +
+            "WHERE art.article_id IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<TagWithArticleUuid> findTagsByArticleUuids(@Param("list") List<UUID> articleUuids);
 }

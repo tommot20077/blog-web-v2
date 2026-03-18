@@ -2,14 +2,21 @@ package dowob.xyz.blog.common.exception;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.stream.Collectors;
@@ -128,6 +135,44 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(e.getStatusCode())
                 .body(ApiResponse.failed(String.valueOf(e.getStatusCode().value()), e.getReason()));
+    }
+
+    /**
+     * 統一處理常見 Client 400 錯誤，回傳 HTTP 400
+     *
+     * <p>涵蓋：缺少必填參數、型別轉換失敗、JSON 格式錯誤、缺少必填 Header、Bean Validation 失敗。</p>
+     */
+    @ExceptionHandler({
+            MissingServletRequestParameterException.class,
+            MethodArgumentTypeMismatchException.class,
+            HttpMessageNotReadableException.class,
+            MissingRequestHeaderException.class,
+            ConstraintViolationException.class
+    })
+    public ResponseEntity<ApiResponse<Void>> handleBadRequestException(Exception e) {
+        log.warn("Bad Request: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", e.getMessage()));
+    }
+
+    /**
+     * 處理不支援的 HTTP Method，回傳 HTTP 405
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotAllowedException(HttpRequestMethodNotSupportedException e) {
+        log.warn("Method Not Allowed: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(ApiResponse.failed("405", e.getMessage()));
+    }
+
+    /**
+     * 處理不支援的 Content-Type，回傳 HTTP 415
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnsupportedMediaTypeException(HttpMediaTypeNotSupportedException e) {
+        log.warn("Unsupported Media Type: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResponse.failed("415", e.getMessage()));
     }
 
     /**
