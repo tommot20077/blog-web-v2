@@ -2,6 +2,7 @@ package dowob.xyz.blog.common.exception;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -138,21 +139,63 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 統一處理常見 Client 400 錯誤，回傳 HTTP 400
-     *
-     * <p>涵蓋：缺少必填參數、型別轉換失敗、JSON 格式錯誤、缺少必填 Header、Bean Validation 失敗。</p>
+     * 處理缺少必填參數，回傳 HTTP 400 與參數名稱
      */
-    @ExceptionHandler({
-            MissingServletRequestParameterException.class,
-            MethodArgumentTypeMismatchException.class,
-            HttpMessageNotReadableException.class,
-            MissingRequestHeaderException.class,
-            ConstraintViolationException.class
-    })
-    public ResponseEntity<ApiResponse<Void>> handleBadRequestException(Exception e) {
-        log.warn("Bad Request: {}", e.getMessage());
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingParameter(MissingServletRequestParameterException e) {
+        log.warn("Missing Parameter: {}", e.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.failed("400", e.getMessage()));
+                .body(ApiResponse.failed("400", "缺少必要參數: " + e.getParameterName()));
+    }
+
+    /**
+     * 處理參數型別轉換失敗，回傳 HTTP 400 與通用安全訊息
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        log.warn("Type Mismatch: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", "參數類型錯誤"));
+    }
+
+    /**
+     * 處理 JSON 格式錯誤，回傳 HTTP 400 與通用安全訊息
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMessageNotReadable(HttpMessageNotReadableException e) {
+        log.warn("Message Not Readable: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", "請求格式錯誤"));
+    }
+
+    /**
+     * 處理缺少必填 Header，回傳 HTTP 400 與 Header 名稱
+     */
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingHeader(MissingRequestHeaderException e) {
+        log.warn("Missing Header: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", "缺少必要標頭: " + e.getHeaderName()));
+    }
+
+    /**
+     * 處理 Bean Validation 失敗，回傳 HTTP 400 與驗證訊息
+     *
+     * <p>violation messages 是我們自訂的驗證訊息（如 {@code @Size}、{@code @NotBlank}），可安全回傳。</p>
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConstraintViolation(ConstraintViolationException e) {
+        log.warn("Constraint Violation: {}", e.getMessage());
+        String message;
+        if (e.getConstraintViolations() != null && !e.getConstraintViolations().isEmpty()) {
+            message = e.getConstraintViolations().stream()
+                    .map(ConstraintViolation::getMessage)
+                    .collect(Collectors.joining(", "));
+        } else {
+            message = "參數驗證失敗";
+        }
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", message));
     }
 
     /**

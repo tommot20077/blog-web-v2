@@ -101,6 +101,15 @@ class TagFacadeImplTest {
             assertThat(result).isEmpty();
             verify(tagNormalizationService, never()).findOrCreate(org.mockito.ArgumentMatchers.anyString());
         }
+
+        @Test
+        @DisplayName("防護：null 傳入，回傳空列表，不拋 NPE")
+        void findOrCreateTags_nullInput_returnsEmptyList() {
+            List<TagInfo> result = tagFacadeImpl.findOrCreateTags(null);
+
+            assertThat(result).isEmpty();
+            verify(tagNormalizationService, never()).findOrCreate(org.mockito.ArgumentMatchers.anyString());
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -158,6 +167,21 @@ class TagFacadeImplTest {
             verify(articleTagRepository, never()).deleteByArticleIdAndTagId(
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
             verify(articleTagRepository).save(articleUuid, newTagId);
+        }
+
+        @Test
+        @DisplayName("防護：tagIds 為 null 時，只清除舊關聯，不拋 NPE")
+        void syncArticleTags_nullTagIds_deletesOldAndDoesNotThrow() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID existingTagId = UUID.randomUUID();
+            Tag existingTag = buildTag(existingTagId, "OldTag", "old-tag");
+            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(existingTag));
+
+            tagFacadeImpl.syncArticleTags(articleUuid, null);
+
+            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, existingTagId);
+            verify(articleTagRepository, never()).save(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
     }
 

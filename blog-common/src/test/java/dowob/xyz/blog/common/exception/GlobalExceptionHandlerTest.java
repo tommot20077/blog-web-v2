@@ -2,6 +2,7 @@ package dowob.xyz.blog.common.exception;
 
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -18,6 +19,7 @@ import org.springframework.validation.BindException;
 import org.springframework.validation.MapBindingResult;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
@@ -28,6 +30,8 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * GlobalExceptionHandler 單元測試
@@ -212,53 +216,60 @@ class GlobalExceptionHandlerTest {
     }
 
     /**
-     * 驗證 MissingServletRequestParameterException 由 handleBadRequestException 處理，回傳 HTTP 400
+     * 驗證 MissingServletRequestParameterException 回傳安全訊息，包含參數名但不洩漏內部細節
      */
     @Test
-    @DisplayName("MissingServletRequestParameterException 應回傳 HTTP 400")
-    void handleMissingServletRequestParam_returns400() {
+    @DisplayName("MissingServletRequestParameterException 應回傳 '缺少必要參數: {name}'，不洩漏內部細節")
+    void handleMissingParam_returnsSanitizedMessage() {
         MissingServletRequestParameterException ex =
                 new MissingServletRequestParameterException("token", "String");
 
-        ResponseEntity<ApiResponse<Void>> response = handler.handleBadRequestException(ex);
+        ResponseEntity<ApiResponse<Void>> response = handler.handleMissingParameter(ex);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getCode()).isEqualTo("400");
+        assertThat(response.getBody().getMessage()).isEqualTo("缺少必要參數: token");
     }
 
     /**
-     * 驗證 MethodArgumentTypeMismatchException 由 handleBadRequestException 處理，回傳 HTTP 400
+     * 驗證 MethodArgumentTypeMismatchException 回傳通用安全訊息，不洩漏 Java 型別資訊
      */
     @Test
-    @DisplayName("MethodArgumentTypeMismatchException 應回傳 HTTP 400")
-    void handleMethodArgumentTypeMismatch_returns400() throws NoSuchMethodException {
+    @DisplayName("MethodArgumentTypeMismatchException 應回傳 '參數類型錯誤'，不洩漏 Java 型別資訊")
+    void handleTypeMismatch_returnsSanitizedMessage() throws NoSuchMethodException {
         Method dummyMethod = String.class.getMethod("charAt", int.class);
         MethodParameter methodParameter = new MethodParameter(dummyMethod, 0);
         MethodArgumentTypeMismatchException ex =
                 new MethodArgumentTypeMismatchException("abc", Long.class, "id", methodParameter, null);
 
-        ResponseEntity<ApiResponse<Void>> response = handler.handleBadRequestException(ex);
+        ResponseEntity<ApiResponse<Void>> response = handler.handleTypeMismatch(ex);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getCode()).isEqualTo("400");
+        assertThat(response.getBody().getMessage()).isEqualTo("參數類型錯誤");
+        assertThat(response.getBody().getMessage()).doesNotContain("Long", "java.lang");
     }
 
     /**
-     * 驗證 HttpMessageNotReadableException 由 handleBadRequestException 處理，回傳 HTTP 400
+     * 驗證 HttpMessageNotReadableException 回傳通用安全訊息，不洩漏 Jackson 反序列化細節
      */
     @Test
-    @DisplayName("HttpMessageNotReadableException 應回傳 HTTP 400")
-    void handleHttpMessageNotReadable_returns400() {
+    @DisplayName("HttpMessageNotReadableException 應回傳 '請求格式錯誤'，不洩漏 Jackson 反序列化細節")
+    void handleMessageNotReadable_returnsSanitizedMessage() {
         HttpMessageNotReadableException ex =
-                new HttpMessageNotReadableException("Malformed JSON", new MockHttpInputMessage(new byte[0]));
+                new HttpMessageNotReadableException(
+                        "JSON parse error: Cannot deserialize value of type `java.time.LocalDateTime`",
+                        new MockHttpInputMessage(new byte[0]));
 
-        ResponseEntity<ApiResponse<Void>> response = handler.handleBadRequestException(ex);
+        ResponseEntity<ApiResponse<Void>> response = handler.handleMessageNotReadable(ex);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getCode()).isEqualTo("400");
+        assertThat(response.getBody().getMessage()).isEqualTo("請求格式錯誤");
+        assertThat(response.getBody().getMessage()).doesNotContain("java.time", "Cannot deserialize");
     }
 
     /**
@@ -278,18 +289,61 @@ class GlobalExceptionHandlerTest {
     }
 
     /**
-     * 驗證 ConstraintViolationException 由 handleBadRequestException 處理，回傳 HTTP 400
+     * 驗證 MissingRequestHeaderException 回傳安全訊息，包含 header 名稱
      */
     @Test
-    @DisplayName("ConstraintViolationException 應回傳 HTTP 400")
-    void handleConstraintViolation_returns400() {
-        ConstraintViolationException ex =
-                new ConstraintViolationException("must not be blank", Set.of());
+    @DisplayName("MissingRequestHeaderException 應回傳 '缺少必要標頭: {headerName}'")
+    void handleMissingHeader_returnsSanitizedMessage() throws NoSuchMethodException {
+        Method dummyMethod = String.class.getMethod("charAt", int.class);
+        MethodParameter methodParameter = new MethodParameter(dummyMethod, 0);
+        MissingRequestHeaderException ex =
+                new MissingRequestHeaderException("X-Request-Id", methodParameter);
 
-        ResponseEntity<ApiResponse<Void>> response = handler.handleBadRequestException(ex);
+        ResponseEntity<ApiResponse<Void>> response = handler.handleMissingHeader(ex);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getCode()).isEqualTo("400");
+        assertThat(response.getBody().getMessage()).isEqualTo("缺少必要標頭: X-Request-Id");
+    }
+
+    /**
+     * 驗證 ConstraintViolationException 有 violations 時，回傳 violation messages（我們自訂的驗證訊息，安全）
+     */
+    @Test
+    @DisplayName("ConstraintViolationException 有 violations 時，應回傳 violation messages")
+    @SuppressWarnings("unchecked")
+    void handleConstraintViolation_withViolations_returnsViolationMessages() {
+        ConstraintViolation<Object> violation1 = mock(ConstraintViolation.class);
+        when(violation1.getMessage()).thenReturn("不能為空");
+        ConstraintViolation<Object> violation2 = mock(ConstraintViolation.class);
+        when(violation2.getMessage()).thenReturn("長度必須在 1 到 100 之間");
+
+        ConstraintViolationException ex = new ConstraintViolationException(Set.of(violation1, violation2));
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleConstraintViolation(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode()).isEqualTo("400");
+        assertThat(response.getBody().getMessage()).contains("不能為空");
+        assertThat(response.getBody().getMessage()).contains("長度必須在 1 到 100 之間");
+    }
+
+    /**
+     * 驗證 ConstraintViolationException 無 violations 時，回傳通用訊息，不洩漏內部細節
+     */
+    @Test
+    @DisplayName("ConstraintViolationException 無 violations 時，應回傳 '參數驗證失敗'")
+    void handleConstraintViolation_withoutViolations_returnsGenericMessage() {
+        ConstraintViolationException ex = new ConstraintViolationException("internal detail", Set.of());
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleConstraintViolation(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode()).isEqualTo("400");
+        assertThat(response.getBody().getMessage()).isEqualTo("參數驗證失敗");
+        assertThat(response.getBody().getMessage()).doesNotContain("internal detail");
     }
 }

@@ -8,6 +8,7 @@ import dowob.xyz.blog.module.tag.service.TagNormalizationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -31,6 +32,9 @@ public class TagFacadeImpl implements TagFacade {
 
     @Override
     public List<TagInfo> findOrCreateTags(List<String> tagNames) {
+        if (tagNames == null || tagNames.isEmpty()) {
+            return Collections.emptyList();
+        }
         return tagNames.stream()
                 .map(tagNormalizationService::findOrCreate)
                 .map(tag -> new TagInfo(tag.getId(), tag.getName(), tag.getSlug()))
@@ -43,6 +47,9 @@ public class TagFacadeImpl implements TagFacade {
         List<Tag> existingTags = articleTagRepository.findTagsByArticleId(articleUuid);
         existingTags.forEach(tag -> articleTagRepository.deleteByArticleIdAndTagId(articleUuid, tag.getId()));
         // 建立新關聯
+        if (tagIds == null) {
+            tagIds = Collections.emptyList();
+        }
         tagIds.forEach(tagId -> articleTagRepository.save(articleUuid, tagId));
     }
 
