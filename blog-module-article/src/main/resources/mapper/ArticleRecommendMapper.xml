@@ -9,7 +9,7 @@
             resultType="dowob.xyz.blog.module.article.model.ArticleSummaryRow">
         SELECT DISTINCT
             a.id,
-            a.uuid,
+            a.uuid::text AS uuid,
             a.title,
             a.slug,
             a.summary,
@@ -18,11 +18,11 @@
             a.like_count AS likeCount,
             a.published_at AS publishedAt
         FROM articles a
-        JOIN article_tags at ON a.id = at.article_id
+        JOIN article_tags at ON a.uuid = at.article_id
         JOIN users u ON a.author_id = u.id
         WHERE at.tag_id IN
             <foreach item="tagId" collection="tagIds" open="(" separator="," close=")">
-                #{tagId}
+                #{tagId}::uuid
             </foreach>
           AND a.uuid != #{excludeUuid}::uuid
           AND a.status = 'PUBLISHED'
@@ -35,7 +35,7 @@
             resultType="dowob.xyz.blog.module.article.model.ArticleSummaryRow">
         SELECT
             a.id,
-            a.uuid,
+            a.uuid::text AS uuid,
             a.title,
             a.slug,
             a.summary,
@@ -52,17 +52,17 @@
           AND a.status = 'PUBLISHED'
     </select>
 
-    <!-- 批次查詢文章標籤名稱 -->
-    <select id="findTagsByArticleIds"
+    <!-- 批次查詢文章標籤名稱（透過 article UUID 關聯） -->
+    <select id="findTagsByArticleUuids"
             resultType="dowob.xyz.blog.module.article.model.ArticleTagRow">
         SELECT
-            at.article_id AS articleId,
+            at.article_id::text AS articleUuid,
             t.name AS tagName
         FROM article_tags at
         JOIN tags t ON at.tag_id = t.id
         WHERE at.article_id IN
-            <foreach item="articleId" collection="articleIds" open="(" separator="," close=")">
-                #{articleId}
+            <foreach item="articleUuid" collection="articleUuids" open="(" separator="," close=")">
+                #{articleUuid}::uuid
             </foreach>
         ORDER BY at.article_id, t.name
     </select>

@@ -78,7 +78,8 @@ public class ArticleFacadeImpl implements ArticleFacade {
         if (articleId == null) {
             return Optional.empty();
         }
-        List<Long> tagIds = recommendMapper.findTagIdsByArticleId(articleId);
+        List<UUID> tagIds = recommendMapper.findTagIdsByArticleUuid(articleUuid)
+                .stream().map(UUID::fromString).collect(Collectors.toList());
         return Optional.of(new ArticleBasicInfo(articleUuid, tagIds));
     }
 
@@ -88,11 +89,12 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * <p>若 tagIds 為空則直接回傳空列表，避免 SQL IN () 語法錯誤。</p>
      */
     @Override
-    public List<ArticleSummaryInfo> getArticlesByTagIds(List<Long> tagIds, UUID excludeUuid, int limit) {
+    public List<ArticleSummaryInfo> getArticlesByTagIds(List<UUID> tagIds, UUID excludeUuid, int limit) {
         if (tagIds == null || tagIds.isEmpty()) {
             return Collections.emptyList();
         }
-        List<ArticleSummaryRow> rows = recommendMapper.findByTagIds(tagIds, excludeUuid, limit);
+        List<String> tagIdStrings = tagIds.stream().map(UUID::toString).collect(Collectors.toList());
+        List<ArticleSummaryRow> rows = recommendMapper.findByTagIds(tagIdStrings, excludeUuid, limit);
         return assembleSummaryInfoList(rows);
     }
 
@@ -191,23 +193,24 @@ public class ArticleFacadeImpl implements ArticleFacade {
             return Collections.emptyList();
         }
 
-        List<Long> articleIds = rows.stream().map(ArticleSummaryRow::getId).toList();
-        List<ArticleTagRow> tagRows = recommendMapper.findTagsByArticleIds(articleIds);
+        List<String> articleUuidStrings = rows.stream()
+                .map(ArticleSummaryRow::getUuid).collect(Collectors.toList());
+        List<ArticleTagRow> tagRows = recommendMapper.findTagsByArticleUuids(articleUuidStrings);
 
-        Map<Long, List<String>> tagNamesByArticleId = tagRows.stream()
+        Map<String, List<String>> tagNamesByArticleUuid = tagRows.stream()
                 .collect(Collectors.groupingBy(
-                        ArticleTagRow::getArticleId,
+                        ArticleTagRow::getArticleUuid,
                         Collectors.mapping(ArticleTagRow::getTagName, Collectors.toList())
                 ));
 
         return rows.stream()
                 .map(row -> new ArticleSummaryInfo(
-                        row.getUuid(),
+                        UUID.fromString(row.getUuid()),
                         row.getTitle(),
                         row.getSlug(),
                         row.getSummary(),
                         row.getAuthorNickname(),
-                        tagNamesByArticleId.getOrDefault(row.getId(), Collections.emptyList()),
+                        tagNamesByArticleUuid.getOrDefault(row.getUuid(), Collections.emptyList()),
                         row.getViewCount(),
                         row.getLikeCount(),
                         row.getPublishedAt()

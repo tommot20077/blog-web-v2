@@ -35,26 +35,26 @@ public interface ArticleRecommendMapper {
     Long findPublishedIdByUuid(@Param("uuid") UUID uuid);
 
     /**
-     * 查詢已發布文章的所有標籤 ID
+     * 查詢已發布文章的所有標籤 ID（UUID）
      *
-     * @param articleId 文章 DB 主鍵
-     * @return 標籤 ID 列表
+     * @param articleUuid 文章公開 UUID（article_tags.article_id 引用 articles.uuid）
+     * @return 標籤 UUID 列表
      */
-    @Select("SELECT tag_id FROM article_tags WHERE article_id = #{articleId} ORDER BY tag_id")
-    List<Long> findTagIdsByArticleId(@Param("articleId") Long articleId);
+    @Select("SELECT tag_id::text FROM article_tags WHERE article_id = #{articleUuid}::uuid ORDER BY tag_id")
+    List<String> findTagIdsByArticleUuid(@Param("articleUuid") UUID articleUuid);
 
     /**
      * 查詢包含指定標籤的已發布文章（依瀏覽次數降冪）
      *
      * <p>使用 XML mapper 處理 IN 子句動態 SQL。</p>
      *
-     * @param tagIds      標籤 ID 列表
+     * @param tagIds      標籤 UUID 列表
      * @param excludeUuid 排除的文章 UUID
      * @param limit       最多回傳筆數
      * @return 文章摘要原始資料列表
      */
     List<ArticleSummaryRow> findByTagIds(
-            @Param("tagIds") List<Long> tagIds,
+            @Param("tagIds") List<String> tagIds,
             @Param("excludeUuid") UUID excludeUuid,
             @Param("limit") int limit);
 
@@ -109,10 +109,10 @@ public interface ArticleRecommendMapper {
     /**
      * 批次查詢文章的標籤名稱（用於組裝 ArticleSummaryInfo.tagNames）
      *
-     * <p>使用 XML mapper 處理 IN 子句動態 SQL。</p>
+     * <p>使用 XML mapper 處理 IN 子句動態 SQL。透過 article UUID 關聯。</p>
      *
-     * @param articleIds 文章 DB 主鍵列表
+     * @param articleUuids 文章 UUID 列表
      * @return 文章標籤對應資料列表
      */
-    List<ArticleTagRow> findTagsByArticleIds(@Param("articleIds") List<Long> articleIds);
+    List<ArticleTagRow> findTagsByArticleUuids(@Param("articleUuids") List<String> articleUuids);
 }
