@@ -46,4 +46,15 @@ public class AdminArticleController {
             @RequestParam(defaultValue = "10") int pageSize) {
         return ApiResponse.success(articleService.getPendingArticles(pageNum, pageSize));
     }
+
+    /**
+     * 取得待審文章總筆數（僅 ADMIN）
+     *
+     * @return 待審文章總筆數
+     */
+    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @GetMapping("/pending/count")
+    public ApiResponse<Long> getPendingArticleCount() {
+        return ApiResponse.success(articleService.getPendingArticleCount());
+    }
 }

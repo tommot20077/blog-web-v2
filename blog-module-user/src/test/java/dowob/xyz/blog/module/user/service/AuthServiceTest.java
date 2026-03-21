@@ -17,6 +17,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -44,6 +46,7 @@ import static org.mockito.Mockito.*;
  * @version 3.0
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class AuthServiceTest {
 
     /** Mock：用戶資料存取 */
@@ -806,6 +809,323 @@ class AuthServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+    }
+
+    // =========================================================================
+    // login 邊界：failCountStr 存在但未達上限（< 5）
+    // =========================================================================
+
+    /**
+     * 驗證：login 失敗計數器值存在但未達鎖定上限（例如 4），應繼續密碼驗證而非直接拋出 ACCOUNT_LOCKED。
+     */
+    @Test
+    @DisplayName("login → failCountStr 存在但 < 5 → 應繼續密碼驗證，不拋出 ACCOUNT_LOCKED")
+    void login_withFailCountBelowMax_shouldNotLock() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn("4");
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
+        when(valueOperations.increment(anyString())).thenReturn(5L);
+
+        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.USER_PASSWORD_ERROR.getCode()));
+    }
+
+    // =========================================================================
+    // login 邊界：首次密碼錯誤應設定 TTL；非首次不設
+    // =========================================================================
+
+    /**
+     * 驗證：首次密碼錯誤（increment 回傳 1L）應呼叫 expire 設定鎖定 TTL。
+     */
+    @Test
+    @DisplayName("login → 首次密碼錯誤（count == 1） → 應呼叫 expire 設定 TTL")
+    void login_firstPasswordFailure_shouldSetExpire() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
+        when(valueOperations.increment(anyString())).thenReturn(1L);
+
+        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
+                .isInstanceOf(BusinessException.class);
+
+        verify(redisTemplate).expire(contains("login:fail:"), eq(15L), eq(java.util.concurrent.TimeUnit.MINUTES));
+    }
+
+    /**
+     * 驗證：非首次密碼錯誤（increment 回傳 > 1L）不應呼叫 expire。
+     */
+    @Test
+    @DisplayName("login → 非首次密碼錯誤（count > 1） → 不應呼叫 expire")
+    void login_subsequentPasswordFailure_shouldNotSetExpire() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
+        when(valueOperations.increment(anyString())).thenReturn(3L);
+
+        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
+                .isInstanceOf(BusinessException.class);
+
+        verify(redisTemplate, never()).expire(contains("login:fail:"), anyLong(), any());
+    }
+
+    /**
+     * 驗證：increment 回傳 null 時不應呼叫 expire，且拋出 USER_PASSWORD_ERROR。
+     */
+    @Test
+    @DisplayName("login → increment 回傳 null → 不應呼叫 expire，拋出 USER_PASSWORD_ERROR")
+    void login_incrementReturnsNull_shouldNotSetExpire() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
+        when(valueOperations.increment(anyString())).thenReturn(null);
+
+        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.USER_PASSWORD_ERROR.getCode()));
+
+        verify(redisTemplate, never()).expire(contains("login:fail:"), anyLong(), any());
+    }
+
+    // =========================================================================
+    // login 邊界：deviceCount 為 null 時不移除最舊 Token
+    // =========================================================================
+
+    /**
+     * 驗證：zCard 回傳 null 時，不應呼叫 popMin 移除最舊 Token。
+     */
+    @Test
+    @DisplayName("login → zCard 回傳 null → 不應呼叫 popMin")
+    void login_zCardReturnsNull_shouldNotEvict() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(null);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+
+        LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
+        verify(zSetOps, never()).popMin(anyString());
+    }
+
+    // =========================================================================
+    // logout 邊界：null 與 blank refreshToken 應刪除整個 ZSet Key
+    // =========================================================================
+
+    /**
+     * 驗證：logout 傳入 null refreshToken 應刪除整個 ZSet Key（登出所有裝置）。
+     */
+    @Test
+    @DisplayName("logout → refreshToken 為 null → 應刪除整個 ZSet Key")
+    void logout_withNullRefreshToken_shouldDeleteEntireKey() {
+        authService.logout(1L, null);
+
+        verify(redisTemplate).delete(contains("user:refresh:"));
+        verify(redisTemplate, never()).opsForZSet();
+    }
+
+    /**
+     * 驗證：logout 傳入空白字串 refreshToken 應刪除整個 ZSet Key（登出所有裝置）。
+     */
+    @Test
+    @DisplayName("logout → refreshToken 為空白字串 → 應刪除整個 ZSet Key")
+    void logout_withBlankRefreshToken_shouldDeleteEntireKey() {
+        authService.logout(1L, "   ");
+
+        verify(redisTemplate).delete(contains("user:refresh:"));
+        verify(redisTemplate, never()).opsForZSet();
+    }
+
+    // =========================================================================
+    // verifyEmail 邊界：token 有效但 user 已不存在
+    // =========================================================================
+
+    /**
+     * 驗證：verifyEmail Token 有效但對應用戶不存在，應拋出 USER_NOT_FOUND BusinessException。
+     */
+    @Test
+    @DisplayName("verifyEmail → Token 有效但用戶不存在 → 應拋出 USER_NOT_FOUND BusinessException")
+    void verifyEmail_withValidTokenButUserNotFound_shouldThrowUserNotFound() {
+        String tokenStr = "orphan-email-token";
+        VerificationToken emailToken = buildEmailVerificationToken(tokenStr, LocalDateTime.now().plusHours(24));
+
+        when(verificationTokenRepository.findByTokenAndType(tokenStr, "EMAIL_VERIFICATION"))
+                .thenReturn(Optional.of(emailToken));
+        when(userRepository.findById(1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.verifyEmail(tokenStr))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.USER_NOT_FOUND.getCode()));
+    }
+
+    // =========================================================================
+    // forgotPassword 邊界：Redis increment 回傳 null（minCount / dayCount）
+    // =========================================================================
+
+    /**
+     * 驗證：forgotPassword 的 minCount increment 回傳 null 時，不設 TTL 但繼續執行。
+     */
+    @Test
+    @DisplayName("forgotPassword → minCount increment 回傳 null → 不設 TTL，靜默繼續執行")
+    void forgotPassword_minCountIncrementNull_shouldNotSetTtlAndProceed() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString())).thenReturn(null);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        authService.forgotPassword(TEST_EMAIL);
+
+        verify(redisTemplate, never()).expire(contains("rate:forgot-pwd:min:"), anyLong(), any());
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    /**
+     * 驗證：forgotPassword 的 dayCount increment 回傳 null 時，不設 TTL 且繼續執行（信箱存在則發送）。
+     */
+    @Test
+    @DisplayName("forgotPassword → dayCount increment 回傳 null → 不設 TTL，繼續執行")
+    void forgotPassword_dayCountIncrementNull_shouldNotSetDayTtlAndProceed() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString()))
+                .thenReturn(1L)   // minCount = 1
+                .thenReturn(null); // dayCount = null
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        authService.forgotPassword(TEST_EMAIL);
+
+        verify(redisTemplate, never()).expire(contains("rate:forgot-pwd:day:"), anyLong(), any());
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    /**
+     * 驗證：forgotPassword 每日計數恰好達到上限（5 次）時，應正常執行不拋出 RATE_LIMIT_EXCEEDED。
+     */
+    @Test
+    @DisplayName("forgotPassword → dayCount 恰好為 5 → 仍應正常執行，不拋出 RATE_LIMIT_EXCEEDED")
+    void forgotPassword_dayCountExactlyAtLimit_shouldProceed() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString()))
+                .thenReturn(1L)  // minCount = 1
+                .thenReturn(5L); // dayCount = 5 (not > 5)
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        authService.forgotPassword(TEST_EMAIL);
+
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    // =========================================================================
+    // resendVerification 邊界：Redis increment 回傳 null 及每日超限
+    // =========================================================================
+
+    /**
+     * 驗證：resendVerification 的 minCount increment 回傳 null 時，不設 TTL 但繼續執行。
+     */
+    @Test
+    @DisplayName("resendVerification → minCount increment 回傳 null → 不設 TTL，靜默繼續執行")
+    void resendVerification_minCountIncrementNull_shouldNotSetTtlAndProceed() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString())).thenReturn(null);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        authService.resendVerification(TEST_EMAIL);
+
+        verify(redisTemplate, never()).expire(contains("rate:resend-verify:min:"), anyLong(), any());
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    /**
+     * 驗證：resendVerification 的 dayCount increment 回傳 null 時，不設 TTL 且繼續執行。
+     */
+    @Test
+    @DisplayName("resendVerification → dayCount increment 回傳 null → 不設 TTL，繼續執行")
+    void resendVerification_dayCountIncrementNull_shouldNotSetDayTtlAndProceed() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString()))
+                .thenReturn(1L)   // minCount = 1
+                .thenReturn(null); // dayCount = null
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        authService.resendVerification(TEST_EMAIL);
+
+        verify(redisTemplate, never()).expire(contains("rate:resend-verify:day:"), anyLong(), any());
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    /**
+     * 驗證：resendVerification 每日計數超過 5 次，應拋出 RATE_LIMIT_EXCEEDED。
+     */
+    @Test
+    @DisplayName("resendVerification → 每日超過限制（dayCount > 5） → 應拋出 RATE_LIMIT_EXCEEDED")
+    void resendVerification_exceedDailyLimit_shouldThrow() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString()))
+                .thenReturn(1L)  // minCount = 1
+                .thenReturn(6L); // dayCount = 6
+
+        assertThatThrownBy(() -> authService.resendVerification(TEST_EMAIL))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    /**
+     * 驗證：resendVerification 每日計數恰好達到上限（5 次）時，應正常執行不拋出 RATE_LIMIT_EXCEEDED。
+     */
+    @Test
+    @DisplayName("resendVerification → dayCount 恰好為 5 → 仍應正常執行，不拋出 RATE_LIMIT_EXCEEDED")
+    void resendVerification_dayCountExactlyAtLimit_shouldProceed() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString()))
+                .thenReturn(1L)  // minCount = 1
+                .thenReturn(5L); // dayCount = 5 (not > 5)
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        authService.resendVerification(TEST_EMAIL);
+
+        verify(verificationTokenRepository, never()).save(any());
+    }
+
+    // =========================================================================
+    // resetPassword 邊界：token 有效但 user 已不存在
+    // =========================================================================
+
+    /**
+     * 驗證：resetPassword Token 有效但對應用戶不存在，應拋出 USER_NOT_FOUND BusinessException。
+     */
+    @Test
+    @DisplayName("resetPassword → Token 有效但用戶不存在 → 應拋出 USER_NOT_FOUND BusinessException")
+    void resetPassword_withValidTokenButUserNotFound_shouldThrowUserNotFound() {
+        String tokenStr = "orphan-reset-token";
+        VerificationToken resetToken = buildResetToken(tokenStr, LocalDateTime.now().plusMinutes(10));
+
+        when(verificationTokenRepository.findByTokenAndType(tokenStr, "PASSWORD_RESET"))
+                .thenReturn(Optional.of(resetToken));
+        when(userRepository.findById(1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.resetPassword(tokenStr, "newPassword"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.USER_NOT_FOUND.getCode()));
     }
 
     // =========================================================================

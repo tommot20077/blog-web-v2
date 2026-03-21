@@ -21,6 +21,8 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.HashOperations;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -31,6 +33,7 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -435,6 +438,342 @@ class AuthControllerTest {
         request.setNewPassword("abc");
 
         mockMvc.perform(post("/api/v1/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    // =========================================================================
+    // POST /api/v1/auth/register 補充測試
+    // =========================================================================
+
+    /**
+     * 驗證：信箱格式不正確時應回傳驗證錯誤。
+     */
+    @Test
+    @DisplayName("POST /register → email 格式錯誤 → 應回傳驗證錯誤")
+    void register_invalidEmailFormat_shouldReturnValidationError() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail("not-an-email");
+        request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
+        request.setNickname(TEST_NICKNAME);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 驗證：暱稱重複時業務例外應映射為對應的錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /register → 暱稱重複 → 應回傳 NICKNAME_DUPLICATED 錯誤碼")
+    void register_duplicateNickname_shouldReturnNicknameDuplicatedError() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
+        request.setNickname(TEST_NICKNAME);
+
+        doThrow(new BusinessException(UserErrorCode.NICKNAME_DUPLICATED))
+                .when(authService).register(anyString(), anyString(), anyString(), anyString());
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
+    }
+
+    /**
+     * 驗證：用戶名重複時業務例外應映射為對應的錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /register → 用戶名重複 → 應回傳 USERNAME_DUPLICATED 錯誤碼")
+    void register_duplicateUsername_shouldReturnUsernameDuplicatedError() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
+        request.setNickname(TEST_NICKNAME);
+
+        doThrow(new BusinessException(UserErrorCode.USERNAME_DUPLICATED))
+                .when(authService).register(anyString(), anyString(), anyString(), anyString());
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.USERNAME_DUPLICATED.getCode()));
+    }
+
+    // =========================================================================
+    // POST /api/v1/auth/login 補充測試
+    // =========================================================================
+
+    /**
+     * 驗證：identifier 為空時應回傳驗證錯誤。
+     */
+    @Test
+    @DisplayName("POST /login → 缺少 identifier → 應回傳驗證錯誤")
+    void login_missingIdentifier_shouldReturnValidationError() throws Exception {
+        LoginRequest request = new LoginRequest();
+        request.setPassword(TEST_PASSWORD);
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 驗證：用戶不存在時應回傳 USER_NOT_FOUND 錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /login → 用戶不存在 → 應回傳 USER_NOT_FOUND 錯誤碼")
+    void login_userNotFound_shouldReturnUserNotFoundError() throws Exception {
+        LoginRequest request = new LoginRequest();
+        request.setIdentifier("unknown@example.com");
+        request.setPassword(TEST_PASSWORD);
+
+        when(authService.login(anyString(), anyString()))
+                .thenThrow(new BusinessException(UserErrorCode.USER_NOT_FOUND));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.USER_NOT_FOUND.getCode()));
+    }
+
+    /**
+     * 驗證：電子信箱尚未驗證時應回傳 EMAIL_NOT_VERIFIED 錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /login → 電子信箱未驗證 → 應回傳 EMAIL_NOT_VERIFIED 錯誤碼")
+    void login_emailNotVerified_shouldReturnEmailNotVerifiedError() throws Exception {
+        LoginRequest request = new LoginRequest();
+        request.setIdentifier(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+
+        when(authService.login(anyString(), anyString()))
+                .thenThrow(new BusinessException(UserErrorCode.EMAIL_NOT_VERIFIED));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.EMAIL_NOT_VERIFIED.getCode()));
+    }
+
+    // =========================================================================
+    // POST /api/v1/auth/refresh 補充測試
+    // =========================================================================
+
+    /**
+     * 驗證：Refresh Token 存在但不在 Redis ZSet 中（已撤銷）應回傳 TOKEN_INVALID 錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /refresh → Token 不在 Redis ZSet 中（已撤銷）→ 應回傳 TOKEN_INVALID 錯誤碼")
+    void refresh_tokenNotInRedis_shouldReturnTokenInvalid() throws Exception {
+        @SuppressWarnings("unchecked")
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
+        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.score(anyString(), anyString())).thenReturn(null);
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new Cookie("refreshToken", "valid.refresh.token")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
+    }
+
+    /**
+     * 驗證：帳號已被停權時 refresh 應回傳 ACCOUNT_SUSPENDED 錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /refresh → 帳號已停權 → 應回傳 ACCOUNT_SUSPENDED 錯誤碼")
+    void refresh_accountSuspended_shouldReturnAccountSuspendedError() throws Exception {
+        @SuppressWarnings("unchecked")
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
+        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get(anyString(), eq("version"))).thenReturn("v1");
+        when(hashOps.get(anyString(), eq("status"))).thenReturn("SUSPENDED");
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new Cookie("refreshToken", "valid.refresh.token")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.ACCOUNT_SUSPENDED.getCode()));
+    }
+
+    /**
+     * 驗證：Token 有效且帳號正常時 refresh 應回傳新的 Access Token（role 與 version 皆有值）。
+     */
+    @Test
+    @DisplayName("POST /refresh → Token 有效且帳號正常（role/version 皆存在）→ 應回傳新 Access Token")
+    void refresh_validToken_shouldReturnNewAccessToken() throws Exception {
+        @SuppressWarnings("unchecked")
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
+        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get(anyString(), eq("version"))).thenReturn("v1");
+        when(hashOps.get(anyString(), eq("status"))).thenReturn("ACTIVE");
+        when(hashOps.get(anyString(), eq("role"))).thenReturn("USER");
+        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString()))
+                .thenReturn("new.access.token");
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new Cookie("refreshToken", "valid.refresh.token")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.accessToken").value("new.access.token"));
+    }
+
+    /**
+     * 驗證：Token 有效但 Redis 中 role 與 version 皆為 null 時應使用預設值（"USER"、"v1"）並正常回傳。
+     */
+    @Test
+    @DisplayName("POST /refresh → role/version 皆為 null → 應使用預設值並回傳新 Access Token")
+    void refresh_nullRoleAndVersion_shouldUseDefaultsAndReturnNewAccessToken() throws Exception {
+        @SuppressWarnings("unchecked")
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
+        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get(anyString(), eq("version"))).thenReturn(null);
+        when(hashOps.get(anyString(), eq("status"))).thenReturn("ACTIVE");
+        when(hashOps.get(anyString(), eq("role"))).thenReturn(null);
+        when(jwtService.generateAccessToken(eq(1L), eq("USER"), eq("v1")))
+                .thenReturn("new.access.token.defaults");
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new Cookie("refreshToken", "valid.refresh.token")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.accessToken").value("new.access.token.defaults"));
+    }
+
+    // =========================================================================
+    // POST /api/v1/auth/logout 補充測試
+    // =========================================================================
+
+    /**
+     * 驗證：未認證用戶呼叫登出時，因 /api/v1/auth/** 為 permitAll，
+     * 應正常執行並回傳 200（authService.logout 接收 null userId）。
+     */
+    @Test
+    @DisplayName("POST /logout → 未認證用戶（auth/** 為 permitAll）→ 應回傳 200")
+    void logout_unauthenticated_shouldReturn200BecauseAuthIsPermitAll() throws Exception {
+        doNothing().when(authService).logout(any(), any());
+
+        mockMvc.perform(post("/api/v1/auth/logout"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    // =========================================================================
+    // GET /api/v1/auth/verify-email 補充測試
+    // =========================================================================
+
+    /**
+     * 驗證：缺少 token 參數時，GlobalExceptionHandler 的 handleBadRequestException 處理
+     * MissingServletRequestParameterException，回傳 HTTP 400。
+     */
+    @Test
+    @DisplayName("GET /verify-email → 缺少 token 參數 → GlobalExceptionHandler 回傳 400")
+    void verifyEmail_missingToken_shouldReturn400() throws Exception {
+        mockMvc.perform(get("/api/v1/auth/verify-email"))
+                .andExpect(status().isBadRequest());
+    }
+
+    // =========================================================================
+    // POST /api/v1/auth/resend-verification 補充測試
+    // =========================================================================
+
+    /**
+     * 驗證：信箱格式不正確時應回傳驗證錯誤。
+     */
+    @Test
+    @DisplayName("POST /resend-verification → 無效信箱格式 → 應回傳驗證錯誤")
+    void resendVerification_invalidEmailFormat_shouldReturnValidationError() throws Exception {
+        ForgotPasswordRequest request = new ForgotPasswordRequest();
+        request.setEmail("not-valid-email");
+
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 驗證：缺少 email 欄位時應回傳驗證錯誤。
+     */
+    @Test
+    @DisplayName("POST /resend-verification → 缺少 email → 應回傳驗證錯誤")
+    void resendVerification_missingEmail_shouldReturnValidationError() throws Exception {
+        ForgotPasswordRequest request = new ForgotPasswordRequest();
+
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    // =========================================================================
+    // POST /api/v1/auth/reset-password 補充測試
+    // =========================================================================
+
+    /**
+     * 驗證：缺少 token 欄位時應回傳驗證錯誤。
+     */
+    @Test
+    @DisplayName("POST /reset-password → 缺少 token → 應回傳驗證錯誤")
+    void resetPassword_missingToken_shouldReturnValidationError() throws Exception {
+        ResetPasswordRequest request = new ResetPasswordRequest();
+        request.setNewPassword("newPassword123");
+
+        mockMvc.perform(post("/api/v1/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 驗證：缺少 forgot-password email 欄位時應回傳驗證錯誤。
+     */
+    @Test
+    @DisplayName("POST /forgot-password → 缺少 email → 應回傳驗證錯誤")
+    void forgotPassword_missingEmail_shouldReturnValidationError() throws Exception {
+        ForgotPasswordRequest request = new ForgotPasswordRequest();
+
+        mockMvc.perform(post("/api/v1/auth/forgot-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())

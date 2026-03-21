@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleTestApplication;
@@ -123,6 +124,12 @@ class ArticleControllerIT {
      */
     @MockitoBean
     private RabbitTemplate rabbitTemplate;
+
+    /**
+     * Mock TagFacade（避免依賴 Tag Module）
+     */
+    @MockitoBean
+    private TagFacade tagFacade;
 
     /**
      * Mock UserFacade（避免依賴 User Module）

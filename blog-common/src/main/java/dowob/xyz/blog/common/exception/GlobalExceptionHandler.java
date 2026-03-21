@@ -2,14 +2,22 @@ package dowob.xyz.blog.common.exception;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.stream.Collectors;
@@ -128,6 +136,86 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(e.getStatusCode())
                 .body(ApiResponse.failed(String.valueOf(e.getStatusCode().value()), e.getReason()));
+    }
+
+    /**
+     * 處理缺少必填參數，回傳 HTTP 400 與參數名稱
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingParameter(MissingServletRequestParameterException e) {
+        log.warn("Missing Parameter: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", "缺少必要參數: " + e.getParameterName()));
+    }
+
+    /**
+     * 處理參數型別轉換失敗，回傳 HTTP 400 與通用安全訊息
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        log.warn("Type Mismatch: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", "參數類型錯誤"));
+    }
+
+    /**
+     * 處理 JSON 格式錯誤，回傳 HTTP 400 與通用安全訊息
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMessageNotReadable(HttpMessageNotReadableException e) {
+        log.warn("Message Not Readable: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", "請求格式錯誤"));
+    }
+
+    /**
+     * 處理缺少必填 Header，回傳 HTTP 400 與 Header 名稱
+     */
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissingHeader(MissingRequestHeaderException e) {
+        log.warn("Missing Header: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", "缺少必要標頭: " + e.getHeaderName()));
+    }
+
+    /**
+     * 處理 Bean Validation 失敗，回傳 HTTP 400 與驗證訊息
+     *
+     * <p>violation messages 是我們自訂的驗證訊息（如 {@code @Size}、{@code @NotBlank}），可安全回傳。</p>
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConstraintViolation(ConstraintViolationException e) {
+        log.warn("Constraint Violation: {}", e.getMessage());
+        String message;
+        if (e.getConstraintViolations() != null && !e.getConstraintViolations().isEmpty()) {
+            message = e.getConstraintViolations().stream()
+                    .map(ConstraintViolation::getMessage)
+                    .collect(Collectors.joining(", "));
+        } else {
+            message = "參數驗證失敗";
+        }
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed("400", message));
+    }
+
+    /**
+     * 處理不支援的 HTTP Method，回傳 HTTP 405
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotAllowedException(HttpRequestMethodNotSupportedException e) {
+        log.warn("Method Not Allowed: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(ApiResponse.failed("405", e.getMessage()));
+    }
+
+    /**
+     * 處理不支援的 Content-Type，回傳 HTTP 415
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnsupportedMediaTypeException(HttpMediaTypeNotSupportedException e) {
+        log.warn("Unsupported Media Type: {}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResponse.failed("415", e.getMessage()));
     }
 
     /**

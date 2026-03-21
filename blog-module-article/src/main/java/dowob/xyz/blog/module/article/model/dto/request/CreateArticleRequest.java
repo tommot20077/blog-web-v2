@@ -45,4 +45,14 @@ public class CreateArticleRequest {
      * 文章分類 UUID 列表（可選）
      */
     private List<UUID> categoryIds;
+
+    /**
+     * 封面圖片 URL（可選）
+     */
+    private String coverImageUrl;
+
+    /**
+     * 標籤名稱列表（可選，會自動正規化並查找或建立標籤）
+     */
+    private List<String> tagNames;
 }

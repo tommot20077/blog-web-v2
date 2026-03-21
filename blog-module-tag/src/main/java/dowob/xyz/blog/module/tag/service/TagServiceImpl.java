@@ -10,20 +10,15 @@ import dowob.xyz.blog.module.tag.repository.ArticleTagRepository;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
 import dowob.xyz.blog.module.tag.repository.UserTagFollowRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.Limit;
 import org.springframework.data.redis.connection.RedisZSetCommands;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -74,11 +69,11 @@ public class TagServiceImpl implements TagService {
 
     @Override
     public List<String> suggest(String prefix, int limit) {
-        org.springframework.data.domain.Range<String> range = org.springframework.data.domain.Range.of(
-                org.springframework.data.domain.Range.Bound.inclusive(prefix),
-                org.springframework.data.domain.Range.Bound.inclusive(prefix + "\uffff")
+        Range<String> range = Range.of(
+                Range.Bound.inclusive(prefix),
+                Range.Bound.inclusive(prefix + "\uffff")
         );
-        org.springframework.data.redis.connection.Limit redisLimit = org.springframework.data.redis.connection.Limit.limit().count(limit);
+        Limit redisLimit = Limit.limit().count(limit);
         Set<String> results = stringRedisTemplate.opsForZSet().rangeByLex(RedisKeyConstant.TAG_AUTOCOMPLETE_KEY, range, redisLimit);
         if (results == null) {
             return List.of();
@@ -100,13 +95,13 @@ public class TagServiceImpl implements TagService {
                         UUID id = UUID.fromString(tuple.getValue());
                         return tagRepository.findById(id).orElse(null);
                     })
-                    .filter(t -> t != null)
+                    .filter(Objects::nonNull)
                     .collect(Collectors.toList());
         }
 
         List<Tag> tags = tagRepository.findTop20ByOrderByUsageCountDesc();
         tags.forEach(tag -> stringRedisTemplate.opsForZSet()
-                .add(RedisKeyConstant.TAG_HOT_KEY, tag.getId().toString(), (double) tag.getUsageCount()));
+                .add(RedisKeyConstant.TAG_HOT_KEY, tag.getId().toString(), tag.getUsageCount()));
         stringRedisTemplate.expire(RedisKeyConstant.TAG_HOT_KEY, HOT_TAGS_TTL_HOURS, TimeUnit.HOURS);
         return tags.subList(0, Math.min(limit, tags.size()));
     }

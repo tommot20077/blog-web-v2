@@ -33,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -296,6 +297,216 @@ class TagServiceTest {
         tagService.adminDeleteTag(id);
 
         verify(userTagFollowRepository).deleteByTagId(id);
+        verify(tagRepository).deleteById(id);
+    }
+
+    // ─── suggest ────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("suggest: Redis 回傳 null 時應回傳空列表")
+    @SuppressWarnings("unchecked")
+    void suggest_redisReturnsNull_returnsEmptyList() {
+        when(zSetOps.rangeByLex(anyString(), any(Range.class), any(Limit.class))).thenReturn(null);
+
+        List<String> result = tagService.suggest("ja", 10);
+
+        assertThat(result).isEmpty();
+    }
+
+    // ─── getHotTags ─────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getHotTags: cache 為空 Set（非 null）時應從 DB 查詢")
+    @SuppressWarnings("unchecked")
+    void getHotTags_cacheEmptySet_queriesDB() {
+        when(zSetOps.reverseRangeWithScores(anyString(), anyLong(), anyLong()))
+                .thenReturn(java.util.Collections.emptySet());
+
+        Tag tag = new Tag();
+        tag.setId(UUID.randomUUID());
+        tag.setName("java");
+        tag.setSlug("java");
+        tag.setUsageCount(5);
+        when(tagRepository.findTop20ByOrderByUsageCountDesc()).thenReturn(List.of(tag));
+
+        List<Tag> result = tagService.getHotTags(10);
+
+        assertThat(result).hasSize(1);
+        verify(tagRepository).findTop20ByOrderByUsageCountDesc();
+    }
+
+    @Test
+    @DisplayName("getHotTags: cache 中的 UUID 不存在於 DB 時應被過濾掉")
+    @SuppressWarnings("unchecked")
+    void getHotTags_cacheHitOrphanedUuid_filteredOut() {
+        UUID orphanId = UUID.randomUUID();
+        ZSetOperations.TypedTuple<String> tuple = new ZSetOperations.TypedTuple<String>() {
+            public String getValue() { return orphanId.toString(); }
+            public Double getScore() { return 3.0; }
+            public int compareTo(ZSetOperations.TypedTuple<String> o) { return 0; }
+        };
+        when(zSetOps.reverseRangeWithScores(eq("tag:hot"), eq(0L), eq(9L)))
+                .thenReturn(Set.of(tuple));
+        when(tagRepository.findById(orphanId)).thenReturn(Optional.empty());
+
+        List<Tag> result = tagService.getHotTags(10);
+
+        assertThat(result).isEmpty();
+    }
+
+    // ─── getTagDetail ────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getTagDetail: cache 回傳 null 時應從 DB 查詢")
+    @SuppressWarnings("unchecked")
+    void getTagDetail_cacheReturnsNull_queriesDB() {
+        when(hashOps.entries(anyString())).thenReturn(null);
+
+        Tag tag = new Tag();
+        tag.setId(UUID.randomUUID());
+        tag.setName("spring");
+        tag.setSlug("spring");
+        tag.setUsageCount(7);
+        when(tagRepository.findBySlug("spring")).thenReturn(Optional.of(tag));
+
+        TagDetailResponse result = tagService.getTagDetail("spring");
+
+        assertThat(result.getName()).isEqualTo("spring");
+        verify(tagRepository).findBySlug("spring");
+    }
+
+    @Test
+    @DisplayName("getTagDetail: cache 中 usageCount 欄位缺失時預設為 0")
+    @SuppressWarnings("unchecked")
+    void getTagDetail_cacheHitMissingUsageCount_defaultsToZero() {
+        UUID id = UUID.randomUUID();
+        java.util.HashMap<Object, Object> cacheData = new java.util.HashMap<>();
+        cacheData.put("id", id.toString());
+        cacheData.put("name", "kotlin");
+        cacheData.put("slug", "kotlin");
+        // usageCount intentionally omitted
+        when(hashOps.entries("tag:kotlin")).thenReturn(cacheData);
+
+        TagDetailResponse result = tagService.getTagDetail("kotlin");
+
+        assertThat(result.getUsageCount()).isEqualTo(0);
+        verify(tagRepository, never()).findBySlug(anyString());
+    }
+
+    @Test
+    @DisplayName("getTagDetail: cache miss 時 tag 欄位 null 值應存為空字串")
+    @SuppressWarnings("unchecked")
+    void getTagDetail_cacheMiss_nullFieldsStoredAsEmptyString() {
+        when(hashOps.entries(anyString())).thenReturn(Map.of());
+
+        Tag tag = new Tag();
+        tag.setId(UUID.randomUUID());
+        tag.setName("rust");
+        tag.setSlug("rust");
+        tag.setColor(null);
+        tag.setIcon(null);
+        tag.setDescription(null);
+        tag.setUsageCount(0);
+        when(tagRepository.findBySlug("rust")).thenReturn(Optional.of(tag));
+
+        tagService.getTagDetail("rust");
+
+        verify(hashOps).putAll(eq("tag:rust"), argThat(map -> {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, String> m = (java.util.Map<String, String>) map;
+            return "".equals(m.get("color")) && "".equals(m.get("icon")) && "".equals(m.get("description"));
+        }));
+    }
+
+    // ─── adminUpdateTag ─────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("adminUpdateTag: tag 不存在時應拋出 TAG_NOT_FOUND")
+    void adminUpdateTag_tagNotFound_throwsBusinessException() {
+        UUID id = UUID.randomUUID();
+        when(tagRepository.findById(id)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> tagService.adminUpdateTag(id, new dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(TagErrorCode.TAG_NOT_FOUND.getMessage());
+    }
+
+    @Test
+    @DisplayName("adminUpdateTag: 所有欄位不為 null 時應全部更新並清除快取")
+    void adminUpdateTag_allFieldsProvided_updatesAndEvictsCache() {
+        UUID id = UUID.randomUUID();
+        Tag tag = new Tag();
+        tag.setId(id);
+        tag.setSlug("go-lang");
+        tag.setUsageCount(0);
+        when(tagRepository.findById(id)).thenReturn(Optional.of(tag));
+        when(tagRepository.save(any(Tag.class))).thenReturn(tag);
+
+        dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest request = new dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest();
+        request.setColor("#ff0000");
+        request.setIcon("fa-code");
+        request.setDescription("Go programming language");
+
+        Tag result = tagService.adminUpdateTag(id, request);
+
+        assertThat(result.getColor()).isEqualTo("#ff0000");
+        assertThat(result.getIcon()).isEqualTo("fa-code");
+        assertThat(result.getDescription()).isEqualTo("Go programming language");
+        verify(stringRedisTemplate).delete("tag:go-lang");
+    }
+
+    @Test
+    @DisplayName("adminUpdateTag: 所有欄位為 null 時不更新任何屬性")
+    void adminUpdateTag_allFieldsNull_noFieldsUpdated() {
+        UUID id = UUID.randomUUID();
+        Tag tag = new Tag();
+        tag.setId(id);
+        tag.setSlug("python");
+        tag.setColor("blue");
+        tag.setIcon("fa-snake");
+        tag.setDescription("original desc");
+        tag.setUsageCount(0);
+        when(tagRepository.findById(id)).thenReturn(Optional.of(tag));
+        when(tagRepository.save(any(Tag.class))).thenReturn(tag);
+
+        dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest request = new dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest();
+        // all fields null
+
+        tagService.adminUpdateTag(id, request);
+
+        assertThat(tag.getColor()).isEqualTo("blue");
+        assertThat(tag.getIcon()).isEqualTo("fa-snake");
+        assertThat(tag.getDescription()).isEqualTo("original desc");
+    }
+
+    // ─── adminDeleteTag ─────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("adminDeleteTag: tag 不存在時應拋出 TAG_NOT_FOUND")
+    void adminDeleteTag_tagNotFound_throwsBusinessException() {
+        UUID id = UUID.randomUUID();
+        when(tagRepository.findById(id)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> tagService.adminDeleteTag(id))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(TagErrorCode.TAG_NOT_FOUND.getMessage());
+    }
+
+    @Test
+    @DisplayName("adminDeleteTag: 成功刪除時應同時清除 Redis hash 快取與熱門 ZSet")
+    void adminDeleteTag_successfulDelete_clearsRedisHashAndHotSet() {
+        UUID id = UUID.randomUUID();
+        Tag tag = new Tag();
+        tag.setId(id);
+        tag.setSlug("scala");
+        tag.setUsageCount(0);
+        when(tagRepository.findById(id)).thenReturn(Optional.of(tag));
+        when(articleTagRepository.countByTagId(id)).thenReturn(0);
+
+        tagService.adminDeleteTag(id);
+
+        verify(stringRedisTemplate).delete("tag:scala");
+        verify(zSetOps).remove(eq("tag:hot"), eq(id.toString()));
         verify(tagRepository).deleteById(id);
     }
 }

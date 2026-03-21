@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -65,4 +66,39 @@ public class ArticleSummaryResponse {
      * 建立時間
      */
     private LocalDateTime createdAt;
+
+    /**
+     * 最後更新時間
+     */
+    private LocalDateTime updatedAt;
+
+    /**
+     * URL slug（SEO 友善網址）
+     */
+    private String slug;
+
+    /**
+     * 按讚次數
+     */
+    private long likeCount;
+
+    /**
+     * 留言數量
+     */
+    private int commentCount;
+
+    /**
+     * 發布時間
+     */
+    private LocalDateTime publishedAt;
+
+    /**
+     * 文章標籤列表
+     */
+    private List<TagSummaryResponse> tags;
+
+    /**
+     * 駁回原因（Phase 3 實作後才有值）
+     */
+    private String rejectReason;
 }

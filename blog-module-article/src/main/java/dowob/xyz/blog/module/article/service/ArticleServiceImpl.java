@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
@@ -19,9 +20,11 @@ import dowob.xyz.blog.module.article.model.Category;
 import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.model.TagWithArticleUuid;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -101,6 +104,11 @@ public class ArticleServiceImpl implements ArticleService {
     private final CategoryRepository categoryRepository;
 
     /**
+     * 標籤 Facade（跨模組標籤操作）
+     */
+    private final TagFacade tagFacade;
+
+    /**
      * Redis 防刷 Key 前綴
      */
     private static final String VIEW_KEY_PREFIX = "view:";
@@ -137,12 +145,22 @@ public class ArticleServiceImpl implements ArticleService {
         article.setViewCount(0L);
         article.setLikeCount(0L);
         article.setCommentCount(0);
+        if (request.getCoverImageUrl() != null) {
+            article.setCoverImageUrl(request.getCoverImageUrl());
+        }
 
         Article saved = articleRepository.save(article);
 
         // 同步文章分類
         if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
             syncCategories(saved.getId(), request.getCategoryIds());
+        }
+
+        // 同步文章標籤
+        if (request.getTagNames() != null && !request.getTagNames().isEmpty()) {
+            List<TagInfo> tags = tagFacade.findOrCreateTags(request.getTagNames());
+            List<UUID> tagIds = tags.stream().map(TagInfo::id).collect(Collectors.toList());
+            tagFacade.syncArticleTags(saved.getUuid(), tagIds);
         }
 
         return toResponse(saved);
@@ -183,6 +201,9 @@ public class ArticleServiceImpl implements ArticleService {
                 article.setPublishedAt(LocalDateTime.now());
             }
         }
+        if (request.getCoverImageUrl() != null) {
+            article.setCoverImageUrl(request.getCoverImageUrl());
+        }
 
         Article updated;
         try {
@@ -194,6 +215,17 @@ public class ArticleServiceImpl implements ArticleService {
         // 同步文章分類（null 表示不更新，空列表表示清除）
         if (request.getCategoryIds() != null) {
             syncCategories(updated.getId(), request.getCategoryIds());
+        }
+
+        // 同步文章標籤（null 表示不更新，空列表表示清除所有標籤）
+        if (request.getTagNames() != null) {
+            if (request.getTagNames().isEmpty()) {
+                tagFacade.deleteArticleTags(updated.getUuid());
+            } else {
+                List<TagInfo> tags = tagFacade.findOrCreateTags(request.getTagNames());
+                List<UUID> tagIds = tags.stream().map(TagInfo::id).collect(Collectors.toList());
+                tagFacade.syncArticleTags(updated.getUuid(), tagIds);
+            }
         }
 
         /** 若文章狀態為 PUBLISHED，發送更新事件通知搜尋模組 */
@@ -242,7 +274,36 @@ public class ArticleServiceImpl implements ArticleService {
     @Transactional
     public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
         Article article = findByUuidOrThrow(articleUuid);
+        return processArticleView(article, viewerId, viewerRole, clientIp);
+    }
 
+    /**
+     * 根據 slug 取得文章詳情
+     *
+     * @param slug       文章 URL slug
+     * @param viewerId   觀看者 ID（匿名為 null）
+     * @param viewerRole 觀看者角色（匿名為 null）
+     * @param clientIp   客戶端 IP（用於防刷）
+     * @return 文章完整資訊
+     */
+    @Override
+    @Transactional
+    public ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole, String clientIp) {
+        Article article = articleRepository.findBySlug(slug)
+                .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
+        return processArticleView(article, viewerId, viewerRole, clientIp);
+    }
+
+    /**
+     * 處理文章存取：驗證可見性、計算瀏覽數、回傳回應
+     *
+     * @param article    文章實體
+     * @param viewerId   觀看者 ID（匿名為 null）
+     * @param viewerRole 觀看者角色（匿名為 null）
+     * @param clientIp   客戶端 IP
+     * @return 文章完整資訊
+     */
+    private ArticleResponse processArticleView(Article article, Long viewerId, Role viewerRole, String clientIp) {
         boolean isAdmin = Role.ADMIN == viewerRole;
         boolean isAuthor = Objects.equals(article.getAuthorId(), viewerId);
         boolean isPublished = article.getStatus().isPubliclyVisible();
@@ -279,7 +340,11 @@ public class ArticleServiceImpl implements ArticleService {
         long offset = (long) (pageNum - 1) * pageSize;
         List<Article> articles = articleMapper.findPublishedPage(offset, pageSize);
         long total = articleMapper.countPublished();
-        List<ArticleSummaryResponse> list = articles.stream().map(this::toSummaryResponse).collect(Collectors.toList());
+        List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
+        Map<UUID, List<TagSummaryResponse>> tagMap = batchToTagResponsesMap(uuids);
+        List<ArticleSummaryResponse> list = articles.stream()
+                .map(a -> toSummaryResponse(a, tagMap))
+                .collect(Collectors.toList());
         return PageResult.of(pageNum, pageSize, total, list);
     }
 
@@ -297,7 +362,11 @@ public class ArticleServiceImpl implements ArticleService {
         long offset = (long) (pageNum - 1) * pageSize;
         List<Article> articles = articleMapper.findPublishedPageByCategorySlug(categorySlug, offset, pageSize);
         long total = articleMapper.countPublishedByCategorySlug(categorySlug);
-        List<ArticleSummaryResponse> list = articles.stream().map(this::toSummaryResponse).collect(Collectors.toList());
+        List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
+        Map<UUID, List<TagSummaryResponse>> tagMap = batchToTagResponsesMap(uuids);
+        List<ArticleSummaryResponse> list = articles.stream()
+                .map(a -> toSummaryResponse(a, tagMap))
+                .collect(Collectors.toList());
         return PageResult.of(pageNum, pageSize, total, list);
     }
 
@@ -307,14 +376,26 @@ public class ArticleServiceImpl implements ArticleService {
      * @param authorId 作者資料庫主鍵
      * @param pageNum  頁碼（從 1 開始）
      * @param pageSize 每頁筆數
+     * @param status   文章狀態篩選（null 表示查詢全部）
      * @return 分頁文章摘要列表
      */
     @Override
-    public PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int pageNum, int pageSize) {
+    public PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int pageNum, int pageSize, ArticleStatus status) {
         long offset = (long) (pageNum - 1) * pageSize;
-        List<Article> articles = articleMapper.findByAuthorIdPaged(authorId, offset, pageSize);
-        long total = articleMapper.countByAuthorId(authorId);
-        List<ArticleSummaryResponse> list = articles.stream().map(this::toSummaryResponse).collect(Collectors.toList());
+        List<Article> articles;
+        long total;
+        if (status != null) {
+            articles = articleMapper.findByAuthorIdAndStatus(authorId, status, offset, pageSize);
+            total = articleMapper.countByAuthorIdAndStatus(authorId, status);
+        } else {
+            articles = articleMapper.findByAuthorIdPaged(authorId, offset, pageSize);
+            total = articleMapper.countByAuthorId(authorId);
+        }
+        List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
+        Map<UUID, List<TagSummaryResponse>> tagMap = batchToTagResponsesMap(uuids);
+        List<ArticleSummaryResponse> list = articles.stream()
+                .map(a -> toSummaryResponse(a, tagMap))
+                .collect(Collectors.toList());
         return PageResult.of(pageNum, pageSize, total, list);
     }
 
@@ -379,6 +460,7 @@ public class ArticleServiceImpl implements ArticleService {
 
         article.setStatus(ArticleStatus.REJECTED);
         log.info("文章 {} 已被駁回，原因：{}", articleUuid, reason);
+        article.setRejectReason(reason);
 
         Article updated = articleRepository.save(article);
         return toResponse(updated);
@@ -396,8 +478,41 @@ public class ArticleServiceImpl implements ArticleService {
         long offset = (long) (pageNum - 1) * pageSize;
         List<Article> articles = articleMapper.findPendingReviewPage(offset, pageSize);
         long total = articleMapper.countPendingReview();
-        List<ArticleSummaryResponse> list = articles.stream().map(this::toSummaryResponse).collect(Collectors.toList());
+        List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
+        Map<UUID, List<TagSummaryResponse>> tagMap = batchToTagResponsesMap(uuids);
+        List<ArticleSummaryResponse> list = articles.stream()
+                .map(a -> toSummaryResponse(a, tagMap))
+                .collect(Collectors.toList());
         return PageResult.of(pageNum, pageSize, total, list);
+    }
+
+    /**
+     * 提交文章審核（DRAFT → PENDING_REVIEW）
+     *
+     * @param operatorId   操作者資料庫主鍵
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @return 提交審核後的文章完整資訊
+     */
+    @Override
+    @Transactional
+    public ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
+        Article article = findByUuidOrThrow(articleUuid);
+        checkWritePermission(operatorId, operatorRole, article);
+        validateStatusTransition(article.getStatus(), ArticleStatus.PENDING_REVIEW, operatorRole);
+        article.setStatus(ArticleStatus.PENDING_REVIEW);
+        Article updated = articleRepository.save(article);
+        return toResponse(updated);
+    }
+
+    /**
+     * 取得待審文章總筆數（僅 ADMIN）
+     *
+     * @return 待審文章總筆數
+     */
+    @Override
+    public long getPendingArticleCount() {
+        return articleMapper.countPendingReview();
     }
 
     /**
@@ -577,6 +692,12 @@ public class ArticleServiceImpl implements ArticleService {
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
                 .categories(toCategoryResponses(article.getId()))
+                .slug(article.getSlug())
+                .likeCount(article.getLikeCount())
+                .commentCount(article.getCommentCount())
+                .publishedAt(article.getPublishedAt())
+                .tags(toTagSummaryResponses(article.getUuid()))
+                .rejectReason(article.getRejectReason())
                 .build();
     }
 
@@ -586,7 +707,7 @@ public class ArticleServiceImpl implements ArticleService {
      * @param article 文章實體
      * @return ArticleSummaryResponse
      */
-    private ArticleSummaryResponse toSummaryResponse(Article article) {
+    private ArticleSummaryResponse toSummaryResponse(Article article, Map<UUID, List<TagSummaryResponse>> tagMap) {
         return ArticleSummaryResponse.builder()
                 .uuid(article.getUuid())
                 .title(article.getTitle())
@@ -597,6 +718,13 @@ public class ArticleServiceImpl implements ArticleService {
                 .status(article.getStatus())
                 .viewCount(article.getViewCount())
                 .createdAt(article.getCreatedAt())
+                .updatedAt(article.getUpdatedAt())
+                .slug(article.getSlug())
+                .likeCount(article.getLikeCount())
+                .commentCount(article.getCommentCount())
+                .publishedAt(article.getPublishedAt())
+                .tags(tagMap.getOrDefault(article.getUuid(), List.of()))
+                .rejectReason(article.getRejectReason())
                 .build();
     }
 
@@ -620,6 +748,50 @@ public class ArticleServiceImpl implements ArticleService {
                 categoryMapper.insertArticleCategory(articleId, category.getId());
             }
         }
+    }
+
+    /**
+     * 查詢單篇文章標籤並轉換為 TagSummaryResponse 列表
+     *
+     * <p>
+     * 供 {@link #toResponse(Article)} 單篇文章使用，單次查詢即可。
+     * 注意：{@link dowob.xyz.blog.infrastructure.event.TagInfo} 是 Record，需使用 id()、name()、slug() 方法。
+     * </p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return 標籤摘要回應列表
+     */
+    private List<TagSummaryResponse> toTagSummaryResponses(UUID articleUuid) {
+        return articleMapper.findTagsByArticleUuid(articleUuid).stream()
+                .map(tag -> TagSummaryResponse.builder()
+                        .id(tag.id())
+                        .name(tag.name())
+                        .slug(tag.slug())
+                        .build())
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 批次查詢多篇文章標籤並建立文章 UUID → TagSummaryResponse 列表的對應 Map
+     *
+     * <p>
+     * 供列表場景使用，一次查詢避免 N+1 問題。
+     * </p>
+     *
+     * @param articleUuids 文章公開 UUID 列表
+     * @return Map&lt;articleUuid, 標籤摘要回應列表&gt;
+     */
+    private Map<UUID, List<TagSummaryResponse>> batchToTagResponsesMap(List<UUID> articleUuids) {
+        if (articleUuids == null || articleUuids.isEmpty()) return Map.of();
+        List<TagWithArticleUuid> all = articleMapper.findTagsByArticleUuids(articleUuids);
+        return all.stream().collect(Collectors.groupingBy(
+                TagWithArticleUuid::getArticleUuid,
+                Collectors.mapping(t -> TagSummaryResponse.builder()
+                        .id(t.getId())
+                        .name(t.getName())
+                        .slug(t.getSlug())
+                        .build(),
+                        Collectors.toList())));
     }
 
     /**

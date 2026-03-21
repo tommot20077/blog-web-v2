@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -48,6 +49,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -93,6 +95,9 @@ class ArticleServiceTest {
 
     @Mock
     private CategoryRepository categoryRepository;
+
+    @Mock
+    private TagFacade tagFacade;
 
     @InjectMocks
     private ArticleServiceImpl articleService;
@@ -256,6 +261,98 @@ class ArticleServiceTest {
             verify(articleRepository).save(captor.capture());
             assertThat(captor.getValue().getSummary()).isEqualTo("自訂摘要");
         }
+
+        @Test
+        @DisplayName("正常：建立文章時指定 tagNames，應呼叫 tagFacade.syncArticleTags")
+        void createArticle_withTagNames_callsSyncArticleTags() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("有標籤的文章");
+            request.setContent("內容");
+            request.setTagNames(List.of("Spring", "Java"));
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            UUID tagId1 = UUID.randomUUID();
+            UUID tagId2 = UUID.randomUUID();
+            when(tagFacade.findOrCreateTags(List.of("Spring", "Java")))
+                    .thenReturn(List.of(
+                            new TagInfo(tagId1, "Spring", "spring"),
+                            new TagInfo(tagId2, "Java", "java")));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            verify(tagFacade).findOrCreateTags(List.of("Spring", "Java"));
+            verify(tagFacade).syncArticleTags(ARTICLE_UUID, List.of(tagId1, tagId2));
+        }
+
+        @Test
+        @DisplayName("正常：建立文章時 tagNames 為 null，不呼叫 tagFacade 任何方法")
+        void createArticle_withNullTagNames_doesNotCallTagFacade() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("無標籤文章");
+            request.setContent("內容");
+            // tagNames 預設為 null
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            verify(tagFacade, never()).findOrCreateTags(any());
+            verify(tagFacade, never()).syncArticleTags(any(), any());
+        }
+
+        @Test
+        @DisplayName("邊界：建立文章時 tagNames 為空列表，不呼叫 tagFacade 任何方法")
+        void createArticle_withEmptyTagNames_doesNotCallTagFacade() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("空標籤文章");
+            request.setContent("內容");
+            request.setTagNames(List.of());
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            verify(tagFacade, never()).findOrCreateTags(any());
+            verify(tagFacade, never()).syncArticleTags(any(), any());
+        }
+
+        @Test
+        @DisplayName("正常：建立文章時指定 coverImageUrl，Article 應包含該 URL")
+        void createArticle_withCoverImageUrl_setsOnArticle() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("有封面圖的文章");
+            request.setContent("內容");
+            request.setCoverImageUrl("https://example.com/cover.jpg");
+
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getCoverImageUrl()).isEqualTo("https://example.com/cover.jpg");
+        }
+
+        @Test
+        @DisplayName("邊界：建立文章時 coverImageUrl 為 null，Article 的 coverImageUrl 應為 null")
+        void createArticle_withNullCoverImageUrl_doesNotSetCoverImageUrl() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("無封面文章");
+            request.setContent("內容");
+            // coverImageUrl 預設為 null
+
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getCoverImageUrl()).isNull();
+        }
     }
 
     /**
@@ -415,6 +512,76 @@ class ArticleServiceTest {
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getMessage());
+        }
+
+        @Test
+        @DisplayName("正常：updateArticle 時 tagNames 非 null 非空，應呼叫 syncArticleTags")
+        void updateArticle_withTagNames_callsSyncArticleTags() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UUID tagId1 = UUID.randomUUID();
+            when(tagFacade.findOrCreateTags(List.of("Spring")))
+                    .thenReturn(List.of(new TagInfo(tagId1, "Spring", "spring")));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTagNames(List.of("Spring"));
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(tagFacade).findOrCreateTags(List.of("Spring"));
+            verify(tagFacade).syncArticleTags(ARTICLE_UUID, List.of(tagId1));
+        }
+
+        @Test
+        @DisplayName("正常：updateArticle 時 tagNames 為 null，不呼叫 tagFacade 任何方法")
+        void updateArticle_withNullTagNames_doesNotCallTagFacade() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            // tagNames 為 null，不更新
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(tagFacade, never()).findOrCreateTags(any());
+            verify(tagFacade, never()).syncArticleTags(any(), any());
+            verify(tagFacade, never()).deleteArticleTags(any());
+        }
+
+        @Test
+        @DisplayName("邊界：updateArticle 時 tagNames 為空列表，應呼叫 deleteArticleTags（清除所有標籤）")
+        void updateArticle_withEmptyTagNames_callsDeleteArticleTags() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTagNames(List.of());
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(tagFacade).deleteArticleTags(ARTICLE_UUID);
+            verify(tagFacade, never()).syncArticleTags(any(), any());
+        }
+
+        @Test
+        @DisplayName("正常：updateArticle 時指定 coverImageUrl，Article 應包含該 URL")
+        void updateArticle_withCoverImageUrl_setsOnArticle() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setCoverImageUrl("https://example.com/cover.jpg");
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getCoverImageUrl()).isEqualTo("https://example.com/cover.jpg");
         }
     }
 
@@ -786,6 +953,32 @@ class ArticleServiceTest {
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
         }
 
+        @Test
+        @DisplayName("正常：rejectArticle 應將 rejectReason 設定到文章實體")
+        void rejectArticle_shouldPersistRejectReason() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            articleService.rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "內容不符合規範");
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isEqualTo("內容不符合規範");
+        }
+
+        @Test
+        @DisplayName("正常：rejectArticle 回應中包含 rejectReason")
+        void rejectArticle_responseShouldContainRejectReason() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = articleService.rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "內容違規");
+
+            assertThat(response.getRejectReason()).isEqualTo("內容違規");
+        }
+
         /**
          * 建立指定狀態的更新請求
          *
@@ -873,6 +1066,112 @@ class ArticleServiceTest {
     }
 
     /**
+     * Response DTO 欄位完整性測試
+     */
+    @Nested
+    @DisplayName("Response DTO 欄位完整性")
+    class ResponseDtoFieldsTests {
+
+        @Test
+        @DisplayName("正常：createArticle 回應包含 slug 欄位")
+        void createArticle_responseShouldIncludeSlug() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("Slug 測試文章");
+            request.setContent("內容");
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            saved.setSlug("slug-test-abcd1234");
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+
+            assertThat(response.getSlug()).isEqualTo("slug-test-abcd1234");
+        }
+
+        @Test
+        @DisplayName("正常：createArticle 回應包含 likeCount 欄位")
+        void createArticle_responseShouldIncludeLikeCount() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("LikeCount 測試");
+            request.setContent("內容");
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            saved.setLikeCount(42L);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+
+            assertThat(response.getLikeCount()).isEqualTo(42L);
+        }
+
+        @Test
+        @DisplayName("正常：createArticle 回應包含 tags 欄位（有標籤時）")
+        void createArticle_responseShouldIncludeTags_whenTagsExist() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("Tags 測試");
+            request.setContent("內容");
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            UUID tagId = UUID.randomUUID();
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID))
+                    .thenReturn(List.of(new TagInfo(tagId, "Spring", "spring")));
+
+            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+
+            assertThat(response.getTags()).hasSize(1);
+            assertThat(response.getTags().get(0).getName()).isEqualTo("Spring");
+            assertThat(response.getTags().get(0).getSlug()).isEqualTo("spring");
+        }
+
+        @Test
+        @DisplayName("正常：createArticle 回應 tags 為空列表（無標籤時）")
+        void createArticle_responseShouldHaveEmptyTags_whenNoTags() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("無標籤測試");
+            request.setContent("內容");
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
+
+            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+
+            assertThat(response.getTags()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("正常：getPublishedArticles 使用批次 tag 查詢（findTagsByArticleUuids），不產生 N+1")
+        void getPublishedArticles_shouldUseBatchTagQuery() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleMapper.findPublishedPage(0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countPublished()).thenReturn(1L);
+            when(articleMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID))).thenReturn(List.of());
+
+            articleService.getPublishedArticles(1, 10);
+
+            verify(articleMapper).findTagsByArticleUuids(List.of(ARTICLE_UUID));
+            verify(articleMapper, never()).findTagsByArticleUuid(any());
+        }
+
+        @Test
+        @DisplayName("正常：toSummaryResponse 包含 updatedAt 欄位")
+        void getPublishedArticles_summaryShouldIncludeUpdatedAt() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            LocalDateTime updatedTime = LocalDateTime.of(2025, 1, 15, 10, 0);
+            article.setUpdatedAt(updatedTime);
+            when(articleMapper.findPublishedPage(0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countPublished()).thenReturn(1L);
+            when(articleMapper.findTagsByArticleUuids(any())).thenReturn(List.of());
+
+            PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(1, 10);
+
+            assertThat(result.getList().get(0).getUpdatedAt()).isEqualTo(updatedTime);
+        }
+    }
+
+    /**
      * 更新已發布文章時的搜尋同步測試
      */
     @Nested
@@ -922,6 +1221,501 @@ class ArticleServiceTest {
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_UPDATED),
                     any(ArticleUpdatedEvent.class));
+        }
+    }
+
+    /**
+     * getMyArticles 狀態篩選測試
+     */
+    @Nested
+    @DisplayName("getMyArticles - 狀態篩選")
+    class GetMyArticlesFilterTests {
+
+        @Test
+        @DisplayName("正常：status 為 null 時查詢全部文章")
+        void getMyArticles_statusNull_returnsAll() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleMapper.findByAuthorIdPaged(AUTHOR_ID, 0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countByAuthorId(AUTHOR_ID)).thenReturn(1L);
+            when(articleMapper.findTagsByArticleUuids(any())).thenReturn(List.of());
+
+            PageResult<ArticleSummaryResponse> result = articleService.getMyArticles(AUTHOR_ID, 1, 10, null);
+
+            assertThat(result.getTotal()).isEqualTo(1L);
+            verify(articleMapper).findByAuthorIdPaged(AUTHOR_ID, 0L, 10);
+            verify(articleMapper, never()).findByAuthorIdAndStatus(any(), any(), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("正常：status 為 DRAFT 時只查詢草稿文章")
+        void getMyArticles_statusDraft_returnsDraftOnly() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleMapper.findByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT, 0L, 10))
+                    .thenReturn(List.of(article));
+            when(articleMapper.countByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT)).thenReturn(1L);
+            when(articleMapper.findTagsByArticleUuids(any())).thenReturn(List.of());
+
+            PageResult<ArticleSummaryResponse> result = articleService.getMyArticles(AUTHOR_ID, 1, 10, ArticleStatus.DRAFT);
+
+            assertThat(result.getTotal()).isEqualTo(1L);
+            verify(articleMapper).findByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT, 0L, 10);
+            verify(articleMapper).countByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT);
+            verify(articleMapper, never()).findByAuthorIdPaged(any(), anyLong(), anyInt());
+        }
+    }
+
+    /**
+     * submitForReview 測試
+     */
+    @Nested
+    @DisplayName("submitForReview")
+    class SubmitForReviewTests {
+
+        @Test
+        @DisplayName("正常：DRAFT → PENDING_REVIEW 成功")
+        void submitForReview_draftToPendingReview_success() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = articleService.submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
+        }
+
+        @Test
+        @DisplayName("異常：PUBLISHED → PENDING_REVIEW（非法轉換）→ ARTICLE_STATUS_TRANSITION_INVALID")
+        void submitForReview_publishedToPendingReview_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            assertThatThrownBy(() -> articleService.submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：非作者提交他人文章 → ARTICLE_ACCESS_DENIED")
+        void submitForReview_otherUserDenied() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            assertThatThrownBy(() -> articleService.submitForReview(OTHER_USER_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+        }
+    }
+
+    /**
+     * getPendingArticleCount 測試
+     */
+    @Nested
+    @DisplayName("getPendingArticleCount")
+    class GetPendingArticleCountTests {
+
+        @Test
+        @DisplayName("正常：回傳待審文章總筆數")
+        void getPendingArticleCount_returnsCorrectCount() {
+            when(articleMapper.countPendingReview()).thenReturn(5L);
+
+            long count = articleService.getPendingArticleCount();
+
+            assertThat(count).isEqualTo(5L);
+            verify(articleMapper).countPendingReview();
+        }
+    }
+
+    /**
+     * 狀態機邊界：合法轉換（未覆蓋路徑）
+     */
+    @Nested
+    @DisplayName("狀態機邊界 - 合法轉換")
+    class StateMachineLegalTransitionTests {
+
+        @Test
+        @DisplayName("正常：PUBLISHED → ARCHIVED 合法轉換，updateArticle 成功")
+        void updateArticle_publishedToArchived_validTransition() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            article.setPublishedAt(LocalDateTime.now().minusDays(1));
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.ARCHIVED);
+
+            ArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
+        }
+
+        @Test
+        @DisplayName("正常：ARCHIVED → DRAFT 合法轉換，updateArticle 成功")
+        void updateArticle_archivedToDraft_validTransition() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.DRAFT);
+
+            ArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+        }
+
+        @Test
+        @DisplayName("正常：updateArticle 更新 status → PUBLISHED 且 publishedAt 為 null，應自動設置 publishedAt")
+        void updateArticle_statusToPublished_whenPublishedAtIsNull_setsPublishedAt() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setPublishedAt(null);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PUBLISHED);
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getPublishedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("正常：updateArticle 更新 status → PUBLISHED 且 publishedAt 已存在，不重設 publishedAt")
+        void updateArticle_statusToPublished_whenPublishedAtAlreadySet_doesNotReset() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            LocalDateTime originalPublishedAt = LocalDateTime.of(2024, 1, 1, 12, 0);
+            article.setPublishedAt(originalPublishedAt);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PUBLISHED);
+
+            articleService.updateArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getPublishedAt()).isEqualTo(originalPublishedAt);
+        }
+
+        @Test
+        @DisplayName("正常：publishArticle 時文章已有 publishedAt，不重設（保留首次發布時間）")
+        void publishArticle_whenPublishedAtAlreadySet_doesNotReset() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            LocalDateTime originalPublishedAt = LocalDateTime.of(2023, 6, 15, 9, 30);
+            article.setPublishedAt(originalPublishedAt);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
+
+            articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getPublishedAt()).isEqualTo(originalPublishedAt);
+        }
+    }
+
+    /**
+     * 狀態機邊界：非法轉換（未覆蓋路徑）
+     */
+    @Nested
+    @DisplayName("狀態機邊界 - 非法轉換")
+    class StateMachineInvalidTransitionTests {
+
+        @Test
+        @DisplayName("異常：DRAFT → ARCHIVED 非法轉換 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void updateArticle_draftToArchived_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.ARCHIVED);
+
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：PUBLISHED → DRAFT 非法轉換 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void updateArticle_publishedToDraft_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.DRAFT);
+
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：REJECTED → PENDING_REVIEW 非法轉換 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void updateArticle_rejectedToPendingReview_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PENDING_REVIEW);
+
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：ARCHIVED → PUBLISHED 非法轉換 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void updateArticle_archivedToPublished_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PUBLISHED);
+
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：DRAFT → REJECTED 非法轉換 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void updateArticle_draftToRejected_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.REJECTED);
+
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：PENDING_REVIEW → DRAFT (非 ADMIN) → 合法轉換應成功（非 ADMIN 仍可執行）")
+        void updateArticle_pendingReviewToDraft_byAuthor_shouldSucceed() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.DRAFT);
+
+            ArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+        }
+    }
+
+    /**
+     * getPublishedArticlesByCategorySlug 測試
+     */
+    @Nested
+    @DisplayName("getPublishedArticlesByCategorySlug")
+    class GetPublishedArticlesByCategorySlugTests {
+
+        @Test
+        @DisplayName("正常：根據分類 slug 分頁查詢已發布文章")
+        void getPublishedArticlesByCategorySlug_success() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            String categorySlug = "tech";
+            when(articleMapper.findPublishedPageByCategorySlug(categorySlug, 0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countPublishedByCategorySlug(categorySlug)).thenReturn(1L);
+            when(articleMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID))).thenReturn(List.of());
+
+            PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticlesByCategorySlug(categorySlug, 1, 10);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getList()).hasSize(1);
+            assertThat(result.getTotal()).isEqualTo(1L);
+            assertThat(result.getPageNum()).isEqualTo(1);
+            verify(articleMapper).findPublishedPageByCategorySlug(categorySlug, 0L, 10);
+            verify(articleMapper).countPublishedByCategorySlug(categorySlug);
+        }
+
+        @Test
+        @DisplayName("正常：第二頁查詢，偏移量正確")
+        void getPublishedArticlesByCategorySlug_secondPage_correctOffset() {
+            String categorySlug = "java";
+            when(articleMapper.findPublishedPageByCategorySlug(categorySlug, 10L, 10)).thenReturn(List.of());
+            when(articleMapper.countPublishedByCategorySlug(categorySlug)).thenReturn(3L);
+            when(articleMapper.findTagsByArticleUuids(any())).thenReturn(List.of());
+
+            PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticlesByCategorySlug(categorySlug, 2, 10);
+
+            assertThat(result.getList()).isEmpty();
+            verify(articleMapper).findPublishedPageByCategorySlug(categorySlug, 10L, 10);
+        }
+
+        @Test
+        @DisplayName("正常：查詢結果包含標籤資訊（批次查詢）")
+        void getPublishedArticlesByCategorySlug_withTags() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            String categorySlug = "spring";
+            UUID tagId = UUID.randomUUID();
+
+            when(articleMapper.findPublishedPageByCategorySlug(categorySlug, 0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countPublishedByCategorySlug(categorySlug)).thenReturn(1L);
+
+            dowob.xyz.blog.module.article.model.TagWithArticleUuid tagWithUuid =
+                    new dowob.xyz.blog.module.article.model.TagWithArticleUuid();
+            tagWithUuid.setArticleUuid(ARTICLE_UUID);
+            tagWithUuid.setId(tagId);
+            tagWithUuid.setName("Spring");
+            tagWithUuid.setSlug("spring");
+
+            when(articleMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(tagWithUuid));
+
+            PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticlesByCategorySlug(categorySlug, 1, 10);
+
+            assertThat(result.getList().get(0).getTags()).hasSize(1);
+            assertThat(result.getList().get(0).getTags().get(0).getName()).isEqualTo("Spring");
+        }
+    }
+
+    /**
+     * extractSummary / summary 邊界測試
+     */
+    @Nested
+    @DisplayName("extractSummary 邊界")
+    class ExtractSummaryBoundaryTests {
+
+        @Test
+        @DisplayName("邊界：content 為 null 且 summary 為 null，extractSummary 回傳 null")
+        void createArticle_contentNull_summaryNull_extractSummaryReturnsNull() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("空內容文章");
+            request.setContent(null);
+            request.setSummary(null);
+
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getSummary()).isNull();
+        }
+
+        @Test
+        @DisplayName("邊界：content 超過 200 字，summary 自動截取前 200 字")
+        void createArticle_longContent_summaryTruncatedTo200Chars() {
+            String longContent = "a".repeat(300);
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("長內容文章");
+            request.setContent(longContent);
+            request.setSummary(null);
+
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getSummary()).isNotNull();
+            assertThat(captor.getValue().getSummary().length()).isLessThanOrEqualTo(200);
+        }
+
+        @Test
+        @DisplayName("邊界：updateArticle 同時傳入 content 與 summary 時，summary 應以傳入值為主")
+        void updateArticle_bothContentAndSummaryProvided_usesSummary() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setContent("新內容");
+            request.setSummary("自訂摘要");
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getSummary()).isEqualTo("自訂摘要");
+        }
+
+        @Test
+        @DisplayName("邊界：updateArticle 只更新 summary（content 為 null），應使用現有 content 計算自動摘要")
+        void updateArticle_onlySummaryBlank_usesExistingContent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setContent("現有文章內容，用來自動生成摘要");
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setSummary("");  // 空白觸發自動摘要，content 為 null 時用現有 content
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getSummary()).isNotNull();
+            assertThat(captor.getValue().getSummary()).isNotBlank();
+        }
+    }
+
+    /**
+     * getArticleBySlug 測試
+     */
+    @Nested
+    @DisplayName("getArticleBySlug")
+    class GetArticleBySlugTests {
+
+        @Test
+        @DisplayName("正常：透過 slug 取得 PUBLISHED 文章")
+        void getArticleBySlug_published_success() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            article.setSlug("test-slug-abcd1234");
+            when(articleRepository.findBySlug("test-slug-abcd1234")).thenReturn(Optional.of(article));
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+
+            ArticleResponse response = articleService.getArticleBySlug("test-slug-abcd1234", null, null, "127.0.0.1");
+
+            assertThat(response).isNotNull();
+            assertThat(response.getSlug()).isEqualTo("test-slug-abcd1234");
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
+        }
+
+        @Test
+        @DisplayName("異常：slug 不存在 → ARTICLE_NOT_FOUND")
+        void getArticleBySlug_notFound() {
+            when(articleRepository.findBySlug("nonexistent-slug")).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> articleService.getArticleBySlug("nonexistent-slug", null, null, "127.0.0.1"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：DRAFT 文章 slug，其他用戶存取 → ARTICLE_NOT_FOUND")
+        void getArticleBySlug_draftArticle_otherUserDenied() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setSlug("draft-slug-1234");
+            when(articleRepository.findBySlug("draft-slug-1234")).thenReturn(Optional.of(article));
+
+            assertThatThrownBy(() -> articleService.getArticleBySlug("draft-slug-1234", OTHER_USER_ID, Role.AUTHOR, "127.0.0.1"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+        }
+
+        @Test
+        @DisplayName("正常：PUBLISHED 文章透過 slug 存取，新 IP 發送 MQ 瀏覽事件")
+        void getArticleBySlug_published_newIp_sendsMqEvent() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            article.setSlug("view-slug-1234");
+            when(articleRepository.findBySlug("view-slug-1234")).thenReturn(Optional.of(article));
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+
+            articleService.getArticleBySlug("view-slug-1234", null, null, "127.0.0.1");
+
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
+                    any(ArticleViewedEvent.class));
         }
     }
 }

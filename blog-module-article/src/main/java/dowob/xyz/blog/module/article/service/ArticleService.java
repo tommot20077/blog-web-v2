@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.service;
 
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
@@ -93,9 +94,10 @@ public interface ArticleService {
      * @param authorId 作者資料庫主鍵
      * @param pageNum  頁碼（從 1 開始）
      * @param pageSize 每頁筆數
+     * @param status   文章狀態篩選（null 表示查詢全部）
      * @return 分頁文章摘要列表
      */
-    PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int pageNum, int pageSize);
+    PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int pageNum, int pageSize, ArticleStatus status);
 
     /**
      * 發布文章
@@ -126,4 +128,32 @@ public interface ArticleService {
      * @return 分頁文章摘要列表
      */
     PageResult<ArticleSummaryResponse> getPendingArticles(int pageNum, int pageSize);
+
+    /**
+     * 提交文章審核（DRAFT → PENDING_REVIEW）
+     *
+     * @param operatorId   操作者資料庫主鍵
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @return 提交審核後的文章完整資訊
+     */
+    ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid);
+
+    /**
+     * 取得待審文章總筆數（僅 ADMIN）
+     *
+     * @return 待審文章總筆數
+     */
+    long getPendingArticleCount();
+
+    /**
+     * 根據 slug 取得文章詳情
+     *
+     * @param slug       文章 URL slug
+     * @param viewerId   觀看者 ID（匿名為 null）
+     * @param viewerRole 觀看者角色（匿名為 null）
+     * @param clientIp   客戶端 IP（用於防刷）
+     * @return 文章完整資訊
+     */
+    ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole, String clientIp);
 }

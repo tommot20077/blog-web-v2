@@ -67,7 +67,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     UserAuthService.SimpleUserDetail userDetail = userAuthService.getUserDetail(userId);
 
                     if (userDetail == null) {
-                        return; // User not found
+                        log.info("User {} not found in DB, skip authentication", userId);
+                        chain.doFilter(request, response);
+                        return;
                     }
 
                     // 根據 enabled 簡單判斷狀態 (這裡為了簡化，若 enabled=true 視為 ACTIVE)
@@ -86,7 +88,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                     // 2. 檢查狀態
                     if (!"ACTIVE".equals(currentStatus) && !"PENDING_VERIFICATION".equals(currentStatus)) {
-                        log.info("User {} is not active (status={})", userId, currentStatus);
+                        log.info("User {} is not active (status={}), skip authentication", userId, currentStatus);
+                        chain.doFilter(request, response);
                         return;
                     }
 

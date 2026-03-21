@@ -46,4 +46,14 @@ public class UpdateArticleRequest {
      * 文章分類 UUID 列表（可選，null 表示不更新，空列表表示清除所有分類）
      */
     private List<UUID> categoryIds;
+
+    /**
+     * 封面圖片 URL（可選，null 表示不更新）
+     */
+    private String coverImageUrl;
+
+    /**
+     * 標籤名稱列表（可選，null 表示不更新，空列表表示清除所有標籤）
+     */
+    private List<String> tagNames;
 }
