@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: 執行測試
+    name: 單元測試 + 整合測試
     runs-on: ubuntu-latest
     permissions:
       checks: write
@@ -25,14 +25,14 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: 執行所有測試
+      - name: 執行單元測試與整合測試
         run: ./mvnw -B verify --fail-at-end -T 2C --no-transfer-progress
 
       - name: 上傳測試報告到 Test Reporter
         if: always()
         uses: dorny/test-reporter@v1
         with:
-          name: Maven Tests
+          name: Unit + IT Tests
           path: '**/target/surefire-reports/*.xml'
           reporter: java-junit
 
@@ -50,3 +50,41 @@ jobs:
         with:
           name: jacoco-report
           path: '**/target/site/jacoco/'
+
+  e2e:
+    name: E2E 測試
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      checks: write
+      contents: read
+
+    steps:
+      - name: 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 安裝 Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 執行 E2E 測試（Testcontainers）
+        run: ./mvnw -B test -Pe2e -pl blog-start -am --no-transfer-progress
+
+      - name: 上傳 E2E 測試報告
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: E2E Tests
+          path: 'blog-start/target/surefire-reports/*.xml'
+          reporter: java-junit
+
+      - name: 上傳 E2E 測試報告到 Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reports
+          path: 'blog-start/target/surefire-reports/'
+          retention-days: 7
