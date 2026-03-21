@@ -60,7 +60,7 @@ class UUIDTypeHandlerTest {
         handler = new UUIDTypeHandler();
     }
 
-    // ─── setNonNullParameter ───────────────────────────────────────────────────
+    /** ─── setNonNullParameter ─────────────────────────────────────────────────── */
 
     /**
      * 驗證 setNonNullParameter 以 ps.setObject(i, uuid) 方式設定參數
@@ -73,7 +73,7 @@ class UUIDTypeHandlerTest {
         verify(preparedStatement).setObject(1, TEST_UUID);
     }
 
-    // ─── getNullableResult(ResultSet, String) ─────────────────────────────────
+    /** ─── getNullableResult(ResultSet, String) ───────────────────────────────── */
 
     /**
      * 驗證 getNullableResult(RS, columnName) 對非 null 字串正確解析為 UUID
@@ -101,7 +101,7 @@ class UUIDTypeHandlerTest {
         assertThat(result).isNull();
     }
 
-    // ─── getNullableResult(ResultSet, int) ────────────────────────────────────
+    /** ─── getNullableResult(ResultSet, int) ──────────────────────────────────── */
 
     /**
      * 驗證 getNullableResult(RS, columnIndex) 對非 null 字串正確解析為 UUID
@@ -129,7 +129,7 @@ class UUIDTypeHandlerTest {
         assertThat(result).isNull();
     }
 
-    // ─── getNullableResult(CallableStatement, int) ────────────────────────────
+    /** ─── getNullableResult(CallableStatement, int) ──────────────────────────── */
 
     /**
      * 驗證 getNullableResult(CS, columnIndex) 對非 null 字串正確解析為 UUID

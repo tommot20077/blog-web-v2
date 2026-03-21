@@ -682,17 +682,14 @@ class AuthControllerTest {
     // =========================================================================
 
     /**
-     * 驗證：未認證用戶呼叫登出時，因 /api/v1/auth/** 為 permitAll，
-     * 應正常執行並回傳 200（authService.logout 接收 null userId）。
+     * 驗證：未認證用戶呼叫登出時，因方法層 {@code @PreAuthorize("isAuthenticated()")} 要求認證，
+     * Spring Security 判斷為匿名用戶後委託 AuthenticationEntryPoint 回傳 401 Unauthorized。
      */
     @Test
-    @DisplayName("POST /logout → 未認證用戶（auth/** 為 permitAll）→ 應回傳 200")
-    void logout_unauthenticated_shouldReturn200BecauseAuthIsPermitAll() throws Exception {
-        doNothing().when(authService).logout(any(), any());
-
+    @DisplayName("POST /logout → 未認證用戶 → @PreAuthorize 拒絕，應回傳 401")
+    void logout_unauthenticated_shouldReturn401() throws Exception {
         mockMvc.perform(post("/api/v1/auth/logout"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("00000"));
+                .andExpect(status().isUnauthorized());
     }
 
     // =========================================================================

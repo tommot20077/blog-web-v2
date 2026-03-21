@@ -150,7 +150,7 @@ public class RedisKeyConstant {
         return RESEND_VERIFY_DAY_PREFIX + email;
     }
 
-    // ===================== Tag =====================
+    /** ===================== Tag ===================== */
 
     /**
      * 熱門標籤 ZSet Key
@@ -180,7 +180,7 @@ public class RedisKeyConstant {
         return TAG_DETAIL_PREFIX + slug;
     }
 
-    // ===================== Search =====================
+    /** ===================== Search ===================== */
 
     /**
      * 熱門搜尋詞 ZSet Key
@@ -204,7 +204,7 @@ public class RedisKeyConstant {
         return SEARCH_HISTORY_PREFIX + userId;
     }
 
-    // ===================== Recommend =====================
+    /** ===================== Recommend ===================== */
 
     /**
      * 熱門排行 ZSet Key 前綴
@@ -244,7 +244,7 @@ public class RedisKeyConstant {
      */
     public static final String LOCK_TRENDING_REFRESH = "lock:trending-refresh";
 
-    // ===================== Auth Hash Fields =====================
+    /** ===================== Auth Hash Fields ===================== */
 
     /**
      * Auth Hash 角色欄位

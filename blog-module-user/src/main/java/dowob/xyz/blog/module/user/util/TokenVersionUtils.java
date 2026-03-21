@@ -10,6 +10,9 @@ package dowob.xyz.blog.module.user.util;
  */
 public final class TokenVersionUtils {
 
+    /**
+     * 私有建構子，防止工具類別被實例化
+     */
     private TokenVersionUtils() {
     }
 

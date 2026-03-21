@@ -21,6 +21,10 @@ import java.util.UUID;
 @Data
 @Table("users")
 public class User {
+
+    /**
+     * 資料庫主鍵 ID
+     */
     @Id
     private Long id;
 

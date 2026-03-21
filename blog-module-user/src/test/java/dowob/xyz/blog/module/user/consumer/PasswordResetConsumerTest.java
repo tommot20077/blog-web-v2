@@ -53,6 +53,11 @@ class PasswordResetConsumerTest {
         verify(channel).basicAck(deliveryTag, false);
     }
 
+    /**
+     * 驗證 basicAck 失敗時，應呼叫 basicNack 將訊息送至 DLQ
+     *
+     * @throws IOException basicNack 可能拋出的 IO 例外
+     */
     @Test
     @DisplayName("basicAck 失敗時呼叫 basicNack")
     void handlePasswordResetRequested_onAckFailure_callsBasicNack() throws IOException {

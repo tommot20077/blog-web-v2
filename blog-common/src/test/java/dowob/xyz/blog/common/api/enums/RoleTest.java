@@ -58,7 +58,7 @@ class RoleTest {
         @Test
         @DisplayName("小寫 'user' 不符合精確比對，應拋出 BusinessException")
         void fromRoleName_lowercaseUser_throwsBusinessException() {
-            // fromRoleName 使用 equals()（非 equalsIgnoreCase()），應嚴格匹配
+            /** fromRoleName 使用 equals()（非 equalsIgnoreCase()），應嚴格匹配 */
             assertThatThrownBy(() -> Role.fromRoleName("user"))
                     .isInstanceOf(BusinessException.class);
         }

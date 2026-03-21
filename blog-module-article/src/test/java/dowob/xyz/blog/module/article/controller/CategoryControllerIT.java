@@ -172,7 +172,7 @@ class CategoryControllerIT {
     @Test
     @DisplayName("GET /api/v1/categories/{slug} - 取得已建立的分類詳情")
     void getCategoryBySlug_success() throws Exception {
-        // 先建立分類
+        /** 先建立分類 */
         CreateCategoryRequest createRequest = new CreateCategoryRequest();
         createRequest.setName("前端");
         createRequest.setSlug("frontend");
@@ -183,7 +183,7 @@ class CategoryControllerIT {
                 .content(objectMapper.writeValueAsString(createRequest)))
                 .andExpect(status().isOk());
 
-        // 取得分類詳情
+        /** 取得分類詳情 */
         mockMvc.perform(get("/api/v1/categories/frontend"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.name").value("前端"))
@@ -201,7 +201,7 @@ class CategoryControllerIT {
     @Test
     @DisplayName("PUT /api/admin/categories/{uuid} - Admin 更新分類")
     void updateCategory_adminSuccess() throws Exception {
-        // 建立分類
+        /** 建立分類 */
         CreateCategoryRequest createRequest = new CreateCategoryRequest();
         createRequest.setName("DevOps");
         createRequest.setSlug("devops");
@@ -215,7 +215,7 @@ class CategoryControllerIT {
 
         String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
 
-        // 更新分類
+        /** 更新分類 */
         UpdateCategoryRequest updateRequest = new UpdateCategoryRequest();
         updateRequest.setName("DevOps & 雲端");
 
@@ -230,7 +230,7 @@ class CategoryControllerIT {
     @Test
     @DisplayName("DELETE /api/admin/categories/{uuid} - Admin 刪除空分類成功")
     void deleteCategory_adminSuccess() throws Exception {
-        // 建立分類
+        /** 建立分類 */
         CreateCategoryRequest createRequest = new CreateCategoryRequest();
         createRequest.setName("測試分類");
         createRequest.setSlug("test-cat");
@@ -244,12 +244,12 @@ class CategoryControllerIT {
 
         String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
 
-        // 刪除分類
+        /** 刪除分類 */
         mockMvc.perform(delete("/api/admin/categories/" + uuid)
                 .with(asUser(AUTHOR_ID, Role.ADMIN)))
                 .andExpect(status().isOk());
 
-        // 確認已刪除
+        /** 確認已刪除 */
         mockMvc.perform(get("/api/v1/categories/test-cat"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0205"));
@@ -262,7 +262,7 @@ class CategoryControllerIT {
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
         when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
-        // 建立分類
+        /** 建立分類 */
         CreateCategoryRequest createRequest = new CreateCategoryRequest();
         createRequest.setName("有文章的分類");
         createRequest.setSlug("with-articles");
@@ -276,7 +276,7 @@ class CategoryControllerIT {
 
         String categoryUuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
 
-        // 建立文章並關聯分類
+        /** 建立文章並關聯分類 */
         CreateArticleRequest articleRequest = new CreateArticleRequest();
         articleRequest.setTitle("測試文章");
         articleRequest.setContent("測試內容");
@@ -288,7 +288,7 @@ class CategoryControllerIT {
                 .content(objectMapper.writeValueAsString(articleRequest)))
                 .andExpect(status().isOk());
 
-        // 嘗試刪除有文章的分類 → A0206
+        /** 嘗試刪除有文章的分類 -> A0206 */
         mockMvc.perform(delete("/api/admin/categories/" + categoryUuid)
                 .with(asUser(AUTHOR_ID, Role.ADMIN)))
                 .andExpect(status().isBadRequest())
@@ -302,7 +302,7 @@ class CategoryControllerIT {
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
         when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
-        // 建立分類
+        /** 建立分類 */
         CreateCategoryRequest categoryRequest = new CreateCategoryRequest();
         categoryRequest.setName("後端");
         categoryRequest.setSlug("backend");
@@ -316,7 +316,7 @@ class CategoryControllerIT {
 
         String categoryUuid = objectMapper.readTree(categoryResponse).path("data").path("uuid").asText();
 
-        // 建立並發布屬於此分類的文章
+        /** 建立並發布屬於此分類的文章 */
         CreateArticleRequest articleRequest = new CreateArticleRequest();
         articleRequest.setTitle("Java 入門");
         articleRequest.setContent("Java 後端內容");
@@ -331,18 +331,18 @@ class CategoryControllerIT {
 
         String articleUuid = objectMapper.readTree(articleResponse).path("data").path("uuid").asText();
 
-        // 發布文章
+        /** 發布文章 */
         mockMvc.perform(post("/api/v1/articles/" + articleUuid + "/publish")
                 .with(asUser(AUTHOR_ID, Role.AUTHOR)))
                 .andExpect(status().isOk());
 
-        // 依分類篩選 → 找到 1 篇
+        /** 依分類篩選 -> 找到 1 篇 */
         mockMvc.perform(get("/api/v1/articles?categorySlug=backend"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(1))
                 .andExpect(jsonPath("$.data.list[0].title").value("Java 入門"));
 
-        // 其他分類 → 0 篇
+        /** 其他分類 -> 0 篇 */
         mockMvc.perform(get("/api/v1/articles?categorySlug=frontend"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(0));
@@ -355,14 +355,14 @@ class CategoryControllerIT {
         request.setName("後端");
         request.setSlug("backend");
 
-        // 第一次建立成功
+        /** 第一次建立成功 */
         mockMvc.perform(post("/api/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk());
 
-        // 第二次同 slug → A0207
+        /** 第二次同 slug -> A0207 */
         CreateCategoryRequest duplicateRequest = new CreateCategoryRequest();
         duplicateRequest.setName("後端技術");
         duplicateRequest.setSlug("backend");
@@ -382,7 +382,7 @@ class CategoryControllerIT {
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
         when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
-        // 建立分類
+        /** 建立分類 */
         CreateCategoryRequest categoryRequest = new CreateCategoryRequest();
         categoryRequest.setName("後端");
         categoryRequest.setSlug("backend");
@@ -396,7 +396,7 @@ class CategoryControllerIT {
 
         String categoryUuid = objectMapper.readTree(categoryResponse).path("data").path("uuid").asText();
 
-        // 建立文章並關聯分類
+        /** 建立文章並關聯分類 */
         CreateArticleRequest articleRequest = new CreateArticleRequest();
         articleRequest.setTitle("分類文章");
         articleRequest.setContent("內容");
@@ -411,12 +411,12 @@ class CategoryControllerIT {
 
         String articleUuid = objectMapper.readTree(articleResponse).path("data").path("uuid").asText();
 
-        // 發布文章
+        /** 發布文章 */
         mockMvc.perform(post("/api/v1/articles/" + articleUuid + "/publish")
                 .with(asUser(AUTHOR_ID, Role.AUTHOR)))
                 .andExpect(status().isOk());
 
-        // 取得文章，驗證 categories 欄位
+        /** 取得文章，驗證 categories 欄位 */
         mockMvc.perform(get("/api/v1/articles/" + articleUuid))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.categories").isArray())

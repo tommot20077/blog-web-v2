@@ -27,7 +27,10 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class TagFacadeImpl implements TagFacade {
 
+    /** 標籤正規化服務（查找或建立標籤） */
     private final TagNormalizationService tagNormalizationService;
+
+    /** 文章-標籤關聯 Repository */
     private final ArticleTagRepository articleTagRepository;
 
     @Override
@@ -43,10 +46,10 @@ public class TagFacadeImpl implements TagFacade {
 
     @Override
     public void syncArticleTags(UUID articleUuid, List<UUID> tagIds) {
-        // 先清除舊關聯
+        /** 先清除舊關聯 */
         List<Tag> existingTags = articleTagRepository.findTagsByArticleId(articleUuid);
         existingTags.forEach(tag -> articleTagRepository.deleteByArticleIdAndTagId(articleUuid, tag.getId()));
-        // 建立新關聯
+        /** 建立新關聯 */
         if (tagIds == null) {
             tagIds = Collections.emptyList();
         }

@@ -162,7 +162,7 @@ class JwtAuthenticationFilterTest {
         }
     }
 
-    // ===== 未覆蓋路徑 =====
+    /** ===== 未覆蓋路徑 ===== */
 
     @Test
     @DisplayName("請求無 Authorization Header 時，應直接放行至下一個 Filter，SecurityContext 保持空白")
@@ -212,7 +212,7 @@ class JwtAuthenticationFilterTest {
         when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
         when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        // Redis miss: both fields return null
+        /** Redis miss: both fields return null */
         when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
         when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
         when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
@@ -242,7 +242,7 @@ class JwtAuthenticationFilterTest {
         when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
         when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        // Redis miss: version field returns null, triggering DB fallback
+        /** Redis miss: version field returns null, triggering DB fallback */
         when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
         when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
         when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
@@ -250,7 +250,7 @@ class JwtAuthenticationFilterTest {
 
         filter.doFilterInternal(request, response, chain);
 
-        // disabled user → status="SUSPENDED" → no auth set, but chain still called
+        /** disabled user -> status="SUSPENDED" -> no auth set, but chain still called */
         verify(chain).doFilter(request, response);
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
