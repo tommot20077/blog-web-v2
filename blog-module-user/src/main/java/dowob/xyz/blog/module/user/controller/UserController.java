@@ -66,7 +66,7 @@ public class UserController {
     /**
      * 刪除帳號
      *
-     * @param userId  Spring Security 認證物件，用於取得當前用戶 ID
+     * @param userId  當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
      * @param request 包含當前密碼的刪除帳號請求（用於二次身份確認）
      * @return 成功回應
      */

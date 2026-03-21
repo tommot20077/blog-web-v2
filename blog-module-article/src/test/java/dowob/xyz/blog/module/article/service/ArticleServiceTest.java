@@ -1436,6 +1436,25 @@ class ArticleServiceTest {
             verify(articleRepository).save(captor.capture());
             assertThat(captor.getValue().getPublishedAt()).isEqualTo(originalPublishedAt);
         }
+
+        @Test
+        @DisplayName("正常：publishArticle 應使用 save() 回傳的 entity 產生 response（確保 updatedAt 為最新）")
+        void publishArticle_shouldUseSavedEntityForResponse() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setUpdatedAt(LocalDateTime.of(2023, 1, 1, 0, 0));
+
+            Article savedArticle = buildArticle(ArticleStatus.PUBLISHED);
+            LocalDateTime savedUpdatedAt = LocalDateTime.of(2026, 3, 21, 12, 0);
+            savedArticle.setUpdatedAt(savedUpdatedAt);
+
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(savedArticle);
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
+
+            ArticleResponse response = articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            assertThat(response.getUpdatedAt()).isEqualTo(savedUpdatedAt);
+        }
     }
 
     /**

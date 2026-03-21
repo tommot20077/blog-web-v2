@@ -474,23 +474,28 @@ public class ArticleServiceImpl implements ArticleService {
         }
 
         /** DB 操作（save + 查詢 tags）在同一個 transaction 內 */
-        List<TagInfo> tags = transactionTemplate.execute(status -> {
-            articleRepository.save(article);
-            return articleMapper.findTagsByArticleUuid(article.getUuid());
+        Object[] txResult = transactionTemplate.execute(status -> {
+            Article saved = articleRepository.save(article);
+            List<TagInfo> tagInfos = articleMapper.findTagsByArticleUuid(saved.getUuid());
+            return new Object[]{saved, tagInfos};
         });
+
+        Article saved = (Article) txResult[0];
+        @SuppressWarnings("unchecked")
+        List<TagInfo> tags = (List<TagInfo>) txResult[1];
 
         /** DB 已 commit，best-effort 發送發布事件 MQ（失敗不影響發布結果） */
         try {
             ArticlePublishedEvent event = new ArticlePublishedEvent(
-                    article.getUuid(),
-                    article.getAuthorId(),
-                    article.getTitle(),
-                    article.getPublishedAt(),
-                    article.getSlug(),
-                    article.getSummary(),
-                    stripMarkdown(article.getContent()),
-                    userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
-                    resolveAuthorNickname(article.getAuthorId()),
+                    saved.getUuid(),
+                    saved.getAuthorId(),
+                    saved.getTitle(),
+                    saved.getPublishedAt(),
+                    saved.getSlug(),
+                    saved.getSummary(),
+                    stripMarkdown(saved.getContent()),
+                    userFacade.getUserUsernameById(saved.getAuthorId()).orElse(null),
+                    resolveAuthorNickname(saved.getAuthorId()),
                     tags);
             rabbitTemplate.convertAndSend(ArticleRabbitMqConfig.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED, event);
@@ -505,13 +510,13 @@ public class ArticleServiceImpl implements ArticleService {
                 rabbitTemplate.convertAndSend(
                         ArticleRabbitMqConfig.EXCHANGE,
                         ArticleRabbitMqConfig.ROUTING_KEY_TAGGED,
-                        new ArticleTagEvent(article.getUuid(), tagIds));
+                        new ArticleTagEvent(saved.getUuid(), tagIds));
             } catch (Exception e) {
                 log.warn("標籤事件 MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
         }
 
-        return toResponse(article);
+        return toResponse(saved);
     }
 
     /**

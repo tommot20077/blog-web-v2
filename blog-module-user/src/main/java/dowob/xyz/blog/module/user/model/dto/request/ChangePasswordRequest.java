@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.user.model.dto.request;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import dowob.xyz.blog.common.constant.PasswordPolicy;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
@@ -23,10 +24,10 @@ public class ChangePasswordRequest {
     private String oldPassword;
 
     /**
-     * 新密碼（最少 6 字元）
+     * 新密碼（{@value PasswordPolicy#MIN_LENGTH}~{@value PasswordPolicy#MAX_LENGTH} 字元）
      */
-    @Schema(description = "新密碼（最少 6 字元）")
+    @Schema(description = "新密碼（" + PasswordPolicy.MIN_LENGTH + "~" + PasswordPolicy.MAX_LENGTH + " 字元）")
     @NotBlank(message = "新密碼不能為空")
-    @Size(min = 6, message = "新密碼至少需要 6 字元")
+    @Size(min = PasswordPolicy.MIN_LENGTH, max = PasswordPolicy.MAX_LENGTH, message = PasswordPolicy.SIZE_MESSAGE)
     private String newPassword;
 }
