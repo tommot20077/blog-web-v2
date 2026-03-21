@@ -33,6 +33,13 @@ public enum UserStatus {
 
     ;
 
+    /**
+     * 從字串解析用戶狀態枚舉（不區分大小寫）
+     *
+     * @param status 狀態字串
+     * @return 對應的 {@link UserStatus} 枚舉值
+     * @throws BusinessException 當 status 為 null 或無法匹配時拋出
+     */
     public static UserStatus fromString(String status) {
         if (status == null) {
             throw new BusinessException(CommonErrorCode.REQUEST_PARAM_MISSING);
@@ -49,6 +56,11 @@ public enum UserStatus {
     }
 
 
+    /**
+     * 判斷用戶是否可用（ACTIVE 或 PENDING_VERIFICATION 狀態為可用）
+     *
+     * @return 若用戶狀態為 ACTIVE 或 PENDING_VERIFICATION 回傳 true，否則 false
+     */
     public boolean isAvailable() {
         return this == ACTIVE || this == PENDING_VERIFICATION;
     }

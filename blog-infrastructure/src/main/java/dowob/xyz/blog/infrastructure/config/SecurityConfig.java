@@ -38,6 +38,18 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    /**
+     * 建立 Spring Security 過濾器鏈
+     *
+     * <p>
+     * 停用 CSRF 與 Session，設定 CORS、路由授權規則，
+     * 並在 UsernamePasswordAuthenticationFilter 前插入 JWT 過濾器。
+     * </p>
+     *
+     * @param http Spring Security HTTP 配置器
+     * @return 已配置的 SecurityFilterChain
+     * @throws Exception 配置過程中發生的例外
+     */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
@@ -45,31 +57,31 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // 靜態資源與 Swagger
+                        /** 靜態資源與 Swagger */
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/favicon.ico", "/error").permitAll()
 
-                        // 認證相關 API
+                        /** 認證相關 API */
                         .requestMatchers("/api/v1/auth/**").permitAll()
 
-                        // 公開的 GET 請求 (文章、標籤、檔案元資料等) - 暫定，後續可細調
+                        /** 公開的 GET 請求（文章、標籤、檔案元資料等）- 暫定，後續可細調 */
                         .requestMatchers(HttpMethod.GET, "/api/v1/articles/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/categories/**").permitAll()
 
-                        // 推薦 API（公開）
+                        /** 推薦 API（公開） */
                         .requestMatchers(HttpMethod.GET, "/api/v1/recommend/**").permitAll()
 
-                        // 搜尋 API（公開查詢與建議，歷史記錄仍需認證）
+                        /** 搜尋 API（公開查詢與建議，歷史記錄仍需認證） */
                         .requestMatchers(HttpMethod.GET, "/api/v1/search").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
 
-                        // Admin 管理端點，僅 ADMIN 可存取
+                        /** Admin 管理端點，僅 ADMIN 可存取 */
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
-                        // 其他所有請求需認證
+                        /** 其他所有請求需認證 */
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(unauthorizedEntryPoint()))
@@ -105,7 +117,8 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of("*")); // 生產環境建議指定具體域名
+        /** 生產環境建議指定具體域名 */
+        configuration.setAllowedOrigins(List.of("*"));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
 

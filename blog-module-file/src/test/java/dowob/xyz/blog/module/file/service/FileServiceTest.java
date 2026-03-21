@@ -85,7 +85,7 @@ class FileServiceTest {
         ReflectionTestUtils.setField(fileService, "bucketName", "test-bucket");
         ReflectionTestUtils.setField(fileService, "minioEndpoint", "http://localhost:9000");
         ReflectionTestUtils.setField(fileService, "fileProperties", fileProperties);
-        // 讓 transactionTemplate.executeWithoutResult() 實際執行 callback
+        /** 讓 transactionTemplate.executeWithoutResult() 實際執行 callback */
         doAnswer(inv -> {
             @SuppressWarnings("unchecked")
             Consumer<TransactionStatus> consumer = inv.getArgument(0);
@@ -410,9 +410,9 @@ class FileServiceTest {
         };
     }
 
-    // ===========================
-    // 邊界測試：uploadFile 邊界分支
-    // ===========================
+    /** =========================== */
+    /** 邊界測試：uploadFile 邊界分支 */
+    /** =========================== */
 
     /** uploadFile：file.getBytes() 拋出 IOException */
     @Nested
@@ -502,7 +502,7 @@ class FileServiceTest {
         void uploadFile_withAdminRole_neverExceedsQuota() throws Exception {
             byte[] jpegBytes = minimalJpegBytes();
             MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
-            // 模擬已用空間遠超過一般使用者配額
+            /** 模擬已用空間遠超過一般使用者配額 */
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(Long.MAX_VALUE / 2);
             when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -522,11 +522,11 @@ class FileServiceTest {
         void uploadFile_withUnknownRole_fallsBackToUserQuota() throws Exception {
             byte[] jpegBytes = minimalJpegBytes();
             MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
-            // 剩餘空間充足（USER 配額 10MB，已用 0）
+            /** 剩餘空間充足（USER 配額 10MB，已用 0） */
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            // GUEST 角色在 quotas map 不存在，應 fallback USER 配額（10MB）
+            /** GUEST 角色在 quotas map 不存在，應 fallback USER 配額（10MB） */
             FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "GUEST");
 
             assertThat(response).isNotNull();
@@ -537,7 +537,7 @@ class FileServiceTest {
         void uploadFile_withUnknownRole_quotaExceeded_throwsException() {
             byte[] jpegBytes = minimalJpegBytes();
             MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
-            // 已用空間等於 USER fallback 配額（10MB），再上傳會超限
+            /** 已用空間等於 USER fallback 配額（10MB），再上傳會超限 */
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(10L * 1024 * 1024);
 
             assertThatThrownBy(() ->
@@ -556,7 +556,7 @@ class FileServiceTest {
         @DisplayName("uploadFile_withNoExtensionFilename_usesBinExtension")
         void uploadFile_withNoExtensionFilename_usesBinExtension() throws Exception {
             byte[] jpegBytes = minimalJpegBytes();
-            // filename 無 dot
+            /** filename 無 dot */
             MockMultipartFile file = new MockMultipartFile("file", "testfile", "image/jpeg", jpegBytes);
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -630,7 +630,7 @@ class FileServiceTest {
         @DisplayName("uploadFile_withLongFilenameVeryLongExt_truncatesTo255")
         void uploadFile_withLongFilenameVeryLongExt_truncatesTo255() throws Exception {
             byte[] jpegBytes = minimalJpegBytes();
-            // ext 長度 260 chars，allowedBase <= 0 → 直接截斷 255
+            /** ext 長度 260 chars，allowedBase <= 0 -> 直接截斷 255 */
             String longExt = "." + "e".repeat(260);
             String longName = "base" + longExt;
             MockMultipartFile file = new MockMultipartFile("file", longName, "image/jpeg", jpegBytes);
@@ -680,7 +680,7 @@ class FileServiceTest {
             metadata.setHasThumbnail(false);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
 
-            // admin 可以刪除非自己的檔案
+            /** admin 可以刪除非自己的檔案 */
             fileService.deleteFile(fileId, adminId, true);
 
             verify(fileMetadataRepository).deleteById(fileId);
@@ -706,7 +706,7 @@ class FileServiceTest {
 
             fileService.deleteFile(fileId, ownerId, false);
 
-            // buildThumbPath 無 dot 分支：storagePath + "_thumb"，仍應呼叫兩次 removeObject
+            /** buildThumbPath 無 dot 分支：storagePath + "_thumb"，仍應呼叫兩次 removeObject */
             verify(minioClient, times(2)).removeObject(any(RemoveObjectArgs.class));
         }
     }
@@ -770,7 +770,7 @@ class FileServiceTest {
         @DisplayName("getQuota_whenUsedExceedsLimit_remainingIsZero")
         void getQuota_whenUsedExceedsLimit_remainingIsZero() {
             UUID userId = UUID.randomUUID();
-            // 已用量超過 10MB USER 配額
+            /** 已用量超過 10MB USER 配額 */
             long usedBytes = 12L * 1024 * 1024;
             when(fileMetadataRepository.sumSizeByUploaderId(userId)).thenReturn(usedBytes);
 
@@ -793,11 +793,11 @@ class FileServiceTest {
             MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             when(fileMetadataRepository.save(any())).thenThrow(new RuntimeException("DB failure"));
-            // 補償刪除 MinIO 也拋出異常
+            /** 補償刪除 MinIO 也拋出異常 */
             doThrow(new RuntimeException("MinIO compensation failed"))
                     .when(minioClient).removeObject(any(RemoveObjectArgs.class));
 
-            // 應拋出原始 DB 例外（補償失敗只 log，不蓋過原始例外）
+            /** 應拋出原始 DB 例外（補償失敗只 log，不蓋過原始例外） */
             assertThatThrownBy(() ->
                     fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
                     .isInstanceOf(RuntimeException.class)

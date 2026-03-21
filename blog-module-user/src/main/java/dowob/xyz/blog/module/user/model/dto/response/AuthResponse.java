@@ -11,7 +11,7 @@ import lombok.Data;
  * Refresh Token 透過 HttpOnly Cookie 傳遞，不出現於此 DTO。</p>
  *
  * @author Yuan
- * @version 2.0
+ * @version 2.1
  */
 @Data
 @AllArgsConstructor

@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
+import dowob.xyz.blog.module.user.model.dto.request.DeleteAccountRequest;
 import dowob.xyz.blog.module.user.model.dto.request.UpdateProfileRequest;
 import dowob.xyz.blog.module.user.service.UserService;
 import org.junit.jupiter.api.DisplayName;
@@ -221,28 +222,36 @@ class UserControllerTest {
     // =========================================================================
 
     /**
-     * 驗證：已登入用戶提供正確密碼應成功刪除帳號並回傳 200。
+     * 驗證：已登入用戶透過 JSON body 提供正確密碼應成功刪除帳號並回傳 200。
      */
     @Test
-    @DisplayName("DELETE /users/me → 已登入，正確密碼 → 應回傳 200 成功回應")
+    @DisplayName("DELETE /users/me → 已登入，JSON body 正確密碼 → 應回傳 200 成功回應")
     void deleteAccount_authenticatedUser_shouldReturn200() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("correctPassword");
+
         doNothing().when(userService).deleteAccount(anyLong(), anyString());
 
         mockMvc.perform(delete("/api/v1/users/me")
                         .with(authentication(USER_AUTH))
-                        .param("password", "correctPassword"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
     }
 
     /**
-     * 驗證：未登入時存取應被拒絕（403 Forbidden）。
+     * 驗證：未登入時存取應被拒絕（401 Unauthorized）。
      */
     @Test
     @DisplayName("DELETE /users/me → 未登入 → 應回傳 401")
-    void deleteAccount_unauthenticated_shouldReturn403() throws Exception {
+    void deleteAccount_unauthenticated_shouldReturn401() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("somePassword");
+
         mockMvc.perform(delete("/api/v1/users/me")
-                        .param("password", "somePassword"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -252,13 +261,70 @@ class UserControllerTest {
     @Test
     @DisplayName("DELETE /users/me → 密碼錯誤 → 應回傳 USER_PASSWORD_ERROR 錯誤碼")
     void deleteAccount_wrongPassword_shouldReturnUserPasswordError() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("wrongPassword");
+
         doThrow(new BusinessException(UserErrorCode.USER_PASSWORD_ERROR))
                 .when(userService).deleteAccount(anyLong(), anyString());
 
         mockMvc.perform(delete("/api/v1/users/me")
                         .with(authentication(USER_AUTH))
-                        .param("password", "wrongPassword"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.USER_PASSWORD_ERROR.getCode()));
+    }
+
+    /**
+     * 驗證：刪除帳號請求密碼為空時應回傳驗證錯誤。
+     */
+    @Test
+    @DisplayName("DELETE /users/me → 密碼為空 → 應回傳驗證錯誤")
+    void deleteAccount_blankPassword_shouldReturnValidationError() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("");
+
+        mockMvc.perform(delete("/api/v1/users/me")
+                        .with(authentication(USER_AUTH))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 驗證：刪除帳號時 6 字元密碼應通過驗證（與全站密碼政策 min=6 一致）。
+     */
+    @Test
+    @DisplayName("DELETE /users/me → 6 字元密碼 → 應通過驗證回傳 200")
+    void deleteAccount_sixCharPassword_shouldPassValidation() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("abc123");
+
+        doNothing().when(userService).deleteAccount(anyLong(), anyString());
+
+        mockMvc.perform(delete("/api/v1/users/me")
+                        .with(authentication(USER_AUTH))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    /**
+     * 驗證：刪除帳號時 5 字元密碼應被驗證層擋下（低於全站密碼政策 min=6）。
+     */
+    @Test
+    @DisplayName("DELETE /users/me → 5 字元密碼 → 應回傳驗證錯誤")
+    void deleteAccount_fiveCharPassword_shouldReturnValidationError() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("abc12");
+
+        mockMvc.perform(delete("/api/v1/users/me")
+                        .with(authentication(USER_AUTH))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
     }
 }

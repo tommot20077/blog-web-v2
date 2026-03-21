@@ -20,6 +20,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -30,7 +31,7 @@ import org.springframework.web.bind.annotation.*;
  * 註冊、登入、登出、刷新 Token、電子信箱驗證、忘記密碼與重設密碼。</p>
  *
  * @author Yuan
- * @version 2.0
+ * @version 2.1
  */
 @Tag(name = "Auth", description = "認證相關 API")
 @RestController
@@ -141,11 +142,13 @@ public class AuthController {
      *
      * <p>清除 Redis 中的 Refresh Token 並重置 Cookie。</p>
      *
-     * @param authentication Spring Security 認證物件，用於取得當前用戶 ID
-     * @param response        HTTP 回應，用於清除 Cookie
+     * @param userId       當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param refreshToken Cookie 中的 Refresh Token（可為 null）
+     * @param response     HTTP 回應，用於清除 Cookie
      * @return 成功回應
      */
     @Operation(summary = "用戶登出", description = "清除 Refresh Token，使 Cookie 失效")
+    @PreAuthorize("isAuthenticated()")
     @PostMapping("/logout")
     public ApiResponse<Void> logout(@AuthenticationPrincipal Long userId,
                                     @CookieValue(name = "refreshToken", required = false) String refreshToken,

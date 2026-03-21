@@ -132,16 +132,17 @@ public class JwtService {
      * @return 計算後的結果點
      */
     private ECPoint multiply(BigInteger k, ECPoint point, EllipticCurve curve) {
-        ECPoint result = ECPoint.POINT_INFINITY; // 初始化為「無窮遠點」（加法單位元）
+        /** 初始化為「無窮遠點」（加法單位元） */
+        ECPoint result = ECPoint.POINT_INFINITY;
         ECPoint addend = point;
         while (k.signum() > 0) {
-            // 若當前位元為 1
+            /** 若當前位元為 1 */
             if (k.testBit(0)) {
                 result = addPoints(result, addend, curve);
             }
-            // 每個位元循環都執行倍增
+            /** 每個位元循環都執行倍增 */
             addend = addPoints(addend, addend, curve);
-            // 位元右移，處理下一個位元
+            /** 位元右移，處理下一個位元 */
             k = k.shiftRight(1);
         }
         return result;
@@ -162,7 +163,7 @@ public class JwtService {
      * @return 兩點之和
      */
     private ECPoint addPoints(ECPoint p1, ECPoint p2, EllipticCurve curve) {
-        // 若其中一點為無窮遠點，結果即為另一點
+        /** 若其中一點為無窮遠點，結果即為另一點 */
         if (p1.equals(ECPoint.POINT_INFINITY)) {
             return p2;
         }
@@ -170,7 +171,8 @@ public class JwtService {
             return p1;
         }
 
-        BigInteger p = ((ECFieldFp) curve.getField()).getP(); // 有限體 p
+        /** 有限體 p */
+        BigInteger p = ((ECFieldFp) curve.getField()).getP();
         BigInteger x1 = p1.getAffineX();
         BigInteger y1 = p1.getAffineY();
         BigInteger x2 = p2.getAffineX();
@@ -178,25 +180,23 @@ public class JwtService {
 
         BigInteger lambda;
         if (Objects.equals(x1, x2)) {
-            // 兩點相同 (Point Doubling) 或互為負點
+            /** 兩點相同 (Point Doubling) 或互為負點 */
             if (!Objects.equals(y1, y2)) {
-                return ECPoint.POINT_INFINITY; // 互為負點，結果為無窮遠
+                /** 互為負點，結果為無窮遠 */
+                return ECPoint.POINT_INFINITY;
             }
-            // 斜率 lambda = (3 * x1^2 + a) / (2 * y1) mod p
+            /** 斜率 lambda = (3 * x1^2 + a) / (2 * y1) mod p */
             lambda = x1.pow(2).multiply(BigInteger.valueOf(3))
                     .add(curve.getA())
                     .multiply(y1.multiply(BigInteger.TWO).modInverse(p))
                     .mod(p);
         } else {
-            // 兩點不同 (Point Addition)
-            // 斜率 lambda = (y2 - y1) / (x2 - x1) mod p
+            /** 兩點不同 (Point Addition)，斜率 lambda = (y2 - y1) / (x2 - x1) mod p */
             lambda = y2.subtract(y1)
                     .multiply(x2.subtract(x1).modInverse(p))
                     .mod(p);
         }
-        // 新點座標計算
-        // x3 = lambda^2 - x1 - x2 mod p
-        // y3 = lambda * (x1 - x3) - y1 mod p
+        /** 新點座標計算：x3 = lambda^2 - x1 - x2 mod p，y3 = lambda * (x1 - x3) - y1 mod p */
         BigInteger x3 = lambda.pow(2).subtract(x1).subtract(x2).mod(p);
         BigInteger y3 = lambda.multiply(x1.subtract(x3)).subtract(y1).mod(p);
         return new ECPoint(x3, y3);
@@ -285,23 +285,48 @@ public class JwtService {
         return validateToken(token) && "refresh".equals(getTokenTypeFromToken(token));
     }
 
+    /**
+     * 驗證 JWT Token 簽名與有效期
+     *
+     * @param token JWT Token 字串
+     * @return 若簽名有效且未過期回傳 true，否則 false
+     */
     public boolean validateToken(String token) {
         try {
-            Jwts.parser().verifyWith(publicKey).build().parseSignedClaims(token); // 使用公鑰驗證
+            /** 使用公鑰驗證 */
+            Jwts.parser().verifyWith(publicKey).build().parseSignedClaims(token);
             return true;
         } catch (Exception e) {
             return false;
         }
     }
 
+    /**
+     * 從 Token 取得用戶 ID（subject claim）
+     *
+     * @param token JWT Token 字串
+     * @return 用戶 ID 字串
+     */
     public String getUserIdFromToken(String token) {
         return extractClaim(token, Claims::getSubject);
     }
 
+    /**
+     * 從 Token 取得版本號（version claim）
+     *
+     * @param token JWT Token 字串
+     * @return Token 版本號字串
+     */
     public String getVersionFromToken(String token) {
         return extractClaim(token, claims -> claims.get("version", String.class));
     }
 
+    /**
+     * 從 Token 取得角色（role claim）
+     *
+     * @param token JWT Token 字串
+     * @return 對應的 {@link Role} 枚舉值
+     */
     public Role getRoleFromToken(String token) {
         return extractClaim(token, claims -> {
             String roleStr = claims.get("role", String.class);

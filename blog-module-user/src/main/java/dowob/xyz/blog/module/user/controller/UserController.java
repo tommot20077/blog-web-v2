@@ -2,12 +2,14 @@ package dowob.xyz.blog.module.user.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
+import dowob.xyz.blog.module.user.model.dto.request.DeleteAccountRequest;
 import dowob.xyz.blog.module.user.model.dto.request.UpdateProfileRequest;
 import dowob.xyz.blog.module.user.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -32,11 +34,12 @@ public class UserController {
     /**
      * 更新個人資料
      *
-     * @param authentication Spring Security 認證物件，用於取得當前用戶 ID
-     * @param request         包含新暱稱與個人簡介的請求
+     * @param userId  當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param request 包含新暱稱與個人簡介的請求
      * @return 成功回應
      */
     @Operation(summary = "更新個人資料", description = "更新當前登入用戶的暱稱與個人簡介")
+    @PreAuthorize("isAuthenticated()")
     @PatchMapping("/me/profile")
     public ApiResponse<Void> updateProfile(@AuthenticationPrincipal Long userId,
                                             @Valid @RequestBody UpdateProfileRequest request) {
@@ -47,11 +50,12 @@ public class UserController {
     /**
      * 修改密碼
      *
-     * @param authentication Spring Security 認證物件，用於取得當前用戶 ID
-     * @param request         包含舊密碼與新密碼的請求
+     * @param userId  當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param request 包含舊密碼與新密碼的請求
      * @return 成功回應
      */
     @Operation(summary = "修改密碼", description = "驗證舊密碼後更新密碼，所有現有 Token 將立即失效")
+    @PreAuthorize("isAuthenticated()")
     @PostMapping("/me/change-password")
     public ApiResponse<Void> changePassword(@AuthenticationPrincipal Long userId,
                                              @Valid @RequestBody ChangePasswordRequest request) {
@@ -62,15 +66,16 @@ public class UserController {
     /**
      * 刪除帳號
      *
-     * @param authentication Spring Security 認證物件，用於取得當前用戶 ID
-     * @param password        當前密碼（用於二次身份確認）
+     * @param userId  當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param request 包含當前密碼的刪除帳號請求（用於二次身份確認）
      * @return 成功回應
      */
     @Operation(summary = "刪除帳號", description = "驗證密碼後將帳號標記為已刪除，所有現有 Token 將立即失效")
+    @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/me")
     public ApiResponse<Void> deleteAccount(@AuthenticationPrincipal Long userId,
-                                            @RequestParam String password) {
-        userService.deleteAccount(userId, password);
+                                            @Valid @RequestBody DeleteAccountRequest request) {
+        userService.deleteAccount(userId, request.getPassword());
         return ApiResponse.success();
     }
 }

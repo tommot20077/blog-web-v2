@@ -26,6 +26,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CategoryController {
 
+    /** 分類業務服務 */
     private final CategoryService categoryService;
 
     /**

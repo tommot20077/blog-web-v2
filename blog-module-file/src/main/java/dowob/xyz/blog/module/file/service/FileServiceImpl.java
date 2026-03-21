@@ -84,7 +84,7 @@ public class FileServiceImpl implements FileService {
      */
     @Override
     public FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole) {
-        // F-2: 一次性讀取 bytes，避免多次消耗 InputStream
+        /** F-2: 一次性讀取 bytes，避免多次消耗 InputStream */
         byte[] fileBytes;
         try {
             fileBytes = file.getBytes();
@@ -140,7 +140,8 @@ public class FileServiceImpl implements FileService {
         }
         FileMetadata metadata = new FileMetadata();
         metadata.setId(fileId);
-        metadata.setOriginalName(sanitizeOriginalName(file.getOriginalFilename()));  // F-4
+        /** F-4: 正規化 originalName */
+        metadata.setOriginalName(sanitizeOriginalName(file.getOriginalFilename()));
         metadata.setStoragePath(storagePath);
         metadata.setContentType(detectedMimeType);
         metadata.setSize((long) fileBytes.length);
@@ -151,14 +152,14 @@ public class FileServiceImpl implements FileService {
         metadata.setUploaderId(uploaderId);
         metadata.setCreatedAt(now);
         metadata.setNewEntity(true);
-        // F-3: 僅 DB 操作在事務內；DB 失敗時補償刪除 MinIO 檔案
+        /** F-3: 僅 DB 操作在事務內；DB 失敗時補償刪除 MinIO 檔案 */
         try {
             transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.save(metadata));
         } catch (Exception e) {
             compensateMinioDelete(storagePath);
             throw e;
         }
-        // DB 已 commit，best-effort 發 MQ（失敗不影響上傳結果）
+        /** DB 已 commit，best-effort 發 MQ（失敗不影響上傳結果） */
         try {
             rabbitTemplate.convertAndSend(
                     FileRabbitMqConfig.EXCHANGE,

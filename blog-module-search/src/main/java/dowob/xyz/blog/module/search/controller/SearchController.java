@@ -48,8 +48,9 @@ public class SearchController {
      * @param q    搜尋關鍵字
      * @param tag  標籤 slug 過濾（可選）
      * @param sort 排序：{@code relevance}（預設）/ {@code latest} / {@code hot}
-     * @param page 頁碼（從 1 開始，預設 1）
-     * @param size 每頁筆數（預設 10）
+     * @param page   頁碼（從 1 開始，預設 1）
+     * @param size   每頁筆數（預設 10）
+     * @param userId 當前登入用戶的資料庫主鍵（匿名為 null，用於記錄搜尋歷史）
      * @return 分頁搜尋結果
      */
     @GetMapping
@@ -86,6 +87,7 @@ public class SearchController {
      * 需登入，回傳最近 20 筆搜尋紀錄。
      * </p>
      *
+     * @param userId 當前登入用戶的資料庫主鍵
      * @return 搜尋歷史列表（最新在前）
      */
     @PreAuthorize("isAuthenticated()")
@@ -104,6 +106,7 @@ public class SearchController {
      * 需登入，刪除所有個人搜尋紀錄。
      * </p>
      *
+     * @param userId 當前登入用戶的資料庫主鍵
      * @return 成功回應
      */
     @PreAuthorize("isAuthenticated()")
