@@ -266,11 +266,6 @@
                 <version>2.2.4</version>
                 <scope>test</scope>
             </dependency>
-            <dependency>
-                <groupId>org.junit.platform</groupId>
-                <artifactId>junit-platform-launcher</artifactId>
-                <scope>test</scope>
-            </dependency>
 
             <!-- File Module -->
             <dependency>
@@ -312,6 +307,11 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
