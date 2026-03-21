@@ -105,10 +105,11 @@ class UserE2E extends AbstractE2ETest {
         String token = authHelper.registerAndLogin(
                 "deleteacc@test.com", "password123", "deleteaccuser", "DeleteAccUser");
 
-        // Act — 刪除帳號
+        // Act — 刪除帳號（密碼透過 request body 傳遞）
         mockMvc.perform(delete(BASE_URL + "/me")
                         .with(AuthHelper.bearerToken(token))
-                        .param("password", "password123"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(java.util.Map.of("password", "password123"))))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 

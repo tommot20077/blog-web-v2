@@ -178,10 +178,11 @@ class UserLifecycleFlowE2E extends AbstractE2ETest {
                 newLoginResult.getResponse().getContentAsString())
                 .get("data").get("accessToken").asText();
 
-        // ===== 13. 刪除帳號 =====
+        // ===== 13. 刪除帳號（密碼透過 request body 傳遞）=====
         mockMvc.perform(delete("/api/v1/users/me")
-                        .param("password", newPassword)
-                        .with(AuthHelper.bearerToken(newToken)))
+                        .with(AuthHelper.bearerToken(newToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("password", newPassword))))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 
