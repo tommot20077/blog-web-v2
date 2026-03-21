@@ -36,6 +36,7 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -301,6 +302,71 @@ class TagControllerIT {
                                 buildAuth(1L, "USER", "COMMENT_WRITE")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/tags/{id}/follow - 已認證使用者取消追蹤標籤，回傳 200 成功")
+    void unfollowTag_authenticated_returns200() throws Exception {
+        UUID tagId = insertTestTag("Kubernetes", "kubernetes", 5);
+        UUID userUuid = UUID.randomUUID();
+        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.of(userUuid));
+
+        // 先追蹤
+        mockMvc.perform(post("/api/v1/tags/{id}/follow", tagId)
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "USER", "COMMENT_WRITE")))
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+
+        // 再取消追蹤
+        mockMvc.perform(delete("/api/v1/tags/{id}/follow", tagId)
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "USER", "COMMENT_WRITE"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/tags/{id}/follow - UserFacade 回傳 empty 時，回傳 400 且 code 為 A0101")
+    void unfollowTag_userNotFound_returns400WithA0101() throws Exception {
+        UUID tagId = insertTestTag("Docker", "docker", 3);
+        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.empty());
+
+        mockMvc.perform(delete("/api/v1/tags/{id}/follow", tagId)
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "USER", "COMMENT_WRITE"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0101"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/tags/{id}/follow - 未認證使用者，回傳 401")
+    void unfollowTag_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(delete("/api/v1/tags/{id}/follow", UUID.randomUUID()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/admin/tags/{id} - 具備 SYSTEM_CONFIG 權限的 ADMIN 刪除標籤，回傳 200 成功")
+    void adminDeleteTag_withSystemConfigPermission_returns200() throws Exception {
+        UUID tagId = insertTestTag("Obsolete", "obsolete", 0);
+
+        mockMvc.perform(delete("/api/admin/tags/{id}", tagId)
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "ADMIN", "SYSTEM_CONFIG"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/admin/tags/{id} - USER 角色（無 SYSTEM_CONFIG 權限），回傳 403")
+    void adminDeleteTag_withoutPermission_returns403() throws Exception {
+        UUID tagId = insertTestTag("Protected", "protected", 0);
+
+        mockMvc.perform(delete("/api/admin/tags/{id}", tagId)
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "USER", "COMMENT_WRITE"))))
                 .andExpect(status().isForbidden());
     }
 }

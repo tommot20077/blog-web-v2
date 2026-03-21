@@ -608,6 +608,95 @@ class ArticleControllerIT {
     }
 
     @Test
+    @DisplayName("GET /api/v1/articles/slug/{slug} - 以 slug 取得已發布文章")
+    void getArticleBySlug_success() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("Slug 測試文章");
+        createRequest.setContent("Slug 測試內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+        String slug = objectMapper.readTree(createResponse).path("data").path("slug").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/slug/" + slug))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("Slug 測試文章"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/submit - 作者送審草稿 → 狀態為 PENDING_REVIEW")
+    void submitForReview_authorSubmitsDraft_success() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("送審測試文章");
+        createRequest.setContent("送審測試內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/submit")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?categorySlug=xxx - 以分類 slug 篩選已發布文章")
+    void getPublishedArticles_withCategorySlug() throws Exception {
+        mockMvc.perform(get("/api/v1/articles")
+                .param("categorySlug", "nonexistent-category"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/me?status=DRAFT - 以狀態篩選我的文章")
+    void getMyArticles_withStatusFilter() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("草稿篩選測試");
+        createRequest.setContent("草稿內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/me")
+                .param("status", "DRAFT")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    @Test
     @DisplayName("GET /api/v1/articles/{uuid} - 同 IP 連續兩次存取，MQ 瀏覽事件只發送一次（防刷）")
     void getArticle_shouldNotCountViewTwice_whenSameIpWithinWindow() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
