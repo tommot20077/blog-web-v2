@@ -74,8 +74,9 @@ public class ViewCountServiceImpl implements ViewCountService {
      */
     @Override
     public void incrementRedisViewCount(UUID articleUuid) {
-        stringRedisTemplate.opsForValue()
-                .increment(RedisKeyConstant.ARTICLE_VIEWS_PREFIX + articleUuid);
+        String key = RedisKeyConstant.ARTICLE_VIEWS_PREFIX + articleUuid;
+        stringRedisTemplate.opsForValue().increment(key);
+        stringRedisTemplate.expire(key, RedisKeyConstant.ARTICLE_VIEWS_TTL_HOURS, java.util.concurrent.TimeUnit.HOURS);
     }
 
     /**

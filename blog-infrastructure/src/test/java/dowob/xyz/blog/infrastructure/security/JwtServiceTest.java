@@ -1,10 +1,13 @@
 package dowob.xyz.blog.infrastructure.security;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.Date;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,15 +43,16 @@ class JwtServiceTest {
      *
      * <p>
      * 因測試環境直接 new 物件而非透過 Spring Container，
-     * {@code @Value} 注入的 {@code expiration} 無法自動設定，
-     * 故使用 {@link ReflectionTestUtils#setField} 手動注入為 1 小時 (ms)。
+     * {@code @Value} 注入的欄位無法自動設定，
+     * 故使用 {@link ReflectionTestUtils#setField} 手動注入預設值：
+     * accessTokenExpiration = 900000ms（15 分鐘）。
      * </p>
      */
     @BeforeEach
     void setUp() {
         jwtService = new JwtService();
         ReflectionTestUtils.setField(jwtService, "expiration", 3600000L);
-        ReflectionTestUtils.setField(jwtService, "accessTokenExpiration", 3600000L);
+        ReflectionTestUtils.setField(jwtService, "accessTokenExpiration", 900000L);
         ReflectionTestUtils.setField(jwtService, "refreshTokenExpiration", 604800000L);
         jwtService.init();
     }
@@ -132,8 +136,6 @@ class JwtServiceTest {
     @Test
     @DisplayName("generateAccessToken → 應生成含 role 與 version 的 Access Token")
     void generateAccessToken_shouldProduceTokenWithRoleAndVersion() {
-        ReflectionTestUtils.setField(jwtService, "accessTokenExpiration", 3600000L);
-
         String token = jwtService.generateAccessToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
 
         assertThat(jwtService.getUserIdFromToken(token)).isEqualTo(String.valueOf(TEST_USER_ID));
@@ -163,8 +165,6 @@ class JwtServiceTest {
     @Test
     @DisplayName("getTokenType → Access Token 應回傳 'access'")
     void getTokenType_forAccessToken_shouldReturnAccess() {
-        ReflectionTestUtils.setField(jwtService, "accessTokenExpiration", 3600000L);
-
         String token = jwtService.generateAccessToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
 
         assertThat(jwtService.getTokenTypeFromToken(token)).isEqualTo("access");
@@ -205,7 +205,7 @@ class JwtServiceTest {
         JwtService svcWithPem = new JwtService();
         ReflectionTestUtils.setField(svcWithPem, "privateKeyPem", pem);
         ReflectionTestUtils.setField(svcWithPem, "expiration", 3600000L);
-        ReflectionTestUtils.setField(svcWithPem, "accessTokenExpiration", 3600000L);
+        ReflectionTestUtils.setField(svcWithPem, "accessTokenExpiration", 900000L);
         ReflectionTestUtils.setField(svcWithPem, "refreshTokenExpiration", 604800000L);
         svcWithPem.init();
 
@@ -264,7 +264,7 @@ class JwtServiceTest {
         JwtService svcNoPem = new JwtService();
         ReflectionTestUtils.setField(svcNoPem, "privateKeyPem", "");
         ReflectionTestUtils.setField(svcNoPem, "expiration", 3600000L);
-        ReflectionTestUtils.setField(svcNoPem, "accessTokenExpiration", 3600000L);
+        ReflectionTestUtils.setField(svcNoPem, "accessTokenExpiration", 900000L);
         ReflectionTestUtils.setField(svcNoPem, "refreshTokenExpiration", 604800000L);
         svcNoPem.init();
 
@@ -272,5 +272,40 @@ class JwtServiceTest {
 
         assertThat(svcNoPem.validateToken(token)).isTrue();
         assertThat(svcNoPem.getUserIdFromToken(token)).isEqualTo(String.valueOf(TEST_USER_ID));
+    }
+
+    /**
+     * 驗證：Access Token 預設過期時間應為 15 分鐘（900 秒）。
+     *
+     * <p>
+     * 不額外覆蓋 accessTokenExpiration，直接使用 setUp() 注入的值（反映 @Value 預設值）。
+     * 生成的 token 其 expiration claim 應距當下約 900 秒（容差 ±5 秒）。
+     * </p>
+     *
+     * <p>
+     * RED 狀態：setUp() 注入 3600000L（1小時），expiry ≈ 3600s，斷言失敗。<br>
+     * GREEN 狀態：setUp() 改注入 900000L（15分鐘），expiry ≈ 900s，斷言通過。
+     * </p>
+     */
+    @Test
+    @DisplayName("Access token 應在 15 分鐘後過期")
+    void generateAccessToken_shouldExpireIn15Minutes() {
+        // 不覆蓋 accessTokenExpiration，使用 setUp() 注入的預設值
+
+        long beforeMs = System.currentTimeMillis();
+        String token = jwtService.generateAccessToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        long afterMs = System.currentTimeMillis();
+
+        Claims claims = ReflectionTestUtils.invokeMethod(jwtService, "extractAllClaims", token);
+        assertThat(claims).isNotNull();
+
+        Date expiration = claims.getExpiration();
+        long expiryMs = expiration.getTime();
+
+        // expiry 應落在 [before + 895s, after + 905s] 區間內（±5 秒容差）
+        assertThat(expiryMs).isBetween(
+                beforeMs + 895_000L,
+                afterMs  + 905_000L
+        );
     }
 }

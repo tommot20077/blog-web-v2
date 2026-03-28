@@ -2,6 +2,8 @@ package dowob.xyz.blog.infrastructure.security;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
+
+import java.util.concurrent.TimeUnit;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -78,6 +80,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                     redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_VERSION, currentVersion);
                     redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_STATUS, currentStatus);
+                    redisTemplate.expire(redisKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
                 } else {
                     currentVersion = (String) redisVersionObj;
                     currentStatus = (String) redisStatusObj;

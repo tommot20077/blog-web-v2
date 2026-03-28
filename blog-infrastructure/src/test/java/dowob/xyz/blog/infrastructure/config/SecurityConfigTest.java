@@ -106,6 +106,16 @@ class SecurityConfigTest {
             return "category";
         }
 
+        @PostMapping("/api/v1/auth/logout")
+        public String authLogout() {
+            return "logout";
+        }
+
+        @PostMapping("/api/v1/auth/refresh")
+        public String authRefresh() {
+            return "refresh";
+        }
+
         @GetMapping("/api/v1/recommend/trending")
         public String getRecommend() {
             return "recommend";
@@ -175,6 +185,33 @@ class SecurityConfigTest {
                 .andExpect(status().isOk());
     }
 
+    // ── Auth 端點（logout/refresh 需認證）──
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/auth/logout 應回傳 401")
+    void logout_withoutAuth_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/auth/refresh 應回傳 401")
+    void refresh_withoutAuth_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("已認證 POST /api/v1/auth/logout 應回傳 200")
+    void logout_withAuth_shouldReturn200() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .with(asUser())
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
+
     // ── 公開 GET 端點 ──
 
     @Test
@@ -192,10 +229,10 @@ class SecurityConfigTest {
     }
 
     @Test
-    @DisplayName("未認證 GET /api/v1/users/** 應回傳 200")
-    void unauthenticatedGetUsers_shouldReturn200() throws Exception {
+    @DisplayName("未認證 GET /api/v1/users/** 應回傳 401（已收窄 permitAll）")
+    void unauthenticatedGetUsers_shouldReturn401() throws Exception {
         mockMvc.perform(get("/api/v1/users/1"))
-                .andExpect(status().isOk());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

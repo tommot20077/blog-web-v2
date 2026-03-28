@@ -154,6 +154,7 @@ public class AuthService {
         String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, user.getTokenVersion());
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, user.getStatus().name());
+        redisTemplate.expire(authKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
 
         String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
         redisTemplate.opsForZSet().add(refreshKey, refreshToken, System.currentTimeMillis());

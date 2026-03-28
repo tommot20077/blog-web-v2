@@ -100,7 +100,8 @@ class ArticleFacadeImplTest {
 
             assertThat(result).isPresent();
             assertThat(result.get().uuid()).isEqualTo(ARTICLE_UUID);
-            assertThat(result.get().tagIds()).containsExactly(1L, 2L);
+            List<Long> tagIds = result.get().tagIds();
+            assertThat(tagIds).containsExactly(1L, 2L);
         }
     }
 

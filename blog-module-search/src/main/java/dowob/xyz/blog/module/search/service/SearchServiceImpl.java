@@ -215,14 +215,19 @@ public class SearchServiceImpl implements SearchService {
      */
     private void recordSearch(String keyword, Long userId) {
         String lower = keyword.toLowerCase();
-        /** 更新熱門搜尋 ZSet（分數遞增） */
+        /** 更新熱門搜尋 ZSet（分數遞增），限制最多 500 個成員避免無限增長 */
         redisTemplate.opsForZSet().incrementScore(RedisKeyConstant.SEARCH_HOT_KEY, lower, 1.0);
+        Long hotSize = redisTemplate.opsForZSet().zCard(RedisKeyConstant.SEARCH_HOT_KEY);
+        if (hotSize != null && hotSize > 500) {
+            redisTemplate.opsForZSet().removeRange(RedisKeyConstant.SEARCH_HOT_KEY, 0, hotSize - 501);
+        }
 
         /** 記錄個人搜尋歷史 */
         if (userId != null) {
             String historyKey = RedisKeyConstant.getSearchHistoryKey(userId);
             redisTemplate.opsForList().leftPush(historyKey, lower);
             redisTemplate.opsForList().trim(historyKey, 0, HISTORY_MAX_SIZE - 1);
+            redisTemplate.expire(historyKey, RedisKeyConstant.SEARCH_HISTORY_TTL_DAYS, java.util.concurrent.TimeUnit.DAYS);
         }
     }
 

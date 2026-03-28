@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine # 使用指定版本的 PostgreSQL 映像
+          image: postgres:18-alpine # 使用指定版本的 PostgreSQL 映像
           envFrom:
             - secretRef:
                 name: postgres-secret # 從 Secret 中載入環境變數

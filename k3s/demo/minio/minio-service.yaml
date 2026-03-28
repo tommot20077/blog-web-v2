@@ -12,8 +12,8 @@ spec:
     - name: api
       port: 9000 # S3 API 端口
       targetPort: 9000
-      nodePort: 30128 # 外部訪問端口 (S3 API)
+      nodePort: 30132 # 外部訪問端口 (S3 API)
     - name: console
       port: 9001 # Console 端口
       targetPort: 9001
-      nodePort: 30129 # 外部訪問端口 (Console)
+      nodePort: 30133 # 外部訪問端口 (Console)

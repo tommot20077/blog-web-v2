@@ -141,7 +141,8 @@ public class ArticleServiceImpl implements ArticleService {
         article.setContentHtml(convertToHtml(request.getContent()));
         article.setSummary(extractSummary(request.getContent(), request.getSummary()));
         article.setSlug(generateSlug(request.getTitle()));
-        article.setStatus(request.getStatus() != null ? request.getStatus() : ArticleStatus.DRAFT);
+        // 建立文章時狀態一律強制為 DRAFT，防止用戶繞過審核流程直接發布
+        article.setStatus(ArticleStatus.DRAFT);
         article.setViewCount(0L);
         article.setLikeCount(0L);
         article.setCommentCount(0);

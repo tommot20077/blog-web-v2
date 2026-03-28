@@ -250,7 +250,11 @@ class AuthControllerTest {
     @Test
     @DisplayName("POST /refresh → 缺少 refreshToken Cookie → 應回傳 TOKEN_INVALID 錯誤碼")
     void refresh_missingCookie_shouldReturnTokenInvalid() throws Exception {
-        mockMvc.perform(post("/api/v1/auth/refresh"))
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .with(authentication(auth)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
@@ -261,9 +265,12 @@ class AuthControllerTest {
     @Test
     @DisplayName("POST /refresh → Token 驗證失敗 → 應回傳 TOKEN_INVALID 錯誤碼")
     void refresh_invalidToken_shouldReturnTokenInvalid() throws Exception {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
         when(jwtService.validateToken("invalid.token")).thenReturn(false);
 
         mockMvc.perform(post("/api/v1/auth/refresh")
+                        .with(authentication(auth))
                         .cookie(new Cookie("refreshToken", "invalid.token")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
@@ -581,6 +588,8 @@ class AuthControllerTest {
     @Test
     @DisplayName("POST /refresh → Token 不在 Redis ZSet 中（已撤銷）→ 應回傳 TOKEN_INVALID 錯誤碼")
     void refresh_tokenNotInRedis_shouldReturnTokenInvalid() throws Exception {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
@@ -589,6 +598,7 @@ class AuthControllerTest {
         when(zSetOps.score(anyString(), anyString())).thenReturn(null);
 
         mockMvc.perform(post("/api/v1/auth/refresh")
+                        .with(authentication(auth))
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
@@ -600,6 +610,8 @@ class AuthControllerTest {
     @Test
     @DisplayName("POST /refresh → 帳號已停權 → 應回傳 ACCOUNT_SUSPENDED 錯誤碼")
     void refresh_accountSuspended_shouldReturnAccountSuspendedError() throws Exception {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         @SuppressWarnings("unchecked")
@@ -614,6 +626,7 @@ class AuthControllerTest {
         when(hashOps.get(anyString(), eq("status"))).thenReturn("SUSPENDED");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
+                        .with(authentication(auth))
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.ACCOUNT_SUSPENDED.getCode()));
@@ -625,6 +638,8 @@ class AuthControllerTest {
     @Test
     @DisplayName("POST /refresh → Token 有效且帳號正常（role/version 皆存在）→ 應回傳新 Access Token")
     void refresh_validToken_shouldReturnNewAccessToken() throws Exception {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         @SuppressWarnings("unchecked")
@@ -642,6 +657,7 @@ class AuthControllerTest {
                 .thenReturn("new.access.token");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
+                        .with(authentication(auth))
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
@@ -654,6 +670,8 @@ class AuthControllerTest {
     @Test
     @DisplayName("POST /refresh → role/version 皆為 null → 應使用預設值並回傳新 Access Token")
     void refresh_nullRoleAndVersion_shouldUseDefaultsAndReturnNewAccessToken() throws Exception {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         @SuppressWarnings("unchecked")
@@ -671,6 +689,7 @@ class AuthControllerTest {
                 .thenReturn("new.access.token.defaults");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
+                        .with(authentication(auth))
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
@@ -682,17 +701,14 @@ class AuthControllerTest {
     // =========================================================================
 
     /**
-     * 驗證：未認證用戶呼叫登出時，因 /api/v1/auth/** 為 permitAll，
-     * 應正常執行並回傳 200（authService.logout 接收 null userId）。
+     * 驗證：未認證用戶呼叫登出時，因 logout 已收窄為 authenticated，
+     * 應回傳 401 Unauthorized。
      */
     @Test
-    @DisplayName("POST /logout → 未認證用戶（auth/** 為 permitAll）→ 應回傳 200")
-    void logout_unauthenticated_shouldReturn200BecauseAuthIsPermitAll() throws Exception {
-        doNothing().when(authService).logout(any(), any());
-
+    @DisplayName("POST /logout → 未認證用戶 → 應回傳 401（logout 需認證）")
+    void logout_unauthenticated_shouldReturn401() throws Exception {
         mockMvc.perform(post("/api/v1/auth/logout"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("00000"));
+                .andExpect(status().isUnauthorized());
     }
 
     // =========================================================================

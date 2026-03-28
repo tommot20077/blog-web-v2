@@ -69,6 +69,23 @@ blog:
       - image/webp
       - image/gif
 
+# Actuator 配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
+# CORS 配置（生產環境同域部署時不觸發，此為開發環境預設）
+app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000}
+
 # SpringDoc OpenAPI 配置
 springdoc:
   swagger-ui:
