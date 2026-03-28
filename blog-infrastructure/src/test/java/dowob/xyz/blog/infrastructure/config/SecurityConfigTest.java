@@ -185,7 +185,7 @@ class SecurityConfigTest {
                 .andExpect(status().isOk());
     }
 
-    // ── Auth 端點（logout/refresh 需認證）──
+    // ── Auth 端點（logout 需認證，refresh 靠 cookie 驗證保持公開）──
 
     @Test
     @DisplayName("未認證 POST /api/v1/auth/logout 應回傳 401")
@@ -196,18 +196,18 @@ class SecurityConfigTest {
     }
 
     @Test
-    @DisplayName("未認證 POST /api/v1/auth/refresh 應回傳 401")
-    void refresh_withoutAuth_shouldReturn401() throws Exception {
-        mockMvc.perform(post("/api/v1/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
     @DisplayName("已認證 POST /api/v1/auth/logout 應回傳 200")
     void logout_withAuth_shouldReturn200() throws Exception {
         mockMvc.perform(post("/api/v1/auth/logout")
                         .with(asUser())
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/auth/refresh 應回傳 200（permitAll，靠 cookie 驗證）")
+    void refresh_withoutAuth_shouldReturn200() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/refresh")
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk());
     }

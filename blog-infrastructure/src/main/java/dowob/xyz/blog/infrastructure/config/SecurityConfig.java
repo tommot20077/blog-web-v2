@@ -70,9 +70,8 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/favicon.ico", "/error").permitAll()
 
-                        // 認證相關 API（logout/refresh 需認證，其餘 auth 端點公開）
+                        // 認證相關 API（logout 需認證，refresh 靠 cookie 驗證故保持公開）
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout").authenticated()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/refresh").authenticated()
                         .requestMatchers("/api/v1/auth/**").permitAll()
 
                         // 公開的 GET 請求（文章、標籤、檔案元資料、分類）
