@@ -300,7 +300,7 @@ class TagServiceTest {
         verify(tagRepository).deleteById(id);
     }
 
-    // ─── suggest ────────────────────────────────────────────────────────────────
+    /** ─── suggest ──────────────────────────────────────────────────────────────── */
 
     @Test
     @DisplayName("suggest: Redis 回傳 null 時應回傳空列表")
@@ -313,7 +313,7 @@ class TagServiceTest {
         assertThat(result).isEmpty();
     }
 
-    // ─── getHotTags ─────────────────────────────────────────────────────────────
+    /** ─── getHotTags ───────────────────────────────────────────────────────────── */
 
     @Test
     @DisplayName("getHotTags: cache 為空 Set（非 null）時應從 DB 查詢")
@@ -354,7 +354,7 @@ class TagServiceTest {
         assertThat(result).isEmpty();
     }
 
-    // ─── getTagDetail ────────────────────────────────────────────────────────────
+    /** ─── getTagDetail ──────────────────────────────────────────────────────────── */
 
     @Test
     @DisplayName("getTagDetail: cache 回傳 null 時應從 DB 查詢")
@@ -384,7 +384,7 @@ class TagServiceTest {
         cacheData.put("id", id.toString());
         cacheData.put("name", "kotlin");
         cacheData.put("slug", "kotlin");
-        // usageCount intentionally omitted
+        /** usageCount intentionally omitted */
         when(hashOps.entries("tag:kotlin")).thenReturn(cacheData);
 
         TagDetailResponse result = tagService.getTagDetail("kotlin");
@@ -418,7 +418,7 @@ class TagServiceTest {
         }));
     }
 
-    // ─── adminUpdateTag ─────────────────────────────────────────────────────────
+    /** ─── adminUpdateTag ───────────────────────────────────────────────────────── */
 
     @Test
     @DisplayName("adminUpdateTag: tag 不存在時應拋出 TAG_NOT_FOUND")
@@ -470,7 +470,7 @@ class TagServiceTest {
         when(tagRepository.save(any(Tag.class))).thenReturn(tag);
 
         dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest request = new dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest();
-        // all fields null
+        /** all fields null */
 
         tagService.adminUpdateTag(id, request);
 
@@ -479,7 +479,7 @@ class TagServiceTest {
         assertThat(tag.getDescription()).isEqualTo("original desc");
     }
 
-    // ─── adminDeleteTag ─────────────────────────────────────────────────────────
+    /** ─── adminDeleteTag ───────────────────────────────────────────────────────── */
 
     @Test
     @DisplayName("adminDeleteTag: tag 不存在時應拋出 TAG_NOT_FOUND")

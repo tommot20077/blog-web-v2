@@ -222,11 +222,14 @@ class UserControllerTest {
     // =========================================================================
 
     /**
-     * 驗證：已登入用戶提供正確密碼應成功刪除帳號並回傳 200。
+     * 驗證：已登入用戶透過 JSON body 提供正確密碼應成功刪除帳號並回傳 200。
      */
     @Test
     @DisplayName("DELETE /users/me → 已登入，JSON body 正確密碼 → 應回傳 200 成功回應")
     void deleteAccount_authenticatedUser_shouldReturn200() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("correctPassword");
+
         doNothing().when(userService).deleteAccount(anyLong(), anyString());
 
         DeleteAccountRequest request = new DeleteAccountRequest();
@@ -241,7 +244,7 @@ class UserControllerTest {
     }
 
     /**
-     * 驗證：未登入時存取應被拒絕。
+     * 驗證：未登入時存取應被拒絕（401 Unauthorized）。
      */
     @Test
     @DisplayName("DELETE /users/me → 未登入 → 應回傳 401")
@@ -276,7 +279,7 @@ class UserControllerTest {
     }
 
     /**
-     * 驗證：密碼為空時應回傳驗證錯誤。
+     * 驗證：刪除帳號請求密碼為空時應回傳驗證錯誤。
      */
     @Test
     @DisplayName("DELETE /users/me → 密碼為空 → 應回傳驗證錯誤")
@@ -288,6 +291,43 @@ class UserControllerTest {
                         .with(authentication(USER_AUTH))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 驗證：刪除帳號時 6 字元密碼應通過驗證（與全站密碼政策 min=6 一致）。
+     */
+    @Test
+    @DisplayName("DELETE /users/me → 6 字元密碼 → 應通過驗證回傳 200")
+    void deleteAccount_sixCharPassword_shouldPassValidation() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("abc123");
+
+        doNothing().when(userService).deleteAccount(anyLong(), anyString());
+
+        mockMvc.perform(delete("/api/v1/users/me")
+                        .with(authentication(USER_AUTH))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    /**
+     * 驗證：刪除帳號時 5 字元密碼應被驗證層擋下（低於全站密碼政策 min=6）。
+     */
+    @Test
+    @DisplayName("DELETE /users/me → 5 字元密碼 → 應回傳驗證錯誤")
+    void deleteAccount_fiveCharPassword_shouldReturnValidationError() throws Exception {
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("abc12");
+
+        mockMvc.perform(delete("/api/v1/users/me")
+                        .with(authentication(USER_AUTH))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
     }
 }

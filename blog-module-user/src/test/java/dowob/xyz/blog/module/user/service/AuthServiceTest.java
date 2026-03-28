@@ -26,6 +26,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -44,7 +45,7 @@ import static org.mockito.Mockito.*;
  * </p>
  *
  * @author Yuan
- * @version 3.0
+ * @version 2.1
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -82,6 +83,10 @@ class AuthServiceTest {
     @Mock
     private VerificationTokenRepository verificationTokenRepository;
 
+    /** Mock：Spring 宣告式事務模板（TransactionTemplate） */
+    @Mock
+    private TransactionTemplate transactionTemplate;
+
     /** 受測物件，由 Mockito 自動注入所有 @Mock */
     @InjectMocks
     private AuthService authService;
@@ -104,9 +109,24 @@ class AuthServiceTest {
     /** 測試用 Refresh Token 字串 */
     private static final String MOCK_REFRESH_TOKEN = "mock.refresh.token";
 
-    // =========================================================================
-    // register 測試
-    // =========================================================================
+    @SuppressWarnings("unchecked")
+    @org.junit.jupiter.api.BeforeEach
+    void setUp() {
+        /** TransactionTemplate mock：直接執行回調 */
+        when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+            org.springframework.transaction.support.TransactionCallback<?> callback = inv.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        doAnswer(inv -> {
+            java.util.function.Consumer<org.springframework.transaction.TransactionStatus> action = inv.getArgument(0);
+            action.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
+    }
+
+    /* =========================================================================
+       register 測試
+       ========================================================================= */
 
     /**
      * 驗證：使用全新 email 與 nickname 註冊，應成功儲存用戶並發布 RabbitMQ 事件。
@@ -214,9 +234,9 @@ class AuthServiceTest {
         assertThat(captured.getTokenVersion()).isEqualTo("v1");
     }
 
-    // =========================================================================
-    // login 測試
-    // =========================================================================
+    /* =========================================================================
+       login 測試
+       ========================================================================= */
 
     /**
      * 驗證：使用正確帳密登入，應回傳包含 accessToken 與 refreshToken 的 LoginResult，
@@ -382,9 +402,9 @@ class AuthServiceTest {
         assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
     }
 
-    // =========================================================================
-    // logout 測試
-    // =========================================================================
+    /* =========================================================================
+       logout 測試
+       ========================================================================= */
 
     /**
      * 驗證：logout 應刪除 Redis 中的 Refresh Token。
@@ -400,9 +420,9 @@ class AuthServiceTest {
         verify(zSetOps).remove(anyString(), eq((Object) MOCK_REFRESH_TOKEN));
     }
 
-    // =========================================================================
-    // verifyEmail 測試
-    // =========================================================================
+    /* =========================================================================
+       verifyEmail 測試
+       ========================================================================= */
 
     /**
      * 驗證：使用有效 Token 驗證信箱，應將用戶狀態設為 ACTIVE、emailVerified=true 並刪除 Token。
@@ -462,9 +482,9 @@ class AuthServiceTest {
                         .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
-    // =========================================================================
-    // forgotPassword 測試
-    // =========================================================================
+    /* =========================================================================
+       forgotPassword 測試
+       ========================================================================= */
 
     /**
      * 驗證：forgotPassword 應儲存驗證 Token 並發布事件至 RabbitMQ。
@@ -556,9 +576,9 @@ class AuthServiceTest {
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
     }
 
-    // =========================================================================
-    // resetPassword 測試
-    // =========================================================================
+    /* =========================================================================
+       resetPassword 測試
+       ========================================================================= */
 
     /**
      * 驗證：resetPassword 使用有效 Token 應更新密碼並遞增 tokenVersion。
@@ -615,9 +635,9 @@ class AuthServiceTest {
                         .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
-    // =========================================================================
-    // login 鎖定測試
-    // =========================================================================
+    /* =========================================================================
+       login 鎖定測試
+       ========================================================================= */
 
     /**
      * 驗證：密碼錯誤時應遞增失敗計數器。
@@ -677,9 +697,9 @@ class AuthServiceTest {
         verify(redisTemplate).delete(contains("login:fail:"));
     }
 
-    // =========================================================================
-    // login ZSet 裝置限制測試
-    // =========================================================================
+    /* =========================================================================
+       login ZSet 裝置限制測試
+       ========================================================================= */
 
     /**
      * 驗證：login 應將 Refresh Token 加入 ZSet。
@@ -741,9 +761,9 @@ class AuthServiceTest {
         verify(zSetOps).remove(anyString(), eq((Object) MOCK_REFRESH_TOKEN));
     }
 
-    // =========================================================================
-    // resendVerification 測試
-    // =========================================================================
+    /* =========================================================================
+       resendVerification 測試
+       ========================================================================= */
 
     /**
      * 驗證：有效 PENDING 狀態用戶應成功發送驗證信。
@@ -812,9 +832,9 @@ class AuthServiceTest {
                         .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
     }
 
-    // =========================================================================
-    // login 邊界：failCountStr 存在但未達上限（< 5）
-    // =========================================================================
+    /* =========================================================================
+       login 邊界：failCountStr 存在但未達上限（< 5）
+       ========================================================================= */
 
     /**
      * 驗證：login 失敗計數器值存在但未達鎖定上限（例如 4），應繼續密碼驗證而非直接拋出 ACCOUNT_LOCKED。
@@ -835,9 +855,9 @@ class AuthServiceTest {
                         .isEqualTo(UserErrorCode.USER_PASSWORD_ERROR.getCode()));
     }
 
-    // =========================================================================
-    // login 邊界：首次密碼錯誤應設定 TTL；非首次不設
-    // =========================================================================
+    /* =========================================================================
+       login 邊界：首次密碼錯誤應設定 TTL；非首次不設
+       ========================================================================= */
 
     /**
      * 驗證：首次密碼錯誤（increment 回傳 1L）應呼叫 expire 設定鎖定 TTL。
@@ -898,9 +918,9 @@ class AuthServiceTest {
         verify(redisTemplate, never()).expire(contains("login:fail:"), anyLong(), any());
     }
 
-    // =========================================================================
-    // login 邊界：deviceCount 為 null 時不移除最舊 Token
-    // =========================================================================
+    /* =========================================================================
+       login 邊界：deviceCount 為 null 時不移除最舊 Token
+       ========================================================================= */
 
     /**
      * 驗證：zCard 回傳 null 時，不應呼叫 popMin 移除最舊 Token。
@@ -926,9 +946,9 @@ class AuthServiceTest {
         verify(zSetOps, never()).popMin(anyString());
     }
 
-    // =========================================================================
-    // logout 邊界：null 與 blank refreshToken 應刪除整個 ZSet Key
-    // =========================================================================
+    /* =========================================================================
+       logout 邊界：null 與 blank refreshToken 應刪除整個 ZSet Key
+       ========================================================================= */
 
     /**
      * 驗證：logout 傳入 null refreshToken 應刪除整個 ZSet Key（登出所有裝置）。
@@ -954,9 +974,9 @@ class AuthServiceTest {
         verify(redisTemplate, never()).opsForZSet();
     }
 
-    // =========================================================================
-    // verifyEmail 邊界：token 有效但 user 已不存在
-    // =========================================================================
+    /* =========================================================================
+       verifyEmail 邊界：token 有效但 user 已不存在
+       ========================================================================= */
 
     /**
      * 驗證：verifyEmail Token 有效但對應用戶不存在，應拋出 USER_NOT_FOUND BusinessException。
@@ -977,9 +997,9 @@ class AuthServiceTest {
                         .isEqualTo(UserErrorCode.USER_NOT_FOUND.getCode()));
     }
 
-    // =========================================================================
-    // forgotPassword 邊界：Redis increment 回傳 null（minCount / dayCount）
-    // =========================================================================
+    /* =========================================================================
+       forgotPassword 邊界：Redis increment 回傳 null（minCount / dayCount）
+       ========================================================================= */
 
     /**
      * 驗證：forgotPassword 的 minCount increment 回傳 null 時，不設 TTL 但繼續執行。
@@ -1032,9 +1052,9 @@ class AuthServiceTest {
         verify(verificationTokenRepository, never()).save(any());
     }
 
-    // =========================================================================
-    // resendVerification 邊界：Redis increment 回傳 null 及每日超限
-    // =========================================================================
+    /* =========================================================================
+       resendVerification 邊界：Redis increment 回傳 null 及每日超限
+       ========================================================================= */
 
     /**
      * 驗證：resendVerification 的 minCount increment 回傳 null 時，不設 TTL 但繼續執行。
@@ -1106,9 +1126,9 @@ class AuthServiceTest {
         verify(verificationTokenRepository, never()).save(any());
     }
 
-    // =========================================================================
-    // resetPassword 邊界：token 有效但 user 已不存在
-    // =========================================================================
+    /* =========================================================================
+       resetPassword 邊界：token 有效但 user 已不存在
+       ========================================================================= */
 
     /**
      * 驗證：resetPassword Token 有效但對應用戶不存在，應拋出 USER_NOT_FOUND BusinessException。
@@ -1129,9 +1149,9 @@ class AuthServiceTest {
                         .isEqualTo(UserErrorCode.USER_NOT_FOUND.getCode()));
     }
 
-    // =========================================================================
-    // incrementVersion 測試
-    // =========================================================================
+    /* =========================================================================
+       incrementVersion 測試
+       ========================================================================= */
 
     /**
      * 驗證：incrementVersion 應正確處理多位數進位（v9 → v10）。
@@ -1153,9 +1173,9 @@ class AuthServiceTest {
         assertThat(AuthService.incrementVersion("vX")).isEqualTo("v1");
     }
 
-    // =========================================================================
-    // 測試輔助方法
-    // =========================================================================
+    /* =========================================================================
+       測試輔助方法
+       ========================================================================= */
 
     /**
      * 建立一個 ACTIVE 狀態的測試用 User 物件。

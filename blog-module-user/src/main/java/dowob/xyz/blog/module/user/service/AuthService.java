@@ -16,11 +16,13 @@ import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -33,8 +35,9 @@ import java.util.concurrent.TimeUnit;
  * 登入採用雙 Token 架構（Access Token + Refresh Token）。</p>
  *
  * @author Yuan
- * @version 2.0
+ * @version 2.1
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthService {
@@ -57,6 +60,9 @@ public class AuthService {
     /** 驗證 Token 資料存取 */
     private final VerificationTokenRepository verificationTokenRepository;
 
+    /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
+    private final TransactionTemplate transactionTemplate;
+
     /**
      * 用戶註冊
      *
@@ -68,7 +74,6 @@ public class AuthService {
      * @param username 用戶名（唯一登入識別符）
      * @param nickname 暱稱
      */
-    @Transactional
     public void register(String email, String password, String username, String nickname) {
         if (userRepository.existsByEmail(email)) {
             throw new BusinessException(UserErrorCode.EMAIL_DUPLICATED);
@@ -90,22 +95,32 @@ public class AuthService {
         user.setStatus(UserStatus.PENDING_VERIFICATION);
         user.setTokenVersion("v1");
 
-        User savedUser = userRepository.save(user);
-
+        /** DB 操作（save user + save verificationToken）在同一個 transaction 內 */
         String tokenValue = UUID.randomUUID().toString();
-        VerificationToken verificationToken = new VerificationToken();
-        verificationToken.setUserId(savedUser.getId());
-        verificationToken.setToken(tokenValue);
-        verificationToken.setType("EMAIL_VERIFICATION");
-        verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
-        verificationToken.setCreatedAt(LocalDateTime.now());
-        verificationTokenRepository.save(verificationToken);
+        User savedUser = transactionTemplate.execute(status -> {
+            User saved = userRepository.save(user);
 
-        rabbitTemplate.convertAndSend(
-                UserRabbitMqConfig.EXCHANGE,
-                UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                new UserRegisteredEvent(savedUser.getId(), savedUser.getEmail(), savedUser.getNickname(), tokenValue)
-        );
+            VerificationToken verificationToken = new VerificationToken();
+            verificationToken.setUserId(saved.getId());
+            verificationToken.setToken(tokenValue);
+            verificationToken.setType("EMAIL_VERIFICATION");
+            verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
+            verificationToken.setCreatedAt(LocalDateTime.now());
+            verificationTokenRepository.save(verificationToken);
+
+            return saved;
+        });
+
+        /** DB 已 commit，best-effort 發 MQ（失敗不影響註冊結果） */
+        try {
+            rabbitTemplate.convertAndSend(
+                    UserRabbitMqConfig.EXCHANGE,
+                    UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
+                    new UserRegisteredEvent(savedUser.getId(), savedUser.getEmail(),
+                            savedUser.getNickname(), tokenValue));
+        } catch (Exception e) {
+            log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+        }
     }
 
     /**
@@ -223,8 +238,8 @@ public class AuthService {
      *
      * @param email 用戶電子信箱
      */
-    @Transactional
     public void forgotPassword(String email) {
+        /** 速率限制檢查（Redis 操作，不需要在 DB transaction 內） */
         String minKey = RedisKeyConstant.getForgotPwdMinKey(email);
         String dayKey = RedisKeyConstant.getForgotPwdDayKey(email);
 
@@ -245,20 +260,27 @@ public class AuthService {
         }
 
         userRepository.findByEmail(email).ifPresent(user -> {
+            /** DB 操作在 transaction 內 */
             String tokenValue = UUID.randomUUID().toString();
-            VerificationToken resetToken = new VerificationToken();
-            resetToken.setUserId(user.getId());
-            resetToken.setToken(tokenValue);
-            resetToken.setType("PASSWORD_RESET");
-            resetToken.setExpiresAt(LocalDateTime.now().plusMinutes(15));
-            resetToken.setCreatedAt(LocalDateTime.now());
-            verificationTokenRepository.save(resetToken);
+            transactionTemplate.executeWithoutResult(status -> {
+                VerificationToken resetToken = new VerificationToken();
+                resetToken.setUserId(user.getId());
+                resetToken.setToken(tokenValue);
+                resetToken.setType("PASSWORD_RESET");
+                resetToken.setExpiresAt(LocalDateTime.now().plusMinutes(15));
+                resetToken.setCreatedAt(LocalDateTime.now());
+                verificationTokenRepository.save(resetToken);
+            });
 
-            rabbitTemplate.convertAndSend(
-                    UserRabbitMqConfig.EXCHANGE,
-                    "user.password.reset",
-                    new UserPasswordResetRequestedEvent(user.getId(), user.getEmail(), tokenValue)
-            );
+            /** DB 已 commit，best-effort 發 MQ（失敗不影響忘記密碼結果） */
+            try {
+                rabbitTemplate.convertAndSend(
+                        UserRabbitMqConfig.EXCHANGE,
+                        UserRabbitMqConfig.ROUTING_KEY_PASSWORD_RESET,
+                        new UserPasswordResetRequestedEvent(user.getId(), user.getEmail(), tokenValue));
+            } catch (Exception e) {
+                log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+            }
         });
     }
 
@@ -272,8 +294,8 @@ public class AuthService {
      *
      * @param email 用戶電子信箱
      */
-    @Transactional
     public void resendVerification(String email) {
+        /** 速率限制檢查（Redis 操作，不需要在 DB transaction 內） */
         String minKey = RedisKeyConstant.getResendVerifyMinKey(email);
         String dayKey = RedisKeyConstant.getResendVerifyDayKey(email);
 
@@ -297,22 +319,30 @@ public class AuthService {
             if (user.getStatus() != UserStatus.PENDING_VERIFICATION) {
                 return;
             }
-            verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
 
+            /** DB 操作（delete + save）在 transaction 內 */
             String tokenValue = UUID.randomUUID().toString();
-            VerificationToken verificationToken = new VerificationToken();
-            verificationToken.setUserId(user.getId());
-            verificationToken.setToken(tokenValue);
-            verificationToken.setType("EMAIL_VERIFICATION");
-            verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
-            verificationToken.setCreatedAt(LocalDateTime.now());
-            verificationTokenRepository.save(verificationToken);
+            transactionTemplate.executeWithoutResult(status -> {
+                verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
 
-            rabbitTemplate.convertAndSend(
-                    UserRabbitMqConfig.EXCHANGE,
-                    UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                    new UserRegisteredEvent(user.getId(), user.getEmail(), user.getNickname(), tokenValue)
-            );
+                VerificationToken verificationToken = new VerificationToken();
+                verificationToken.setUserId(user.getId());
+                verificationToken.setToken(tokenValue);
+                verificationToken.setType("EMAIL_VERIFICATION");
+                verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
+                verificationToken.setCreatedAt(LocalDateTime.now());
+                verificationTokenRepository.save(verificationToken);
+            });
+
+            /** DB 已 commit，best-effort 發 MQ（失敗不影響重發結果） */
+            try {
+                rabbitTemplate.convertAndSend(
+                        UserRabbitMqConfig.EXCHANGE,
+                        UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
+                        new UserRegisteredEvent(user.getId(), user.getEmail(), user.getNickname(), tokenValue));
+            } catch (Exception e) {
+                log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+            }
         });
     }
 

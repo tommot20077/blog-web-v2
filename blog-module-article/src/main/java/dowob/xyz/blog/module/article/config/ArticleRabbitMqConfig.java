@@ -60,6 +60,11 @@ public class ArticleRabbitMqConfig {
     public static final String ROUTING_KEY_DELETED = "article.deleted";
 
     /**
+     * 文章被標記標籤 Routing Key
+     */
+    public static final String ROUTING_KEY_TAGGED = "article.tagged";
+
+    /**
      * 建立死信隊列（DLQ）參數
      *
      * @return 包含死信交換器與路由 Key 的 Map

@@ -61,8 +61,8 @@ class RecommendServiceTest {
     private RecommendServiceImpl service;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
-    private static final Long TAG_ID_1 = 1L;
-    private static final Long TAG_ID_2 = 2L;
+    private static final UUID TAG_ID_1 = UUID.randomUUID();
+    private static final UUID TAG_ID_2 = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {

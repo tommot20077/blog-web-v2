@@ -27,8 +27,10 @@ import org.mockito.quality.Strictness;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
@@ -45,6 +47,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -53,6 +56,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -99,6 +103,10 @@ class ArticleServiceTest {
     @Mock
     private TagFacade tagFacade;
 
+    /** Mock：Spring 宣告式事務模板（TransactionTemplate） */
+    @Mock
+    private TransactionTemplate transactionTemplate;
+
     @InjectMocks
     private ArticleServiceImpl articleService;
 
@@ -135,6 +143,7 @@ class ArticleServiceTest {
     @Mock
     private ValueOperations<String, String> valueOps;
 
+    @SuppressWarnings("unchecked")
     @BeforeEach
     void setUp() {
         when(userFacade.getUserUuidById(AUTHOR_ID)).thenReturn(Optional.of(AUTHOR_UUID));
@@ -143,6 +152,17 @@ class ArticleServiceTest {
         when(viewCountService.getViewCount(any())).thenReturn(0L);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
         when(categoryMapper.findCategoriesByArticleIds(any())).thenReturn(List.of());
+
+        /** TransactionTemplate mock：直接執行回調 */
+        when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+            org.springframework.transaction.support.TransactionCallback<?> callback = inv.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        doAnswer(inv -> {
+            Consumer<org.springframework.transaction.TransactionStatus> action = inv.getArgument(0);
+            action.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
     }
 
     /**
@@ -296,7 +316,7 @@ class ArticleServiceTest {
             CreateArticleRequest request = new CreateArticleRequest();
             request.setTitle("無標籤文章");
             request.setContent("內容");
-            // tagNames 預設為 null
+            /** tagNames 預設為 null */
 
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
@@ -347,7 +367,7 @@ class ArticleServiceTest {
             CreateArticleRequest request = new CreateArticleRequest();
             request.setTitle("無封面文章");
             request.setContent("內容");
-            // coverImageUrl 預設為 null
+            /** coverImageUrl 預設為 null */
 
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -568,7 +588,7 @@ class ArticleServiceTest {
             when(articleRepository.save(any(Article.class))).thenReturn(article);
 
             UpdateArticleRequest request = new UpdateArticleRequest();
-            // tagNames 為 null，不更新
+            /** tagNames 為 null，不更新 */
 
             articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
 
@@ -1442,6 +1462,25 @@ class ArticleServiceTest {
             verify(articleRepository).save(captor.capture());
             assertThat(captor.getValue().getPublishedAt()).isEqualTo(originalPublishedAt);
         }
+
+        @Test
+        @DisplayName("正常：publishArticle 應使用 save() 回傳的 entity 產生 response（確保 updatedAt 為最新）")
+        void publishArticle_shouldUseSavedEntityForResponse() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setUpdatedAt(LocalDateTime.of(2023, 1, 1, 0, 0));
+
+            Article savedArticle = buildArticle(ArticleStatus.PUBLISHED);
+            LocalDateTime savedUpdatedAt = LocalDateTime.of(2026, 3, 21, 12, 0);
+            savedArticle.setUpdatedAt(savedUpdatedAt);
+
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(savedArticle);
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
+
+            ArticleResponse response = articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            assertThat(response.getUpdatedAt()).isEqualTo(savedUpdatedAt);
+        }
     }
 
     /**
@@ -1742,6 +1781,149 @@ class ArticleServiceTest {
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                     any(ArticleViewedEvent.class));
+        }
+    }
+
+    /**
+     * ArticleTagEvent 發送測試（Task 4：article.tagged 事件 Producer）
+     */
+    @Nested
+    @DisplayName("ArticleTagEvent - article.tagged 事件發送")
+    class ArticleTagEventTests {
+
+        @Test
+        @DisplayName("正常：publishArticle 有 tags 時，應發送 ArticleTagEvent 至 article.tagged")
+        void publishArticle_withTags_shouldSendArticleTagEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UUID tagId1 = UUID.randomUUID();
+            UUID tagId2 = UUID.randomUUID();
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(
+                    List.of(new TagInfo(tagId1, "Spring", "spring"),
+                            new TagInfo(tagId2, "Java", "java")));
+
+            articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            ArgumentCaptor<ArticleTagEvent> captor = ArgumentCaptor.forClass(ArticleTagEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
+                    captor.capture());
+
+            ArticleTagEvent event = captor.getValue();
+            assertThat(event.articleId()).isEqualTo(ARTICLE_UUID);
+            assertThat(event.tagIds()).containsExactlyInAnyOrder(tagId1, tagId2);
+        }
+
+        @Test
+        @DisplayName("邊界：publishArticle 無 tags 時，不發送 ArticleTagEvent")
+        void publishArticle_withoutTags_shouldNotSendArticleTagEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
+
+            articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            verify(rabbitTemplate, never()).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
+                    any(ArticleTagEvent.class));
+        }
+
+        @Test
+        @DisplayName("正常：createArticle 有 tags 時，應發送 ArticleTagEvent 至 article.tagged")
+        void createArticle_withTags_shouldSendArticleTagEvent() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("有標籤文章");
+            request.setContent("內容");
+            request.setTagNames(List.of("Spring", "Java"));
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            UUID tagId1 = UUID.randomUUID();
+            UUID tagId2 = UUID.randomUUID();
+            when(tagFacade.findOrCreateTags(List.of("Spring", "Java")))
+                    .thenReturn(List.of(
+                            new TagInfo(tagId1, "Spring", "spring"),
+                            new TagInfo(tagId2, "Java", "java")));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            ArgumentCaptor<ArticleTagEvent> captor = ArgumentCaptor.forClass(ArticleTagEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
+                    captor.capture());
+
+            ArticleTagEvent event = captor.getValue();
+            assertThat(event.articleId()).isEqualTo(ARTICLE_UUID);
+            assertThat(event.tagIds()).containsExactlyInAnyOrder(tagId1, tagId2);
+        }
+
+        @Test
+        @DisplayName("邊界：createArticle 無 tags 時，不發送 ArticleTagEvent")
+        void createArticle_withoutTags_shouldNotSendArticleTagEvent() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("無標籤文章");
+            request.setContent("內容");
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            verify(rabbitTemplate, never()).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
+                    any(ArticleTagEvent.class));
+        }
+
+        @Test
+        @DisplayName("正常：updateArticle 有 tags 時，應發送 ArticleTagEvent 至 article.tagged")
+        void updateArticle_withTags_shouldSendArticleTagEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UUID tagId1 = UUID.randomUUID();
+            when(tagFacade.findOrCreateTags(List.of("Spring")))
+                    .thenReturn(List.of(new TagInfo(tagId1, "Spring", "spring")));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTagNames(List.of("Spring"));
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            ArgumentCaptor<ArticleTagEvent> captor = ArgumentCaptor.forClass(ArticleTagEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
+                    captor.capture());
+
+            ArticleTagEvent event = captor.getValue();
+            assertThat(event.articleId()).isEqualTo(ARTICLE_UUID);
+            assertThat(event.tagIds()).containsExactly(tagId1);
+        }
+
+        @Test
+        @DisplayName("邊界：updateArticle tagNames 為 null 時，不發送 ArticleTagEvent")
+        void updateArticle_withNullTagNames_shouldNotSendArticleTagEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+
+            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(rabbitTemplate, never()).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
+                    any(ArticleTagEvent.class));
         }
     }
 }

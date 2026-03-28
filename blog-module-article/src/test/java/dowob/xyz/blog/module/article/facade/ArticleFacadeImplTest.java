@@ -65,7 +65,7 @@ class ArticleFacadeImplTest {
     private ArticleSummaryRow row(Long id, UUID uuid, String title) {
         ArticleSummaryRow row = new ArticleSummaryRow();
         row.setId(id);
-        row.setUuid(uuid);
+        row.setUuid(uuid.toString());
         row.setTitle(title);
         row.setSlug("slug");
         row.setSummary("summary");
@@ -87,21 +87,23 @@ class ArticleFacadeImplTest {
             Optional<ArticleBasicInfo> result = facade.getPublishedArticleBasicInfo(ARTICLE_UUID);
 
             assertThat(result).isEmpty();
-            verify(recommendMapper, never()).findTagIdsByArticleId(anyLong());
+            verify(recommendMapper, never()).findTagIdsByArticleUuid(any(UUID.class));
         }
 
         @Test
         @DisplayName("文章存在時回傳基本資訊含標籤")
         void whenArticleExists_returnsBasicInfoWithTags() {
+            UUID tag1 = UUID.randomUUID();
+            UUID tag2 = UUID.randomUUID();
             when(recommendMapper.findPublishedIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_ID);
-            when(recommendMapper.findTagIdsByArticleId(ARTICLE_ID)).thenReturn(List.of(1L, 2L));
+            when(recommendMapper.findTagIdsByArticleUuid(ARTICLE_UUID))
+                    .thenReturn(List.of(tag1.toString(), tag2.toString()));
 
             Optional<ArticleBasicInfo> result = facade.getPublishedArticleBasicInfo(ARTICLE_UUID);
 
             assertThat(result).isPresent();
             assertThat(result.get().uuid()).isEqualTo(ARTICLE_UUID);
-            List<Long> tagIds = result.get().tagIds();
-            assertThat(tagIds).containsExactly(1L, 2L);
+            assertThat(result.get().tagIds()).containsExactly(tag1, tag2);
         }
     }
 
@@ -130,17 +132,18 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("正常查詢並組裝標籤名稱")
         void queriesAndAssemblesTagNames() {
+            UUID tagUuid = UUID.randomUUID();
             ArticleSummaryRow row = row(ARTICLE_ID, ARTICLE_UUID, "Test");
             ArticleTagRow tagRow = new ArticleTagRow();
-            tagRow.setArticleId(ARTICLE_ID);
+            tagRow.setArticleUuid(ARTICLE_UUID.toString());
             tagRow.setTagName("Java");
 
-            when(recommendMapper.findByTagIds(List.of(1L), ARTICLE_UUID, 5))
+            when(recommendMapper.findByTagIds(List.of(tagUuid.toString()), ARTICLE_UUID, 5))
                     .thenReturn(List.of(row));
-            when(recommendMapper.findTagsByArticleIds(List.of(ARTICLE_ID)))
+            when(recommendMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID.toString())))
                     .thenReturn(List.of(tagRow));
 
-            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(1L), ARTICLE_UUID, 5);
+            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(tagUuid), ARTICLE_UUID, 5);
 
             assertThat(result).hasSize(1);
             assertThat(result.get(0).title()).isEqualTo("Test");

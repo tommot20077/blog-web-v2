@@ -54,8 +54,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 String tokenVersion = jwtService.getVersionFromToken(jwt);
                 Role role = jwtService.getRoleFromToken(jwt);
 
-                // 檢查 Redis 中的版本號與狀態
-                // Key format: user:auth:{userId} -> Hash
+                /** 檢查 Redis 中的版本號與狀態，Key format: user:auth:{userId} -> Hash */
                 String redisKey = RedisKeyConstant.getUserAuthKey(userId);
                 Object redisVersionObj = redisTemplate.opsForHash().get(redisKey, RedisKeyConstant.FIELD_VERSION);
                 Object redisStatusObj = redisTemplate.opsForHash().get(redisKey, RedisKeyConstant.FIELD_STATUS);
@@ -64,7 +63,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 String currentStatus;
 
                 if (redisVersionObj == null || redisStatusObj == null) {
-                    // Redis Miss -> 查 DB 回填
+                    /** Redis Miss -> 查 DB 回填 */
                     currentVersion = userAuthService.getUserTokenVersion(userId);
                     UserAuthService.SimpleUserDetail userDetail = userAuthService.getUserDetail(userId);
 
@@ -74,8 +73,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         return;
                     }
 
-                    // 根據 enabled 簡單判斷狀態 (這裡為了簡化，若 enabled=true 視為 ACTIVE)
-                    // TODO: 之後 UserDetail 應直接回傳 UserStatus Enum
+                    /**
+                     * 根據 enabled 簡單判斷狀態（這裡為了簡化，若 enabled=true 視為 ACTIVE）
+                     * TODO: 之後 UserDetail 應直接回傳 UserStatus Enum
+                     */
                     currentStatus = userDetail.enabled() ? "ACTIVE" : "SUSPENDED";
 
                     redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_VERSION, currentVersion);
@@ -86,17 +87,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     currentStatus = (String) redisStatusObj;
                 }
 
-                // 1. 檢查版本號 (必須完全一致)
+                /** 1. 檢查版本號（必須完全一致） */
                 if (Objects.equals(tokenVersion, currentVersion)) {
 
-                    // 2. 檢查狀態
+                    /** 2. 檢查狀態 */
                     if (!"ACTIVE".equals(currentStatus) && !"PENDING_VERIFICATION".equals(currentStatus)) {
                         log.info("User {} is not active (status={}), skip authentication", userId, currentStatus);
                         chain.doFilter(request, response);
                         return;
                     }
 
-                    // Token 有效且狀態正常：組合角色字串與所有對應 Permission 為 GrantedAuthority 列表
+                    /** Token 有效且狀態正常：組合角色字串與所有對應 Permission 為 GrantedAuthority 列表 */
                     List<SimpleGrantedAuthority> authorities = new ArrayList<>();
                     authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
                     role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
@@ -112,7 +113,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
             }
         } catch (Exception e) {
-            // 不在 Filter 這裡拋出異常，讓 Spring Security 處理未認證狀態
+            /** 不在 Filter 這裡拋出異常，讓 Spring Security 處理未認證狀態 */
             log.error("Cannot set user authentication: {}", e.getMessage());
         }
 

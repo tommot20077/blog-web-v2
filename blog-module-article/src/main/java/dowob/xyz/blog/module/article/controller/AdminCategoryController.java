@@ -33,6 +33,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AdminCategoryController {
 
+    /** 分類業務服務 */
     private final CategoryService categoryService;
 
     /**

@@ -55,9 +55,10 @@ public class FileController {
     /**
      * 上傳檔案（需要 FILE_UPLOAD 權限）
      *
-     * @param file        上傳的檔案
-     * @param usageType   用途類型
-     * @param authentication 當前認證資訊
+     * @param file           上傳的檔案
+     * @param usageType      用途類型
+     * @param userId         當前登入用戶的資料庫主鍵
+     * @param authentication 當前認證資訊（用於解析角色）
      * @return 上傳成功的檔案資訊
      */
     @PostMapping("/api/v1/files/upload")
@@ -88,7 +89,8 @@ public class FileController {
      * 刪除檔案（需認證，擁有者或管理員可操作）
      *
      * @param id             檔案 UUID
-     * @param authentication 當前認證資訊
+     * @param userId         當前登入用戶的資料庫主鍵
+     * @param authentication 當前認證資訊（用於判斷是否為管理員）
      * @return 空回應
      */
     @DeleteMapping("/api/v1/files/{id}")
@@ -107,8 +109,8 @@ public class FileController {
     /**
      * 取得目前使用者的所有上傳檔案
      *
-     * @param authentication 當前認證資訊
-     * @param pageable       分頁參數
+     * @param userId   當前登入用戶的資料庫主鍵
+     * @param pageable 分頁參數
      * @return 檔案列表
      */
     @GetMapping("/api/v1/users/me/files")
@@ -123,7 +125,8 @@ public class FileController {
     /**
      * 取得目前使用者的儲存配額資訊
      *
-     * @param authentication 當前認證資訊
+     * @param userId         當前登入用戶的資料庫主鍵
+     * @param authentication 當前認證資訊（用於解析角色）
      * @return 配額資訊
      */
     @GetMapping("/api/v1/users/me/quota")

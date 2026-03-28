@@ -2,6 +2,8 @@ package dowob.xyz.blog.module.tag.model;
 
 import lombok.Data;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Transient;
+import org.springframework.data.domain.Persistable;
 import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
@@ -15,18 +17,30 @@ import java.util.UUID;
  * 包含使用計數的遞增與遞減操作。
  * </p>
  *
+ * <p>
+ * 實作 {@link Persistable} 以支援手動賦值 UUID 主鍵——
+ * Spring Data JDBC 預設以 ID 是否為 null 判斷新舊實體，
+ * 手動設定 UUID 後需明確標記為新實體才能正確執行 INSERT。
+ * </p>
+ *
  * @author Yuan
  * @version 1.0
  */
 @Data
 @Table("tags")
-public class Tag {
+public class Tag implements Persistable<UUID> {
 
     /**
      * 資料庫主鍵（UUID，手動賦值）
      */
     @Id
     private UUID id;
+
+    /**
+     * 標記此實體是否為新建（控制 save() 使用 INSERT 或 UPDATE）
+     */
+    @Transient
+    private boolean isNew = false;
 
     /**
      * 標籤名稱（唯一）

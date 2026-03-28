@@ -170,9 +170,11 @@ public class RabbitMqConfig {
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(converter);
         factory.setAcknowledgeMode(AcknowledgeMode.AUTO);
-        // 對於 Auto Ack 模式，通常不建議配置複雜的 RetryInterceptor，
-        // 因為一旦拋出異常，Spring AMQP 預設行為是無限 Requeue (除非配置了 error handler)
-        // 這裡保持預設行為，若有需要可額外配置 ErrorHandler
+        /**
+         * 對於 Auto Ack 模式，通常不建議配置複雜的 RetryInterceptor，
+         * 因為一旦拋出異常，Spring AMQP 預設行為是無限 Requeue（除非配置了 error handler）。
+         * 這裡保持預設行為，若有需要可額外配置 ErrorHandler。
+         */
         return factory;
     }
 

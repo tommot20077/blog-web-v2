@@ -34,8 +34,8 @@ public class UserController {
     /**
      * 更新個人資料
      *
-     * @param authentication Spring Security 認證物件，用於取得當前用戶 ID
-     * @param request         包含新暱稱與個人簡介的請求
+     * @param userId  當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param request 包含新暱稱與個人簡介的請求
      * @return 成功回應
      */
     @Operation(summary = "更新個人資料", description = "更新當前登入用戶的暱稱與個人簡介")
@@ -50,8 +50,8 @@ public class UserController {
     /**
      * 修改密碼
      *
-     * @param authentication Spring Security 認證物件，用於取得當前用戶 ID
-     * @param request         包含舊密碼與新密碼的請求
+     * @param userId  當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param request 包含舊密碼與新密碼的請求
      * @return 成功回應
      */
     @Operation(summary = "修改密碼", description = "驗證舊密碼後更新密碼，所有現有 Token 將立即失效")
@@ -66,8 +66,8 @@ public class UserController {
     /**
      * 刪除帳號
      *
-     * @param authentication Spring Security 認證物件，用於取得當前用戶 ID
-     * @param request         包含當前密碼的請求（用於二次身份確認）
+     * @param userId  當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param request 包含當前密碼的刪除帳號請求（用於二次身份確認）
      * @return 成功回應
      */
     @Operation(summary = "刪除帳號", description = "驗證密碼後將帳號標記為已刪除，所有現有 Token 將立即失效")

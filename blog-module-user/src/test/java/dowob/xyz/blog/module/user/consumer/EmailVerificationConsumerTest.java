@@ -25,12 +25,19 @@ import static org.mockito.Mockito.verify;
 @DisplayName("EmailVerificationConsumer 單元測試")
 class EmailVerificationConsumerTest {
 
+    /** 受測物件 */
     @InjectMocks
     private EmailVerificationConsumer consumer;
 
+    /** Mock RabbitMQ Channel */
     @Mock
     private Channel channel;
 
+    /**
+     * 驗證成功處理事件後，basicAck 被正確呼叫
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
     @Test
     @DisplayName("處理用戶註冊事件後應呼叫 basicAck")
     void handleUserRegistered_success_acksMessage() throws IOException {
@@ -42,6 +49,11 @@ class EmailVerificationConsumerTest {
         verify(channel).basicAck(deliveryTag, false);
     }
 
+    /**
+     * 驗證 basicAck 失敗時，應呼叫 basicNack 將訊息送至 DLQ
+     *
+     * @throws IOException basicNack 可能拋出的 IO 例外
+     */
     @Test
     @DisplayName("basicAck 失敗時呼叫 basicNack")
     void handleUserRegistered_onAckFailure_callsBasicNack() throws IOException {

@@ -55,7 +55,7 @@ public interface ArticleFacade {
      * @param limit       最多回傳筆數
      * @return 文章摘要列表
      */
-    List<ArticleSummaryInfo> getArticlesByTagIds(List<Long> tagIds, UUID excludeUuid, int limit);
+    List<ArticleSummaryInfo> getArticlesByTagIds(List<UUID> tagIds, UUID excludeUuid, int limit);
 
     /**
      * 查詢最新已發布文章（依發布時間降冪排序）

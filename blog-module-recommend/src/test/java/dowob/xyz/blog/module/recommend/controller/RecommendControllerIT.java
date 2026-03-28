@@ -124,7 +124,7 @@ class RecommendControllerIT {
 
         when(articleFacade.getPublishedArticleBasicInfo(targetUuid))
                 .thenReturn(Optional.of(new dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo(
-                        targetUuid, List.of(1L))));
+                        targetUuid, List.of(UUID.randomUUID()))));
         when(articleFacade.getArticlesByTagIds(anyList(), any(), anyInt()))
                 .thenReturn(List.of(summaryInfo(recommendedUuid, "Related Article")));
         when(searchFacade.findSimilarArticles(any(), anyInt()))

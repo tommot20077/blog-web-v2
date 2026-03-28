@@ -10,7 +10,7 @@ import lombok.Data;
  * <p>支援以電子信箱或暱稱作為登入識別符。</p>
  *
  * @author Yuan
- * @version 2.0
+ * @version 2.1
  */
 @Data
 @Schema(description = "登入請求")

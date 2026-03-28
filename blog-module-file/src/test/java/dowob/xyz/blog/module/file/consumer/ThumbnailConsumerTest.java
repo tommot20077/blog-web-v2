@@ -81,7 +81,7 @@ class ThumbnailConsumerTest {
         ImageUploadedEvent event = new ImageUploadedEvent(
                 UUID.randomUUID(), "files/error.jpg", "image/jpeg");
 
-        // minioClient.getObject 拋出例外以模擬失敗
+        /** minioClient.getObject 拋出例外以模擬失敗 */
         when(minioClient.getObject(any(GetObjectArgs.class)))
                 .thenThrow(new RuntimeException("MinIO connection failed"));
 

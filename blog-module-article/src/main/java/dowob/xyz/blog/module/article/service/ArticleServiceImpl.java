@@ -9,6 +9,7 @@ import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
@@ -37,6 +38,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -108,6 +110,9 @@ public class ArticleServiceImpl implements ArticleService {
      */
     private final TagFacade tagFacade;
 
+    /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
+    private final TransactionTemplate transactionTemplate;
+
     /**
      * Redis 防刷 Key 前綴
      */
@@ -131,7 +136,6 @@ public class ArticleServiceImpl implements ArticleService {
      * @return 建立後的文章完整資訊
      */
     @Override
-    @Transactional
     public ArticleResponse createArticle(Long authorId, CreateArticleRequest request) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
@@ -150,18 +154,43 @@ public class ArticleServiceImpl implements ArticleService {
             article.setCoverImageUrl(request.getCoverImageUrl());
         }
 
-        Article saved = articleRepository.save(article);
+        /**
+         * DB 操作（save + syncTags）在同一個 transaction 內。
+         * 回傳 Object[] 以同時取得 saved Article 與 tagInfos。
+         */
+        Object[] txResult = transactionTemplate.execute(status -> {
+            Article saved = articleRepository.save(article);
 
-        // 同步文章分類
-        if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
-            syncCategories(saved.getId(), request.getCategoryIds());
-        }
+            /** 同步文章分類 */
+            if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
+                syncCategories(saved.getId(), request.getCategoryIds());
+            }
 
-        // 同步文章標籤
-        if (request.getTagNames() != null && !request.getTagNames().isEmpty()) {
-            List<TagInfo> tags = tagFacade.findOrCreateTags(request.getTagNames());
-            List<UUID> tagIds = tags.stream().map(TagInfo::id).collect(Collectors.toList());
-            tagFacade.syncArticleTags(saved.getUuid(), tagIds);
+            /** 同步文章標籤 */
+            List<TagInfo> tags = List.of();
+            if (request.getTagNames() != null && !request.getTagNames().isEmpty()) {
+                tags = tagFacade.findOrCreateTags(request.getTagNames());
+                List<UUID> tagIds = tags.stream().map(TagInfo::id).collect(Collectors.toList());
+                tagFacade.syncArticleTags(saved.getUuid(), tagIds);
+            }
+            return new Object[]{saved, tags};
+        });
+
+        Article saved = (Article) txResult[0];
+        @SuppressWarnings("unchecked")
+        List<TagInfo> tagInfos = (List<TagInfo>) txResult[1];
+
+        /** DB 已 commit，best-effort 發送標籤事件 MQ（失敗不影響建立結果） */
+        if (tagInfos != null && !tagInfos.isEmpty()) {
+            try {
+                List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
+                rabbitTemplate.convertAndSend(
+                        ArticleRabbitMqConfig.EXCHANGE,
+                        ArticleRabbitMqConfig.ROUTING_KEY_TAGGED,
+                        new ArticleTagEvent(saved.getUuid(), tagIds));
+            } catch (Exception e) {
+                log.warn("標籤事件 MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+            }
         }
 
         return toResponse(saved);
@@ -177,7 +206,6 @@ public class ArticleServiceImpl implements ArticleService {
      * @return 更新後的文章完整資訊
      */
     @Override
-    @Transactional
     public ArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
             UpdateArticleRequest request) {
         Article article = findByUuidOrThrow(articleUuid);
@@ -206,32 +234,54 @@ public class ArticleServiceImpl implements ArticleService {
             article.setCoverImageUrl(request.getCoverImageUrl());
         }
 
-        Article updated;
-        try {
-            updated = articleRepository.save(article);
-        } catch (org.springframework.dao.OptimisticLockingFailureException e) {
-            throw new BusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE);
-        }
-
-        // 同步文章分類（null 表示不更新，空列表表示清除）
-        if (request.getCategoryIds() != null) {
-            syncCategories(updated.getId(), request.getCategoryIds());
-        }
-
-        // 同步文章標籤（null 表示不更新，空列表表示清除所有標籤）
-        if (request.getTagNames() != null) {
-            if (request.getTagNames().isEmpty()) {
-                tagFacade.deleteArticleTags(updated.getUuid());
-            } else {
-                List<TagInfo> tags = tagFacade.findOrCreateTags(request.getTagNames());
-                List<UUID> tagIds = tags.stream().map(TagInfo::id).collect(Collectors.toList());
-                tagFacade.syncArticleTags(updated.getUuid(), tagIds);
+        /** DB 操作（save + syncCategories + syncTags）在同一個 transaction 內 */
+        Object[] txResult = transactionTemplate.execute(status -> {
+            Article updated;
+            try {
+                updated = articleRepository.save(article);
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                throw new BusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE);
             }
-        }
 
-        /** 若文章狀態為 PUBLISHED，發送更新事件通知搜尋模組 */
+            /** 同步文章分類（null 表示不更新，空列表表示清除） */
+            if (request.getCategoryIds() != null) {
+                syncCategories(updated.getId(), request.getCategoryIds());
+            }
+
+            /** 同步文章標籤（null 表示不更新，空列表表示清除所有標籤） */
+            List<TagInfo> tags = List.of();
+            if (request.getTagNames() != null) {
+                if (request.getTagNames().isEmpty()) {
+                    tagFacade.deleteArticleTags(updated.getUuid());
+                } else {
+                    tags = tagFacade.findOrCreateTags(request.getTagNames());
+                    List<UUID> tagIds = tags.stream().map(TagInfo::id).collect(Collectors.toList());
+                    tagFacade.syncArticleTags(updated.getUuid(), tagIds);
+                }
+            }
+            return new Object[]{updated, tags};
+        });
+
+        Article updated = (Article) txResult[0];
+        @SuppressWarnings("unchecked")
+        List<TagInfo> tagInfos = (List<TagInfo>) txResult[1];
+
+        /** DB 已 commit，best-effort 發送更新事件 MQ */
         if (updated.getStatus() == ArticleStatus.PUBLISHED) {
             publishUpdatedEvent(updated);
+        }
+
+        /** DB 已 commit，best-effort 發送標籤事件 MQ */
+        if (tagInfos != null && !tagInfos.isEmpty()) {
+            try {
+                List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
+                rabbitTemplate.convertAndSend(
+                        ArticleRabbitMqConfig.EXCHANGE,
+                        ArticleRabbitMqConfig.ROUTING_KEY_TAGGED,
+                        new ArticleTagEvent(updated.getUuid(), tagIds));
+            } catch (Exception e) {
+                log.warn("標籤事件 MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+            }
         }
 
         return toResponse(updated);
@@ -245,17 +295,22 @@ public class ArticleServiceImpl implements ArticleService {
      * @param articleUuid  文章公開 UUID
      */
     @Override
-    @Transactional
     public void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
         Article article = findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
-        articleRepository.delete(article);
 
-        /** 發送刪除事件通知搜尋模組移除索引 */
-        rabbitTemplate.convertAndSend(
-                ArticleRabbitMqConfig.EXCHANGE,
-                ArticleRabbitMqConfig.ROUTING_KEY_DELETED,
-                new ArticleDeletedEvent(article.getUuid(), Instant.now()));
+        /** DB 刪除在 transaction 內 */
+        transactionTemplate.executeWithoutResult(status -> articleRepository.delete(article));
+
+        /** DB 已 commit，best-effort 發送刪除事件 MQ（失敗不影響刪除結果） */
+        try {
+            rabbitTemplate.convertAndSend(
+                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleRabbitMqConfig.ROUTING_KEY_DELETED,
+                    new ArticleDeletedEvent(article.getUuid(), Instant.now()));
+        } catch (Exception e) {
+            log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+        }
     }
 
     /**
@@ -409,7 +464,6 @@ public class ArticleServiceImpl implements ArticleService {
      * @return 發布後的文章完整資訊
      */
     @Override
-    @Transactional
     public ArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
         Article article = findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
@@ -420,24 +474,50 @@ public class ArticleServiceImpl implements ArticleService {
             article.setPublishedAt(LocalDateTime.now());
         }
 
-        Article updated = articleRepository.save(article);
+        /** DB 操作（save + 查詢 tags）在同一個 transaction 內 */
+        Object[] txResult = transactionTemplate.execute(status -> {
+            Article saved = articleRepository.save(article);
+            List<TagInfo> tagInfos = articleMapper.findTagsByArticleUuid(saved.getUuid());
+            return new Object[]{saved, tagInfos};
+        });
 
-        List<TagInfo> tags = articleMapper.findTagsByArticleUuid(updated.getUuid());
-        ArticlePublishedEvent event = new ArticlePublishedEvent(
-                updated.getUuid(),
-                updated.getAuthorId(),
-                updated.getTitle(),
-                updated.getPublishedAt(),
-                updated.getSlug(),
-                updated.getSummary(),
-                stripMarkdown(updated.getContent()),
-                userFacade.getUserUsernameById(updated.getAuthorId()).orElse(null),
-                resolveAuthorNickname(updated.getAuthorId()),
-                tags);
-        rabbitTemplate.convertAndSend(ArticleRabbitMqConfig.EXCHANGE, ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED,
-                event);
+        Article saved = (Article) txResult[0];
+        @SuppressWarnings("unchecked")
+        List<TagInfo> tags = (List<TagInfo>) txResult[1];
 
-        return toResponse(updated);
+        /** DB 已 commit，best-effort 發送發布事件 MQ（失敗不影響發布結果） */
+        try {
+            ArticlePublishedEvent event = new ArticlePublishedEvent(
+                    saved.getUuid(),
+                    saved.getAuthorId(),
+                    saved.getTitle(),
+                    saved.getPublishedAt(),
+                    saved.getSlug(),
+                    saved.getSummary(),
+                    stripMarkdown(saved.getContent()),
+                    userFacade.getUserUsernameById(saved.getAuthorId()).orElse(null),
+                    resolveAuthorNickname(saved.getAuthorId()),
+                    tags);
+            rabbitTemplate.convertAndSend(ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED, event);
+        } catch (Exception e) {
+            log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+        }
+
+        /** best-effort 發送標籤事件 MQ */
+        if (tags != null && !tags.isEmpty()) {
+            try {
+                List<UUID> tagIds = tags.stream().map(TagInfo::id).toList();
+                rabbitTemplate.convertAndSend(
+                        ArticleRabbitMqConfig.EXCHANGE,
+                        ArticleRabbitMqConfig.ROUTING_KEY_TAGGED,
+                        new ArticleTagEvent(saved.getUuid(), tagIds));
+            } catch (Exception e) {
+                log.warn("標籤事件 MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+            }
+        }
+
+        return toResponse(saved);
     }
 
     /**
@@ -840,21 +920,25 @@ public class ArticleServiceImpl implements ArticleService {
      * @param article 更新後的文章實體
      */
     private void publishUpdatedEvent(Article article) {
-        List<TagInfo> tags = articleMapper.findTagsByArticleUuid(article.getUuid());
-        ArticleUpdatedEvent event = new ArticleUpdatedEvent(
-                article.getUuid(),
-                article.getAuthorId(),
-                article.getTitle(),
-                article.getPublishedAt(),
-                article.getSlug(),
-                article.getSummary(),
-                stripMarkdown(article.getContent()),
-                userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
-                resolveAuthorNickname(article.getAuthorId()),
-                tags);
-        rabbitTemplate.convertAndSend(
-                ArticleRabbitMqConfig.EXCHANGE,
-                ArticleRabbitMqConfig.ROUTING_KEY_UPDATED,
-                event);
+        try {
+            List<TagInfo> tags = articleMapper.findTagsByArticleUuid(article.getUuid());
+            ArticleUpdatedEvent event = new ArticleUpdatedEvent(
+                    article.getUuid(),
+                    article.getAuthorId(),
+                    article.getTitle(),
+                    article.getPublishedAt(),
+                    article.getSlug(),
+                    article.getSummary(),
+                    stripMarkdown(article.getContent()),
+                    userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
+                    resolveAuthorNickname(article.getAuthorId()),
+                    tags);
+            rabbitTemplate.convertAndSend(
+                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleRabbitMqConfig.ROUTING_KEY_UPDATED,
+                    event);
+        } catch (Exception e) {
+            log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+        }
     }
 }

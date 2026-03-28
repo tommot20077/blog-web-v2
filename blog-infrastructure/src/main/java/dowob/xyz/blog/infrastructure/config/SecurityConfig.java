@@ -44,6 +44,18 @@ public class SecurityConfig {
     @Value("${app.cors.allowed-origins:http://localhost:3000}")
     private List<String> allowedOrigins;
 
+    /**
+     * 建立 Spring Security 過濾器鏈
+     *
+     * <p>
+     * 停用 CSRF 與 Session，設定 CORS、路由授權規則，
+     * 並在 UsernamePasswordAuthenticationFilter 前插入 JWT 過濾器。
+     * </p>
+     *
+     * @param http Spring Security HTTP 配置器
+     * @return 已配置的 SecurityFilterChain
+     * @throws Exception 配置過程中發生的例外
+     */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
@@ -69,17 +81,17 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/categories/**").permitAll()
 
-                        // 推薦 API（公開）
+                        /** 推薦 API（公開） */
                         .requestMatchers(HttpMethod.GET, "/api/v1/recommend/**").permitAll()
 
-                        // 搜尋 API（公開查詢與建議，歷史記錄仍需認證）
+                        /** 搜尋 API（公開查詢與建議，歷史記錄仍需認證） */
                         .requestMatchers(HttpMethod.GET, "/api/v1/search").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
 
-                        // Admin 管理端點，僅 ADMIN 可存取
+                        /** Admin 管理端點，僅 ADMIN 可存取 */
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
-                        // 其他所有請求需認證
+                        /** 其他所有請求需認證 */
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(unauthorizedEntryPoint()))
