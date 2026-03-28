@@ -153,10 +153,11 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("查詢結果為空時回傳空列表")
         void whenMapperReturnsEmpty_returnsEmptyList() {
-            when(recommendMapper.findByTagIds(List.of(1L), ARTICLE_UUID, 5))
+            UUID tagUuid = UUID.randomUUID();
+            when(recommendMapper.findByTagIds(List.of(tagUuid.toString()), ARTICLE_UUID, 5))
                     .thenReturn(Collections.emptyList());
 
-            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(1L), ARTICLE_UUID, 5);
+            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(tagUuid), ARTICLE_UUID, 5);
 
             assertThat(result).isEmpty();
         }
@@ -164,14 +165,15 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("文章無對應標籤時 tagNames 回傳空列表")
         void whenNoTagsForArticle_tagNamesIsEmpty() {
+            UUID tagUuid = UUID.randomUUID();
             ArticleSummaryRow row = row(ARTICLE_ID, ARTICLE_UUID, "No Tags");
 
-            when(recommendMapper.findByTagIds(List.of(1L), ARTICLE_UUID, 5))
+            when(recommendMapper.findByTagIds(List.of(tagUuid.toString()), ARTICLE_UUID, 5))
                     .thenReturn(List.of(row));
-            when(recommendMapper.findTagsByArticleIds(List.of(ARTICLE_ID)))
+            when(recommendMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID.toString())))
                     .thenReturn(Collections.emptyList());
 
-            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(1L), ARTICLE_UUID, 5);
+            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(tagUuid), ARTICLE_UUID, 5);
 
             assertThat(result).hasSize(1);
             assertThat(result.get(0).tagNames()).isEmpty();
@@ -204,12 +206,12 @@ class ArticleFacadeImplTest {
         void queriesAndAssemblesTagNames() {
             ArticleSummaryRow row = row(ARTICLE_ID, ARTICLE_UUID, "By UUID");
             ArticleTagRow tagRow = new ArticleTagRow();
-            tagRow.setArticleId(ARTICLE_ID);
+            tagRow.setArticleUuid(ARTICLE_UUID.toString());
             tagRow.setTagName("Spring");
 
             when(recommendMapper.findByUuids(List.of(ARTICLE_UUID)))
                     .thenReturn(List.of(row));
-            when(recommendMapper.findTagsByArticleIds(List.of(ARTICLE_ID)))
+            when(recommendMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID.toString())))
                     .thenReturn(List.of(tagRow));
 
             List<ArticleSummaryInfo> result = facade.getPublishedArticlesByUuids(List.of(ARTICLE_UUID));
@@ -228,12 +230,12 @@ class ArticleFacadeImplTest {
         void queriesAndAssemblesResults() {
             ArticleSummaryRow row = row(ARTICLE_ID, ARTICLE_UUID, "Recent");
             ArticleTagRow tagRow = new ArticleTagRow();
-            tagRow.setArticleId(ARTICLE_ID);
+            tagRow.setArticleUuid(ARTICLE_UUID.toString());
             tagRow.setTagName("Java");
 
             when(recommendMapper.findRecentPublished(ARTICLE_UUID, 5))
                     .thenReturn(List.of(row));
-            when(recommendMapper.findTagsByArticleIds(List.of(ARTICLE_ID)))
+            when(recommendMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID.toString())))
                     .thenReturn(List.of(tagRow));
 
             List<ArticleSummaryInfo> result = facade.getRecentPublishedArticles(ARTICLE_UUID, 5);

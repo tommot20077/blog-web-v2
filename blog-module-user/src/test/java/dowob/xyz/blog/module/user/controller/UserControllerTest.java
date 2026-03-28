@@ -227,9 +227,6 @@ class UserControllerTest {
     @Test
     @DisplayName("DELETE /users/me → 已登入，JSON body 正確密碼 → 應回傳 200 成功回應")
     void deleteAccount_authenticatedUser_shouldReturn200() throws Exception {
-        DeleteAccountRequest request = new DeleteAccountRequest();
-        request.setPassword("correctPassword");
-
         doNothing().when(userService).deleteAccount(anyLong(), anyString());
 
         DeleteAccountRequest request = new DeleteAccountRequest();
