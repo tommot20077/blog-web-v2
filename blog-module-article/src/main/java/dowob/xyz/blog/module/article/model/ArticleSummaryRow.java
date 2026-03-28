@@ -3,8 +3,6 @@ package dowob.xyz.blog.module.article.model;
 import lombok.Data;
 
 import java.time.LocalDateTime;
-import java.util.UUID;
-
 /**
  * 文章摘要查詢結果原始資料
  *
@@ -28,7 +26,7 @@ public class ArticleSummaryRow {
     /**
      * 文章公開 UUID
      */
-    private UUID uuid;
+    private String uuid;
 
     /**
      * 文章標題

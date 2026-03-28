@@ -1,0 +1,35 @@
+# E2E 測試專用配置
+# 所有外部服務連線（DB/Redis/RabbitMQ/MinIO/ES）由 @DynamicPropertySource 注入，不在此設定
+
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+  rabbitmq:
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+
+mybatis:
+  mapper-locations: classpath*:mapper/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    use-generated-keys: true
+
+minio:
+  bucket-name: blog-e2e-test
+
+blog:
+  file:
+    quotas:
+      USER: 10MB
+      AUTHOR: 500MB
+    allowed-mime-types:
+      - image/jpeg
+      - image/png
+      - image/webp
+      - image/gif

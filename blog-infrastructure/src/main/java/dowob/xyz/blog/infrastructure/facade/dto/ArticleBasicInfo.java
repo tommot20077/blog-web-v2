@@ -18,6 +18,6 @@ import java.util.UUID;
  */
 public record ArticleBasicInfo(
         UUID uuid,
-        List<Long> tagIds
+        List<UUID> tagIds
 ) {
 }

@@ -68,6 +68,7 @@ public class TagNormalizationServiceImpl implements TagNormalizationService {
         newTag.setName(normalized);
         newTag.setSlug(slug);
         newTag.setCreatedAt(LocalDateTime.now());
+        newTag.setNew(true);
         Tag saved = tagRepository.save(newTag);
 
         redisTemplate.opsForZSet().add(RedisKeyConstant.TAG_AUTOCOMPLETE_KEY, slug, 0.0);
