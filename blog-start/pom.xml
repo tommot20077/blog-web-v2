@@ -25,6 +25,12 @@
             <version>${log4j2.version}</version>
         </dependency>
 
+        <!-- Actuator（Health Probe + 可觀測性基礎） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
         <!-- Modules -->
         <dependency>
             <groupId>dowob.xyz</groupId>

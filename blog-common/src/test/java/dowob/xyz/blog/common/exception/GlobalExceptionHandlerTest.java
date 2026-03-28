@@ -17,6 +17,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.MapBindingResult;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -345,5 +346,37 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().getCode()).isEqualTo("400");
         assertThat(response.getBody().getMessage()).isEqualTo("參數驗證失敗");
         assertThat(response.getBody().getMessage()).doesNotContain("internal detail");
+    }
+
+    /**
+     * 驗證 ConstraintViolationException 的 violations 為 null 時，回傳通用訊息
+     */
+    @Test
+    @DisplayName("ConstraintViolationException violations 為 null 時，應回傳 '參數驗證失敗'")
+    void handleConstraintViolation_withNullViolations_returnsGenericMessage() {
+        ConstraintViolationException ex = new ConstraintViolationException("internal detail", null);
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleConstraintViolation(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode()).isEqualTo("400");
+        assertThat(response.getBody().getMessage()).isEqualTo("參數驗證失敗");
+    }
+
+    /**
+     * 驗證 HttpMediaTypeNotSupportedException 回傳 HTTP 415
+     */
+    @Test
+    @DisplayName("HttpMediaTypeNotSupportedException 應回傳 HTTP 415")
+    void handleUnsupportedMediaType_returns415() {
+        HttpMediaTypeNotSupportedException ex =
+                new HttpMediaTypeNotSupportedException("Content-Type 'text/plain' is not supported");
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleUnsupportedMediaTypeException(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode()).isEqualTo("415");
     }
 }

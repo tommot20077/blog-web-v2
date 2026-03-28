@@ -6,17 +6,24 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.amqp.core.ReturnedMessage;
+import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * RabbitMqConfig 單元測試
@@ -129,5 +136,93 @@ class RabbitMqConfigTest {
 
         assertThat(template).isNotNull();
         assertThat(template.isMandatoryFor(new Message(new byte[0]))).isTrue();
+    }
+
+    /**
+     * 驗證 messageConverter 回傳 Jackson2JsonMessageConverter
+     */
+    @Test
+    @DisplayName("messageConverter 應回傳 Jackson2JsonMessageConverter 實例")
+    void messageConverter_returnsJacksonConverter() {
+        MessageConverter converter = config.messageConverter();
+
+        assertThat(converter).isNotNull();
+        assertThat(converter).isInstanceOf(Jackson2JsonMessageConverter.class);
+    }
+
+    /**
+     * 驗證 autoAckContainerFactory 配置為 AUTO acknowledge mode
+     */
+    @Test
+    @DisplayName("autoAckContainerFactory 應配置為 AUTO acknowledge mode")
+    void autoAckContainerFactory_hasAutoAck() {
+        MessageConverter converter = config.messageConverter();
+        SimpleRabbitListenerContainerFactory factory =
+                config.autoAckContainerFactory(connectionFactory, converter);
+
+        assertThat(factory).isNotNull();
+
+        SimpleMessageListenerContainer container =
+                (SimpleMessageListenerContainer) factory.createListenerContainer();
+        assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.AUTO);
+    }
+
+    /**
+     * 驗證 rabbitTemplate 使用 CachingConnectionFactory 時，配置 Publisher Confirm 與 Returns
+     */
+    @Test
+    @DisplayName("rabbitTemplate 使用 CachingConnectionFactory 時應配置 CORRELATED confirm 與 publisherReturns")
+    void rabbitTemplate_withCachingConnectionFactory_configuresPublisherConfirm() {
+        CachingConnectionFactory cachingCf = mock(CachingConnectionFactory.class);
+
+        RabbitTemplate template = config.rabbitTemplate(cachingCf);
+
+        assertThat(template).isNotNull();
+        verify(cachingCf).setPublisherConfirmType(CachingConnectionFactory.ConfirmType.CORRELATED);
+        verify(cachingCf).setPublisherReturns(true);
+    }
+
+    /**
+     * 驗證 rabbitTemplate 的 ConfirmCallback 處理 nack（ack=false）不拋出異常
+     */
+    @Test
+    @DisplayName("rabbitTemplate 的 ConfirmCallback 收到 nack 時不應拋出異常")
+    void rabbitTemplate_confirmCallback_handlesNackWithoutException() {
+        RabbitTemplate template = config.rabbitTemplate(connectionFactory);
+
+        RabbitTemplate.ConfirmCallback confirmCallback =
+                (RabbitTemplate.ConfirmCallback) ReflectionTestUtils.getField(template, "confirmCallback");
+        assertThat(confirmCallback).isNotNull();
+        confirmCallback.confirm(null, false, "broker rejected");
+    }
+
+    /**
+     * 驗證 rabbitTemplate 的 ConfirmCallback 處理 ack（ack=true）不拋出異常
+     */
+    @Test
+    @DisplayName("rabbitTemplate 的 ConfirmCallback 收到 ack 時不應拋出異常")
+    void rabbitTemplate_confirmCallback_handlesAckWithoutException() {
+        RabbitTemplate template = config.rabbitTemplate(connectionFactory);
+
+        RabbitTemplate.ConfirmCallback confirmCallback =
+                (RabbitTemplate.ConfirmCallback) ReflectionTestUtils.getField(template, "confirmCallback");
+        assertThat(confirmCallback).isNotNull();
+        confirmCallback.confirm(null, true, null);
+    }
+
+    /**
+     * 驗證 rabbitTemplate 的 ReturnsCallback 處理 returned message 不拋出異常
+     */
+    @Test
+    @DisplayName("rabbitTemplate 的 ReturnsCallback 處理 returned message 不應拋出異常")
+    void rabbitTemplate_returnsCallback_handlesReturnedMessageWithoutException() {
+        RabbitTemplate template = config.rabbitTemplate(connectionFactory);
+
+        RabbitTemplate.ReturnsCallback returnsCallback =
+                (RabbitTemplate.ReturnsCallback) ReflectionTestUtils.getField(template, "returnsCallback");
+        assertThat(returnsCallback).isNotNull();
+        ReturnedMessage returned = new ReturnedMessage(
+                new Message(new byte[0]), 312, "NO_ROUTE", "test.exchange", "test.key");
+        returnsCallback.returnedMessage(returned);
     }
 }

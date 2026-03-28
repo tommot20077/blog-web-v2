@@ -85,4 +85,50 @@ class RedisKeyConstantTest {
     void fieldRole_hasExpectedValue() {
         assertThat(RedisKeyConstant.FIELD_ROLE).isEqualTo("role");
     }
+
+    @Test
+    @DisplayName("getUserAuthKey 應回傳 user:auth:{userId}")
+    void getUserAuthKey_returnsAuthKey() {
+        assertThat(RedisKeyConstant.getUserAuthKey(1L)).isEqualTo("user:auth:1");
+    }
+
+    @Test
+    @DisplayName("getUserRefreshKey 應回傳 user:refresh:{userId}")
+    void getUserRefreshKey_returnsRefreshKey() {
+        assertThat(RedisKeyConstant.getUserRefreshKey(99L)).isEqualTo("user:refresh:99");
+    }
+
+    @Test
+    @DisplayName("getForgotPwdMinKey 應回傳 rate:forgot-pwd:min:{email}")
+    void getForgotPwdMinKey_returnsMinuteRateLimitKey() {
+        assertThat(RedisKeyConstant.getForgotPwdMinKey("test@example.com"))
+                .isEqualTo("rate:forgot-pwd:min:test@example.com");
+    }
+
+    @Test
+    @DisplayName("getForgotPwdDayKey 應回傳 rate:forgot-pwd:day:{email}")
+    void getForgotPwdDayKey_returnsDayRateLimitKey() {
+        assertThat(RedisKeyConstant.getForgotPwdDayKey("test@example.com"))
+                .isEqualTo("rate:forgot-pwd:day:test@example.com");
+    }
+
+    @Test
+    @DisplayName("getLoginFailKey 應回傳 login:fail:{userId}")
+    void getLoginFailKey_returnsLoginFailKey() {
+        assertThat(RedisKeyConstant.getLoginFailKey(7L)).isEqualTo("login:fail:7");
+    }
+
+    @Test
+    @DisplayName("getResendVerifyMinKey 應回傳 rate:resend-verify:min:{email}")
+    void getResendVerifyMinKey_returnsMinuteRateLimitKey() {
+        assertThat(RedisKeyConstant.getResendVerifyMinKey("user@blog.com"))
+                .isEqualTo("rate:resend-verify:min:user@blog.com");
+    }
+
+    @Test
+    @DisplayName("getResendVerifyDayKey 應回傳 rate:resend-verify:day:{email}")
+    void getResendVerifyDayKey_returnsDayRateLimitKey() {
+        assertThat(RedisKeyConstant.getResendVerifyDayKey("user@blog.com"))
+                .isEqualTo("rate:resend-verify:day:user@blog.com");
+    }
 }

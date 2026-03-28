@@ -108,6 +108,15 @@ public class RedisKeyConstant {
      */
     public static final long LOGIN_FAIL_TTL_MINUTES = 15;
 
+    /** 用戶認證快取 TTL（天），與 Refresh Token 生命週期對齊 */
+    public static final long USER_AUTH_TTL_DAYS = 7;
+
+    /** 搜尋歷史 TTL（天） */
+    public static final long SEARCH_HISTORY_TTL_DAYS = 30;
+
+    /** 文章瀏覽計數安全網 TTL（小時），FlushJob 正常清理，此為失敗殘留的保護 */
+    public static final long ARTICLE_VIEWS_TTL_HOURS = 24;
+
     /**
      * 生成登入失敗計數 Redis Key
      *

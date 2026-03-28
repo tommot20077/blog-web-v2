@@ -121,6 +121,15 @@ class ArticleFacadeImplTest {
         }
 
         @Test
+        @DisplayName("tagIds 為 null 時不查詢直接回傳空列表")
+        void whenTagIdsNull_skipsQueryAndReturnsEmptyList() {
+            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(null, ARTICLE_UUID, 5);
+
+            assertThat(result).isEmpty();
+            verify(recommendMapper, never()).findByTagIds(anyList(), any(UUID.class), anyInt());
+        }
+
+        @Test
         @DisplayName("正常查詢並組裝標籤名稱")
         void queriesAndAssemblesTagNames() {
             UUID tagUuid = UUID.randomUUID();
@@ -140,6 +149,35 @@ class ArticleFacadeImplTest {
             assertThat(result.get(0).title()).isEqualTo("Test");
             assertThat(result.get(0).tagNames()).containsExactly("Java");
         }
+
+        @Test
+        @DisplayName("查詢結果為空時回傳空列表")
+        void whenMapperReturnsEmpty_returnsEmptyList() {
+            UUID tagUuid = UUID.randomUUID();
+            when(recommendMapper.findByTagIds(List.of(tagUuid.toString()), ARTICLE_UUID, 5))
+                    .thenReturn(Collections.emptyList());
+
+            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(tagUuid), ARTICLE_UUID, 5);
+
+            assertThat(result).isEmpty();
+        }
+
+        @Test
+        @DisplayName("文章無對應標籤時 tagNames 回傳空列表")
+        void whenNoTagsForArticle_tagNamesIsEmpty() {
+            UUID tagUuid = UUID.randomUUID();
+            ArticleSummaryRow row = row(ARTICLE_ID, ARTICLE_UUID, "No Tags");
+
+            when(recommendMapper.findByTagIds(List.of(tagUuid.toString()), ARTICLE_UUID, 5))
+                    .thenReturn(List.of(row));
+            when(recommendMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID.toString())))
+                    .thenReturn(Collections.emptyList());
+
+            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(tagUuid), ARTICLE_UUID, 5);
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).tagNames()).isEmpty();
+        }
     }
 
     @Nested
@@ -152,6 +190,70 @@ class ArticleFacadeImplTest {
 
             assertThat(result).isEmpty();
             verify(recommendMapper, never()).findByUuids(anyList());
+        }
+
+        @Test
+        @DisplayName("uuids 為 null 時不查詢直接回傳空列表")
+        void whenUuidsNull_skipsQueryAndReturnsEmptyList() {
+            List<ArticleSummaryInfo> result = facade.getPublishedArticlesByUuids(null);
+
+            assertThat(result).isEmpty();
+            verify(recommendMapper, never()).findByUuids(anyList());
+        }
+
+        @Test
+        @DisplayName("正常查詢並組裝標籤名稱")
+        void queriesAndAssemblesTagNames() {
+            ArticleSummaryRow row = row(ARTICLE_ID, ARTICLE_UUID, "By UUID");
+            ArticleTagRow tagRow = new ArticleTagRow();
+            tagRow.setArticleUuid(ARTICLE_UUID.toString());
+            tagRow.setTagName("Spring");
+
+            when(recommendMapper.findByUuids(List.of(ARTICLE_UUID)))
+                    .thenReturn(List.of(row));
+            when(recommendMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID.toString())))
+                    .thenReturn(List.of(tagRow));
+
+            List<ArticleSummaryInfo> result = facade.getPublishedArticlesByUuids(List.of(ARTICLE_UUID));
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).title()).isEqualTo("By UUID");
+            assertThat(result.get(0).tagNames()).containsExactly("Spring");
+        }
+    }
+
+    @Nested
+    class GetRecentPublishedArticles {
+
+        @Test
+        @DisplayName("正常查詢並組裝結果")
+        void queriesAndAssemblesResults() {
+            ArticleSummaryRow row = row(ARTICLE_ID, ARTICLE_UUID, "Recent");
+            ArticleTagRow tagRow = new ArticleTagRow();
+            tagRow.setArticleUuid(ARTICLE_UUID.toString());
+            tagRow.setTagName("Java");
+
+            when(recommendMapper.findRecentPublished(ARTICLE_UUID, 5))
+                    .thenReturn(List.of(row));
+            when(recommendMapper.findTagsByArticleUuids(List.of(ARTICLE_UUID.toString())))
+                    .thenReturn(List.of(tagRow));
+
+            List<ArticleSummaryInfo> result = facade.getRecentPublishedArticles(ARTICLE_UUID, 5);
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).title()).isEqualTo("Recent");
+            assertThat(result.get(0).tagNames()).containsExactly("Java");
+        }
+
+        @Test
+        @DisplayName("無結果時回傳空列表")
+        void whenNoResults_returnsEmptyList() {
+            when(recommendMapper.findRecentPublished(ARTICLE_UUID, 5))
+                    .thenReturn(Collections.emptyList());
+
+            List<ArticleSummaryInfo> result = facade.getRecentPublishedArticles(ARTICLE_UUID, 5);
+
+            assertThat(result).isEmpty();
         }
     }
 
@@ -191,6 +293,53 @@ class ArticleFacadeImplTest {
             when(articleMapper.findAllPublished()).thenReturn(List.of());
 
             assertThat(facade.findAllPublishedForIndex()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("文章 content 為 null 時 stripMarkdown 回傳空字串")
+        void whenContentIsNull_stripMarkdownReturnsEmpty() {
+            Article article = new Article();
+            article.setId(ARTICLE_ID);
+            article.setUuid(ARTICLE_UUID);
+            article.setTitle("Null Content");
+            article.setSlug("null-content");
+            article.setSummary("summary");
+            article.setContent(null);
+            article.setAuthorId(10L);
+
+            when(articleMapper.findAllPublished()).thenReturn(List.of(article));
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
+            when(userFacade.getUserUsernameById(10L)).thenReturn(Optional.of("user1"));
+            when(userFacade.getUserNicknameById(10L)).thenReturn(Optional.of("User One"));
+
+            List<ArticleIndexData> result = facade.findAllPublishedForIndex();
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).contentText()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("UserFacade 回傳 empty 時 author 欄位為 null")
+        void whenUserNotFound_authorFieldsAreNull() {
+            Article article = new Article();
+            article.setId(ARTICLE_ID);
+            article.setUuid(ARTICLE_UUID);
+            article.setTitle("Unknown Author");
+            article.setSlug("unknown-author");
+            article.setSummary("summary");
+            article.setContent("content");
+            article.setAuthorId(999L);
+
+            when(articleMapper.findAllPublished()).thenReturn(List.of(article));
+            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
+            when(userFacade.getUserUsernameById(999L)).thenReturn(Optional.empty());
+            when(userFacade.getUserNicknameById(999L)).thenReturn(Optional.empty());
+
+            List<ArticleIndexData> result = facade.findAllPublishedForIndex();
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).authorUsername()).isNull();
+            assertThat(result.get(0).authorNickname()).isNull();
         }
     }
 

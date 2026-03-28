@@ -54,8 +54,8 @@ public class JwtService {
     @Value("${jwt.expiration:86400000}")
     private long expiration;
 
-    /** Access Token 過期時間（預設 1 小時） */
-    @Value("${jwt.access.expiration:3600000}")
+    /** Access Token 過期時間（預設 15 分鐘） */
+    @Value("${jwt.access.expiration:900000}")
     private long accessTokenExpiration;
 
     /** Refresh Token 過期時間（預設 7 天） */

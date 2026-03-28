@@ -1,6 +1,8 @@
 package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.UserStatus;
+
+import java.util.concurrent.TimeUnit;
 import dowob.xyz.blog.module.user.util.TokenVersionUtils;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
@@ -88,6 +90,7 @@ public class UserService {
 
         String redisKey = RedisKeyConstant.getUserAuthKey(userId);
         redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_VERSION, newVersion);
+        redisTemplate.expire(redisKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
     }
 
     /**

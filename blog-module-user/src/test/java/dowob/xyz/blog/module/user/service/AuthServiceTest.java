@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
@@ -1217,6 +1218,34 @@ class AuthServiceTest {
      * @param expiresAt 過期時間
      * @return VerificationToken 實體
      */
+    // =========================================================================
+    // user:auth TTL 驗證
+    // =========================================================================
+
+    /**
+     * 驗證：login 成功後應對 user:auth key 設定 7 天 TTL。
+     */
+    @Test
+    @DisplayName("login → 成功後應設定 user:auth TTL 為 7 天")
+    void login_success_shouldSetAuthKeyTtl() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        String expectedAuthKey = RedisKeyConstant.getUserAuthKey(mockUser.getId());
+        verify(redisTemplate).expire(eq(expectedAuthKey), eq(RedisKeyConstant.USER_AUTH_TTL_DAYS), eq(java.util.concurrent.TimeUnit.DAYS));
+    }
+
     private VerificationToken buildEmailVerificationToken(String tokenStr, LocalDateTime expiresAt) {
         VerificationToken token = new VerificationToken();
         token.setId(2L);

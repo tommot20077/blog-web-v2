@@ -227,10 +227,10 @@ class UserControllerTest {
     @Test
     @DisplayName("DELETE /users/me → 已登入，JSON body 正確密碼 → 應回傳 200 成功回應")
     void deleteAccount_authenticatedUser_shouldReturn200() throws Exception {
+        doNothing().when(userService).deleteAccount(anyLong(), anyString());
+
         DeleteAccountRequest request = new DeleteAccountRequest();
         request.setPassword("correctPassword");
-
-        doNothing().when(userService).deleteAccount(anyLong(), anyString());
 
         mockMvc.perform(delete("/api/v1/users/me")
                         .with(authentication(USER_AUTH))
@@ -261,11 +261,11 @@ class UserControllerTest {
     @Test
     @DisplayName("DELETE /users/me → 密碼錯誤 → 應回傳 USER_PASSWORD_ERROR 錯誤碼")
     void deleteAccount_wrongPassword_shouldReturnUserPasswordError() throws Exception {
-        DeleteAccountRequest request = new DeleteAccountRequest();
-        request.setPassword("wrongPassword");
-
         doThrow(new BusinessException(UserErrorCode.USER_PASSWORD_ERROR))
                 .when(userService).deleteAccount(anyLong(), anyString());
+
+        DeleteAccountRequest request = new DeleteAccountRequest();
+        request.setPassword("wrongPassword");
 
         mockMvc.perform(delete("/api/v1/users/me")
                         .with(authentication(USER_AUTH))

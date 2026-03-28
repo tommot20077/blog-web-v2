@@ -242,6 +242,103 @@ class SearchServiceTest {
             assertThat(response.getAuthorNickname()).isEqualTo("Yuan");
             assertThat(response.getTagNames()).containsExactly("Java");
         }
+
+        @Test
+        @DisplayName("指定 tag 篩選時，應加入 Nested Query 過濾")
+        void search_withTag_executesNestedQuery() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            PageResult<SearchResultResponse> result = searchService.search(null, "java", "relevance", 1, 10, null);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getTotal()).isZero();
+            verify(elasticsearchOperations).search(any(Query.class), eq(ArticleDocument.class));
+        }
+
+        @Test
+        @DisplayName("sort=latest 時，應以 publishedAt 降序排序")
+        void search_withLatestSort_sortsbyPublishedAt() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, "latest", 1, 10, null);
+
+            assertThat(result).isNotNull();
+            verify(elasticsearchOperations).search(any(Query.class), eq(ArticleDocument.class));
+        }
+
+        @Test
+        @DisplayName("sort=hot 時，應以 viewCount 和 likeCount 降序排序")
+        void search_withHotSort_sortsByViewAndLikeCount() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, "hot", 1, 10, null);
+
+            assertThat(result).isNotNull();
+            verify(elasticsearchOperations).search(any(Query.class), eq(ArticleDocument.class));
+        }
+
+        @Test
+        @DisplayName("文章 tags 為 null 時，tagNames 應回傳空列表")
+        void search_whenDocTagsNull_tagNamesIsEmpty() {
+            ArticleDocument doc = ArticleDocument.builder()
+                    .id(UUID.randomUUID().toString())
+                    .title("No Tags")
+                    .summary("summary")
+                    .slug("no-tags")
+                    .author(new ArticleDocument.AuthorInfo(1L, "yuan", "Yuan"))
+                    .tags(null)
+                    .publishedAt(LocalDateTime.now())
+                    .viewCount(0L)
+                    .likeCount(0L)
+                    .status("PUBLISHED")
+                    .build();
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(doc));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
+
+            assertThat(result.getList().get(0).getTagNames()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("文章 author 為 null 時，authorNickname 應為 null")
+        void search_whenDocAuthorNull_authorNicknameIsNull() {
+            ArticleDocument doc = ArticleDocument.builder()
+                    .id(UUID.randomUUID().toString())
+                    .title("No Author")
+                    .summary("summary")
+                    .slug("no-author")
+                    .author(null)
+                    .tags(List.of())
+                    .publishedAt(LocalDateTime.now())
+                    .viewCount(0L)
+                    .likeCount(0L)
+                    .status("PUBLISHED")
+                    .build();
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(doc));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
+
+            assertThat(result.getList().get(0).getAuthorNickname()).isNull();
+        }
+
+        @Test
+        @DisplayName("同時指定關鍵字與標籤時，應同時應用 MultiMatch 與 Nested Query")
+        void search_withKeywordAndTag_appliesBothFilters() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+            when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
+
+            PageResult<SearchResultResponse> result = searchService.search("Spring", "java", "relevance", 1, 10, 1L);
+
+            assertThat(result).isNotNull();
+            verify(zSetOperations).incrementScore("search:hot", "spring", 1.0);
+            verify(listOperations).leftPush("search:history:1", "spring");
+        }
     }
 
     /**
@@ -436,6 +533,37 @@ class SearchServiceTest {
             searchService.reindexAll();
 
             verify(articleSearchRepository).saveAll(List.of());
+        }
+
+        @Test
+        @DisplayName("ArticleIndexData tags 為 null 時，轉換後 tags 為空列表")
+        void reindexAll_whenTagsNull_convertsToEmptyTagList() {
+            ArticleIndexData data = new ArticleIndexData(
+                    UUID.randomUUID(), "No Tags Article", "no-tags",
+                    "summary", "content",
+                    1L, "yuan", "Yuan",
+                    LocalDateTime.now(), 0L, 0L, null);
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
+
+            searchService.reindexAll();
+
+            verify(articleSearchRepository).saveAll(any());
+        }
+
+        @Test
+        @DisplayName("ArticleIndexData 含標籤時，轉換後 tags 正確映射")
+        void reindexAll_withTags_convertsTagsCorrectly() {
+            ArticleIndexData.TagData tagData = new ArticleIndexData.TagData(UUID.randomUUID(), "Java", "java");
+            ArticleIndexData data = new ArticleIndexData(
+                    UUID.randomUUID(), "Tagged Article", "tagged",
+                    "summary", "content",
+                    1L, "yuan", "Yuan",
+                    LocalDateTime.now(), 10L, 5L, List.of(tagData));
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
+
+            searchService.reindexAll();
+
+            verify(articleSearchRepository).saveAll(any());
         }
     }
 }

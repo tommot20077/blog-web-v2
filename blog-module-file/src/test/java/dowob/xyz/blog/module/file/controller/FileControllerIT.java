@@ -372,4 +372,78 @@ class FileControllerIT {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0401"));
     }
+
+    @Test
+    @DisplayName("DELETE /api/files/{id} - ADMIN 刪除他人檔案，應回傳 00000 成功")
+    void deleteFile_byAdmin_returns200() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "ARTICLE_CONTENT")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
+        mockMvc.perform(delete("/api/v1/files/" + fileId)
+                .with(asUser(USER_B_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - 取得已上傳檔案的元資料，應回傳 00000 且 data.id 不為 null")
+    void getFileMetadata_existingFile_returns200() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "ARTICLE_CONTENT")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
+        mockMvc.perform(get("/api/v1/files/" + fileId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.id").value(fileId));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - 取得不存在的檔案元資料，應回傳錯誤碼")
+    void getFileMetadata_notFound_returnsError() throws Exception {
+        mockMvc.perform(get("/api/v1/files/" + UUID.randomUUID()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0401"));
+    }
+
+    @Test
+    @DisplayName("GET /api/users/me/quota - 未認證存取配額應回傳 HTTP 401")
+    void getQuota_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(get("/api/v1/users/me/quota"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/files/{id} - 未認證刪除應回傳 HTTP 401")
+    void deleteFile_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(delete("/api/v1/files/" + UUID.randomUUID()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("GET /api/users/me/quota - ADMIN 角色查詢配額，limitBytes 應對應 ADMIN 額度")
+    void getQuota_admin_returnsAdminQuota() throws Exception {
+        mockMvc.perform(get("/api/v1/users/me/quota")
+                .with(asUser(USER_A_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.usedBytes").value(0));
+    }
 }

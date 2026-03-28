@@ -682,11 +682,11 @@ class AuthControllerTest {
     // =========================================================================
 
     /**
-     * 驗證：未認證用戶呼叫登出時，因方法層 {@code @PreAuthorize("isAuthenticated()")} 要求認證，
-     * Spring Security 判斷為匿名用戶後委託 AuthenticationEntryPoint 回傳 401 Unauthorized。
+     * 驗證：未認證用戶呼叫登出時，因 logout 已收窄為 authenticated，
+     * 應回傳 401 Unauthorized。
      */
     @Test
-    @DisplayName("POST /logout → 未認證用戶 → @PreAuthorize 拒絕，應回傳 401")
+    @DisplayName("POST /logout → 未認證用戶 → 應回傳 401（logout 需認證）")
     void logout_unauthenticated_shouldReturn401() throws Exception {
         mockMvc.perform(post("/api/v1/auth/logout"))
                 .andExpect(status().isUnauthorized());

@@ -26,6 +26,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -128,5 +130,87 @@ class ThumbnailConsumerTest {
         verify(fileMetadataRepository).save(captor.capture());
         assertThat(captor.getValue().getHasThumbnail()).isTrue();
         verify(channel).basicAck(99L, false);
+    }
+
+    /**
+     * 驗證 fileMetadataRepository.findById 回傳 empty 時不呼叫 save
+     */
+    @Test
+    @DisplayName("handleImageUploaded_withValidImage_butMetadataNotFound_doesNotSave")
+    void handleImageUploaded_withValidImage_butMetadataNotFound_doesNotSave() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+
+        InputStream jpegStream = getClass().getResourceAsStream("/test.jpg");
+        assertThat(jpegStream).isNotNull();
+        byte[] jpegBytes = jpegStream.readAllBytes();
+
+        GetObjectResponse mockResponse = org.mockito.Mockito.mock(GetObjectResponse.class);
+        ByteArrayInputStream bais = new ByteArrayInputStream(jpegBytes);
+        when(mockResponse.read(any(byte[].class), any(int.class), any(int.class)))
+                .thenAnswer(inv -> bais.read(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        when(mockResponse.read())
+                .thenAnswer(inv -> bais.read());
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 50L);
+
+        verify(fileMetadataRepository, never()).save(any());
+        verify(channel).basicAck(50L, false);
+    }
+
+    /**
+     * 驗證處理失敗且 basicNack 也拋出 IOException 時不會拋出未處理例外
+     */
+    @Test
+    @DisplayName("handleImageUploaded_onFailure_nackAlsoFails_doesNotThrow")
+    void handleImageUploaded_onFailure_nackAlsoFails_doesNotThrow() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), "files/error.jpg", "image/jpeg");
+
+        when(minioClient.getObject(any(GetObjectArgs.class)))
+                .thenThrow(new RuntimeException("MinIO connection failed"));
+        doThrow(new IOException("channel closed")).when(channel).basicNack(eq(77L), eq(false), eq(false));
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 77L);
+
+        verify(channel).basicNack(77L, false, false);
+    }
+
+    /**
+     * 驗證路徑無副檔名時 extractExtension 回傳 "jpg" 且 buildThumbPath 附加 _thumb
+     */
+    @Test
+    @DisplayName("handleImageUploaded_withPathWithoutExtension_usesJpgDefault")
+    void handleImageUploaded_withPathWithoutExtension_usesJpgDefault() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                fileId, "articles/noext", "image/jpeg");
+
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+
+        InputStream jpegStream = getClass().getResourceAsStream("/test.jpg");
+        assertThat(jpegStream).isNotNull();
+        byte[] jpegBytes = jpegStream.readAllBytes();
+
+        GetObjectResponse mockResponse = org.mockito.Mockito.mock(GetObjectResponse.class);
+        ByteArrayInputStream bais = new ByteArrayInputStream(jpegBytes);
+        when(mockResponse.read(any(byte[].class), any(int.class), any(int.class)))
+                .thenAnswer(inv -> bais.read(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        when(mockResponse.read())
+                .thenAnswer(inv -> bais.read());
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 60L);
+
+        verify(channel).basicAck(60L, false);
     }
 }

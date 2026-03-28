@@ -193,19 +193,23 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("正常：建立文章時明確指定 PENDING_REVIEW 狀態")
-        void createArticle_withPendingReviewStatus() {
+        @DisplayName("安全：建立文章時傳入 PENDING_REVIEW 狀態應強制為 DRAFT")
+        void createArticle_withPendingReviewStatus_shouldForceDraft() {
+            // 傳入 PENDING_REVIEW 模擬試圖繞過草稿階段
             CreateArticleRequest request = new CreateArticleRequest();
             request.setTitle("待審文章");
             request.setContent("內容");
             request.setStatus(ArticleStatus.PENDING_REVIEW);
 
-            Article saved = buildArticle(ArticleStatus.PENDING_REVIEW);
-            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+            // save 直接回傳傳入的 Article，以便驗證實際存入的狀態
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+            articleService.createArticle(AUTHOR_ID, request);
 
-            assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
+            // 無論傳入何種狀態，儲存至 DB 前都必須是 DRAFT
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getStatus()).isEqualTo(ArticleStatus.DRAFT);
         }
 
         @Test
@@ -372,6 +376,28 @@ class ArticleServiceTest {
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
             assertThat(captor.getValue().getCoverImageUrl()).isNull();
+        }
+
+        @Test
+        @DisplayName("建立文章時傳入 PUBLISHED 狀態應強制為 DRAFT")
+        void createArticle_withPublishedStatus_shouldForceDraft() {
+            // 建立傳入 PUBLISHED 狀態的請求，模擬惡意繞過審核流程
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("惡意文章");
+            request.setContent("試圖繞過審核直接發布");
+            request.setStatus(ArticleStatus.PUBLISHED);
+
+            // save 直接回傳傳入的 Article，以便驗證實際存入的狀態
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            articleService.createArticle(AUTHOR_ID, request);
+
+            // 捕捉實際傳入 save() 的 Article，驗證 status 已被強制覆寫為 DRAFT
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getStatus())
+                    .as("即使 request 傳入 PUBLISHED，實際儲存的 Article 狀態必須為 DRAFT")
+                    .isEqualTo(ArticleStatus.DRAFT);
         }
     }
 
