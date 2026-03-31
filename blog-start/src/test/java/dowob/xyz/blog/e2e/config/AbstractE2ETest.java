@@ -46,7 +46,8 @@ public abstract class AbstractE2ETest {
             new RedisContainer(DockerImageName.parse("redis:7-alpine"));
 
     static final RabbitMQContainer RABBITMQ =
-            new RabbitMQContainer("rabbitmq:3-management-alpine");
+            new RabbitMQContainer("rabbitmq:3-management-alpine")
+                    .withVhost("blog");
 
     static final MinIOContainer MINIO =
             new MinIOContainer("minio/minio:latest");
@@ -81,6 +82,7 @@ public abstract class AbstractE2ETest {
         registry.add("spring.rabbitmq.port", RABBITMQ::getAmqpPort);
         registry.add("spring.rabbitmq.username", RABBITMQ::getAdminUsername);
         registry.add("spring.rabbitmq.password", RABBITMQ::getAdminPassword);
+        registry.add("spring.rabbitmq.virtual-host", () -> "blog");
         // MinIO
         registry.add("minio.endpoint", MINIO::getS3URL);
         registry.add("minio.access-key", MINIO::getUserName);
