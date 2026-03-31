@@ -28,6 +28,8 @@ spring:
   # Elasticsearch
   elasticsearch:
     uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
+    username: ${ELASTICSEARCH_USERNAME:elastic}
+    password: ${ELASTICSEARCH_PASSWORD:password}
 
 # MinIO Config
 minio:
