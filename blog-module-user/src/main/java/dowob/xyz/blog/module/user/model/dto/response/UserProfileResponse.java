@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.user.model.dto.response;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -20,13 +21,14 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@Schema(description = "使用者個人資料回應")
 public record UserProfileResponse(
-        UUID uuid,
-        String email,
-        String nickname,
-        String avatarUrl,
-        Role role,
-        boolean emailVerified,
-        LocalDateTime createdAt
+        @Schema(description = "使用者對外公開的 UUID") UUID uuid,
+        @Schema(description = "電子信箱") String email,
+        @Schema(description = "暱稱") String nickname,
+        @Schema(description = "頭貼 URL（可為 null）") String avatarUrl,
+        @Schema(description = "使用者角色") Role role,
+        @Schema(description = "信箱是否已驗證") boolean emailVerified,
+        @Schema(description = "帳號建立時間") LocalDateTime createdAt
 ) {
 }

@@ -361,7 +361,9 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.data.uuid").value(testUuid.toString()))
                 .andExpect(jsonPath("$.data.email").value("test@example.com"))
                 .andExpect(jsonPath("$.data.nickname").value("testNickname"))
-                .andExpect(jsonPath("$.data.role").value("USER"));
+                .andExpect(jsonPath("$.data.role").value("USER"))
+                .andExpect(jsonPath("$.data.avatarUrl").value("https://example.com/avatar.png"))
+                .andExpect(jsonPath("$.data.emailVerified").value(true));
     }
 
     /**

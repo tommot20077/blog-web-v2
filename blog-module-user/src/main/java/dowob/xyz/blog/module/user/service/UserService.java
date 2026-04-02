@@ -46,6 +46,7 @@ public class UserService {
      * @param userId 用戶 ID
      * @return 使用者個人資料 DTO
      */
+    @Transactional(readOnly = true)
     public UserProfileResponse getUserProfile(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));

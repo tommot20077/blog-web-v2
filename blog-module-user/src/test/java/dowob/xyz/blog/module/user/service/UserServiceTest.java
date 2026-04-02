@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
+import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
@@ -328,7 +329,9 @@ class UserServiceTest {
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> userService.getUserProfile(TEST_USER_ID))
-                .isInstanceOf(BusinessException.class);
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(UserErrorCode.USER_NOT_FOUND));
     }
 
     /* =========================================================================
