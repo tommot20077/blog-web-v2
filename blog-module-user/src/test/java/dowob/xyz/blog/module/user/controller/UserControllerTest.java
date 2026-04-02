@@ -10,6 +10,7 @@ import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.DeleteAccountRequest;
 import dowob.xyz.blog.module.user.model.dto.request.UpdateProfileRequest;
+import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.service.UserService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,9 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+
+import java.time.LocalDateTime;
+import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -326,5 +330,62 @@ class UserControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    // =========================================================================
+    // GET /api/v1/users/me 測試
+    // =========================================================================
+
+    /**
+     * 驗證：已登入用戶呼叫 GET /users/me 應回傳 200 及使用者資料。
+     */
+    @Test
+    @DisplayName("GET /users/me → 已登入 → 應回傳 200 及使用者資料")
+    void getMe_authenticated_shouldReturn200WithUserProfile() throws Exception {
+        UUID testUuid = UUID.randomUUID();
+        UserProfileResponse profile = new UserProfileResponse(
+                testUuid,
+                "test@example.com",
+                "testNickname",
+                "https://example.com/avatar.png",
+                Role.USER,
+                true,
+                LocalDateTime.of(2024, 1, 1, 0, 0)
+        );
+        when(userService.getUserProfile(1L)).thenReturn(profile);
+
+        mockMvc.perform(get("/api/v1/users/me")
+                        .with(authentication(USER_AUTH)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.uuid").value(testUuid.toString()))
+                .andExpect(jsonPath("$.data.email").value("test@example.com"))
+                .andExpect(jsonPath("$.data.nickname").value("testNickname"))
+                .andExpect(jsonPath("$.data.role").value("USER"));
+    }
+
+    /**
+     * 驗證：未登入時呼叫 GET /users/me 應回傳 401。
+     */
+    @Test
+    @DisplayName("GET /users/me → 未登入 → 應回傳 401")
+    void getMe_unauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/users/me"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * 驗證：使用者不存在時應回傳 USER_NOT_FOUND 錯誤碼。
+     */
+    @Test
+    @DisplayName("GET /users/me → 使用者不存在 → 應回傳 USER_NOT_FOUND 錯誤碼")
+    void getMe_userNotFound_shouldReturnUserNotFoundError() throws Exception {
+        when(userService.getUserProfile(1L))
+                .thenThrow(new BusinessException(UserErrorCode.USER_NOT_FOUND));
+
+        mockMvc.perform(get("/api/v1/users/me")
+                        .with(authentication(USER_AUTH)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.USER_NOT_FOUND.getCode()));
     }
 }

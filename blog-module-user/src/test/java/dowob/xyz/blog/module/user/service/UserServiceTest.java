@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
+import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,7 +18,9 @@ import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -284,6 +287,48 @@ class UserServiceTest {
         userService.deleteAccount(TEST_USER_ID, TEST_PASSWORD);
 
         verify(redisTemplate, times(2)).delete(anyString());
+    }
+
+    /* =========================================================================
+       getUserProfile 測試
+       ========================================================================= */
+
+    /**
+     * 驗證：getUserProfile 應回傳正確的使用者個人資料。
+     */
+    @Test
+    @DisplayName("getUserProfile → 使用者存在 → 應回傳 UserProfileResponse")
+    void getUserProfile_userExists_shouldReturnProfile() {
+        UUID testUuid = UUID.randomUUID();
+        LocalDateTime createdAt = LocalDateTime.of(2024, 1, 1, 0, 0);
+        User mockUser = buildActiveUser();
+        mockUser.setUuid(testUuid);
+        mockUser.setAvatarUrl("https://example.com/avatar.png");
+        mockUser.setEmailVerified(true);
+        mockUser.setCreatedAt(createdAt);
+        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+
+        UserProfileResponse result = userService.getUserProfile(TEST_USER_ID);
+
+        assertThat(result.uuid()).isEqualTo(testUuid);
+        assertThat(result.email()).isEqualTo("test@example.com");
+        assertThat(result.nickname()).isEqualTo(TEST_NICKNAME);
+        assertThat(result.avatarUrl()).isEqualTo("https://example.com/avatar.png");
+        assertThat(result.role()).isEqualTo(Role.USER);
+        assertThat(result.emailVerified()).isTrue();
+        assertThat(result.createdAt()).isEqualTo(createdAt);
+    }
+
+    /**
+     * 驗證：getUserProfile 在使用者不存在時應拋出 BusinessException。
+     */
+    @Test
+    @DisplayName("getUserProfile → 使用者不存在 → 應拋出 BusinessException")
+    void getUserProfile_userNotFound_shouldThrowBusinessException() {
+        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.getUserProfile(TEST_USER_ID))
+                .isInstanceOf(BusinessException.class);
     }
 
     /* =========================================================================

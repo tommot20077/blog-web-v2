@@ -8,6 +8,7 @@ import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
+import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -36,6 +37,27 @@ public class UserService {
 
     /** Redis 操作模板，用於清除快取 */
     private final StringRedisTemplate redisTemplate;
+
+    /**
+     * 取得使用者個人資料
+     *
+     * <p>依 userId 查詢使用者，並回傳對外公開的個人資料。若使用者不存在，拋出 BusinessException。</p>
+     *
+     * @param userId 用戶 ID
+     * @return 使用者個人資料 DTO
+     */
+    public UserProfileResponse getUserProfile(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
+        return new UserProfileResponse(
+                user.getUuid(),
+                user.getEmail(),
+                user.getNickname(),
+                user.getAvatarUrl(),
+                user.getRole(),
+                user.isEmailVerified(),
+                user.getCreatedAt());
+    }
 
     /**
      * 更新個人資料
