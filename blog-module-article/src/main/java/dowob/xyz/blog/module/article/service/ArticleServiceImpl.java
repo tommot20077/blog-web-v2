@@ -387,64 +387,64 @@ public class ArticleServiceImpl implements ArticleService {
     /**
      * 分頁取得已發布文章列表
      *
-     * @param pageNum  頁碼（從 1 開始）
-     * @param pageSize 每頁筆數
+     * @param page 頁碼（從 1 開始）
+     * @param size 每頁筆數
      * @return 分頁文章摘要列表
      */
     @Override
-    public PageResult<ArticleSummaryResponse> getPublishedArticles(int pageNum, int pageSize) {
-        long offset = (long) (pageNum - 1) * pageSize;
-        List<Article> articles = articleMapper.findPublishedPage(offset, pageSize);
+    public PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int size) {
+        long offset = (long) (page - 1) * size;
+        List<Article> articles = articleMapper.findPublishedPage(offset, size);
         long total = articleMapper.countPublished();
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
         Map<UUID, List<TagSummaryResponse>> tagMap = batchToTagResponsesMap(uuids);
         List<ArticleSummaryResponse> list = articles.stream()
                 .map(a -> toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
-        return PageResult.of(pageNum, pageSize, total, list);
+        return PageResult.of(page, size, total, list);
     }
 
     /**
      * 根據分類 slug 分頁取得已發布文章列表
      *
      * @param categorySlug 分類 slug
-     * @param pageNum      頁碼（從 1 開始）
-     * @param pageSize     每頁筆數
+     * @param page         頁碼（從 1 開始）
+     * @param size         每頁筆數
      * @return 分頁文章摘要列表
      */
     @Override
     public PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(
-            String categorySlug, int pageNum, int pageSize) {
-        long offset = (long) (pageNum - 1) * pageSize;
-        List<Article> articles = articleMapper.findPublishedPageByCategorySlug(categorySlug, offset, pageSize);
+            String categorySlug, int page, int size) {
+        long offset = (long) (page - 1) * size;
+        List<Article> articles = articleMapper.findPublishedPageByCategorySlug(categorySlug, offset, size);
         long total = articleMapper.countPublishedByCategorySlug(categorySlug);
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
         Map<UUID, List<TagSummaryResponse>> tagMap = batchToTagResponsesMap(uuids);
         List<ArticleSummaryResponse> list = articles.stream()
                 .map(a -> toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
-        return PageResult.of(pageNum, pageSize, total, list);
+        return PageResult.of(page, size, total, list);
     }
 
     /**
      * 分頁取得當前登入用戶的文章列表
      *
      * @param authorId 作者資料庫主鍵
-     * @param pageNum  頁碼（從 1 開始）
-     * @param pageSize 每頁筆數
+     * @param page  頁碼（從 1 開始）
+     * @param size 每頁筆數
      * @param status   文章狀態篩選（null 表示查詢全部）
      * @return 分頁文章摘要列表
      */
     @Override
-    public PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int pageNum, int pageSize, ArticleStatus status) {
-        long offset = (long) (pageNum - 1) * pageSize;
+    public PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int page, int size, ArticleStatus status) {
+        long offset = (long) (page - 1) * size;
         List<Article> articles;
         long total;
         if (status != null) {
-            articles = articleMapper.findByAuthorIdAndStatus(authorId, status, offset, pageSize);
+            articles = articleMapper.findByAuthorIdAndStatus(authorId, status, offset, size);
             total = articleMapper.countByAuthorIdAndStatus(authorId, status);
         } else {
-            articles = articleMapper.findByAuthorIdPaged(authorId, offset, pageSize);
+            articles = articleMapper.findByAuthorIdPaged(authorId, offset, size);
             total = articleMapper.countByAuthorId(authorId);
         }
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
@@ -452,7 +452,7 @@ public class ArticleServiceImpl implements ArticleService {
         List<ArticleSummaryResponse> list = articles.stream()
                 .map(a -> toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
-        return PageResult.of(pageNum, pageSize, total, list);
+        return PageResult.of(page, size, total, list);
     }
 
     /**
@@ -550,21 +550,21 @@ public class ArticleServiceImpl implements ArticleService {
     /**
      * 分頁取得待審文章列表（僅 ADMIN）
      *
-     * @param pageNum  頁碼（從 1 開始）
-     * @param pageSize 每頁筆數
+     * @param page 頁碼（從 1 開始）
+     * @param size 每頁筆數
      * @return 分頁文章摘要列表
      */
     @Override
-    public PageResult<ArticleSummaryResponse> getPendingArticles(int pageNum, int pageSize) {
-        long offset = (long) (pageNum - 1) * pageSize;
-        List<Article> articles = articleMapper.findPendingReviewPage(offset, pageSize);
+    public PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size) {
+        long offset = (long) (page - 1) * size;
+        List<Article> articles = articleMapper.findPendingReviewPage(offset, size);
         long total = articleMapper.countPendingReview();
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
         Map<UUID, List<TagSummaryResponse>> tagMap = batchToTagResponsesMap(uuids);
         List<ArticleSummaryResponse> list = articles.stream()
                 .map(a -> toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
-        return PageResult.of(pageNum, pageSize, total, list);
+        return PageResult.of(page, size, total, list);
     }
 
     /**

@@ -72,32 +72,32 @@ public interface ArticleService {
     /**
      * 分頁取得已發布文章列表（公開）
      *
-     * @param pageNum  頁碼（從 1 開始）
-     * @param pageSize 每頁筆數
+     * @param page 頁碼（從 1 開始）
+     * @param size 每頁筆數
      * @return 分頁文章摘要列表
      */
-    PageResult<ArticleSummaryResponse> getPublishedArticles(int pageNum, int pageSize);
+    PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int size);
 
     /**
      * 根據分類 slug 分頁取得已發布文章列表
      *
      * @param categorySlug 分類 slug
-     * @param pageNum      頁碼
-     * @param pageSize     每頁筆數
+     * @param page         頁碼
+     * @param size         每頁筆數
      * @return 分頁文章摘要列表
      */
-    PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(String categorySlug, int pageNum, int pageSize);
+    PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(String categorySlug, int page, int size);
 
     /**
      * 分頁取得當前登入用戶的文章列表
      *
      * @param authorId 作者資料庫主鍵
-     * @param pageNum  頁碼（從 1 開始）
-     * @param pageSize 每頁筆數
+     * @param page     頁碼（從 1 開始）
+     * @param size     每頁筆數
      * @param status   文章狀態篩選（null 表示查詢全部）
      * @return 分頁文章摘要列表
      */
-    PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int pageNum, int pageSize, ArticleStatus status);
+    PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int page, int size, ArticleStatus status);
 
     /**
      * 發布文章
@@ -123,11 +123,11 @@ public interface ArticleService {
     /**
      * 分頁取得待審文章列表（僅 ADMIN）
      *
-     * @param pageNum  頁碼（從 1 開始）
-     * @param pageSize 每頁筆數
+     * @param page 頁碼（從 1 開始）
+     * @param size 每頁筆數
      * @return 分頁文章摘要列表
      */
-    PageResult<ArticleSummaryResponse> getPendingArticles(int pageNum, int pageSize);
+    PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size);
 
     /**
      * 提交文章審核（DRAFT → PENDING_REVIEW）
