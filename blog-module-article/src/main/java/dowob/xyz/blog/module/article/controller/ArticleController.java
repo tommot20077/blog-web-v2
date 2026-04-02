@@ -58,20 +58,20 @@ public class ArticleController {
      * categorySlug 為 null 或空白時，回傳所有已發布文章。
      * </p>
      *
-     * @param pageNum      頁碼，預設 1
-     * @param pageSize     每頁筆數，預設 10
+     * @param page         頁碼，預設 1
+     * @param size         每頁筆數，預設 10
      * @param categorySlug 分類 slug（可選）
      * @return 分頁文章摘要列表
      */
     @GetMapping
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPublishedArticles(
-            @RequestParam(defaultValue = "1") int pageNum,
-            @RequestParam(defaultValue = "10") int pageSize,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String categorySlug) {
         if (categorySlug != null && !categorySlug.isBlank()) {
-            return ApiResponse.success(articleService.getPublishedArticlesByCategorySlug(categorySlug, pageNum, pageSize));
+            return ApiResponse.success(articleService.getPublishedArticlesByCategorySlug(categorySlug, page, size));
         }
-        return ApiResponse.success(articleService.getPublishedArticles(pageNum, pageSize));
+        return ApiResponse.success(articleService.getPublishedArticles(page, size));
     }
 
     /**
@@ -164,8 +164,8 @@ public class ArticleController {
     /**
      * 取得我的文章列表（需登入）
      *
-     * @param pageNum  頁碼，預設 1
-     * @param pageSize 每頁筆數，預設 10
+     * @param page     頁碼，預設 1
+     * @param size     每頁筆數，預設 10
      * @param status   文章狀態篩選（可選）
      * @param authorId 當前登入用戶的資料庫主鍵（作者 ID）
      * @return 分頁文章摘要列表
@@ -173,11 +173,11 @@ public class ArticleController {
     @PreAuthorize("isAuthenticated()")
     @GetMapping("/me")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getMyArticles(
-            @RequestParam(defaultValue = "1") int pageNum,
-            @RequestParam(defaultValue = "10") int pageSize,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) ArticleStatus status,
             @AuthenticationPrincipal Long authorId) {
-        return ApiResponse.success(articleService.getMyArticles(authorId, pageNum, pageSize, status));
+        return ApiResponse.success(articleService.getMyArticles(authorId, page, size, status));
     }
 
     /**
