@@ -434,7 +434,8 @@ class SecurityConfigTest {
             mockMvc.perform(options("/api/v1/articles/123")
                             .header("Origin", "http://evil.example.com")
                             .header("Access-Control-Request-Method", "GET"))
-                    .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+                    .andExpect(header().doesNotExist("Access-Control-Allow-Origin"))
+                    .andExpect(status().isForbidden());
         }
 
         @Test
