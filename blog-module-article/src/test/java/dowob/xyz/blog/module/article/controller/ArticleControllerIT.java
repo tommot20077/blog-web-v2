@@ -201,7 +201,7 @@ class ArticleControllerIT {
         mockMvc.perform(get("/api/v1/articles"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
-                .andExpect(jsonPath("$.data.list").isArray())
+                .andExpect(jsonPath("$.data.records").isArray())
                 .andExpect(jsonPath("$.data.total").value(0));
     }
 
@@ -335,7 +335,7 @@ class ArticleControllerIT {
                 .with(asUser(AUTHOR_ID, Role.AUTHOR)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(2))
-                .andExpect(jsonPath("$.data.list").isArray());
+                .andExpect(jsonPath("$.data.records").isArray());
     }
 
     @Test
@@ -460,7 +460,7 @@ class ArticleControllerIT {
                 .with(asUser(AUTHOR_ID, Role.ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(1))
-                .andExpect(jsonPath("$.data.list").isArray());
+                .andExpect(jsonPath("$.data.records").isArray());
     }
 
     @Test

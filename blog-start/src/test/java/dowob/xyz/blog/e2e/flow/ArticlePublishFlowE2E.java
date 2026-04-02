@@ -121,7 +121,7 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess())
                 .andExpect(jsonPath("$.data.total", greaterThanOrEqualTo(1)))
-                .andExpect(jsonPath("$.data.list").isNotEmpty());
+                .andExpect(jsonPath("$.data.records").isNotEmpty());
 
         // ===== 6. ADMIN 發布文章 =====
         mockMvc.perform(post("/api/v1/articles/" + articleUuid + "/publish")
@@ -152,7 +152,7 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                         .param("q", "Spring Boot"))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess())
-                .andExpect(jsonPath("$.data.list[0].title", containsString("Spring Boot")));
+                .andExpect(jsonPath("$.data.records[0].title", containsString("Spring Boot")));
 
         // ===== 9. 匿名用戶透過 slug 閱讀文章 =====
         mockMvc.perform(get("/api/v1/articles/slug/" + articleSlug))
@@ -180,7 +180,7 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                         .andExpect(status().isOk())
                         .andExpect(E2EAssertions.apiSuccess())
                         .andExpect(jsonPath("$.data.total", greaterThanOrEqualTo(1)))
-                        .andExpect(jsonPath("$.data.list[0].title",
+                        .andExpect(jsonPath("$.data.records[0].title",
                                 containsString("Updated")))
         );
 

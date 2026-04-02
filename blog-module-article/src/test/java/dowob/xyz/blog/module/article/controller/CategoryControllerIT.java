@@ -340,7 +340,7 @@ class CategoryControllerIT {
         mockMvc.perform(get("/api/v1/articles?categorySlug=backend"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(1))
-                .andExpect(jsonPath("$.data.list[0].title").value("Java 入門"));
+                .andExpect(jsonPath("$.data.records[0].title").value("Java 入門"));
 
         /** 其他分類 -> 0 篇 */
         mockMvc.perform(get("/api/v1/articles?categorySlug=frontend"))
