@@ -429,6 +429,15 @@ class SecurityConfigTest {
         }
 
         @Test
+        @DisplayName("OPTIONS preflight 帶不在白名單的 Origin → 不應回傳 Access-Control-Allow-Origin 標頭")
+        void preflightRequest_fromUnknownOrigin_shouldNotReturnAllowOriginHeader() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/123")
+                            .header("Origin", "http://evil.example.com")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+        }
+
+        @Test
         @DisplayName("CORS 回應應包含 Access-Control-Allow-Credentials: true")
         void corsResponse_shouldIncludeAllowCredentialsHeader() throws Exception {
             mockMvc.perform(options("/api/v1/articles/123")
