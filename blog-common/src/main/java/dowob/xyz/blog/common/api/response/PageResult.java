@@ -1,6 +1,5 @@
 package dowob.xyz.blog.common.api.response;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -16,23 +15,22 @@ import java.util.List;
  */
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 public class PageResult<T> {
 
     /**
      * 當前頁碼
      */
-    private Integer pageNum;
+    private Integer current;
 
     /**
      * 每頁數量
      */
-    private Integer pageSize;
+    private Integer size;
 
     /**
      * 總頁數
      */
-    private Integer totalPage;
+    private Integer pages;
 
     /**
      * 總條數
@@ -42,29 +40,29 @@ public class PageResult<T> {
     /**
      * 數據列表
      */
-    private List<T> list;
+    private List<T> records;
 
 
     /**
      * 將原始數據轉換為分頁封裝對象
      *
-     * @param pageNum  當前頁碼
-     * @param pageSize 每頁數量
-     * @param total    總條數
-     * @param list     數據列表
-     * @param <T>      數據類型
+     * @param current 當前頁碼
+     * @param size    每頁數量
+     * @param total   總條數
+     * @param records 數據列表
+     * @param <T>     數據類型
      *
      * @return 分頁結果對象
      */
-    public static <T> PageResult<T> of(Integer pageNum, Integer pageSize, Long total, List<T> list) {
+    public static <T> PageResult<T> of(Integer current, Integer size, Long total, List<T> records) {
         PageResult<T> result = new PageResult<>();
-        result.setPageNum(pageNum);
-        result.setPageSize(pageSize);
+        result.setCurrent(current);
+        result.setSize(size);
         result.setTotal(total);
-        result.setList(list);
+        result.setRecords(records);
         /** 計算總頁數 */
-        int totalPages = pageSize > 0 ? (int) Math.ceil((double) total / pageSize) : 0;
-        result.setTotalPage(totalPages);
+        int totalPages = size > 0 ? (int) Math.ceil((double) total / size) : 0;
+        result.setPages(totalPages);
         return result;
     }
 }

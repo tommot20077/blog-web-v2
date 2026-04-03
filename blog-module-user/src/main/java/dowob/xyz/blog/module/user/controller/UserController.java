@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.DeleteAccountRequest;
 import dowob.xyz.blog.module.user.model.dto.request.UpdateProfileRequest;
+import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -30,6 +31,19 @@ public class UserController {
 
     /** 用戶自助業務服務 */
     private final UserService userService;
+
+    /**
+     * 取得當前使用者個人資料
+     *
+     * @param userId 當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @return 使用者個人資料
+     */
+    @Operation(summary = "取得當前使用者資訊", description = "回傳當前登入使用者的個人資料")
+    @PreAuthorize("isAuthenticated()")
+    @GetMapping("/me")
+    public ApiResponse<UserProfileResponse> getMe(@AuthenticationPrincipal Long userId) {
+        return ApiResponse.success(userService.getUserProfile(userId));
+    }
 
     /**
      * 更新個人資料

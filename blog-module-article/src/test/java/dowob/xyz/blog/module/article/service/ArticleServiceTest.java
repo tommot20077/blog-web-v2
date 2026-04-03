@@ -925,9 +925,9 @@ class ArticleServiceTest {
             PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(1, 10);
 
             assertThat(result).isNotNull();
-            assertThat(result.getList()).hasSize(1);
+            assertThat(result.getRecords()).hasSize(1);
             assertThat(result.getTotal()).isEqualTo(1L);
-            assertThat(result.getPageNum()).isEqualTo(1);
+            assertThat(result.getCurrent()).isEqualTo(1);
         }
 
         @Test
@@ -938,7 +938,7 @@ class ArticleServiceTest {
 
             PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(2, 10);
 
-            assertThat(result.getList()).isEmpty();
+            assertThat(result.getRecords()).isEmpty();
             verify(articleMapper).findPublishedPage(10L, 10);
         }
     }
@@ -1055,7 +1055,7 @@ class ArticleServiceTest {
             PageResult<ArticleSummaryResponse> result = articleService.getPendingArticles(1, 10);
 
             assertThat(result).isNotNull();
-            assertThat(result.getList()).hasSize(1);
+            assertThat(result.getRecords()).hasSize(1);
             assertThat(result.getTotal()).isEqualTo(1L);
         }
     }
@@ -1213,7 +1213,7 @@ class ArticleServiceTest {
 
             PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(1, 10);
 
-            assertThat(result.getList().get(0).getUpdatedAt()).isEqualTo(updatedTime);
+            assertThat(result.getRecords().get(0).getUpdatedAt()).isEqualTo(updatedTime);
         }
     }
 
@@ -1595,9 +1595,9 @@ class ArticleServiceTest {
             PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticlesByCategorySlug(categorySlug, 1, 10);
 
             assertThat(result).isNotNull();
-            assertThat(result.getList()).hasSize(1);
+            assertThat(result.getRecords()).hasSize(1);
             assertThat(result.getTotal()).isEqualTo(1L);
-            assertThat(result.getPageNum()).isEqualTo(1);
+            assertThat(result.getCurrent()).isEqualTo(1);
             verify(articleMapper).findPublishedPageByCategorySlug(categorySlug, 0L, 10);
             verify(articleMapper).countPublishedByCategorySlug(categorySlug);
         }
@@ -1612,7 +1612,7 @@ class ArticleServiceTest {
 
             PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticlesByCategorySlug(categorySlug, 2, 10);
 
-            assertThat(result.getList()).isEmpty();
+            assertThat(result.getRecords()).isEmpty();
             verify(articleMapper).findPublishedPageByCategorySlug(categorySlug, 10L, 10);
         }
 
@@ -1637,8 +1637,8 @@ class ArticleServiceTest {
 
             PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticlesByCategorySlug(categorySlug, 1, 10);
 
-            assertThat(result.getList().get(0).getTags()).hasSize(1);
-            assertThat(result.getList().get(0).getTags().get(0).getName()).isEqualTo("Spring");
+            assertThat(result.getRecords().get(0).getTags()).hasSize(1);
+            assertThat(result.getRecords().get(0).getTags().get(0).getName()).isEqualTo("Spring");
         }
     }
 

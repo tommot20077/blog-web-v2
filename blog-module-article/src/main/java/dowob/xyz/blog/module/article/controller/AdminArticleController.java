@@ -35,16 +35,16 @@ public class AdminArticleController {
     /**
      * 分頁取得待審文章列表（僅 ADMIN）
      *
-     * @param pageNum  頁碼，預設 1
-     * @param pageSize 每頁筆數，預設 10
+     * @param page 頁碼，預設 1
+     * @param size 每頁筆數，預設 10
      * @return 分頁待審文章摘要列表
      */
     @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
     @GetMapping("/pending")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPendingArticles(
-            @RequestParam(defaultValue = "1") int pageNum,
-            @RequestParam(defaultValue = "10") int pageSize) {
-        return ApiResponse.success(articleService.getPendingArticles(pageNum, pageSize));
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        return ApiResponse.success(articleService.getPendingArticles(page, size));
     }
 
     /**

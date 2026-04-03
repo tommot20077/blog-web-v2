@@ -170,8 +170,8 @@ class ArticleE2E extends AbstractE2ETest {
 
         mockMvc.perform(get("/api/v1/articles/me")
                         .with(bearerToken(token))
-                        .param("pageNum", "1")
-                        .param("pageSize", "10"))
+                        .param("page", "1")
+                        .param("size", "10"))
                 .andExpect(status().isOk())
                 .andExpect(apiSuccess())
                 .andExpect(hasData())
@@ -270,8 +270,8 @@ class ArticleE2E extends AbstractE2ETest {
 
         mockMvc.perform(get("/api/admin/articles/pending")
                         .with(bearerToken(adminToken))
-                        .param("pageNum", "1")
-                        .param("pageSize", "10"))
+                        .param("page", "1")
+                        .param("size", "10"))
                 .andExpect(status().isOk())
                 .andExpect(apiSuccess())
                 .andExpect(hasData())
@@ -320,8 +320,8 @@ class ArticleE2E extends AbstractE2ETest {
 
         // 匿名查詢
         mockMvc.perform(get("/api/v1/articles")
-                        .param("pageNum", "1")
-                        .param("pageSize", "10"))
+                        .param("page", "1")
+                        .param("size", "10"))
                 .andExpect(status().isOk())
                 .andExpect(apiSuccess())
                 .andExpect(hasData())

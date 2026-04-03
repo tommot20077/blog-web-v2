@@ -122,10 +122,10 @@ class AdminArticleControllerTest {
                         .with(asAdmin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
-                .andExpect(jsonPath("$.data.pageNum").value(1))
-                .andExpect(jsonPath("$.data.pageSize").value(10))
+                .andExpect(jsonPath("$.data.current").value(1))
+                .andExpect(jsonPath("$.data.size").value(10))
                 .andExpect(jsonPath("$.data.total").value(1))
-                .andExpect(jsonPath("$.data.list[0].title").value("測試文章"));
+                .andExpect(jsonPath("$.data.records[0].title").value("測試文章"));
 
         verify(articleService).getPendingArticles(1, 10);
     }
@@ -137,18 +137,18 @@ class AdminArticleControllerTest {
         when(articleService.getPendingArticles(2, 5)).thenReturn(pageResult);
 
         mockMvc.perform(get("/api/admin/articles/pending")
-                        .param("pageNum", "2")
-                        .param("pageSize", "5")
+                        .param("page", "2")
+                        .param("size", "5")
                         .with(asAdmin()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.pageNum").value(2))
-                .andExpect(jsonPath("$.data.pageSize").value(5));
+                .andExpect(jsonPath("$.data.current").value(2))
+                .andExpect(jsonPath("$.data.size").value(5));
 
         verify(articleService).getPendingArticles(2, 5);
     }
 
     @Test
-    @DisplayName("GET /pending → Admin 不帶分頁參數 → 應使用預設值 pageNum=1, pageSize=10")
+    @DisplayName("GET /pending → Admin 不帶分頁參數 → 應使用預設值 page=1, size=10")
     void getPendingArticles_asAdminDefaultParams_shouldUseDefaults() throws Exception {
         PageResult<ArticleSummaryResponse> pageResult = PageResult.of(1, 10, 0L, List.of());
         when(articleService.getPendingArticles(1, 10)).thenReturn(pageResult);

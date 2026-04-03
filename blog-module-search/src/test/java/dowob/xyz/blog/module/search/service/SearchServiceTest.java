@@ -171,8 +171,8 @@ class SearchServiceTest {
 
             assertThat(result).isNotNull();
             assertThat(result.getTotal()).isEqualTo(1);
-            assertThat(result.getList()).hasSize(1);
-            assertThat(result.getList().get(0).getTitle()).isEqualTo("Spring Boot 教學");
+            assertThat(result.getRecords()).hasSize(1);
+            assertThat(result.getRecords().get(0).getTitle()).isEqualTo("Spring Boot 教學");
             verify(elasticsearchOperations).search(any(Query.class), eq(ArticleDocument.class));
         }
 
@@ -237,7 +237,7 @@ class SearchServiceTest {
 
             PageResult<SearchResultResponse> result = searchService.search("Spring", null, "relevance", 1, 10, null);
 
-            SearchResultResponse response = result.getList().get(0);
+            SearchResultResponse response = result.getRecords().get(0);
             assertThat(response.getSlug()).isEqualTo("spring-boot-tutorial");
             assertThat(response.getAuthorNickname()).isEqualTo("Yuan");
             assertThat(response.getTagNames()).containsExactly("Java");
@@ -300,7 +300,7 @@ class SearchServiceTest {
 
             PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
 
-            assertThat(result.getList().get(0).getTagNames()).isEmpty();
+            assertThat(result.getRecords().get(0).getTagNames()).isEmpty();
         }
 
         @Test
@@ -323,7 +323,7 @@ class SearchServiceTest {
 
             PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
 
-            assertThat(result.getList().get(0).getAuthorNickname()).isNull();
+            assertThat(result.getRecords().get(0).getAuthorNickname()).isNull();
         }
 
         @Test

@@ -5,6 +5,7 @@ import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -27,8 +28,10 @@ import java.util.List;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -397,6 +400,53 @@ class SecurityConfigTest {
     void unauthenticatedRequest_shouldReturn401NotDefault403() throws Exception {
         mockMvc.perform(get("/api/v1/profile"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // ── CORS 設定驗證 ──
+
+    @Nested
+    @DisplayName("CORS 設定")
+    class CorsConfigTests {
+
+        @Test
+        @DisplayName("OPTIONS preflight 請求帶 http://localhost:5500 Origin 應回傳 200 且含 CORS 回應標頭")
+        void preflightRequest_fromLocalhostPort5500_shouldReturn200() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/123")
+                            .header("Origin", "http://localhost:5500")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:5500"));
+        }
+
+        @Test
+        @DisplayName("OPTIONS preflight 請求帶 http://127.0.0.1:5500 Origin 應回傳 200 且含 CORS 回應標頭")
+        void preflightRequest_from127Port5500_shouldReturn200() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/123")
+                            .header("Origin", "http://127.0.0.1:5500")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Origin", "http://127.0.0.1:5500"));
+        }
+
+        @Test
+        @DisplayName("OPTIONS preflight 帶不在白名單的 Origin → 不應回傳 Access-Control-Allow-Origin 標頭")
+        void preflightRequest_fromUnknownOrigin_shouldNotReturnAllowOriginHeader() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/123")
+                            .header("Origin", "http://evil.example.com")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(header().doesNotExist("Access-Control-Allow-Origin"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("CORS 回應應包含 Access-Control-Allow-Credentials: true")
+        void corsResponse_shouldIncludeAllowCredentialsHeader() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/123")
+                            .header("Origin", "http://localhost:5500")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
+        }
     }
 
     // ── 工具方法 ──
