@@ -27,8 +27,6 @@ import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -217,7 +215,7 @@ public class ArticleServiceImpl implements ArticleService {
         // 狀態守衛：只有 DRAFT 或 REJECTED 允許透過 PUT 編輯內容
         ArticleStatus currentStatus = article.getStatus();
         if (currentStatus != ArticleStatus.DRAFT && currentStatus != ArticleStatus.REJECTED) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "目前狀態不允許編輯");
+            throw new BusinessException(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED);
         }
 
         if (request.getTitle() != null) {
@@ -353,7 +351,7 @@ public class ArticleServiceImpl implements ArticleService {
     public EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
         Article article = findByUuidOrThrow(articleUuid);
         if (!article.getAuthorId().equals(requesterId)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "您無權限存取此文章");
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
         return toEditorResponse(article);
     }

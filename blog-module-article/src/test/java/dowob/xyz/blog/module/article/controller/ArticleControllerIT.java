@@ -799,7 +799,7 @@ class ArticleControllerIT {
     }
 
     @Test
-    @DisplayName("PUT /api/v1/articles/{uuid} → PUBLISHED 狀態 → 403")
+    @DisplayName("PUT /api/v1/articles/{uuid} → PUBLISHED 狀態 → 400（ARTICLE_EDIT_NOT_ALLOWED）")
     void updateArticle_published_returns403() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
@@ -828,7 +828,7 @@ class ArticleControllerIT {
                 .with(asUser(AUTHOR_ID, Role.AUTHOR))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(updateRequest)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -867,7 +867,15 @@ class ArticleControllerIT {
     }
 
     @Test
-    @DisplayName("GET /api/v1/articles/{uuid}/edit → 他人文章 → 403")
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void getArticleForEdit_roleUser_returns403() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + UUID.randomUUID() + "/edit")
+                .with(asUser(AUTHOR_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 他人文章 → 400（ARTICLE_ACCESS_DENIED）")
     void getArticleForEdit_otherUserArticle_returns403() throws Exception {
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
         when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
@@ -886,7 +894,7 @@ class ArticleControllerIT {
 
         mockMvc.perform(get("/api/v1/articles/" + uuid + "/edit")
                 .with(asUser(99L, Role.AUTHOR)))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isBadRequest());
     }
 
     @Test

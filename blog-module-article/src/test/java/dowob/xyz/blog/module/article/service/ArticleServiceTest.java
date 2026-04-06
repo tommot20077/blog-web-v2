@@ -14,8 +14,6 @@ import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -1220,9 +1218,8 @@ class ArticleServiceTest {
             request.setTitle("更新後標題");
 
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                    .isEqualTo(HttpStatus.FORBIDDEN);
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
 
             verify(rabbitTemplate, never()).convertAndSend(
                     eq(ArticleRabbitMqConfig.EXCHANGE),
@@ -1339,7 +1336,7 @@ class ArticleServiceTest {
     class StateMachineLegalTransitionTests {
 
         @Test
-        @DisplayName("異常：PUBLISHED 狀態 → PUT 狀態守衛阻擋 → ResponseStatusException 403")
+        @DisplayName("異常：PUBLISHED 狀態 → PUT 狀態守衛阻擋 → ARTICLE_EDIT_NOT_ALLOWED")
         void updateArticle_published_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             article.setPublishedAt(LocalDateTime.now().minusDays(1));
@@ -1349,13 +1346,12 @@ class ArticleServiceTest {
             request.setStatus(ArticleStatus.ARCHIVED);
 
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                    .isEqualTo(HttpStatus.FORBIDDEN);
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
 
         @Test
-        @DisplayName("異常：ARCHIVED 狀態 → PUT 狀態守衛阻擋 → ResponseStatusException 403")
+        @DisplayName("異常：ARCHIVED 狀態 → PUT 狀態守衛阻擋 → ARTICLE_EDIT_NOT_ALLOWED")
         void updateArticle_archived_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.ARCHIVED);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
@@ -1364,9 +1360,8 @@ class ArticleServiceTest {
             request.setStatus(ArticleStatus.DRAFT);
 
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                    .isEqualTo(HttpStatus.FORBIDDEN);
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
 
         @Test
@@ -1446,7 +1441,7 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("異常：PUBLISHED 狀態 → PUT 守衛阻擋（先於狀態機驗證）→ ResponseStatusException 403")
+        @DisplayName("異常：PUBLISHED 狀態 → PUT 守衛阻擋（先於狀態機驗證）→ ARTICLE_EDIT_NOT_ALLOWED")
         void updateArticle_publishedToDraft_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
@@ -1455,9 +1450,8 @@ class ArticleServiceTest {
             request.setStatus(ArticleStatus.DRAFT);
 
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                    .isEqualTo(HttpStatus.FORBIDDEN);
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
 
         @Test
@@ -1475,7 +1469,7 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("異常：ARCHIVED 狀態 → PUT 守衛阻擋（先於狀態機驗證）→ ResponseStatusException 403")
+        @DisplayName("異常：ARCHIVED 狀態 → PUT 守衛阻擋（先於狀態機驗證）→ ARTICLE_EDIT_NOT_ALLOWED")
         void updateArticle_archivedToPublished_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.ARCHIVED);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
@@ -1484,9 +1478,8 @@ class ArticleServiceTest {
             request.setStatus(ArticleStatus.PUBLISHED);
 
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                    .isEqualTo(HttpStatus.FORBIDDEN);
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
 
         @Test
@@ -1504,7 +1497,7 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("異常：PENDING_REVIEW 狀態 → PUT 守衛阻擋 → ResponseStatusException 403")
+        @DisplayName("異常：PENDING_REVIEW 狀態 → PUT 守衛阻擋 → ARTICLE_EDIT_NOT_ALLOWED")
         void updateArticle_pendingReview_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
@@ -1513,9 +1506,8 @@ class ArticleServiceTest {
             request.setStatus(ArticleStatus.DRAFT);
 
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                    .isEqualTo(HttpStatus.FORBIDDEN);
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
     }
 
@@ -1914,15 +1906,14 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("異常：非作者嘗試存取他人文章 → ResponseStatusException HTTP 403")
-        void getArticleForEdit_otherUser_throws403() {
+        @DisplayName("異常：非作者嘗試存取他人文章 → ARTICLE_ACCESS_DENIED")
+        void getArticleForEdit_otherUser_denied() {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
             assertThatThrownBy(() -> articleService.getArticleForEdit(ARTICLE_UUID, OTHER_USER_ID))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                    .isEqualTo(HttpStatus.FORBIDDEN);
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
         }
     }
 }

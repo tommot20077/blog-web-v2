@@ -151,7 +151,7 @@ public class ArticleController {
      * @param requesterId 當前登入用戶的資料庫主鍵
      * @return Editor 用文章資訊
      */
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @GetMapping("/{uuid}/edit")
     public ApiResponse<EditorArticleResponse> getArticleForEdit(
             @PathVariable UUID uuid,
