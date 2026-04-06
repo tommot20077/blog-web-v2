@@ -106,7 +106,6 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
         JsonNode articleData = objectMapper.readTree(
                 createResult.getResponse().getContentAsString()).get("data");
         String articleUuid = articleData.get("uuid").asText();
-        String articleSlug = articleData.get("slug").asText();
 
         // ===== 4. AUTHOR 送審 =====
         mockMvc.perform(post("/api/v1/articles/" + articleUuid + "/submit")
@@ -155,6 +154,12 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                 .andExpect(jsonPath("$.data.records[0].title", containsString("Spring Boot")));
 
         // ===== 9. 匿名用戶透過 slug 閱讀文章 =====
+        // EditorArticleResponse 不含 slug，從 GET /articles/{uuid} (ArticleResponse) 取得
+        String slugResponse = mockMvc.perform(get("/api/v1/articles/" + articleUuid))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String articleSlug = objectMapper.readTree(slugResponse).path("data").path("slug").asText();
+
         mockMvc.perform(get("/api/v1/articles/slug/" + articleSlug))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess())
