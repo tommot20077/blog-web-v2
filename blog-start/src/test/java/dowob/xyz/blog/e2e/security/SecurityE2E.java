@@ -135,7 +135,7 @@ class SecurityE2E extends AbstractE2ETest {
 
             Map<String, Object> body = category("TestCat", "test-cat");
 
-            mockMvc.perform(post("/api/admin/categories")
+            mockMvc.perform(post("/api/v1/admin/categories")
                             .with(bearerToken(userToken))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
@@ -165,7 +165,7 @@ class SecurityE2E extends AbstractE2ETest {
 
             Map<String, Object> body = category("TestCat", "test-cat");
 
-            mockMvc.perform(post("/api/admin/categories")
+            mockMvc.perform(post("/api/v1/admin/categories")
                             .with(bearerToken(authorToken))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))
@@ -180,7 +180,7 @@ class SecurityE2E extends AbstractE2ETest {
 
             Map<String, Object> body = category("TestCat", "test-cat");
 
-            mockMvc.perform(post("/api/admin/categories")
+            mockMvc.perform(post("/api/v1/admin/categories")
                             .with(bearerToken(adminToken))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(body)))

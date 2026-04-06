@@ -84,14 +84,14 @@ class AdminSearchControllerTest {
     @Test
     @DisplayName("POST /api/admin/search/reindex — 未認證應回傳 401")
     void reindex_unauthenticated_returns401() throws Exception {
-        mockMvc.perform(post("/api/admin/search/reindex"))
+        mockMvc.perform(post("/api/v1/admin/search/reindex"))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("POST /api/admin/search/reindex — 一般用戶應回傳 403")
     void reindex_asUser_returns403() throws Exception {
-        mockMvc.perform(post("/api/admin/search/reindex")
+        mockMvc.perform(post("/api/v1/admin/search/reindex")
                         .with(asUser()))
                 .andExpect(status().isForbidden());
     }
@@ -99,7 +99,7 @@ class AdminSearchControllerTest {
     @Test
     @DisplayName("POST /api/admin/search/reindex — Admin 用戶應回傳 200 與成功訊息")
     void reindex_asAdmin_returns200WithMessage() throws Exception {
-        mockMvc.perform(post("/api/admin/search/reindex")
+        mockMvc.perform(post("/api/v1/admin/search/reindex")
                         .with(asAdmin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))

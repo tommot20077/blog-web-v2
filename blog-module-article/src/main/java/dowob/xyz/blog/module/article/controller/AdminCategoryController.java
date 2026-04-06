@@ -29,7 +29,7 @@ import java.util.UUID;
  * @version 1.0
  */
 @RestController
-@RequestMapping("/api/admin/categories")
+@RequestMapping("/api/v1/admin/categories")
 @RequiredArgsConstructor
 public class AdminCategoryController {
 

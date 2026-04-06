@@ -173,7 +173,7 @@ class SearchE2E extends AbstractE2ETest {
         String adminToken = authHelper.createUserWithRole(
                 "search-admin@test.com", "Password1!", "searchadmin", "SearchAdmin", Role.ADMIN);
 
-        mockMvc.perform(post("/api/admin/search/reindex")
+        mockMvc.perform(post("/api/v1/admin/search/reindex")
                         .with(bearerToken(adminToken)))
                 .andExpect(status().isOk())
                 .andExpect(apiSuccess());

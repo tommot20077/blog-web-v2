@@ -72,7 +72,7 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                 "admin-flow@test.com", "Admin123!", "adminflow", "Admin Flow", Role.ADMIN);
 
         String catBody = objectMapper.writeValueAsString(DataBuilder.category("Tech", "tech"));
-        String catResponse = mockMvc.perform(post("/api/admin/categories")
+        String catResponse = mockMvc.perform(post("/api/v1/admin/categories")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(catBody)
                         .with(AuthHelper.bearerToken(adminToken)))
@@ -116,7 +116,7 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                 .andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"));
 
         // ===== 5. ADMIN 取得待審列表，確認文章在列表中 =====
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .with(AuthHelper.bearerToken(adminToken)))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess())

@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
  * @version 1.0
  */
 @RestController
-@RequestMapping("/api/admin/articles")
+@RequestMapping("/api/v1/admin/articles")
 @RequiredArgsConstructor
 public class AdminArticleController {
 
@@ -47,14 +47,4 @@ public class AdminArticleController {
         return ApiResponse.success(articleService.getPendingArticles(page, size));
     }
 
-    /**
-     * 取得待審文章總筆數（僅 ADMIN）
-     *
-     * @return 待審文章總筆數
-     */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
-    @GetMapping("/pending/count")
-    public ApiResponse<Long> getPendingArticleCount() {
-        return ApiResponse.success(articleService.getPendingArticleCount());
-    }
 }

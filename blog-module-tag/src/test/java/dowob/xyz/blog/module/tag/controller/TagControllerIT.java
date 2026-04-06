@@ -282,7 +282,7 @@ class TagControllerIT {
         UUID tagId = insertTestTag("Redis", "redis", 0);
         Map<String, String> body = Map.of("color", "#ff0000");
 
-        mockMvc.perform(put("/api/admin/tags/{id}", tagId)
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", tagId)
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
                                 buildAuth(1L, "ADMIN", "SYSTEM_CONFIG")))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -297,7 +297,7 @@ class TagControllerIT {
         UUID tagId = insertTestTag("RabbitMQ", "rabbitmq", 0);
         Map<String, String> body = Map.of("color", "#00ff00");
 
-        mockMvc.perform(put("/api/admin/tags/{id}", tagId)
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", tagId)
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
                                 buildAuth(1L, "USER", "COMMENT_WRITE")))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -352,7 +352,7 @@ class TagControllerIT {
     void adminDeleteTag_withSystemConfigPermission_returns200() throws Exception {
         UUID tagId = insertTestTag("Obsolete", "obsolete", 0);
 
-        mockMvc.perform(delete("/api/admin/tags/{id}", tagId)
+        mockMvc.perform(delete("/api/v1/admin/tags/{id}", tagId)
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
                                 buildAuth(1L, "ADMIN", "SYSTEM_CONFIG"))))
                 .andExpect(status().isOk())
@@ -364,7 +364,7 @@ class TagControllerIT {
     void adminDeleteTag_withoutPermission_returns403() throws Exception {
         UUID tagId = insertTestTag("Protected", "protected", 0);
 
-        mockMvc.perform(delete("/api/admin/tags/{id}", tagId)
+        mockMvc.perform(delete("/api/v1/admin/tags/{id}", tagId)
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
                                 buildAuth(1L, "USER", "COMMENT_WRITE"))))
                 .andExpect(status().isForbidden());

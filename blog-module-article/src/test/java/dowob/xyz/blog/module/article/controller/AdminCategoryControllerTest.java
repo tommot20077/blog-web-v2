@@ -108,7 +108,7 @@ class AdminCategoryControllerTest {
         request.setName("技術");
         request.setSlug("tech");
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isUnauthorized());
@@ -121,7 +121,7 @@ class AdminCategoryControllerTest {
         request.setName("技術");
         request.setSlug("tech");
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request))
                         .with(asUser()))
@@ -146,7 +146,7 @@ class AdminCategoryControllerTest {
                 .build();
         when(categoryService.createCategory(any(CreateCategoryRequest.class))).thenReturn(response);
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request))
                         .with(asAdmin()))
@@ -166,7 +166,7 @@ class AdminCategoryControllerTest {
         CreateCategoryRequest request = new CreateCategoryRequest();
         // name 和 slug 都是 @NotBlank，故意留空
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request))
                         .with(asAdmin()))
@@ -183,7 +183,7 @@ class AdminCategoryControllerTest {
         UpdateCategoryRequest request = new UpdateCategoryRequest();
         request.setName("更新名稱");
 
-        mockMvc.perform(put("/api/admin/categories/{uuid}", TEST_UUID)
+        mockMvc.perform(put("/api/v1/admin/categories/{uuid}", TEST_UUID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isUnauthorized());
@@ -195,7 +195,7 @@ class AdminCategoryControllerTest {
         UpdateCategoryRequest request = new UpdateCategoryRequest();
         request.setName("更新名稱");
 
-        mockMvc.perform(put("/api/admin/categories/{uuid}", TEST_UUID)
+        mockMvc.perform(put("/api/v1/admin/categories/{uuid}", TEST_UUID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request))
                         .with(asUser()))
@@ -217,7 +217,7 @@ class AdminCategoryControllerTest {
                 .build();
         when(categoryService.updateCategory(eq(TEST_UUID), any(UpdateCategoryRequest.class))).thenReturn(response);
 
-        mockMvc.perform(put("/api/admin/categories/{uuid}", TEST_UUID)
+        mockMvc.perform(put("/api/v1/admin/categories/{uuid}", TEST_UUID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request))
                         .with(asAdmin()))
@@ -244,7 +244,7 @@ class AdminCategoryControllerTest {
                 .build();
         when(categoryService.updateCategory(eq(specificUuid), any(UpdateCategoryRequest.class))).thenReturn(response);
 
-        mockMvc.perform(put("/api/admin/categories/{uuid}", specificUuid)
+        mockMvc.perform(put("/api/v1/admin/categories/{uuid}", specificUuid)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request))
                         .with(asAdmin()))
@@ -260,14 +260,14 @@ class AdminCategoryControllerTest {
     @Test
     @DisplayName("DELETE /{uuid} → 未認證 → 應回傳 401")
     void deleteCategory_unauthenticated_shouldReturn401() throws Exception {
-        mockMvc.perform(delete("/api/admin/categories/{uuid}", TEST_UUID))
+        mockMvc.perform(delete("/api/v1/admin/categories/{uuid}", TEST_UUID))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("DELETE /{uuid} → 一般用戶 → 應回傳 403")
     void deleteCategory_asUser_shouldReturn403() throws Exception {
-        mockMvc.perform(delete("/api/admin/categories/{uuid}", TEST_UUID)
+        mockMvc.perform(delete("/api/v1/admin/categories/{uuid}", TEST_UUID)
                         .with(asUser()))
                 .andExpect(status().isForbidden());
     }
@@ -277,7 +277,7 @@ class AdminCategoryControllerTest {
     void deleteCategory_asAdmin_shouldReturn200() throws Exception {
         doNothing().when(categoryService).deleteCategory(TEST_UUID);
 
-        mockMvc.perform(delete("/api/admin/categories/{uuid}", TEST_UUID)
+        mockMvc.perform(delete("/api/v1/admin/categories/{uuid}", TEST_UUID)
                         .with(asAdmin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
@@ -291,7 +291,7 @@ class AdminCategoryControllerTest {
         UUID specificUuid = UUID.fromString("33333333-3333-3333-3333-333333333333");
         doNothing().when(categoryService).deleteCategory(specificUuid);
 
-        mockMvc.perform(delete("/api/admin/categories/{uuid}", specificUuid)
+        mockMvc.perform(delete("/api/v1/admin/categories/{uuid}", specificUuid)
                         .with(asAdmin()))
                 .andExpect(status().isOk());
 

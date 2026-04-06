@@ -268,7 +268,7 @@ class ArticleE2E extends AbstractE2ETest {
         String adminToken = authHelper.createUserWithRole(
                 "admin@test.com", "Password1!", "admin1", "Admin", Role.ADMIN);
 
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .with(bearerToken(adminToken))
                         .param("page", "1")
                         .param("size", "10"))
@@ -277,12 +277,6 @@ class ArticleE2E extends AbstractE2ETest {
                 .andExpect(hasData())
                 .andExpect(jsonPath("$.data.total").value(1));
 
-        // 同時驗證待審數量端點
-        mockMvc.perform(get("/api/admin/articles/pending/count")
-                        .with(bearerToken(adminToken)))
-                .andExpect(status().isOk())
-                .andExpect(apiSuccess())
-                .andExpect(jsonPath("$.data").value(1));
     }
 
     @Test
