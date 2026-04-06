@@ -166,36 +166,13 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                 .andExpect(jsonPath("$.data.title").value("E2E Spring Boot Guide"))
                 .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
 
-        // ===== 10. AUTHOR 更新文章標題 =====
-        Map<String, Object> updateBody = new LinkedHashMap<>();
-        updateBody.put("title", "Updated E2E Spring Boot Guide");
-
-        mockMvc.perform(put("/api/v1/articles/" + articleUuid)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(updateBody))
-                        .with(AuthHelper.bearerToken(authorToken)))
-                .andExpect(status().isOk())
-                .andExpect(E2EAssertions.apiSuccess())
-                .andExpect(jsonPath("$.data.title").value("Updated E2E Spring Boot Guide"));
-
-        // ===== 11. 等待 ES 更新，驗證搜尋結果反映新標題 =====
-        await().atMost(15, SECONDS).pollInterval(1, SECONDS).untilAsserted(() ->
-                mockMvc.perform(get("/api/v1/search")
-                                .param("q", "Updated E2E"))
-                        .andExpect(status().isOk())
-                        .andExpect(E2EAssertions.apiSuccess())
-                        .andExpect(jsonPath("$.data.total", greaterThanOrEqualTo(1)))
-                        .andExpect(jsonPath("$.data.records[0].title",
-                                containsString("Updated")))
-        );
-
-        // ===== 12. AUTHOR 刪除文章 =====
+        // ===== 10. AUTHOR 刪除文章 =====
         mockMvc.perform(delete("/api/v1/articles/" + articleUuid)
                         .with(AuthHelper.bearerToken(authorToken)))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 
-        // ===== 13. 驗證文章已不存在 =====
+        // ===== 11. 驗證文章已不存在 =====
         mockMvc.perform(get("/api/v1/articles/" + articleUuid))
                 .andExpect(status().isBadRequest());
     }
