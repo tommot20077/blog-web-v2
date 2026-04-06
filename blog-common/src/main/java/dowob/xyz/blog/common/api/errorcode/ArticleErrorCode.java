@@ -51,7 +51,12 @@ public enum ArticleErrorCode implements IErrorCode {
     /**
      * 文章並發更新（樂觀鎖衝突）
      */
-    ARTICLE_CONCURRENT_UPDATE("A0208", "文章已被其他人修改，請重新整理後再試");
+    ARTICLE_CONCURRENT_UPDATE("A0208", "文章已被其他人修改，請重新整理後再試"),
+
+    /**
+     * 目前文章狀態不允許編輯（PENDING_REVIEW / PUBLISHED / ARCHIVED）
+     */
+    ARTICLE_EDIT_NOT_ALLOWED("A0209", "目前狀態不允許編輯");
 
     /**
      * 錯誤碼

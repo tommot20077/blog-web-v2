@@ -13,6 +13,9 @@ import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -173,7 +176,7 @@ class ArticleServiceTest {
     class CreateArticleTests {
 
         @Test
-        @DisplayName("正常：建立文章成功，回傳 ArticleResponse（含 authorNickname）")
+        @DisplayName("正常：建立文章成功，回傳 EditorArticleResponse（含 uuid、status）")
         void createArticle_success() {
             CreateArticleRequest request = new CreateArticleRequest();
             request.setTitle("新文章");
@@ -183,12 +186,11 @@ class ArticleServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
 
             assertThat(response).isNotNull();
             assertThat(response.getUuid()).isEqualTo(ARTICLE_UUID);
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
-            assertThat(response.getAuthorNickname()).isEqualTo("TestAuthor");
             verify(articleRepository).save(any(Article.class));
         }
 
@@ -213,8 +215,8 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("正常：getUserNicknameById 回傳 empty 時，authorNickname 為 null，不拋例外")
-        void createArticle_userNicknameNotFound_authorNicknameIsNull() {
+        @DisplayName("正常：getUserNicknameById 回傳 empty 時，建立文章不拋例外")
+        void createArticle_userNicknameNotFound_noException() {
             when(userFacade.getUserNicknameById(AUTHOR_ID)).thenReturn(Optional.empty());
 
             CreateArticleRequest request = new CreateArticleRequest();
@@ -224,10 +226,9 @@ class ArticleServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
 
             assertThat(response).isNotNull();
-            assertThat(response.getAuthorNickname()).isNull();
         }
 
         @Test
@@ -241,7 +242,7 @@ class ArticleServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
 
             org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -418,7 +419,7 @@ class ArticleServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("更新後標題");
 
-            ArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            EditorArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
 
             assertThat(response).isNotNull();
             verify(articleRepository).save(any(Article.class));
@@ -434,7 +435,7 @@ class ArticleServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("Admin 更新");
 
-            ArticleResponse response = articleService.updateArticle(OTHER_USER_ID, Role.ADMIN, ARTICLE_UUID, request);
+            EditorArticleResponse response = articleService.updateArticle(OTHER_USER_ID, Role.ADMIN, ARTICLE_UUID, request);
 
             assertThat(response).isNotNull();
         }
@@ -993,7 +994,7 @@ class ArticleServiceTest {
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID,
+            EditorArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID,
                     buildUpdateRequest(ArticleStatus.DRAFT));
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
@@ -1119,35 +1120,19 @@ class ArticleServiceTest {
     class ResponseDtoFieldsTests {
 
         @Test
-        @DisplayName("正常：createArticle 回應包含 slug 欄位")
-        void createArticle_responseShouldIncludeSlug() {
+        @DisplayName("正常：createArticle 應自動產生 slug 並寫入 Article 實體")
+        void createArticle_shouldGenerateSlug() {
             CreateArticleRequest request = new CreateArticleRequest();
             request.setTitle("Slug 測試文章");
             request.setContent("內容");
 
-            Article saved = buildArticle(ArticleStatus.DRAFT);
-            saved.setSlug("slug-test-abcd1234");
-            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+            articleService.createArticle(AUTHOR_ID, request);
 
-            assertThat(response.getSlug()).isEqualTo("slug-test-abcd1234");
-        }
-
-        @Test
-        @DisplayName("正常：createArticle 回應包含 likeCount 欄位")
-        void createArticle_responseShouldIncludeLikeCount() {
-            CreateArticleRequest request = new CreateArticleRequest();
-            request.setTitle("LikeCount 測試");
-            request.setContent("內容");
-
-            Article saved = buildArticle(ArticleStatus.DRAFT);
-            saved.setLikeCount(42L);
-            when(articleRepository.save(any(Article.class))).thenReturn(saved);
-
-            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
-
-            assertThat(response.getLikeCount()).isEqualTo(42L);
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getSlug()).isNotBlank();
         }
 
         @Test
@@ -1164,7 +1149,7 @@ class ArticleServiceTest {
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID))
                     .thenReturn(List.of(new TagInfo(tagId, "Spring", "spring")));
 
-            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
 
             assertThat(response.getTags()).hasSize(1);
             assertThat(response.getTags().get(0).getName()).isEqualTo("Spring");
@@ -1182,7 +1167,7 @@ class ArticleServiceTest {
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
 
-            ArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = articleService.createArticle(AUTHOR_ID, request);
 
             assertThat(response.getTags()).isEmpty();
         }
@@ -1225,30 +1210,24 @@ class ArticleServiceTest {
     class UpdateArticleSearchSyncTests {
 
         @Test
-        @DisplayName("正常：更新已發布文章的標題時，應發送 ArticleUpdatedEvent")
-        void updatePublishedArticle_shouldPublishUpdatedEvent() {
+        @DisplayName("異常：PUBLISHED 狀態 → PUT 守衛阻擋，不發送 ArticleUpdatedEvent")
+        void updatePublishedArticle_blockedByGuard_noEvent() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             article.setPublishedAt(LocalDateTime.now().minusDays(1));
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
-            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
-            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(
-                    List.of(new TagInfo(UUID.randomUUID(), "Spring", "spring")));
 
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("更新後標題");
 
-            articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.FORBIDDEN);
 
-            ArgumentCaptor<ArticleUpdatedEvent> captor = ArgumentCaptor.forClass(ArticleUpdatedEvent.class);
-            verify(rabbitTemplate).convertAndSend(
+            verify(rabbitTemplate, never()).convertAndSend(
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_UPDATED),
-                    captor.capture());
-
-            ArticleUpdatedEvent event = captor.getValue();
-            assertThat(event.articleUuid()).isEqualTo(ARTICLE_UUID);
-            assertThat(event.title()).isEqualTo("更新後標題");
-            assertThat(event.tags()).hasSize(1);
+                    any(ArticleUpdatedEvent.class));
         }
 
         @Test
@@ -1353,25 +1332,6 @@ class ArticleServiceTest {
     }
 
     /**
-     * getPendingArticleCount 測試
-     */
-    @Nested
-    @DisplayName("getPendingArticleCount")
-    class GetPendingArticleCountTests {
-
-        @Test
-        @DisplayName("正常：回傳待審文章總筆數")
-        void getPendingArticleCount_returnsCorrectCount() {
-            when(articleMapper.countPendingReview()).thenReturn(5L);
-
-            long count = articleService.getPendingArticleCount();
-
-            assertThat(count).isEqualTo(5L);
-            verify(articleMapper).countPendingReview();
-        }
-    }
-
-    /**
      * 狀態機邊界：合法轉換（未覆蓋路徑）
      */
     @Nested
@@ -1379,34 +1339,34 @@ class ArticleServiceTest {
     class StateMachineLegalTransitionTests {
 
         @Test
-        @DisplayName("正常：PUBLISHED → ARCHIVED 合法轉換，updateArticle 成功")
-        void updateArticle_publishedToArchived_validTransition() {
+        @DisplayName("異常：PUBLISHED 狀態 → PUT 狀態守衛阻擋 → ResponseStatusException 403")
+        void updateArticle_published_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             article.setPublishedAt(LocalDateTime.now().minusDays(1));
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
-            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.ARCHIVED);
 
-            ArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
-
-            assertThat(response.getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.FORBIDDEN);
         }
 
         @Test
-        @DisplayName("正常：ARCHIVED → DRAFT 合法轉換，updateArticle 成功")
-        void updateArticle_archivedToDraft_validTransition() {
+        @DisplayName("異常：ARCHIVED 狀態 → PUT 狀態守衛阻擋 → ResponseStatusException 403")
+        void updateArticle_archived_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.ARCHIVED);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
-            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.DRAFT);
 
-            ArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
-
-            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.FORBIDDEN);
         }
 
         @Test
@@ -1425,25 +1385,6 @@ class ArticleServiceTest {
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
             assertThat(captor.getValue().getPublishedAt()).isNotNull();
-        }
-
-        @Test
-        @DisplayName("正常：updateArticle 更新 status → PUBLISHED 且 publishedAt 已存在，不重設 publishedAt")
-        void updateArticle_statusToPublished_whenPublishedAtAlreadySet_doesNotReset() {
-            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
-            LocalDateTime originalPublishedAt = LocalDateTime.of(2024, 1, 1, 12, 0);
-            article.setPublishedAt(originalPublishedAt);
-            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
-            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
-
-            UpdateArticleRequest request = new UpdateArticleRequest();
-            request.setStatus(ArticleStatus.PUBLISHED);
-
-            articleService.updateArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, request);
-
-            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
-            verify(articleRepository).save(captor.capture());
-            assertThat(captor.getValue().getPublishedAt()).isEqualTo(originalPublishedAt);
         }
 
         @Test
@@ -1505,8 +1446,8 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("異常：PUBLISHED → DRAFT 非法轉換 → ARTICLE_STATUS_TRANSITION_INVALID")
-        void updateArticle_publishedToDraft_invalidTransition() {
+        @DisplayName("異常：PUBLISHED 狀態 → PUT 守衛阻擋（先於狀態機驗證）→ ResponseStatusException 403")
+        void updateArticle_publishedToDraft_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
@@ -1514,8 +1455,9 @@ class ArticleServiceTest {
             request.setStatus(ArticleStatus.DRAFT);
 
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
-                    .isInstanceOf(BusinessException.class)
-                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.FORBIDDEN);
         }
 
         @Test
@@ -1533,8 +1475,8 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("異常：ARCHIVED → PUBLISHED 非法轉換 → ARTICLE_STATUS_TRANSITION_INVALID")
-        void updateArticle_archivedToPublished_invalidTransition() {
+        @DisplayName("異常：ARCHIVED 狀態 → PUT 守衛阻擋（先於狀態機驗證）→ ResponseStatusException 403")
+        void updateArticle_archivedToPublished_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.ARCHIVED);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
 
@@ -1542,8 +1484,9 @@ class ArticleServiceTest {
             request.setStatus(ArticleStatus.PUBLISHED);
 
             assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
-                    .isInstanceOf(BusinessException.class)
-                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.FORBIDDEN);
         }
 
         @Test
@@ -1561,18 +1504,18 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("異常：PENDING_REVIEW → DRAFT (非 ADMIN) → 合法轉換應成功（非 ADMIN 仍可執行）")
-        void updateArticle_pendingReviewToDraft_byAuthor_shouldSucceed() {
+        @DisplayName("異常：PENDING_REVIEW 狀態 → PUT 守衛阻擋 → ResponseStatusException 403")
+        void updateArticle_pendingReview_blockedByGuard() {
             Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
-            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.DRAFT);
 
-            ArticleResponse response = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
-
-            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+            assertThatThrownBy(() -> articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.FORBIDDEN);
         }
     }
 
@@ -1924,6 +1867,62 @@ class ArticleServiceTest {
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
                     any(ArticleTagEvent.class));
+        }
+    }
+
+    /**
+     * getArticleForEdit 測試
+     */
+    @Nested
+    @DisplayName("getArticleForEdit")
+    class GetArticleForEditTests {
+
+        @Test
+        @DisplayName("正常：作者本人可取得自己的文章用於編輯")
+        void getArticleForEdit_authorCanAccess() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            EditorArticleResponse response = articleService.getArticleForEdit(ARTICLE_UUID, AUTHOR_ID);
+
+            assertThat(response).isNotNull();
+            assertThat(response.getUuid()).isEqualTo(ARTICLE_UUID);
+            assertThat(response.getContent()).isEqualTo("測試內容");
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+        }
+
+        @Test
+        @DisplayName("正常：REJECTED 狀態的文章可供作者取得編輯")
+        void getArticleForEdit_rejectedArticle_authorCanAccess() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            EditorArticleResponse response = articleService.getArticleForEdit(ARTICLE_UUID, AUTHOR_ID);
+
+            assertThat(response).isNotNull();
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.REJECTED);
+        }
+
+        @Test
+        @DisplayName("異常：文章不存在 → ARTICLE_NOT_FOUND")
+        void getArticleForEdit_notFound() {
+            when(articleRepository.findByUuid(any())).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> articleService.getArticleForEdit(UUID.randomUUID(), AUTHOR_ID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：非作者嘗試存取他人文章 → ResponseStatusException HTTP 403")
+        void getArticleForEdit_otherUser_throws403() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            assertThatThrownBy(() -> articleService.getArticleForEdit(ARTICLE_UUID, OTHER_USER_ID))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.FORBIDDEN);
         }
     }
 }

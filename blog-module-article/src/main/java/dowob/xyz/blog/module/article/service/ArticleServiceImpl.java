@@ -25,7 +25,10 @@ import dowob.xyz.blog.module.article.model.TagWithArticleUuid;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -136,7 +139,7 @@ public class ArticleServiceImpl implements ArticleService {
      * @return 建立後的文章完整資訊
      */
     @Override
-    public ArticleResponse createArticle(Long authorId, CreateArticleRequest request) {
+    public EditorArticleResponse createArticle(Long authorId, CreateArticleRequest request) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
         article.setAuthorId(authorId);
@@ -193,7 +196,7 @@ public class ArticleServiceImpl implements ArticleService {
             }
         }
 
-        return toResponse(saved);
+        return toEditorResponse(saved);
     }
 
     /**
@@ -206,10 +209,16 @@ public class ArticleServiceImpl implements ArticleService {
      * @return 更新後的文章完整資訊
      */
     @Override
-    public ArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
+    public EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
             UpdateArticleRequest request) {
         Article article = findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
+
+        // 狀態守衛：只有 DRAFT 或 REJECTED 允許透過 PUT 編輯內容
+        ArticleStatus currentStatus = article.getStatus();
+        if (currentStatus != ArticleStatus.DRAFT && currentStatus != ArticleStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "目前狀態不允許編輯");
+        }
 
         if (request.getTitle() != null) {
             article.setTitle(request.getTitle());
@@ -284,7 +293,7 @@ public class ArticleServiceImpl implements ArticleService {
             }
         }
 
-        return toResponse(updated);
+        return toEditorResponse(updated);
     }
 
     /**
@@ -331,6 +340,22 @@ public class ArticleServiceImpl implements ArticleService {
     public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
         Article article = findByUuidOrThrow(articleUuid);
         return processArticleView(article, viewerId, viewerRole, clientIp);
+    }
+
+    /**
+     * 取得文章供 Editor 編輯（僅作者本人）
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param requesterId 請求者資料庫主鍵
+     * @return Editor 用文章資訊
+     */
+    @Override
+    public EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
+        Article article = findByUuidOrThrow(articleUuid);
+        if (!article.getAuthorId().equals(requesterId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "您無權限存取此文章");
+        }
+        return toEditorResponse(article);
     }
 
     /**
@@ -587,16 +612,6 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
-     * 取得待審文章總筆數（僅 ADMIN）
-     *
-     * @return 待審文章總筆數
-     */
-    @Override
-    public long getPendingArticleCount() {
-        return articleMapper.countPendingReview();
-    }
-
-    /**
      * 根據 UUID 查詢文章，不存在則拋出例外
      *
      * @param uuid 文章 UUID
@@ -779,6 +794,32 @@ public class ArticleServiceImpl implements ArticleService {
                 .publishedAt(article.getPublishedAt())
                 .tags(toTagSummaryResponses(article.getUuid()))
                 .rejectReason(article.getRejectReason())
+                .build();
+    }
+
+    /**
+     * 轉換文章實體為 Editor 專用回應 DTO
+     *
+     * <p>
+     * 僅包含編輯器所需欄位，不含 contentHtml、slug、viewCount 等閱讀端欄位。
+     * </p>
+     *
+     * @param article 文章實體
+     * @return EditorArticleResponse
+     */
+    private EditorArticleResponse toEditorResponse(Article article) {
+        return EditorArticleResponse.builder()
+                .uuid(article.getUuid())
+                .title(article.getTitle())
+                .summary(article.getSummary())
+                .content(article.getContent())
+                .coverImageUrl(article.getCoverImageUrl())
+                .status(article.getStatus())
+                .categories(toCategoryResponses(article.getId()))
+                .tags(toTagSummaryResponses(article.getUuid()))
+                .rejectReason(article.getRejectReason())
+                .createdAt(article.getCreatedAt())
+                .updatedAt(article.getUpdatedAt())
                 .build();
     }
 
