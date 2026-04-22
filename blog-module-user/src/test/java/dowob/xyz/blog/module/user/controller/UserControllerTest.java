@@ -347,7 +347,10 @@ class UserControllerTest {
                 testUuid,
                 "test@example.com",
                 "testNickname",
+                null,
                 "https://example.com/avatar.png",
+                null,
+                null,
                 Role.USER,
                 true,
                 LocalDateTime.of(2024, 1, 1, 0, 0)

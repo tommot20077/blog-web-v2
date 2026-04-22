@@ -14,7 +14,10 @@ import java.util.UUID;
  * @param uuid          使用者對外公開的 UUID
  * @param email         電子信箱
  * @param nickname      暱稱
+ * @param bio           個人簡介
  * @param avatarUrl     頭貼 URL（可為 null）
+ * @param website       個人網站 URL（可為 null）
+ * @param socialLinks   社群連結 JSON 字串（可為 null）
  * @param role          使用者角色
  * @param emailVerified 信箱是否已驗證
  * @param createdAt     帳號建立時間
@@ -26,7 +29,10 @@ public record UserProfileResponse(
         @Schema(description = "使用者對外公開的 UUID") UUID uuid,
         @Schema(description = "電子信箱") String email,
         @Schema(description = "暱稱") String nickname,
+        @Schema(description = "個人簡介") String bio,
         @Schema(description = "頭貼 URL（可為 null）") String avatarUrl,
+        @Schema(description = "個人網站 URL（可為 null）") String website,
+        @Schema(description = "社群連結（JSON 格式，可為 null）") String socialLinks,
         @Schema(description = "使用者角色") Role role,
         @Schema(description = "信箱是否已驗證") boolean emailVerified,
         @Schema(description = "帳號建立時間") LocalDateTime createdAt

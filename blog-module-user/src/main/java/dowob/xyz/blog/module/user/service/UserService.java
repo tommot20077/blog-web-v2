@@ -54,7 +54,10 @@ public class UserService {
                 user.getUuid(),
                 user.getEmail(),
                 user.getNickname(),
+                user.getBio(),
                 user.getAvatarUrl(),
+                user.getWebsite(),
+                user.getSocialLinks(),
                 user.getRole(),
                 user.isEmailVerified(),
                 user.getCreatedAt());

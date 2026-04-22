@@ -88,7 +88,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
 
                         /** Admin 管理端點，僅 ADMIN 可存取 */
-                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 
                         /** 其他所有請求需認證 */
                         .anyRequest().authenticated())
