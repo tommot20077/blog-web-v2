@@ -1,8 +1,11 @@
 package dowob.xyz.blog.infrastructure.config;
 
+import io.minio.BucketExistsArgs;
+import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,6 +31,7 @@ import jakarta.validation.constraints.NotBlank;
  * @author Yuan
  * @version 1.0
  */
+@Slf4j
 @Getter
 @Setter
 @Validated
@@ -70,5 +74,28 @@ public class MinioConfig {
                 .endpoint(endpoint)
                 .credentials(accessKey, secretKey)
                 .build();
+    }
+
+    /**
+     * 確保 bucket 存在，不存在則自動建立。
+     * 避免因 bucket 缺失導致所有上傳請求回傳 500。
+     */
+    @Bean
+    public org.springframework.boot.ApplicationRunner ensureBucket(MinioClient minioClient) {
+        return args -> {
+            try {
+                boolean exists = minioClient.bucketExists(
+                        BucketExistsArgs.builder().bucket(bucketName).build());
+                if (!exists) {
+                    minioClient.makeBucket(
+                            MakeBucketArgs.builder().bucket(bucketName).build());
+                    log.info("MinIO bucket '{}' 已建立", bucketName);
+                } else {
+                    log.debug("MinIO bucket '{}' 已存在", bucketName);
+                }
+            } catch (Exception e) {
+                log.error("MinIO bucket 初始化失敗（bucket={}）：{}", bucketName, e.getMessage());
+            }
+        };
     }
 }
