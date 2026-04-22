@@ -91,9 +91,9 @@ public class SearchServiceImpl implements SearchService {
                     .fuzziness("AUTO"))));
         }
 
-        /** 僅搜尋已發布文章 */
+        /** 僅搜尋已發布文章（status.keyword — ES index uses text+keyword dynamic mapping） */
         boolQuery.filter(Query.of(fb -> fb.term(t -> t
-                .field("status")
+                .field("status.keyword")
                 .value("PUBLISHED"))));
 
         /** 標籤過濾（Nested Query） */

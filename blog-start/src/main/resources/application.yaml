@@ -53,6 +53,7 @@ mybatis:
     map-underscore-to-camel-case: true
     use-generated-keys: true
   type-aliases-package: dowob.xyz.blog.module
+  type-handlers-package: dowob.xyz.blog.infrastructure.config
 
 # MinIO Config
 minio:
