@@ -94,14 +94,14 @@ class AdminArticleControllerTest {
     @Test
     @DisplayName("GET /pending → 未認證 → 應回傳 401")
     void getPendingArticles_unauthenticated_shouldReturn401() throws Exception {
-        mockMvc.perform(get("/api/admin/articles/pending"))
+        mockMvc.perform(get("/api/v1/admin/articles/pending"))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("GET /pending → 一般用戶 → 應回傳 403")
     void getPendingArticles_asUser_shouldReturn403() throws Exception {
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .with(asUser()))
                 .andExpect(status().isForbidden());
     }
@@ -118,7 +118,7 @@ class AdminArticleControllerTest {
         PageResult<ArticleSummaryResponse> pageResult = PageResult.of(1, 10, 1L, List.of(article));
         when(articleService.getPendingArticles(1, 10)).thenReturn(pageResult);
 
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .with(asAdmin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
@@ -136,7 +136,7 @@ class AdminArticleControllerTest {
         PageResult<ArticleSummaryResponse> pageResult = PageResult.of(2, 5, 0L, List.of());
         when(articleService.getPendingArticles(2, 5)).thenReturn(pageResult);
 
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .param("page", "2")
                         .param("size", "5")
                         .with(asAdmin()))
@@ -153,43 +153,11 @@ class AdminArticleControllerTest {
         PageResult<ArticleSummaryResponse> pageResult = PageResult.of(1, 10, 0L, List.of());
         when(articleService.getPendingArticles(1, 10)).thenReturn(pageResult);
 
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .with(asAdmin()))
                 .andExpect(status().isOk());
 
         verify(articleService).getPendingArticles(1, 10);
     }
 
-    // =========================================================================
-    // GET /api/admin/articles/pending/count
-    // =========================================================================
-
-    @Test
-    @DisplayName("GET /pending/count → 未認證 → 應回傳 401")
-    void getPendingArticleCount_unauthenticated_shouldReturn401() throws Exception {
-        mockMvc.perform(get("/api/admin/articles/pending/count"))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
-    @DisplayName("GET /pending/count → 一般用戶 → 應回傳 403")
-    void getPendingArticleCount_asUser_shouldReturn403() throws Exception {
-        mockMvc.perform(get("/api/admin/articles/pending/count")
-                        .with(asUser()))
-                .andExpect(status().isForbidden());
-    }
-
-    @Test
-    @DisplayName("GET /pending/count → Admin → 應回傳 200 與正確數量")
-    void getPendingArticleCount_asAdmin_shouldReturn200WithCount() throws Exception {
-        when(articleService.getPendingArticleCount()).thenReturn(42L);
-
-        mockMvc.perform(get("/api/admin/articles/pending/count")
-                        .with(asAdmin()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("00000"))
-                .andExpect(jsonPath("$.data").value(42));
-
-        verify(articleService).getPendingArticleCount();
-    }
 }

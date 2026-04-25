@@ -111,7 +111,7 @@ class AdminTagControllerTest {
         UpdateTagRequest request = new UpdateTagRequest();
         request.setColor("#FF0000");
 
-        mockMvc.perform(put("/api/admin/tags/{id}", TAG_ID)
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isUnauthorized());
@@ -123,7 +123,7 @@ class AdminTagControllerTest {
         UpdateTagRequest request = new UpdateTagRequest();
         request.setColor("#FF0000");
 
-        mockMvc.perform(put("/api/admin/tags/{id}", TAG_ID)
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
                         .with(asUser())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
@@ -147,7 +147,7 @@ class AdminTagControllerTest {
         when(tagService.adminUpdateTag(eq(TAG_ID), any(UpdateTagRequest.class)))
                 .thenReturn(updatedTag);
 
-        mockMvc.perform(put("/api/admin/tags/{id}", TAG_ID)
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
                         .with(asAdmin())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
@@ -167,14 +167,14 @@ class AdminTagControllerTest {
     @Test
     @DisplayName("DELETE /api/admin/tags/{id} — 未認證應回傳 401")
     void deleteTag_unauthenticated_returns401() throws Exception {
-        mockMvc.perform(delete("/api/admin/tags/{id}", TAG_ID))
+        mockMvc.perform(delete("/api/v1/admin/tags/{id}", TAG_ID))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     @DisplayName("DELETE /api/admin/tags/{id} — 一般用戶應回傳 403")
     void deleteTag_asUser_returns403() throws Exception {
-        mockMvc.perform(delete("/api/admin/tags/{id}", TAG_ID)
+        mockMvc.perform(delete("/api/v1/admin/tags/{id}", TAG_ID)
                         .with(asUser()))
                 .andExpect(status().isForbidden());
     }
@@ -182,7 +182,7 @@ class AdminTagControllerTest {
     @Test
     @DisplayName("DELETE /api/admin/tags/{id} — Admin 用戶應回傳 200")
     void deleteTag_asAdmin_returns200() throws Exception {
-        mockMvc.perform(delete("/api/admin/tags/{id}", TAG_ID)
+        mockMvc.perform(delete("/api/v1/admin/tags/{id}", TAG_ID)
                         .with(asAdmin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));

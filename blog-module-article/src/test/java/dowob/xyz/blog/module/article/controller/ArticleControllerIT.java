@@ -456,7 +456,7 @@ class ArticleControllerIT {
                 .andExpect(status().isOk());
 
         /** Admin 查詢待審列表 */
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                 .with(asUser(AUTHOR_ID, Role.ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(1))
@@ -466,7 +466,7 @@ class ArticleControllerIT {
     @Test
     @DisplayName("GET /api/admin/articles/pending - AUTHOR 呼叫 → 403")
     void getPendingArticles_nonAdminForbidden() throws Exception {
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                 .with(asUser(AUTHOR_ID, Role.AUTHOR)))
                 .andExpect(status().isForbidden());
     }
@@ -626,11 +626,16 @@ class ArticleControllerIT {
                 .andReturn().getResponse().getContentAsString();
 
         String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
-        String slug = objectMapper.readTree(createResponse).path("data").path("slug").asText();
 
         mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
                 .with(asUser(AUTHOR_ID, Role.AUTHOR)))
                 .andExpect(status().isOk());
+
+        // 從已發布文章的 GET 回應中取得 slug（EditorArticleResponse 不含 slug）
+        String getResponse = mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String slug = objectMapper.readTree(getResponse).path("data").path("slug").asText();
 
         mockMvc.perform(get("/api/v1/articles/slug/" + slug))
                 .andExpect(status().isOk())
@@ -734,5 +739,169 @@ class ArticleControllerIT {
                         org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.EXCHANGE),
                         org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                         org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
+    }
+
+    // ===== Editor API 測試 =====
+
+    @Test
+    @DisplayName("POST /api/v1/articles → 回傳 EditorArticleResponse（有 uuid、content，無 contentHtml、viewCount）")
+    void createArticle_returnsEditorArticleResponse() throws Exception {
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle("Editor 建立文章");
+        request.setContent("# Markdown 內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.content").value("# Markdown 內容"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"))
+                .andExpect(jsonPath("$.data.contentHtml").doesNotExist())
+                .andExpect(jsonPath("$.data.viewCount").doesNotExist())
+                .andExpect(jsonPath("$.data.slug").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} → DRAFT 狀態 → 成功更新，回傳 EditorArticleResponse（無 contentHtml）")
+    void updateArticle_draft_allowed_returnsEditorResponse() throws Exception {
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("草稿");
+        createRequest.setContent("初始內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("更新後標題");
+
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("更新後標題"))
+                .andExpect(jsonPath("$.data.contentHtml").doesNotExist())
+                .andExpect(jsonPath("$.data.viewCount").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} → PUBLISHED 狀態 → 400（ARTICLE_EDIT_NOT_ALLOWED）")
+    void updateArticle_published_returns403() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("待發布文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("試圖修改已發布文章");
+
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 作者本人可取得 EditorArticleResponse")
+    void getArticleForEdit_authorCanAccess() throws Exception {
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("可編輯文章");
+        createRequest.setContent("**Markdown 內容**");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid + "/edit")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.uuid").value(uuid))
+                .andExpect(jsonPath("$.data.content").value("**Markdown 內容**"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"))
+                .andExpect(jsonPath("$.data.contentHtml").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 未認證 → 401")
+    void getArticleForEdit_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + UUID.randomUUID() + "/edit"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void getArticleForEdit_roleUser_returns403() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + UUID.randomUUID() + "/edit")
+                .with(asUser(AUTHOR_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 他人文章 → 400（ARTICLE_ACCESS_DENIED）")
+    void getArticleForEdit_otherUserArticle_returns403() throws Exception {
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("他人文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid + "/edit")
+                .with(asUser(99L, Role.AUTHOR)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 文章不存在 → 400（ARTICLE_NOT_FOUND）")
+    void getArticleForEdit_notFound_returns400() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + UUID.randomUUID() + "/edit")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest());
     }
 }

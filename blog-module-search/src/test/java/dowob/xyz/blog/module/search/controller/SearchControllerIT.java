@@ -275,7 +275,7 @@ class SearchControllerIT {
         @Test
         @DisplayName("匿名使用者重建索引應回傳 401")
         void reindex_anonymousUser_returns401() throws Exception {
-            mockMvc.perform(post("/api/admin/search/reindex"))
+            mockMvc.perform(post("/api/v1/admin/search/reindex"))
                     .andExpect(status().isUnauthorized());
         }
 
@@ -285,7 +285,7 @@ class SearchControllerIT {
         @Test
         @DisplayName("一般使用者重建索引應回傳 403")
         void reindex_regularUser_returns403() throws Exception {
-            mockMvc.perform(post("/api/admin/search/reindex").with(userAuth(1L)))
+            mockMvc.perform(post("/api/v1/admin/search/reindex").with(userAuth(1L)))
                     .andExpect(status().isForbidden());
         }
 
@@ -295,7 +295,7 @@ class SearchControllerIT {
         @Test
         @DisplayName("ADMIN 使用者應可成功觸發重建索引（200 OK）")
         void reindex_adminUser_returns200() throws Exception {
-            mockMvc.perform(post("/api/admin/search/reindex").with(adminAuth(1L)))
+            mockMvc.perform(post("/api/v1/admin/search/reindex").with(adminAuth(1L)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.code").value("00000"));
 

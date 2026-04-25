@@ -15,8 +15,8 @@ import org.springframework.web.bind.annotation.RestController;
  * 文章管理員 REST Controller
  *
  * <p>
- * 提供管理員專用的文章管理端點，路由以 /api/admin/articles 為前綴。
- * SecurityConfig 已設定 /api/admin/** 僅允許 ADMIN 角色存取。
+ * 提供管理員專用的文章管理端點，路由以 /api/v1/admin/articles 為前綴。
+ * SecurityConfig 已設定 /api/v1/admin/** 僅允許 ADMIN 角色存取。
  * </p>
  *
  * @author Yuan
@@ -47,14 +47,4 @@ public class AdminArticleController {
         return ApiResponse.success(articleService.getPendingArticles(page, size));
     }
 
-    /**
-     * 取得待審文章總筆數（僅 ADMIN）
-     *
-     * @return 待審文章總筆數
-     */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
-    @GetMapping("/pending/count")
-    public ApiResponse<Long> getPendingArticleCount() {
-        return ApiResponse.success(articleService.getPendingArticleCount());
-    }
 }

@@ -7,6 +7,7 @@ import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 
 import java.util.UUID;
 
@@ -28,20 +29,31 @@ public interface ArticleService {
      *
      * @param authorId 作者資料庫主鍵
      * @param request  建立文章請求
-     * @return 建立後的文章完整資訊
+     * @return 建立後的 Editor 文章資訊
      */
-    ArticleResponse createArticle(Long authorId, CreateArticleRequest request);
+    EditorArticleResponse createArticle(Long authorId, CreateArticleRequest request);
 
     /**
-     * 更新文章
+     * 更新文章（僅允許 DRAFT 或 REJECTED 狀態）
      *
      * @param operatorId   操作者資料庫主鍵
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @param request      更新請求
-     * @return 更新後的文章完整資訊
+     * @return 更新後的 Editor 文章資訊
+     * @throws org.springframework.web.server.ResponseStatusException HTTP 403 當文章狀態為 PENDING_REVIEW / PUBLISHED / ARCHIVED
      */
-    ArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid, UpdateArticleRequest request);
+    EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid, UpdateArticleRequest request);
+
+    /**
+     * 取得文章供 Editor 編輯（僅作者本人）
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param requesterId 請求者資料庫主鍵
+     * @return Editor 用文章資訊
+     * @throws org.springframework.web.server.ResponseStatusException HTTP 403 當請求者非作者
+     */
+    EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId);
 
     /**
      * 刪除文章
@@ -138,13 +150,6 @@ public interface ArticleService {
      * @return 提交審核後的文章完整資訊
      */
     ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid);
-
-    /**
-     * 取得待審文章總筆數（僅 ADMIN）
-     *
-     * @return 待審文章總筆數
-     */
-    long getPendingArticleCount();
 
     /**
      * 根據 slug 取得文章詳情

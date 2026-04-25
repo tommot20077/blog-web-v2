@@ -72,7 +72,7 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                 "admin-flow@test.com", "Admin123!", "adminflow", "Admin Flow", Role.ADMIN);
 
         String catBody = objectMapper.writeValueAsString(DataBuilder.category("Tech", "tech"));
-        String catResponse = mockMvc.perform(post("/api/admin/categories")
+        String catResponse = mockMvc.perform(post("/api/v1/admin/categories")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(catBody)
                         .with(AuthHelper.bearerToken(adminToken)))
@@ -106,7 +106,6 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
         JsonNode articleData = objectMapper.readTree(
                 createResult.getResponse().getContentAsString()).get("data");
         String articleUuid = articleData.get("uuid").asText();
-        String articleSlug = articleData.get("slug").asText();
 
         // ===== 4. AUTHOR 送審 =====
         mockMvc.perform(post("/api/v1/articles/" + articleUuid + "/submit")
@@ -116,7 +115,7 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                 .andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"));
 
         // ===== 5. ADMIN 取得待審列表，確認文章在列表中 =====
-        mockMvc.perform(get("/api/admin/articles/pending")
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .with(AuthHelper.bearerToken(adminToken)))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess())
@@ -155,42 +154,25 @@ class ArticlePublishFlowE2E extends AbstractE2ETest {
                 .andExpect(jsonPath("$.data.records[0].title", containsString("Spring Boot")));
 
         // ===== 9. 匿名用戶透過 slug 閱讀文章 =====
+        // EditorArticleResponse 不含 slug，從 GET /articles/{uuid} (ArticleResponse) 取得
+        String slugResponse = mockMvc.perform(get("/api/v1/articles/" + articleUuid))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String articleSlug = objectMapper.readTree(slugResponse).path("data").path("slug").asText();
+
         mockMvc.perform(get("/api/v1/articles/slug/" + articleSlug))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess())
                 .andExpect(jsonPath("$.data.title").value("E2E Spring Boot Guide"))
                 .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
 
-        // ===== 10. AUTHOR 更新文章標題 =====
-        Map<String, Object> updateBody = new LinkedHashMap<>();
-        updateBody.put("title", "Updated E2E Spring Boot Guide");
-
-        mockMvc.perform(put("/api/v1/articles/" + articleUuid)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(updateBody))
-                        .with(AuthHelper.bearerToken(authorToken)))
-                .andExpect(status().isOk())
-                .andExpect(E2EAssertions.apiSuccess())
-                .andExpect(jsonPath("$.data.title").value("Updated E2E Spring Boot Guide"));
-
-        // ===== 11. 等待 ES 更新，驗證搜尋結果反映新標題 =====
-        await().atMost(15, SECONDS).pollInterval(1, SECONDS).untilAsserted(() ->
-                mockMvc.perform(get("/api/v1/search")
-                                .param("q", "Updated E2E"))
-                        .andExpect(status().isOk())
-                        .andExpect(E2EAssertions.apiSuccess())
-                        .andExpect(jsonPath("$.data.total", greaterThanOrEqualTo(1)))
-                        .andExpect(jsonPath("$.data.records[0].title",
-                                containsString("Updated")))
-        );
-
-        // ===== 12. AUTHOR 刪除文章 =====
+        // ===== 10. AUTHOR 刪除文章 =====
         mockMvc.perform(delete("/api/v1/articles/" + articleUuid)
                         .with(AuthHelper.bearerToken(authorToken)))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 
-        // ===== 13. 驗證文章已不存在 =====
+        // ===== 11. 驗證文章已不存在 =====
         mockMvc.perform(get("/api/v1/articles/" + articleUuid))
                 .andExpect(status().isBadRequest());
     }

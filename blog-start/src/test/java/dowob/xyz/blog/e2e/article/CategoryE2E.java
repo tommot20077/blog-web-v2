@@ -52,7 +52,7 @@ class CategoryE2E extends AbstractE2ETest {
      * 管理員建立分類並回傳 UUID
      */
     private String createCategoryAndGetUuid(String adminToken, Map<String, Object> body) throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/admin/categories")
+        MvcResult result = mockMvc.perform(post("/api/v1/admin/categories")
                         .with(bearerToken(adminToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
@@ -122,7 +122,7 @@ class CategoryE2E extends AbstractE2ETest {
 
         Map<String, Object> body = categoryWithDetails("前端開發", "frontend", "前端開發相關", 3);
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                         .with(bearerToken(adminToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
@@ -150,7 +150,7 @@ class CategoryE2E extends AbstractE2ETest {
         updateBody.put("description", "新描述");
         updateBody.put("sortOrder", 5);
 
-        mockMvc.perform(put("/api/admin/categories/" + uuid)
+        mockMvc.perform(put("/api/v1/admin/categories/" + uuid)
                         .with(bearerToken(adminToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(updateBody)))
@@ -171,7 +171,7 @@ class CategoryE2E extends AbstractE2ETest {
                 categoryWithDetails("待刪除", "to-delete", "將被刪除", 1));
 
         // 刪除
-        mockMvc.perform(delete("/api/admin/categories/" + uuid)
+        mockMvc.perform(delete("/api/v1/admin/categories/" + uuid)
                         .with(bearerToken(adminToken)))
                 .andExpect(status().isOk())
                 .andExpect(apiSuccess());
@@ -191,7 +191,7 @@ class CategoryE2E extends AbstractE2ETest {
 
         Map<String, Object> body = categoryWithDetails("非法分類", "illegal", "不該成功", 1);
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                         .with(bearerToken(userToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))

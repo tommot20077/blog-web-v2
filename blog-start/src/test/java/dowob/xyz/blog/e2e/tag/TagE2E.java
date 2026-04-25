@@ -206,7 +206,7 @@ class TagE2E extends AbstractE2ETest {
         updateRequest.put("color", "#326CE5");
 
         // Act & Assert
-        mockMvc.perform(put("/api/admin/tags/{id}", tagId)
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", tagId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(updateRequest))
                         .with(AuthHelper.bearerToken(adminToken)))
@@ -236,7 +236,7 @@ class TagE2E extends AbstractE2ETest {
         jdbcTemplate.update("UPDATE tags SET usage_count = 0 WHERE id = ?", tagId);
 
         // Act — 刪除標籤
-        mockMvc.perform(delete("/api/admin/tags/{id}", tagId)
+        mockMvc.perform(delete("/api/v1/admin/tags/{id}", tagId)
                         .with(AuthHelper.bearerToken(adminToken)))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
@@ -266,7 +266,7 @@ class TagE2E extends AbstractE2ETest {
         updateRequest.put("description", "Should not be allowed");
 
         // Act & Assert — USER 角色無 SYSTEM_CONFIG 權限
-        mockMvc.perform(put("/api/admin/tags/{id}", tagId)
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", tagId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(updateRequest))
                         .with(AuthHelper.bearerToken(userToken)))

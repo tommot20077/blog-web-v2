@@ -145,7 +145,7 @@ class CategoryControllerIT {
         request.setDescription("後端技術");
         request.setSortOrder(1);
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
@@ -162,7 +162,7 @@ class CategoryControllerIT {
         request.setName("後端");
         request.setSlug("backend");
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.AUTHOR))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
@@ -177,7 +177,7 @@ class CategoryControllerIT {
         createRequest.setName("前端");
         createRequest.setSlug("frontend");
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createRequest)))
@@ -206,7 +206,7 @@ class CategoryControllerIT {
         createRequest.setName("DevOps");
         createRequest.setSlug("devops");
 
-        String createResponse = mockMvc.perform(post("/api/admin/categories")
+        String createResponse = mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createRequest)))
@@ -219,7 +219,7 @@ class CategoryControllerIT {
         UpdateCategoryRequest updateRequest = new UpdateCategoryRequest();
         updateRequest.setName("DevOps & 雲端");
 
-        mockMvc.perform(put("/api/admin/categories/" + uuid)
+        mockMvc.perform(put("/api/v1/admin/categories/" + uuid)
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(updateRequest)))
@@ -235,7 +235,7 @@ class CategoryControllerIT {
         createRequest.setName("測試分類");
         createRequest.setSlug("test-cat");
 
-        String createResponse = mockMvc.perform(post("/api/admin/categories")
+        String createResponse = mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createRequest)))
@@ -245,7 +245,7 @@ class CategoryControllerIT {
         String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
 
         /** 刪除分類 */
-        mockMvc.perform(delete("/api/admin/categories/" + uuid)
+        mockMvc.perform(delete("/api/v1/admin/categories/" + uuid)
                 .with(asUser(AUTHOR_ID, Role.ADMIN)))
                 .andExpect(status().isOk());
 
@@ -267,7 +267,7 @@ class CategoryControllerIT {
         createRequest.setName("有文章的分類");
         createRequest.setSlug("with-articles");
 
-        String createResponse = mockMvc.perform(post("/api/admin/categories")
+        String createResponse = mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(createRequest)))
@@ -289,7 +289,7 @@ class CategoryControllerIT {
                 .andExpect(status().isOk());
 
         /** 嘗試刪除有文章的分類 -> A0206 */
-        mockMvc.perform(delete("/api/admin/categories/" + categoryUuid)
+        mockMvc.perform(delete("/api/v1/admin/categories/" + categoryUuid)
                 .with(asUser(AUTHOR_ID, Role.ADMIN)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("A0206"));
@@ -307,7 +307,7 @@ class CategoryControllerIT {
         categoryRequest.setName("後端");
         categoryRequest.setSlug("backend");
 
-        String categoryResponse = mockMvc.perform(post("/api/admin/categories")
+        String categoryResponse = mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(categoryRequest)))
@@ -356,7 +356,7 @@ class CategoryControllerIT {
         request.setSlug("backend");
 
         /** 第一次建立成功 */
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
@@ -367,7 +367,7 @@ class CategoryControllerIT {
         duplicateRequest.setName("後端技術");
         duplicateRequest.setSlug("backend");
 
-        mockMvc.perform(post("/api/admin/categories")
+        mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(duplicateRequest)))
@@ -387,7 +387,7 @@ class CategoryControllerIT {
         categoryRequest.setName("後端");
         categoryRequest.setSlug("backend");
 
-        String categoryResponse = mockMvc.perform(post("/api/admin/categories")
+        String categoryResponse = mockMvc.perform(post("/api/v1/admin/categories")
                 .with(asUser(AUTHOR_ID, Role.ADMIN))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(categoryRequest)))

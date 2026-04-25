@@ -10,6 +10,7 @@ import dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -118,8 +119,8 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @PostMapping
-    public ApiResponse<ArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request,
-                                                       @AuthenticationPrincipal Long authorId) {
+    public ApiResponse<EditorArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request,
+                                                             @AuthenticationPrincipal Long authorId) {
         return ApiResponse.success(articleService.createArticle(authorId, request));
     }
 
@@ -134,13 +135,28 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PutMapping("/{uuid}")
-    public ApiResponse<ArticleResponse> updateArticle(
+    public ApiResponse<EditorArticleResponse> updateArticle(
             @PathVariable UUID uuid,
             @Valid @RequestBody UpdateArticleRequest request,
             @AuthenticationPrincipal Long operatorId,
             Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
         return ApiResponse.success(articleService.updateArticle(operatorId, operatorRole, uuid, request));
+    }
+
+    /**
+     * 取得文章供 Editor 編輯（需認證，僅作者本人）
+     *
+     * @param uuid        文章公開 UUID
+     * @param requesterId 當前登入用戶的資料庫主鍵
+     * @return Editor 用文章資訊
+     */
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
+    @GetMapping("/{uuid}/edit")
+    public ApiResponse<EditorArticleResponse> getArticleForEdit(
+            @PathVariable UUID uuid,
+            @AuthenticationPrincipal Long requesterId) {
+        return ApiResponse.success(articleService.getArticleForEdit(uuid, requesterId));
     }
 
     /**

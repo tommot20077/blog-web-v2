@@ -134,17 +134,17 @@ class SecurityConfigTest {
             return "suggest";
         }
 
-        @GetMapping("/api/admin/dashboard")
+        @GetMapping("/api/v1/admin/dashboard")
         public String adminDashboard() {
             return "dashboard";
         }
 
-        @PostMapping("/api/admin/settings")
+        @PostMapping("/api/v1/admin/settings")
         public String adminSettings() {
             return "settings";
         }
 
-        @DeleteMapping("/api/admin/users/1")
+        @DeleteMapping("/api/v1/admin/users/1")
         public String adminDeleteUser() {
             return "deleted";
         }
@@ -296,46 +296,46 @@ class SecurityConfigTest {
     // ── Admin 端點 ──
 
     @Test
-    @DisplayName("未認證訪問 /api/admin/** 應回傳 401")
+    @DisplayName("未認證訪問 /api/v1/admin/** 應回傳 401")
     void unauthenticatedAccessAdmin_shouldReturn401() throws Exception {
-        mockMvc.perform(get("/api/admin/dashboard"))
+        mockMvc.perform(get("/api/v1/admin/dashboard"))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
-    @DisplayName("一般用戶訪問 /api/admin/** 應回傳 403")
+    @DisplayName("一般用戶訪問 /api/v1/admin/** 應回傳 403")
     void userAccessAdmin_shouldReturn403() throws Exception {
-        mockMvc.perform(get("/api/admin/dashboard").with(asUser()))
+        mockMvc.perform(get("/api/v1/admin/dashboard").with(asUser()))
                 .andExpect(status().isForbidden());
     }
 
     @Test
-    @DisplayName("Admin GET /api/admin/** 應通過安全層")
+    @DisplayName("Admin GET /api/v1/admin/** 應通過安全層")
     void adminGetAdmin_shouldReturn200() throws Exception {
-        mockMvc.perform(get("/api/admin/dashboard").with(asAdmin()))
+        mockMvc.perform(get("/api/v1/admin/dashboard").with(asAdmin()))
                 .andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("Admin POST /api/admin/** 應通過安全層")
+    @DisplayName("Admin POST /api/v1/admin/** 應通過安全層")
     void adminPostAdmin_shouldReturn200() throws Exception {
-        mockMvc.perform(post("/api/admin/settings").with(asAdmin())
+        mockMvc.perform(post("/api/v1/admin/settings").with(asAdmin())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("Admin DELETE /api/admin/** 應通過安全層")
+    @DisplayName("Admin DELETE /api/v1/admin/** 應通過安全層")
     void adminDeleteAdmin_shouldReturn200() throws Exception {
-        mockMvc.perform(delete("/api/admin/users/1").with(asAdmin()))
+        mockMvc.perform(delete("/api/v1/admin/users/1").with(asAdmin()))
                 .andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("AUTHOR 訪問 /api/admin/** 應回傳 403")
+    @DisplayName("AUTHOR 訪問 /api/v1/admin/** 應回傳 403")
     void authorAccessAdmin_shouldReturn403() throws Exception {
-        mockMvc.perform(get("/api/admin/dashboard").with(asAuthor()))
+        mockMvc.perform(get("/api/v1/admin/dashboard").with(asAuthor()))
                 .andExpect(status().isForbidden());
     }
 
