@@ -20,10 +20,13 @@ import java.util.Map;
 import static dowob.xyz.blog.e2e.support.AuthHelper.bearerToken;
 import static dowob.xyz.blog.e2e.support.DataBuilder.article;
 import static dowob.xyz.blog.e2e.support.DataBuilder.category;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -255,6 +258,16 @@ class SecurityE2E extends AbstractE2ETest {
                     .andExpect(jsonPath("$.timestamp").exists())
                     .andExpect(jsonPath("$.path").doesNotExist())
                     .andExpect(jsonPath("$.error").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("CORS preflight 應允許 PATCH（avoid blocking PATCH /users/me/profile from frontend）")
+        void cors_preflight_allowsPatch() throws Exception {
+            mockMvc.perform(options("/api/v1/users/me/profile")
+                            .header("Origin", "http://127.0.0.1:5500")
+                            .header("Access-Control-Request-Method", "PATCH"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Methods", containsString("PATCH")));
         }
 
         @Test
