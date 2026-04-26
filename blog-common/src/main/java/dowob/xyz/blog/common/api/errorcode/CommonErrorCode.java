@@ -38,6 +38,16 @@ public enum CommonErrorCode implements IErrorCode {
      */
     REQUEST_PARAM_MISSING("A0004", "請求參數缺失"),
 
+    /**
+     * 未認證（未登入或 Token 無效）
+     */
+    UNAUTHENTICATED("A0005", "請先登入"),
+
+    /**
+     * 已認證但無權限存取資源
+     */
+    FORBIDDEN("A0006", "權限不足"),
+
 
     /**
      * 系統執行出錯，請稍後再試

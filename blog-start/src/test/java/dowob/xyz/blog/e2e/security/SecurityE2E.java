@@ -24,6 +24,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -231,6 +232,49 @@ class SecurityE2E extends AbstractE2ETest {
             mockMvc.perform(get("/api/v1/articles/me")
                             .with(bearerToken("invalid.token.here")))
                     .andExpect(status().isUnauthorized());
+        }
+    }
+
+    // ========== Error Response Format ==========
+
+    /**
+     * 401/403 錯誤回應格式測試 — 驗證統一回傳 {@code ApiResponse} 結構
+     * （非 Spring Security 的 default {@code {timestamp,status,error,path}}）
+     */
+    @Nested
+    @DisplayName("錯誤回應格式 (ApiResponse)")
+    class ErrorResponseFormat {
+
+        @Test
+        @DisplayName("匿名訪 protected endpoint 回 401 + ApiResponse 格式 (code=A0005)")
+        void unauthorized_returnsApiResponseJson() throws Exception {
+            mockMvc.perform(get("/api/v1/articles/me"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.code").value("A0005"))
+                    .andExpect(jsonPath("$.message").exists())
+                    .andExpect(jsonPath("$.timestamp").exists())
+                    .andExpect(jsonPath("$.path").doesNotExist())
+                    .andExpect(jsonPath("$.error").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("USER 訪 admin endpoint 回 403 + ApiResponse 格式 (code=A0006)")
+        void forbidden_returnsApiResponseJson() throws Exception {
+            String userToken = authHelper.createUserWithRole(
+                    "user-403@test.com", "Password1!", "user403", "User403", Role.USER);
+
+            Map<String, Object> body = category("TestCat", "test-cat");
+
+            mockMvc.perform(post("/api/v1/admin/categories")
+                            .with(bearerToken(userToken))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(body)))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("A0006"))
+                    .andExpect(jsonPath("$.message").exists())
+                    .andExpect(jsonPath("$.timestamp").exists())
+                    .andExpect(jsonPath("$.path").doesNotExist())
+                    .andExpect(jsonPath("$.error").doesNotExist());
         }
     }
 }
