@@ -21,7 +21,7 @@ public class CreateArticleRequest {
      * 文章標題（必填）
      */
     @NotBlank(message = "標題不得為空")
-    @Size(max = 200, message = "標題長度不得超過 200 字")
+    @Size(min = 1, max = 120, message = "標題長度須為 1-120 字元")
     private String title;
 
     /**

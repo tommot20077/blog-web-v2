@@ -393,4 +393,23 @@ class UserControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.USER_NOT_FOUND.getCode()));
     }
+
+    // =========================================================================
+    // 密碼複雜度驗證測試
+    // =========================================================================
+
+    @Test
+    @DisplayName("POST /users/me/change-password → 新密碼只含英文字母（無數字）→ 應回傳 400")
+    void changePassword_weakNewPassword_noNumber_shouldReturn400() throws Exception {
+        ChangePasswordRequest request = new ChangePasswordRequest();
+        request.setOldPassword("Test1234");
+        request.setNewPassword("Abcdefghij");
+
+        mockMvc.perform(post("/api/v1/users/me/change-password")
+                        .with(authentication(USER_AUTH))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
 }

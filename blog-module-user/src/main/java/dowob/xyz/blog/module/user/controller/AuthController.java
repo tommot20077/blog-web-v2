@@ -17,6 +17,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
@@ -48,6 +49,10 @@ public class AuthController {
     /** Redis 操作模板，用於 Refresh Token 比對 */
     private final StringRedisTemplate redisTemplate;
 
+    /** Cookie Secure flag；dev 環境設 false 以支援 http + Firefox/Safari */
+    @Value("${app.cookie.secure:true}")
+    private boolean cookieSecure;
+
     /**
      * 用戶註冊
      *
@@ -78,7 +83,7 @@ public class AuthController {
 
         ResponseCookie refreshCookie = ResponseCookie.from("refreshToken", loginResult.refreshToken())
                 .httpOnly(true)
-                .secure(true)
+                .secure(cookieSecure)
                 .sameSite("Strict")
                 .maxAge(604800)
                 .path("/api/v1/auth")
@@ -157,7 +162,7 @@ public class AuthController {
 
         ResponseCookie clearCookie = ResponseCookie.from("refreshToken", "")
                 .httpOnly(true)
-                .secure(true)
+                .secure(cookieSecure)
                 .sameSite("Strict")
                 .maxAge(0)
                 .path("/api/v1/auth")

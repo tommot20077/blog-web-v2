@@ -23,7 +23,7 @@ public class UpdateArticleRequest {
     /**
      * 文章標題（可選）
      */
-    @Size(max = 200, message = "標題長度不得超過 200 字")
+    @Size(max = 120, message = "標題長度須為 1-120 字元")
     private String title;
 
     /**

@@ -776,4 +776,40 @@ class AuthControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
     }
+
+    // =========================================================================
+    // 密碼複雜度驗證測試
+    // =========================================================================
+
+    @Test
+    @DisplayName("POST /register → 密碼只含英文字母（無數字）→ 應回傳 400 驗證錯誤")
+    void register_passwordWithoutNumber_shouldReturn400() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
+        request.setPassword("Abcdefghij");
+        request.setUsername(TEST_USERNAME);
+        request.setNickname(TEST_NICKNAME);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    @Test
+    @DisplayName("POST /register → 密碼有字母和數字但僅 7 字元 → 應回傳 400 驗證錯誤")
+    void register_passwordTooShort_shouldReturn400() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
+        request.setPassword("Test123");
+        request.setUsername(TEST_USERNAME);
+        request.setNickname(TEST_NICKNAME);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
 }

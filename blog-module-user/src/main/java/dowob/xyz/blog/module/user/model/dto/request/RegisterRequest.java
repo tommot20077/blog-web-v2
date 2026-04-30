@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import dowob.xyz.blog.common.constant.PasswordPolicy;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -30,7 +31,7 @@ public class RegisterRequest {
      */
     @Schema(description = "密碼", example = "password123")
     @NotBlank(message = "密碼不能為空")
-    @Size(min = PasswordPolicy.MIN_LENGTH, max = PasswordPolicy.MAX_LENGTH, message = PasswordPolicy.SIZE_MESSAGE)
+    @Pattern(regexp = PasswordPolicy.PATTERN, message = PasswordPolicy.PATTERN_MESSAGE)
     private String password;
 
     /**

@@ -904,4 +904,35 @@ class ArticleControllerIT {
                 .with(asUser(AUTHOR_ID, Role.AUTHOR)))
                 .andExpect(status().isBadRequest());
     }
+
+    @Test
+    @DisplayName("POST /api/v1/articles - title 超過 120 字 → 回傳 code=400")
+    void createArticle_titleTooLong_shouldReturn400() throws Exception {
+        String longTitle = "a".repeat(121);
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle(longTitle);
+        request.setContent("內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} - title 超過 120 字 → 回傳 code=400")
+    void updateArticle_titleTooLong_shouldReturn400() throws Exception {
+        String longTitle = "a".repeat(121);
+        UpdateArticleRequest request = new UpdateArticleRequest();
+        request.setTitle(longTitle);
+
+        mockMvc.perform(put("/api/v1/articles/" + UUID.randomUUID())
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
 }

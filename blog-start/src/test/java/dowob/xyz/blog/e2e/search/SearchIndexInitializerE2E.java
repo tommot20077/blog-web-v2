@@ -77,6 +77,29 @@ class SearchIndexInitializerE2E extends AbstractE2ETest {
         assertThat(statusFieldType(idxOps)).isEqualTo("keyword");
     }
 
+    @Test
+    @DisplayName("Index 存在、status=keyword 但 tags 非 nested 時，initializer 應砍掉重建為 nested")
+    void initializer_tagsNotNested_recreatesIndex() {
+        IndexOperations idxOps = esOps.indexOps(ArticleDocument.class);
+        if (idxOps.exists()) {
+            idxOps.delete();
+        }
+        // 故意建一個 status=keyword 但 tags=object（非 nested）的 mapping，
+        // 模擬 dynamic mapping 未正確套用 nested type 的情況
+        Document wrongMapping = Document.parse(
+                "{\"properties\":{\"status\":{\"type\":\"keyword\"},\"tags\":{\"type\":\"object\"}}}"
+        );
+        idxOps.create(Map.of(), wrongMapping);
+        assertThat(statusFieldType(idxOps)).isEqualTo("keyword");
+        assertThat(tagsFieldType(idxOps)).isEqualTo("object");
+
+        initializer.ensureCorrectMapping();
+
+        assertThat(idxOps.exists()).isTrue();
+        assertThat(statusFieldType(idxOps)).isEqualTo("keyword");
+        assertThat(tagsFieldType(idxOps)).isEqualTo("nested");
+    }
+
     private String statusFieldType(IndexOperations idxOps) {
         Map<String, Object> mapping = idxOps.getMapping();
         @SuppressWarnings("unchecked")
@@ -84,5 +107,14 @@ class SearchIndexInitializerE2E extends AbstractE2ETest {
         @SuppressWarnings("unchecked")
         Map<String, Object> statusField = (Map<String, Object>) properties.get("status");
         return (String) statusField.get("type");
+    }
+
+    private String tagsFieldType(IndexOperations idxOps) {
+        Map<String, Object> mapping = idxOps.getMapping();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> properties = (Map<String, Object>) mapping.get("properties");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> tagsField = (Map<String, Object>) properties.get("tags");
+        return tagsField != null ? (String) tagsField.get("type") : null;
     }
 }

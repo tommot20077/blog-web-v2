@@ -53,18 +53,18 @@ public class SearchIndexInitializer implements ApplicationRunner {
             log.info("Elasticsearch index 'blog_articles' 已建立並套用 Java annotation mapping");
             return;
         }
-        if (isStatusFieldKeyword(indexOps)) {
+        if (isMappingValid(indexOps)) {
             log.debug("Elasticsearch index 'blog_articles' mapping 已對齊");
             return;
         }
-        log.warn("Elasticsearch index 'blog_articles' mapping 與 Java annotation 不一致 (status 非 keyword), "
+        log.warn("Elasticsearch index 'blog_articles' mapping 與 Java annotation 不一致 (status 非 keyword 或 tags 非 nested), "
                 + "將砍掉重建; 請執行 POST /api/v1/admin/search/reindex 灌回資料");
         indexOps.delete();
         indexOps.createWithMapping();
         log.info("Elasticsearch index 'blog_articles' 已重建; 等待 admin 觸發 reindex");
     }
 
-    private boolean isStatusFieldKeyword(IndexOperations indexOps) {
+    private boolean isMappingValid(IndexOperations indexOps) {
         Map<String, Object> mapping = indexOps.getMapping();
         if (mapping == null) {
             return false;
@@ -73,10 +73,19 @@ public class SearchIndexInitializer implements ApplicationRunner {
         if (!(propertiesObj instanceof Map<?, ?> properties)) {
             return false;
         }
+        // 驗證 status 為 keyword（term query 必要條件）
         Object statusObj = properties.get("status");
         if (!(statusObj instanceof Map<?, ?> statusField)) {
             return false;
         }
-        return "keyword".equals(statusField.get("type"));
+        if (!"keyword".equals(statusField.get("type"))) {
+            return false;
+        }
+        // 驗證 tags 為 nested（Nested Query 必要條件）
+        Object tagsObj = properties.get("tags");
+        if (!(tagsObj instanceof Map<?, ?> tagsField)) {
+            return false;
+        }
+        return "nested".equals(tagsField.get("type"));
     }
 }
