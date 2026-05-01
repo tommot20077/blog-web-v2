@@ -259,4 +259,24 @@ public class RedisKeyConstant {
      * Auth Hash 角色欄位
      */
     public static final String FIELD_ROLE = "role";
+
+    /** ===================== Reading Progress（批 2 / V14）===================== */
+
+    /**
+     * 閱讀進度 Hash Key 前綴
+     * Key: reading:progress:{userId}:{articleUuid}
+     */
+    public static final String READING_PROGRESS_PREFIX = "reading:progress:";
+
+    /**
+     * 待 flush dirty Set Key
+     * Members: "{userId}:{articleUuid}"
+     */
+    public static final String READING_DIRTY_KEY = "reading:dirty";
+
+    /** Reading progress Redis key TTL（天）*/
+    public static final long READING_PROGRESS_TTL_DAYS = 3L;
+
+    /** 視為已讀完的進度門檻（>= 0.95 觸發 DEL Redis + UPSERT DB）*/
+    public static final java.math.BigDecimal READING_PROGRESS_COMPLETED_THRESHOLD = new java.math.BigDecimal("0.95");
 }
