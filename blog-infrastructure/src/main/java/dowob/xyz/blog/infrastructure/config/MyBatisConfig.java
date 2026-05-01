@@ -19,7 +19,8 @@ import org.springframework.context.annotation.Configuration;
         "dowob.xyz.blog.module.article.mapper",
         "dowob.xyz.blog.module.tag.mapper",
         "dowob.xyz.blog.module.file.mapper",
-        "dowob.xyz.blog.module.comment.mapper"
+        "dowob.xyz.blog.module.comment.mapper",
+        "dowob.xyz.blog.module.reading.mapper"
 })
 public class MyBatisConfig {
     /**
