@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.service;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -12,6 +13,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -40,6 +42,7 @@ public class ArticleQueryService {
     private final ArticleService articleService;
     private final ArticleLikeService articleLikeService;
     private final ArticleMapper articleMapper;
+    private final ReadingFacade readingFacade;
 
     // ─── 列表查詢（帶 liked 填充）───
 
@@ -52,7 +55,7 @@ public class ArticleQueryService {
      */
     public PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int size) {
         PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(page, size);
-        enrichLikedList(result.getRecords());
+        enrich(result.getRecords());
         return result;
     }
 
@@ -68,7 +71,7 @@ public class ArticleQueryService {
             String categorySlug, int page, int size) {
         PageResult<ArticleSummaryResponse> result =
                 articleService.getPublishedArticlesByCategorySlug(categorySlug, page, size);
-        enrichLikedList(result.getRecords());
+        enrich(result.getRecords());
         return result;
     }
 
@@ -85,7 +88,7 @@ public class ArticleQueryService {
             Long authorId, int page, int size, ArticleStatus status) {
         PageResult<ArticleSummaryResponse> result =
                 articleService.getMyArticles(authorId, page, size, status);
-        enrichLikedList(result.getRecords());
+        enrich(result.getRecords());
         return result;
     }
 
@@ -98,7 +101,7 @@ public class ArticleQueryService {
      */
     public PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size) {
         PageResult<ArticleSummaryResponse> result = articleService.getPendingArticles(page, size);
-        enrichLikedList(result.getRecords());
+        enrich(result.getRecords());
         return result;
     }
 
@@ -116,7 +119,7 @@ public class ArticleQueryService {
     public ArticleResponse getArticleByUuid(
             UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
         ArticleResponse resp = articleService.getArticleByUuid(articleUuid, viewerId, viewerRole, clientIp);
-        enrichLikedSingle(resp);
+        enrichSingle(resp);
         return resp;
     }
 
@@ -132,21 +135,37 @@ public class ArticleQueryService {
     public ArticleResponse getArticleBySlug(
             String slug, Long viewerId, Role viewerRole, String clientIp) {
         ArticleResponse resp = articleService.getArticleBySlug(slug, viewerId, viewerRole, clientIp);
-        enrichLikedSingle(resp);
+        enrichSingle(resp);
         return resp;
+    }
+
+    // ─── 收藏列表查詢 ───
+
+    /**
+     * 根據文章 ID 列表批次取得文章摘要（含 liked 狀態）。
+     *
+     * <p>供 BookmarkController 使用：先取得摘要，再批次填充 liked 狀態。</p>
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return 文章摘要列表（liked 已填充）
+     */
+    public List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds) {
+        List<ArticleSummaryResponse> records = articleService.getArticleSummariesByIds(articleIds);
+        enrich(records);
+        return records;
     }
 
     // ─── 私有 helper ───
 
     /**
-     * 批次填充 ArticleSummaryResponse 列表的 liked 欄位。
+     * 批次填充 ArticleSummaryResponse 列表的 liked / bookmarked / lastReadProgress 欄位。
      *
      * <p>ArticleSummaryResponse 未暴露 DB 主鍵，故先透過 UUID 批量查詢取得 id Map，
-     * 再以 id 批量查詢已按讚集合，避免 N+1。未登入時全部設為 false。</p>
+     * 再以 id 批量查詢各狀態，避免 N+1。未登入時 liked/bookmarked=false，lastReadProgress=null。</p>
      *
      * @param records ArticleSummaryResponse 列表
      */
-    private void enrichLikedList(List<ArticleSummaryResponse> records) {
+    private void enrich(List<ArticleSummaryResponse> records) {
         if (records == null || records.isEmpty()) {
             return;
         }
@@ -160,42 +179,57 @@ public class ArticleQueryService {
         Map<UUID, Long> uuidToId = idRows.stream()
                 .collect(Collectors.toMap(Article::getUuid, Article::getId));
 
+        List<Long> articleIds = uuids.stream()
+                .map(uuidToId::get)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+
         if (userId == null) {
-            records.forEach(r -> r.setLiked(false));
+            records.forEach(r -> {
+                r.setLiked(false);
+                r.setBookmarked(false);
+                r.setLastReadProgress(null);
+            });
             return;
         }
 
-        List<Long> articleIds = uuids.stream()
-                .map(uuidToId::get)
-                .filter(id -> id != null)
-                .collect(Collectors.toList());
         Set<Long> likedIds = articleLikeService.batchIsLiked(userId, articleIds);
+        Set<Long> bookmarkedIds = readingFacade.batchIsBookmarked(userId, articleIds);
+        Map<Long, BigDecimal> progressMap = readingFacade.batchGetProgress(userId, articleIds);
+
         records.forEach(r -> {
             Long id = uuidToId.get(r.getUuid());
             r.setLiked(id != null && likedIds.contains(id));
+            r.setBookmarked(id != null && bookmarkedIds.contains(id));
+            r.setLastReadProgress(id != null ? progressMap.get(id) : null);
         });
     }
 
     /**
-     * 填充單篇 ArticleResponse 的 liked 欄位。
+     * 填充單篇 ArticleResponse 的 liked / bookmarked / lastReadProgress 欄位。
      *
-     * <p>ArticleResponse 未暴露 DB 主鍵，透過 UUID 查詢 id，再判斷是否已按讚。
-     * 未登入時設為 false。</p>
+     * <p>ArticleResponse 未暴露 DB 主鍵，透過 UUID 查詢 id，再判斷各狀態。
+     * 未登入時 liked/bookmarked=false，lastReadProgress=null。</p>
      *
-     * @param resp ArticleResponse（可為 null，呼叫方已確認非 null 才進入此方法）
+     * @param resp ArticleResponse（可為 null）
      */
-    private void enrichLikedSingle(ArticleResponse resp) {
+    private void enrichSingle(ArticleResponse resp) {
         if (resp == null) {
             return;
         }
         Long userId = currentUserIdOrNull();
         if (userId == null) {
             resp.setLiked(false);
+            resp.setBookmarked(false);
+            resp.setLastReadProgress(null);
             return;
         }
         Long articleId = articleService.findIdByUuid(resp.getUuid());
-        boolean liked = articleId != null && articleLikeService.isLiked(userId, articleId);
-        resp.setLiked(liked);
+        resp.setLiked(articleId != null && articleLikeService.isLiked(userId, articleId));
+        resp.setBookmarked(articleId != null && readingFacade.isBookmarked(userId, articleId));
+        if (resp.getUuid() != null) {
+            resp.setLastReadProgress(readingFacade.getProgress(userId, resp.getUuid()));
+        }
     }
 
     /**

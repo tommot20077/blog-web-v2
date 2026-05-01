@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
@@ -95,6 +96,7 @@ class CommentControllerIT {
     @MockitoBean private TagFacade tagFacade;
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
+    @MockitoBean private ReadingFacade readingFacade;
 
     private static final Long USER_ID = 1L;
     private static final Long OTHER_USER_ID = 2L;

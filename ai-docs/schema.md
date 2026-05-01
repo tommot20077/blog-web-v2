@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V13 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V14 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V13**
+> 最後更新版本：**V14**
 
 ---
 
@@ -343,6 +343,88 @@ PRIMARY KEY (user_id, tag_id)
 
 ---
 
+### user_bookmarks
+
+> V14 新增。使用者收藏文章（純 flag，user × article 1:1）。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `user_bookmarks_pkey`（auto）on id
+- `uq_user_bookmarks_user_article`（UNIQUE constraint）on (user_id, article_id)
+
+**Foreign keys:**
+- `user_id` → `users(id)`（NO ACTION）
+- `article_id` → `articles(id)`（ON DELETE CASCADE）
+
+---
+
+### user_highlights
+
+> V14 新增。使用者對文章段落劃線，附私人顏色標記與 note。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | 對外暴露的 ID |
+| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | |
+| snippet | TEXT | NOT NULL | 被劃線的原文片段 |
+| prefix | VARCHAR(64) | NOT NULL DEFAULT '' | 劃線前文（定位用） |
+| suffix | VARCHAR(64) | NOT NULL DEFAULT '' | 劃線後文（定位用） |
+| color | VARCHAR(7) | NOT NULL DEFAULT '#FFEB3B' | hex 色碼（6位）；CHECK constraint 驗證格式 |
+| note | TEXT | NULL | 私人備註 |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Constraints:**
+- `chk_user_highlights_color`: `color ~ '^#[0-9A-Fa-f]{6}$'`
+
+**Indexes:**
+- `user_highlights_pkey`（auto）on id
+- `user_highlights_uuid_key`（auto, UNIQUE）on uuid
+- `idx_user_highlights_article_for_user`（V14）on (user_id, article_id)
+- `idx_user_highlights_user_recent`（V14）on (user_id, created_at DESC)
+
+**Foreign keys:**
+- `user_id` → `users(id)`（NO ACTION）
+- `article_id` → `articles(id)`（ON DELETE CASCADE）
+
+---
+
+### user_reading_progress
+
+> V14 新增。使用者對文章的閱讀進度（0.000–1.000 NUMERIC）。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | |
+| progress | NUMERIC(4,3) | NOT NULL | 0.000–1.000；CHECK constraint 驗證範圍 |
+| last_heading_anchor | VARCHAR(255) | NULL | 最後停留的標題 anchor（如 `#section-2`） |
+| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Constraints:**
+- `uq_user_reading_progress_user_article`: UNIQUE (user_id, article_id)
+- `chk_user_reading_progress_range`: `progress >= 0 AND progress <= 1`
+
+**Indexes:**
+- `user_reading_progress_pkey`（auto）on id
+- `uq_user_reading_progress_user_article`（UNIQUE constraint）on (user_id, article_id)
+- `idx_user_reading_progress_user_recent`（V14）on (user_id, updated_at DESC)
+
+**Foreign keys:**
+- `user_id` → `users(id)`（NO ACTION）
+- `article_id` → `articles(id)`（ON DELETE CASCADE）
+
+---
+
 ## Migration Index
 
 | 版本 | 描述 |
@@ -360,6 +442,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V11** | `articles` 新增 `reject_reason TEXT` |
 | **V12** | `article_likes.article_id`、`article_likes.user_id`、`comments.article_id`、`comments.user_id` 補 NOT NULL 約束 |
 | **V13** | `articles.like_count` BIGINT → INTEGER；DROP `idx_articles_uuid`（重複）；`comments` 改造（DROP status，新增 content_html / like_count / edited_at / deleted_at / deleted_by_role + 3 個索引）；`article_likes` UNIQUE 順序調整為 `uq_article_likes_user_article(user_id, article_id)`；新建 `comment_likes` |
+| **V14** | 新建 `user_bookmarks`（收藏，UNIQUE user×article）；`user_highlights`（劃線 + note，hex 色號 CHECK，2個索引）；`user_reading_progress`（NUMERIC(4,3) 0–1 範圍 CHECK，1個索引）；article_id 全部 ON DELETE CASCADE |
 
 ---
 
