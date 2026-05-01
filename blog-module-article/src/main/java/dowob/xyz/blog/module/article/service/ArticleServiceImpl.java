@@ -34,6 +34,7 @@ import lombok.extern.slf4j.Slf4j;
 import com.vladsch.flexmark.html.HtmlRenderer;
 import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.ast.Node;
+import com.vladsch.flexmark.util.ast.TextCollectingVisitor;
 import com.vladsch.flexmark.util.data.MutableDataSet;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -760,8 +761,7 @@ public class ArticleServiceImpl implements ArticleService {
         }
         Parser parser = Parser.builder().build();
         Node document = parser.parse(content);
-        com.vladsch.flexmark.util.ast.TextCollectingVisitor visitor =
-                new com.vladsch.flexmark.util.ast.TextCollectingVisitor();
+        TextCollectingVisitor visitor = new TextCollectingVisitor();
         String plainText = visitor.collectAndGetText(document);
         return plainText.substring(0, Math.min(200, plainText.length()));
     }

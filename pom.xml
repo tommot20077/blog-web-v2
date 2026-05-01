@@ -43,6 +43,7 @@
         <jjwt.version>0.12.3</jjwt.version>
         <thumbnailator.version>0.4.20</thumbnailator.version>
         <tika.version>3.1.0</tika.version>
+        <flexmark.version>0.64.8</flexmark.version>
         <opencc4j.version>1.8.1</opencc4j.version>
     </properties>
 
@@ -308,7 +309,7 @@
             <dependency>
                 <groupId>com.vladsch.flexmark</groupId>
                 <artifactId>flexmark-all</artifactId>
-                <version>0.64.8</version>
+                <version>${flexmark.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
