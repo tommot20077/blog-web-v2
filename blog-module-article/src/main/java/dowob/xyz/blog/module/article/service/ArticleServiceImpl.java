@@ -1019,6 +1019,14 @@ public class ArticleServiceImpl implements ArticleService {
         return results;
     }
 
+    @Override
+    public List<Article> findByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return List.of();
+        List<Article> result = new java.util.ArrayList<>();
+        articleRepository.findAllById(ids).forEach(result::add);
+        return result;
+    }
+
     /**
      * 發送文章更新事件至 RabbitMQ
      *

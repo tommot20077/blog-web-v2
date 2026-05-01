@@ -212,4 +212,12 @@ public interface ArticleService {
      * @return 文章摘要列表（依 articleIds 順序）
      */
     List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds);
+
+    /**
+     * 根據 ID 列表批次查詢文章實體（供跨模組 uuid 反向映射使用）。
+     *
+     * @param ids 文章資料庫主鍵列表
+     * @return 文章實體列表
+     */
+    java.util.List<dowob.xyz.blog.module.article.model.Article> findByIds(java.util.List<Long> ids);
 }
