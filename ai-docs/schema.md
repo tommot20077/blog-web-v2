@@ -1,0 +1,376 @@
+# Database Schema（PostgreSQL）
+
+> **真相來源**：本文件描述套用所有 migrations V1–V13 後的當前 DB schema。
+> **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
+> 最後更新版本：**V13**
+
+---
+
+## Extension
+
+```sql
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+```
+
+---
+
+## Tables
+
+### users
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | 對外公開識別碼 |
+| email | VARCHAR(255) | NOT NULL UNIQUE | |
+| password_hash | VARCHAR(255) | NOT NULL | bcrypt 雜湊 |
+| nickname | VARCHAR(50) | NOT NULL | |
+| username | VARCHAR(50) | NOT NULL UNIQUE DEFAULT '' | V3 新增 |
+| avatar_url | VARCHAR(512) | | |
+| bio | TEXT | | |
+| website | VARCHAR(255) | | V4 新增 |
+| social_links | TEXT | | V4 新增 JSONB；V10 改為 TEXT（Spring Data JDBC 相容） |
+| role | VARCHAR(20) | NOT NULL DEFAULT 'USER' | USER / AUTHOR / ADMIN |
+| status | VARCHAR(20) | NOT NULL | PENDING / ACTIVE / DELETED |
+| email_verified | BOOLEAN | NOT NULL DEFAULT FALSE | |
+| token_version | VARCHAR(10) | | JWT stateful version |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `users_pkey`（auto）on id
+- `users_uuid_key`（auto, UNIQUE）on uuid
+- `users_email_key`（auto, UNIQUE）on email
+- `users_username_key`（auto, UNIQUE）on username
+
+**Foreign keys:** 無（被其他表參照）
+
+---
+
+### verification_tokens
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| token | VARCHAR(255) | NOT NULL UNIQUE | |
+| type | VARCHAR(20) | NOT NULL | EMAIL_VERIFY / PASSWORD_RESET |
+| expires_at | TIMESTAMP | NOT NULL | |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `verification_tokens_pkey`（auto）on id
+- `verification_tokens_token_key`（auto, UNIQUE）on token
+
+**Foreign keys:**
+- `user_id` → `users(id)`（NO ACTION）
+
+---
+
+### articles
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | 對外公開識別碼 |
+| author_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| title | VARCHAR(200) | NOT NULL | |
+| slug | VARCHAR(250) | NOT NULL UNIQUE | SEO-friendly URL 段落 |
+| summary | VARCHAR(500) | | |
+| content_md | TEXT | NOT NULL | 原始 Markdown |
+| content_html | TEXT | | V5 新增；Markdown 預渲染 HTML |
+| cover_image_url | VARCHAR(512) | | |
+| status | VARCHAR(20) | NOT NULL DEFAULT 'DRAFT' | DRAFT / PENDING / PUBLISHED / REJECTED |
+| reject_reason | TEXT | | V11 新增 |
+| view_count | BIGINT | NOT NULL DEFAULT 0 | 反正規化計數 |
+| like_count | INTEGER | NOT NULL DEFAULT 0 | V13 由 BIGINT 改為 INTEGER |
+| comment_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數 |
+| version | BIGINT | NOT NULL DEFAULT 1 | V7 新增；樂觀鎖 |
+| published_at | TIMESTAMP | | |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `articles_pkey`（auto）on id
+- `articles_uuid_key`（auto, UNIQUE）on uuid
+- `articles_slug_key`（auto, UNIQUE）on slug
+- `idx_articles_author_id`（V2）on author_id
+- `idx_articles_status`（V2）on status
+- `idx_articles_created_at`（V2）on created_at DESC
+- ~~`idx_articles_uuid`~~ V13 已 DROP（與 UNIQUE constraint 重複）
+
+**Foreign keys:**
+- `author_id` → `users(id)`（NO ACTION）
+
+---
+
+### categories
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | |
+| name | VARCHAR(50) | NOT NULL UNIQUE | |
+| slug | VARCHAR(60) | NOT NULL UNIQUE | |
+| description | VARCHAR(200) | | |
+| sort_order | INT | NOT NULL DEFAULT 0 | 排序用 |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `categories_pkey`（auto）on id
+- `categories_uuid_key`（auto, UNIQUE）on uuid
+- `categories_name_key`（auto, UNIQUE）on name
+- `categories_slug_key`（auto, UNIQUE）on slug
+
+**Foreign keys:** 無
+
+---
+
+### article_categories
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| article_id | BIGINT | REFERENCES articles(id) ON DELETE CASCADE | |
+| category_id | BIGINT | REFERENCES categories(id) ON DELETE CASCADE | |
+
+PRIMARY KEY (article_id, category_id)
+
+**Indexes:**
+- `article_categories_pkey`（auto, composite PK）on (article_id, category_id)
+- `idx_article_categories_category_id`（V6）on category_id
+
+**Foreign keys:**
+- `article_id` → `articles(id)` ON DELETE CASCADE
+- `category_id` → `categories(id)` ON DELETE CASCADE
+
+---
+
+### tags
+
+> V9 重建：原 V1 的 BIGSERIAL PK 版本已 DROP；現為 UUID PK。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | UUID | PRIMARY KEY | |
+| name | VARCHAR(100) | NOT NULL UNIQUE | |
+| slug | VARCHAR(120) | NOT NULL UNIQUE | |
+| color | VARCHAR(20) | | |
+| icon | VARCHAR(100) | | |
+| description | TEXT | | |
+| parent_id | UUID | REFERENCES tags(id) | 階層式 tag；自我參照 |
+| usage_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數 |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `tags_pkey`（auto）on id
+- `tags_name_key`（auto, UNIQUE）on name
+- `tags_slug_key`（auto, UNIQUE）on slug
+
+**Foreign keys:**
+- `parent_id` → `tags(id)`（NO ACTION，自我參照）
+
+---
+
+### article_tags
+
+> V9 重建：改以 articles.uuid 與 tags.id（UUID）為外鍵。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| article_id | UUID | NOT NULL REFERENCES articles(uuid) ON DELETE CASCADE | |
+| tag_id | UUID | NOT NULL REFERENCES tags(id) | |
+
+PRIMARY KEY (article_id, tag_id)
+
+**Indexes:**
+- `article_tags_pkey`（auto, composite PK）on (article_id, tag_id)
+
+**Foreign keys:**
+- `article_id` → `articles(uuid)` ON DELETE CASCADE
+- `tag_id` → `tags(id)`（NO ACTION）
+
+---
+
+### user_tag_follows
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| user_id | UUID | NOT NULL | 注意：不是 users.id（BIGINT），而是 uuid |
+| tag_id | UUID | NOT NULL REFERENCES tags(id) | |
+
+PRIMARY KEY (user_id, tag_id)
+
+**Indexes:**
+- `user_tag_follows_pkey`（auto, composite PK）on (user_id, tag_id)
+
+**Foreign keys:**
+- `tag_id` → `tags(id)`（NO ACTION）
+
+> ⚠️ `user_id` 欄位型別為 UUID，但沒有直接 FK 指向 `users(id)`（BIGINT）或 `users(uuid)`。這是 V9 遺留設計，若後續需要強 FK 完整性須補 migration。
+
+---
+
+### article_likes
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | V12 補 NOT NULL |
+| user_id | BIGINT | NOT NULL REFERENCES users(id) | V12 補 NOT NULL |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Constraints:**
+- `uq_article_likes_user_article` UNIQUE (user_id, article_id)（V13 重建，原為 article_id, user_id 順序）
+
+**Indexes:**
+- `article_likes_pkey`（auto）on id
+- `uq_article_likes_user_article`（auto, UNIQUE constraint）on (user_id, article_id)
+
+**Foreign keys:**
+- `article_id` → `articles(id)` ON DELETE CASCADE
+- `user_id` → `users(id)`（NO ACTION）
+
+---
+
+### comments
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | |
+| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | V12 補 NOT NULL |
+| parent_id | BIGINT | REFERENCES comments(id) ON DELETE CASCADE | NULL = 頂層；2 層上限由 service 強制 |
+| user_id | BIGINT | NOT NULL REFERENCES users(id) | V12 補 NOT NULL；user 軟刪除不 cascade |
+| content | TEXT | NOT NULL | 原始 Markdown |
+| content_html | TEXT | NOT NULL DEFAULT '' | V13 新增；Sanitized HTML |
+| like_count | INTEGER | NOT NULL DEFAULT 0 | V13 新增；反正規化計數 |
+| edited_at | TIMESTAMP | NULL | V13 新增；5 分鐘窗外不可編輯（service 規則） |
+| deleted_at | TIMESTAMP | NULL | V13 新增；軟刪除時間戳 |
+| deleted_by_role | VARCHAR(20) | NULL | V13 新增；AUTHOR / ADMIN / NULL |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+> V13 移除：`status VARCHAR(20) NOT NULL DEFAULT 'VISIBLE'`（改用 deleted_at 軟刪除模式）
+
+**Indexes:**
+- `comments_pkey`（auto）on id
+- `comments_uuid_key`（auto, UNIQUE）on uuid
+- `idx_comments_article_top_level`（V13, partial）on (article_id, created_at DESC) WHERE parent_id IS NULL
+- `idx_comments_replies`（V13, partial）on (parent_id, created_at) WHERE parent_id IS NOT NULL
+- `idx_comments_user_created`（V13）on (user_id, created_at DESC)
+
+**Foreign keys:**
+- `article_id` → `articles(id)` ON DELETE CASCADE
+- `parent_id` → `comments(id)` ON DELETE CASCADE（自我參照）
+- `user_id` → `users(id)`（NO ACTION，user 軟刪除不連帶）
+
+---
+
+### comment_likes
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| comment_id | BIGINT | NOT NULL REFERENCES comments(id) ON DELETE CASCADE | |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Constraints:**
+- `uq_comment_likes_user_comment` UNIQUE (user_id, comment_id)
+
+**Indexes:**
+- `comment_likes_pkey`（auto）on id
+- `uq_comment_likes_user_comment`（auto, UNIQUE constraint）on (user_id, comment_id)
+
+**Foreign keys:**
+- `user_id` → `users(id)`（NO ACTION）
+- `comment_id` → `comments(id)` ON DELETE CASCADE
+
+---
+
+### files
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | |
+| uploader_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| original_name | VARCHAR(255) | NOT NULL | |
+| storage_key | VARCHAR(512) | NOT NULL UNIQUE | MinIO object key |
+| content_type | VARCHAR(100) | NOT NULL | |
+| size_bytes | BIGINT | NOT NULL | |
+| category | VARCHAR(20) | NOT NULL | AVATAR / ARTICLE_COVER / ATTACHMENT 等 |
+| reference_id | BIGINT | | 參照的業務實體 ID |
+| reference_type | VARCHAR(50) | | 參照的業務實體類型 |
+| metadata | JSONB | | 額外 metadata |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `files_pkey`（auto）on id
+- `files_uuid_key`（auto, UNIQUE）on uuid
+- `files_storage_key_key`（auto, UNIQUE）on storage_key
+- `idx_files_uploader`（V1）on uploader_id
+- `idx_files_reference`（V1）on (reference_type, reference_id)
+
+**Foreign keys:**
+- `uploader_id` → `users(id)`（NO ACTION）
+
+---
+
+### file_metadata
+
+> V8 新增。與 `files` 表平行存在，用於儲存影像尺寸等 metadata（file module 使用 UUID PK）。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | UUID | PRIMARY KEY | |
+| original_name | VARCHAR(255) | NOT NULL | |
+| storage_path | VARCHAR(512) | NOT NULL | |
+| content_type | VARCHAR(100) | NOT NULL | |
+| size | BIGINT | NOT NULL | 位元組 |
+| width | INTEGER | | 影像寬度（px）；非影像則 NULL |
+| height | INTEGER | | 影像高度（px）；非影像則 NULL |
+| usage_type | VARCHAR(50) | NOT NULL | AVATAR / COVER / ATTACHMENT 等 |
+| has_thumbnail | BOOLEAN | NOT NULL DEFAULT FALSE | |
+| uploader_id | UUID | NOT NULL | 對應 users.uuid |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `file_metadata_pkey`（auto）on id
+- `idx_file_metadata_uploader_id`（V8）on uploader_id
+
+**Foreign keys:** 無（uploader_id 為 UUID，邏輯上對應 users.uuid，但無 FK constraint）
+
+---
+
+## Migration Index
+
+| 版本 | 描述 |
+|------|------|
+| **V1** | 初始 schema — `users` / `verification_tokens` / `articles` / `tags`（BIGSERIAL）/ `article_tags` / `article_likes` / `comments`（含 status）/ `files` + `idx_files_*` |
+| **V2** | `articles` 效能索引 — `idx_articles_uuid`、`idx_articles_author_id`、`idx_articles_status`、`idx_articles_created_at` |
+| **V3** | `users` 新增 `username VARCHAR(50) UNIQUE NOT NULL DEFAULT ''` |
+| **V4** | `users` 新增 `website VARCHAR(255)`、`social_links JSONB` |
+| **V5** | `articles` 新增 `content_html TEXT`（Markdown 預渲染） |
+| **V6** | 新建 `categories` + `article_categories`（多對多）；`idx_article_categories_category_id` |
+| **V7** | `articles` 新增 `version BIGINT NOT NULL DEFAULT 1`（樂觀鎖） |
+| **V8** | 新建 `file_metadata`（UUID PK）+ `idx_file_metadata_uploader_id` |
+| **V9** | 重建 `tags`（UUID PK）+ `article_tags`（UUID FK）+ 新建 `user_tag_follows` |
+| **V10** | `users.social_links` 型別由 JSONB 改為 TEXT（Spring Data JDBC 相容） |
+| **V11** | `articles` 新增 `reject_reason TEXT` |
+| **V12** | `article_likes.article_id`、`article_likes.user_id`、`comments.article_id`、`comments.user_id` 補 NOT NULL 約束 |
+| **V13** | `articles.like_count` BIGINT → INTEGER；DROP `idx_articles_uuid`（重複）；`comments` 改造（DROP status，新增 content_html / like_count / edited_at / deleted_at / deleted_by_role + 3 個索引）；`article_likes` UNIQUE 順序調整為 `uq_article_likes_user_article(user_id, article_id)`；新建 `comment_likes` |
+
+---
+
+## Field Conventions
+
+| Convention | 說明 |
+|------------|------|
+| `uuid UUID NOT NULL UNIQUE DEFAULT uuid_generate_v4()` | 所有對外可見的業務實體均有 uuid；API 層只暴露 uuid，不暴露 BIGSERIAL id |
+| `created_at / updated_at TIMESTAMP` | 所有業務 entity；Spring Data JDBC 用 `@CreatedDate` / `@LastModifiedDate` |
+| `deleted_at TIMESTAMP NULL` | 軟刪除模式（comments；users 用 status 欄位替代） |
+| `deleted_by_role VARCHAR(20) NULL` | 記錄刪除者角色（AUTHOR / ADMIN），僅 comments 使用 |
+| 反正規化計數 | `articles.{view_count, like_count, comment_count}`、`comments.like_count`、`tags.usage_count`；由 service 層原子 UPDATE 維護 |
+| Naming: UNIQUE constraint | 明確命名 `uq_{table}_{purpose}`（例 `uq_article_likes_user_article`）；避免靠 PG 自動命名 |
+| Naming: B-tree index | `idx_{table}_{purpose}`（例 `idx_comments_article_top_level`）；複合索引用語意名而非欄位串接 |
