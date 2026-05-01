@@ -31,11 +31,6 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import com.vladsch.flexmark.html.HtmlRenderer;
-import com.vladsch.flexmark.parser.Parser;
-import com.vladsch.flexmark.util.ast.Node;
-import com.vladsch.flexmark.util.ast.TextCollectingVisitor;
-import com.vladsch.flexmark.util.data.MutableDataSet;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -116,6 +111,11 @@ public class ArticleServiceImpl implements ArticleService {
 
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
+
+    /**
+     * Markdown 渲染器（含 OWASP HtmlSanitizer 白名單防護）
+     */
+    private final ArticleMarkdownRenderer markdownRenderer;
 
     /**
      * Redis 防刷 Key 前綴
@@ -725,30 +725,22 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
-     * 將 Markdown 轉換為 HTML 字串
+     * 將 Markdown 轉換為安全 HTML 字串。
+     *
+     * <p>委派給 {@link ArticleMarkdownRenderer}，輸出已通過 OWASP 白名單消毒。</p>
      *
      * @param markdown Markdown 原文
-     * @return HTML 字串
+     * @return 安全的 HTML 字串；null 輸入回傳 null
      */
     private String convertToHtml(String markdown) {
-        if (markdown == null) {
-            return null;
-        }
-        MutableDataSet options = new MutableDataSet();
-        options.set(HtmlRenderer.ESCAPE_HTML, true);
-        options.set(HtmlRenderer.SUPPRESS_HTML, true);
-        Parser parser = Parser.builder(options).build();
-        Node document = parser.parse(markdown);
-        HtmlRenderer renderer = HtmlRenderer.builder(options).build();
-        return renderer.render(document);
+        return markdownRenderer.render(markdown);
     }
 
     /**
-     * 自動擷取摘要
+     * 自動擷取摘要。
      *
-     * <p>
-     * summary 非空白時直接回傳；空白則從 Markdown 取純文字前 200 字。
-     * </p>
+     * <p>summary 非空白時直接回傳；空白則透過 {@link ArticleMarkdownRenderer#toPlainText(String)}
+     * 取 Markdown 純文字前 200 字。</p>
      *
      * @param content Markdown 內容
      * @param summary 原始摘要（可能為空）
@@ -761,10 +753,10 @@ public class ArticleServiceImpl implements ArticleService {
         if (content == null) {
             return null;
         }
-        Parser parser = Parser.builder().build();
-        Node document = parser.parse(content);
-        TextCollectingVisitor visitor = new TextCollectingVisitor();
-        String plainText = visitor.collectAndGetText(document);
+        String plainText = markdownRenderer.toPlainText(content);
+        if (plainText == null) {
+            return null;
+        }
         return plainText.substring(0, Math.min(200, plainText.length()));
     }
 

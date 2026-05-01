@@ -110,6 +110,10 @@ class ArticleServiceTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
+    /** Mock：Markdown 渲染器（含 OWASP 白名單） */
+    @Mock
+    private ArticleMarkdownRenderer markdownRenderer;
+
     @InjectMocks
     private ArticleServiceImpl articleService;
 
@@ -155,6 +159,19 @@ class ArticleServiceTest {
         when(viewCountService.getViewCount(any())).thenReturn(0L);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
         when(categoryMapper.findCategoriesByArticleIds(any())).thenReturn(List.of());
+
+        // markdownRenderer stub：render 回傳簡單 <p> 包覆內容，toPlainText 回傳原始內容
+        when(markdownRenderer.render(any())).thenAnswer(inv -> {
+            String md = inv.getArgument(0);
+            if (md == null) return null;
+            if (md.isEmpty()) return "";
+            return "<p>" + md + "</p>\n";
+        });
+        when(markdownRenderer.toPlainText(any())).thenAnswer(inv -> {
+            String md = inv.getArgument(0);
+            if (md == null) return null;
+            return md;
+        });
 
         /** TransactionTemplate mock：直接執行回調 */
         when(transactionTemplate.execute(any())).thenAnswer(inv -> {
@@ -889,13 +906,17 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("XSS 安全：convertToHtml 應對 script 標籤進行 escape，不輸出可執行腳本")
+        @DisplayName("XSS 安全：convertToHtml 委派給 ArticleMarkdownRenderer，應剝除 script 標籤（由 OWASP 處理）")
         void createArticle_convertToHtml_shouldEscapeScriptTags() {
+            // 直接驗證 ArticleMarkdownRenderer 的 XSS 防護，由 ArticleMarkdownRendererTest 全面覆蓋
+            // 此處驗證 ArticleServiceImpl 有正確委派給 markdownRenderer.render()
             CreateArticleRequest request = new CreateArticleRequest();
             request.setTitle("XSS 測試");
             request.setContent("<script>alert('xss')</script>這是正常文字");
             request.setSummary("摘要");
 
+            when(markdownRenderer.render("<script>alert('xss')</script>這是正常文字"))
+                    .thenReturn("這是正常文字");  // 模擬 OWASP 剝除 script 後的結果
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
             articleService.createArticle(AUTHOR_ID, request);
