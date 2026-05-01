@@ -292,4 +292,26 @@ public interface ArticleMapper {
     })
     List<Long> findLikedArticleIdsByUser(@Param("userId") Long userId,
                                           @Param("articleIds") List<Long> articleIds);
+
+    /**
+     * 批次查詢文章 UUID → DB 主鍵對應關係。
+     *
+     * <p>
+     * 供 ArticleQueryService 在列表頁 enrichLiked 時，一次查詢所有文章 id，
+     * 避免 N+1 問題。
+     * </p>
+     *
+     * @param uuids 文章公開 UUID 列表
+     * @return uuid → id 對應結果（以 {@code id} 欄位回傳，含 {@code uuid} 欄位用於 mapping）
+     */
+    @Results(id = "uuidToIdMap", value = {
+            @Result(property = "id", column = "id"),
+            @Result(property = "uuid", column = "uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class)
+    })
+    @Select("<script>" +
+            "SELECT id, uuid FROM articles " +
+            "WHERE uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<Article> findIdsByUuids(@Param("list") List<UUID> uuids);
 }

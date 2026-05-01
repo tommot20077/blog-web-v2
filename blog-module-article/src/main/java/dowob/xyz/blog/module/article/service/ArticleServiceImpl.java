@@ -42,8 +42,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -118,13 +116,6 @@ public class ArticleServiceImpl implements ArticleService {
 
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
-
-    /**
-     * 文章按讚 Service（用 @Lazy 打破循環依賴：ArticleLikeService → ArticleService → ArticleLikeService）
-     */
-    @Lazy
-    @Autowired
-    private ArticleLikeService articleLikeService;
 
     /**
      * Redis 防刷 Key 前綴
@@ -436,7 +427,6 @@ public class ArticleServiceImpl implements ArticleService {
         List<ArticleSummaryResponse> list = articles.stream()
                 .map(a -> toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
-        populateLikedBatch(articles, list);
         return PageResult.of(page, size, total, list);
     }
 
@@ -459,7 +449,6 @@ public class ArticleServiceImpl implements ArticleService {
         List<ArticleSummaryResponse> list = articles.stream()
                 .map(a -> toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
-        populateLikedBatch(articles, list);
         return PageResult.of(page, size, total, list);
     }
 
@@ -489,7 +478,6 @@ public class ArticleServiceImpl implements ArticleService {
         List<ArticleSummaryResponse> list = articles.stream()
                 .map(a -> toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
-        populateLikedBatch(articles, list);
         return PageResult.of(page, size, total, list);
     }
 
@@ -602,7 +590,6 @@ public class ArticleServiceImpl implements ArticleService {
         List<ArticleSummaryResponse> list = articles.stream()
                 .map(a -> toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
-        populateLikedBatch(articles, list);
         return PageResult.of(page, size, total, list);
     }
 
@@ -784,12 +771,14 @@ public class ArticleServiceImpl implements ArticleService {
     /**
      * 轉換文章實體為完整回應 DTO
      *
+     * <p>
+     * liked 欄位由 ArticleQueryService 負責填充（CQRS Read 層），此處預設為 null。
+     * </p>
+     *
      * @param article 文章實體
-     * @return ArticleResponse
+     * @return ArticleResponse（liked 欄位為 null，由呼叫方自行填充）
      */
-    private ArticleResponse toResponse(Article article) {
-        Long currentUserId = currentUserIdOrNull();
-        boolean liked = currentUserId != null && articleLikeService.isLiked(currentUserId, article.getId());
+    ArticleResponse toResponse(Article article) {
         return ArticleResponse.builder()
                 .uuid(article.getUuid())
                 .title(article.getTitle())
@@ -810,7 +799,7 @@ public class ArticleServiceImpl implements ArticleService {
                 .publishedAt(article.getPublishedAt())
                 .tags(toTagSummaryResponses(article.getUuid()))
                 .rejectReason(article.getRejectReason())
-                .liked(liked)
+                .liked(null)
                 .build();
     }
 
@@ -1017,60 +1006,6 @@ public class ArticleServiceImpl implements ArticleService {
     @Override
     public Long findIdByUuid(UUID uuid) {
         return articleMapper.findIdByUuid(uuid);
-    }
-
-    /**
-     * 批次填充 ArticleSummaryResponse 列表的 liked 欄位
-     *
-     * <p>
-     * 若未登入（currentUserId == null），全部設為 false。
-     * 否則一次 batchIsLiked 查詢，避免 N+1。
-     * </p>
-     *
-     * @param articles 文章實體列表（提供 id 供 batchIsLiked 使用）
-     * @param list     對應的 ArticleSummaryResponse 列表（順序相同）
-     */
-    private void populateLikedBatch(List<Article> articles, List<ArticleSummaryResponse> list) {
-        if (list.isEmpty()) {
-            return;
-        }
-        Long currentUserId = currentUserIdOrNull();
-        if (currentUserId == null) {
-            list.forEach(r -> r.setLiked(false));
-            return;
-        }
-        List<Long> articleIds = articles.stream().map(Article::getId).collect(Collectors.toList());
-        Set<Long> likedIds = articleLikeService.batchIsLiked(currentUserId, articleIds);
-        // articles 與 list 順序一致，透過 index 對應
-        for (int i = 0; i < articles.size(); i++) {
-            list.get(i).setLiked(likedIds.contains(articles.get(i).getId()));
-        }
-    }
-
-    /**
-     * 從 SecurityContextHolder 取得當前登入使用者 ID，未登入時回傳 null
-     *
-     * <p>
-     * 用於 liked 欄位填充：未登入永遠為 false。
-     * Principal 為 Long（JwtAuthenticationFilter 寫入的 userId）。
-     * </p>
-     *
-     * @return 使用者 DB ID，或 null（匿名 / 未認證）
-     */
-    private Long currentUserIdOrNull() {
-        org.springframework.security.core.Authentication auth =
-                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated()) {
-            return null;
-        }
-        Object principal = auth.getPrincipal();
-        if ("anonymousUser".equals(principal)) {
-            return null;
-        }
-        if (principal instanceof Long id) {
-            return id;
-        }
-        return null;
     }
 
     /**

@@ -11,6 +11,7 @@ import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -47,9 +48,14 @@ import java.util.UUID;
 public class ArticleController {
 
     /**
-     * 文章服務
+     * 文章服務（Write）
      */
     private final ArticleService articleService;
+
+    /**
+     * 文章查詢服務（Read，CQRS 分層）
+     */
+    private final ArticleQueryService articleQueryService;
 
     /**
      * 分頁取得已發布文章列表（公開）
@@ -70,9 +76,9 @@ public class ArticleController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String categorySlug) {
         if (categorySlug != null && !categorySlug.isBlank()) {
-            return ApiResponse.success(articleService.getPublishedArticlesByCategorySlug(categorySlug, page, size));
+            return ApiResponse.success(articleQueryService.getPublishedArticlesByCategorySlug(categorySlug, page, size));
         }
-        return ApiResponse.success(articleService.getPublishedArticles(page, size));
+        return ApiResponse.success(articleQueryService.getPublishedArticles(page, size));
     }
 
     /**
@@ -90,7 +96,7 @@ public class ArticleController {
                                                           @AuthenticationPrincipal Long viewerId,
                                                           Authentication authentication) {
         Role viewerRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.getArticleBySlug(slug, viewerId, viewerRole, getClientIp(request)));
+        return ApiResponse.success(articleQueryService.getArticleBySlug(slug, viewerId, viewerRole, getClientIp(request)));
     }
 
     /**
@@ -107,7 +113,7 @@ public class ArticleController {
                                                     @AuthenticationPrincipal Long viewerId,
                                                     Authentication authentication) {
         Role viewerRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.getArticleByUuid(uuid, viewerId, viewerRole, getClientIp(request)));
+        return ApiResponse.success(articleQueryService.getArticleByUuid(uuid, viewerId, viewerRole, getClientIp(request)));
     }
 
     /**
@@ -193,7 +199,7 @@ public class ArticleController {
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) ArticleStatus status,
             @AuthenticationPrincipal Long authorId) {
-        return ApiResponse.success(articleService.getMyArticles(authorId, page, size, status));
+        return ApiResponse.success(articleQueryService.getMyArticles(authorId, page, size, status));
     }
 
     /**
