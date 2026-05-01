@@ -270,6 +270,6 @@ public interface ArticleMapper {
      * @param uuid 文章公開 UUID
      * @return 文章資料庫主鍵，若不存在則回傳 null
      */
-    @Select("SELECT id FROM articles WHERE uuid = #{uuid}")
+    @Select("SELECT id FROM articles WHERE uuid = #{uuid}::uuid")
     Long findIdByUuid(@Param("uuid") UUID uuid);
 }
