@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.controller;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -28,9 +29,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminArticleController {
 
     /**
-     * 文章服務
+     * 文章服務（Write）
      */
     private final ArticleService articleService;
+
+    /**
+     * 文章查詢服務（Read，CQRS 分層）
+     */
+    private final ArticleQueryService articleQueryService;
 
     /**
      * 分頁取得待審文章列表（僅 ADMIN）
@@ -44,7 +50,7 @@ public class AdminArticleController {
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPendingArticles(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "10") int size) {
-        return ApiResponse.success(articleService.getPendingArticles(page, size));
+        return ApiResponse.success(articleQueryService.getPendingArticles(page, size));
     }
 
 }

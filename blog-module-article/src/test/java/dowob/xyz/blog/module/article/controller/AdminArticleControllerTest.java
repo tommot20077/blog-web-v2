@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleWebTestConfiguration;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -57,6 +58,9 @@ class AdminArticleControllerTest {
 
     @MockitoBean
     private ArticleService articleService;
+
+    @MockitoBean
+    private ArticleQueryService articleQueryService;
 
     @MockitoBean
     private JwtService jwtService;
@@ -116,7 +120,7 @@ class AdminArticleControllerTest {
                 .createdAt(LocalDateTime.now())
                 .build();
         PageResult<ArticleSummaryResponse> pageResult = PageResult.of(1, 10, 1L, List.of(article));
-        when(articleService.getPendingArticles(1, 10)).thenReturn(pageResult);
+        when(articleQueryService.getPendingArticles(1, 10)).thenReturn(pageResult);
 
         mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .with(asAdmin()))
@@ -127,14 +131,14 @@ class AdminArticleControllerTest {
                 .andExpect(jsonPath("$.data.total").value(1))
                 .andExpect(jsonPath("$.data.records[0].title").value("測試文章"));
 
-        verify(articleService).getPendingArticles(1, 10);
+        verify(articleQueryService).getPendingArticles(1, 10);
     }
 
     @Test
     @DisplayName("GET /pending → Admin 自訂分頁參數 → 應傳遞正確參數")
     void getPendingArticles_asAdminWithCustomPage_shouldPassCorrectParams() throws Exception {
         PageResult<ArticleSummaryResponse> pageResult = PageResult.of(2, 5, 0L, List.of());
-        when(articleService.getPendingArticles(2, 5)).thenReturn(pageResult);
+        when(articleQueryService.getPendingArticles(2, 5)).thenReturn(pageResult);
 
         mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .param("page", "2")
@@ -144,20 +148,20 @@ class AdminArticleControllerTest {
                 .andExpect(jsonPath("$.data.current").value(2))
                 .andExpect(jsonPath("$.data.size").value(5));
 
-        verify(articleService).getPendingArticles(2, 5);
+        verify(articleQueryService).getPendingArticles(2, 5);
     }
 
     @Test
     @DisplayName("GET /pending → Admin 不帶分頁參數 → 應使用預設值 page=1, size=10")
     void getPendingArticles_asAdminDefaultParams_shouldUseDefaults() throws Exception {
         PageResult<ArticleSummaryResponse> pageResult = PageResult.of(1, 10, 0L, List.of());
-        when(articleService.getPendingArticles(1, 10)).thenReturn(pageResult);
+        when(articleQueryService.getPendingArticles(1, 10)).thenReturn(pageResult);
 
         mockMvc.perform(get("/api/v1/admin/articles/pending")
                         .with(asAdmin()))
                 .andExpect(status().isOk());
 
-        verify(articleService).getPendingArticles(1, 10);
+        verify(articleQueryService).getPendingArticles(1, 10);
     }
 
 }

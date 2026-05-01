@@ -26,6 +26,7 @@
         <module>blog-module-tag</module>
         <module>blog-module-search</module>
         <module>blog-module-recommend</module>
+        <module>blog-module-comment</module>
         <module>blog-start</module>
     </modules>
 
@@ -43,7 +44,9 @@
         <jjwt.version>0.12.3</jjwt.version>
         <thumbnailator.version>0.4.20</thumbnailator.version>
         <tika.version>3.1.0</tika.version>
+        <flexmark.version>0.64.8</flexmark.version>
         <opencc4j.version>1.8.1</opencc4j.version>
+        <owasp-java-html-sanitizer.version>20240325.1</owasp-java-html-sanitizer.version>
     </properties>
 
     <dependencyManagement>
@@ -218,6 +221,11 @@
                 <artifactId>blog-module-recommend</artifactId>
                 <version>${blog.version}</version>
             </dependency>
+            <dependency>
+                <groupId>dowob.xyz</groupId>
+                <artifactId>blog-module-comment</artifactId>
+                <version>${blog.version}</version>
+            </dependency>
 
             <!-- External Libraries -->
             <dependency>
@@ -306,9 +314,16 @@
 
             <!-- Article Module - Markdown 渲染 -->
             <dependency>
-                <groupId>org.commonmark</groupId>
-                <artifactId>commonmark</artifactId>
-                <version>0.22.0</version>
+                <groupId>com.vladsch.flexmark</groupId>
+                <artifactId>flexmark-all</artifactId>
+                <version>${flexmark.version}</version>
+            </dependency>
+
+            <!-- Comment Module - HTML Sanitizer -->
+            <dependency>
+                <groupId>com.googlecode.owasp-java-html-sanitizer</groupId>
+                <artifactId>owasp-java-html-sanitizer</artifactId>
+                <version>${owasp-java-html-sanitizer.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

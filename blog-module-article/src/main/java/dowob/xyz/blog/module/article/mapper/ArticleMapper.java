@@ -222,4 +222,96 @@ public interface ArticleMapper {
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")
     List<TagWithArticleUuid> findTagsByArticleUuids(@Param("list") List<UUID> articleUuids);
+
+    /**
+     * 原子性遞增文章留言計數
+     *
+     * @param id 文章資料庫主鍵
+     * @return 受影響列數
+     */
+    @Update("UPDATE articles SET comment_count = comment_count + 1 WHERE id = #{id}")
+    int incrementCommentCount(@Param("id") Long id);
+
+    /**
+     * 原子性遞減文章留言計數（守衛 > 0，防 underflow）
+     *
+     * @param id 文章資料庫主鍵
+     * @return 受影響列數
+     */
+    @Update("UPDATE articles SET comment_count = comment_count - 1 WHERE id = #{id} AND comment_count > 0")
+    int decrementCommentCount(@Param("id") Long id);
+
+    /**
+     * 原子性遞增文章按讚計數
+     *
+     * @param id 文章資料庫主鍵
+     * @return 受影響列數
+     */
+    @Update("UPDATE articles SET like_count = like_count + 1 WHERE id = #{id}")
+    int incrementLikeCount(@Param("id") Long id);
+
+    /**
+     * 原子性遞減文章按讚計數（守衛 > 0，防 underflow）
+     *
+     * @param id 文章資料庫主鍵
+     * @return 受影響列數
+     */
+    @Update("UPDATE articles SET like_count = like_count - 1 WHERE id = #{id} AND like_count > 0")
+    int decrementLikeCount(@Param("id") Long id);
+
+    /**
+     * 根據文章公開 UUID 查詢資料庫主鍵
+     *
+     * <p>
+     * 供跨模組 Service（如 CommentService、ArticleLikeService）透過 UUID 取得
+     * article PK，避免直接 JOIN articles 表造成模組耦合。
+     * </p>
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章資料庫主鍵，若不存在則回傳 null
+     */
+    @Select("SELECT id FROM articles WHERE uuid = #{uuid}::uuid")
+    Long findIdByUuid(@Param("uuid") UUID uuid);
+
+    /**
+     * 批次查詢「當前使用者按讚過哪些文章」。
+     *
+     * @param userId     使用者主鍵
+     * @param articleIds 要查詢的文章 PK 集合
+     * @return 已按讚的 article_id 集合
+     */
+    @Select({
+        "<script>",
+        "SELECT article_id FROM article_likes",
+        " WHERE user_id = #{userId}",
+        "   AND article_id IN",
+        "<foreach collection='articleIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        "</script>"
+    })
+    List<Long> findLikedArticleIdsByUser(@Param("userId") Long userId,
+                                          @Param("articleIds") List<Long> articleIds);
+
+    /**
+     * 批次查詢文章 UUID → DB 主鍵對應關係。
+     *
+     * <p>
+     * 供 ArticleQueryService 在列表頁 enrichLiked 時，一次查詢所有文章 id，
+     * 避免 N+1 問題。
+     * </p>
+     *
+     * @param uuids 文章公開 UUID 列表
+     * @return uuid → id 對應結果（以 {@code id} 欄位回傳，含 {@code uuid} 欄位用於 mapping）
+     */
+    @Results(id = "uuidToIdMap", value = {
+            @Result(property = "id", column = "id"),
+            @Result(property = "uuid", column = "uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class)
+    })
+    @Select("<script>" +
+            "SELECT id, uuid FROM articles " +
+            "WHERE uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<Article> findIdsByUuids(@Param("list") List<UUID> uuids);
 }

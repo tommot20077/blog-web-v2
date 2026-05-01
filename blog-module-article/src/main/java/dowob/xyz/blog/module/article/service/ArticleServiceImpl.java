@@ -31,18 +31,16 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.commonmark.node.Node;
-import org.commonmark.parser.Parser;
-import org.commonmark.renderer.html.HtmlRenderer;
-import org.commonmark.renderer.text.TextContentRenderer;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -113,6 +111,11 @@ public class ArticleServiceImpl implements ArticleService {
 
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
+
+    /**
+     * Markdown 渲染器（含 OWASP HtmlSanitizer 白名單防護）
+     */
+    private final ArticleMarkdownRenderer markdownRenderer;
 
     /**
      * Redis 防刷 Key 前綴
@@ -722,30 +725,22 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
-     * 將 Markdown 轉換為 HTML 字串
+     * 將 Markdown 轉換為安全 HTML 字串。
+     *
+     * <p>委派給 {@link ArticleMarkdownRenderer}，輸出已通過 OWASP 白名單消毒。</p>
      *
      * @param markdown Markdown 原文
-     * @return HTML 字串
+     * @return 安全的 HTML 字串；null 輸入回傳 null
      */
     private String convertToHtml(String markdown) {
-        if (markdown == null) {
-            return null;
-        }
-        Parser parser = Parser.builder().build();
-        Node document = parser.parse(markdown);
-        HtmlRenderer renderer = HtmlRenderer.builder()
-                .escapeHtml(true)
-                .sanitizeUrls(true)
-                .build();
-        return renderer.render(document);
+        return markdownRenderer.render(markdown);
     }
 
     /**
-     * 自動擷取摘要
+     * 自動擷取摘要。
      *
-     * <p>
-     * summary 非空白時直接回傳；空白則從 Markdown 取純文字前 200 字。
-     * </p>
+     * <p>summary 非空白時直接回傳；空白則透過 {@link ArticleMarkdownRenderer#toPlainText(String)}
+     * 取 Markdown 純文字前 200 字。</p>
      *
      * @param content Markdown 內容
      * @param summary 原始摘要（可能為空）
@@ -758,20 +753,24 @@ public class ArticleServiceImpl implements ArticleService {
         if (content == null) {
             return null;
         }
-        Parser parser = Parser.builder().build();
-        Node document = parser.parse(content);
-        TextContentRenderer textRenderer = TextContentRenderer.builder().build();
-        String plainText = textRenderer.render(document);
+        String plainText = markdownRenderer.toPlainText(content);
+        if (plainText == null) {
+            return null;
+        }
         return plainText.substring(0, Math.min(200, plainText.length()));
     }
 
     /**
      * 轉換文章實體為完整回應 DTO
      *
+     * <p>
+     * liked 欄位由 ArticleQueryService 負責填充（CQRS Read 層），此處預設為 null。
+     * </p>
+     *
      * @param article 文章實體
-     * @return ArticleResponse
+     * @return ArticleResponse（liked 欄位為 null，由呼叫方自行填充）
      */
-    private ArticleResponse toResponse(Article article) {
+    ArticleResponse toResponse(Article article) {
         return ArticleResponse.builder()
                 .uuid(article.getUuid())
                 .title(article.getTitle())
@@ -792,6 +791,7 @@ public class ArticleServiceImpl implements ArticleService {
                 .publishedAt(article.getPublishedAt())
                 .tags(toTagSummaryResponses(article.getUuid()))
                 .rejectReason(article.getRejectReason())
+                .liked(null)
                 .build();
     }
 
@@ -947,6 +947,57 @@ public class ArticleServiceImpl implements ArticleService {
                         .sortOrder(c.getSortOrder())
                         .build(),
                         Collectors.toList())));
+    }
+
+    /**
+     * 原子性遞增文章留言計數
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    @Override
+    public void incrementCommentCount(Long articleId) {
+        articleMapper.incrementCommentCount(articleId);
+    }
+
+    /**
+     * 原子性遞減文章留言計數（守衛 > 0，防 underflow）
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    @Override
+    public void decrementCommentCount(Long articleId) {
+        articleMapper.decrementCommentCount(articleId);
+    }
+
+    /**
+     * 原子性遞增文章按讚計數
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    @Override
+    public void incrementLikeCount(Long articleId) {
+        articleMapper.incrementLikeCount(articleId);
+    }
+
+    /**
+     * 原子性遞減文章按讚計數（守衛 > 0，防 underflow）
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    @Override
+    public void decrementLikeCount(Long articleId) {
+        articleMapper.decrementLikeCount(articleId);
+    }
+
+    /**
+     * 根據文章公開 UUID 查詢資料庫主鍵
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章資料庫主鍵，若不存在則回傳 null
+     */
+    @Override
+    public Long findIdByUuid(UUID uuid) {
+        return articleMapper.findIdByUuid(uuid);
     }
 
     /**

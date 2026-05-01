@@ -60,7 +60,11 @@
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-recommend</artifactId>
         </dependency>
-        
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-comment</artifactId>
+        </dependency>
+
         <!-- Tests -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

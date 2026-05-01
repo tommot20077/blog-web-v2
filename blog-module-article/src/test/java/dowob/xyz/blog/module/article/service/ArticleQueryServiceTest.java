@@ -1,0 +1,312 @@
+package dowob.xyz.blog.module.article.service;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+
+import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.when;
+
+/**
+ * ArticleQueryService 單元測試
+ *
+ * <p>驗證 CQRS Read 層的 liked 欄位填充邏輯，以及對 ArticleService 的正確委派。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@MockitoSettings(strictness = Strictness.LENIENT)
+@ExtendWith(MockitoExtension.class)
+@DisplayName("ArticleQueryService 單元測試")
+class ArticleQueryServiceTest {
+
+    @Mock
+    private ArticleService articleService;
+
+    @Mock
+    private ArticleLikeService articleLikeService;
+
+    @Mock
+    private ArticleMapper articleMapper;
+
+    @InjectMocks
+    private ArticleQueryService articleQueryService;
+
+    private static final Long AUTHOR_ID = 1L;
+    private static final UUID ARTICLE_UUID = UUID.randomUUID();
+    private static final Long ARTICLE_DB_ID = 42L;
+
+    /**
+     * 建立測試用 ArticleSummaryResponse
+     */
+    private ArticleSummaryResponse buildSummary() {
+        return ArticleSummaryResponse.builder()
+                .uuid(ARTICLE_UUID)
+                .title("測試標題")
+                .summary("測試摘要")
+                .status(ArticleStatus.PUBLISHED)
+                .viewCount(0L)
+                .likeCount(0L)
+                .commentCount(0)
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .build();
+    }
+
+    /**
+     * 建立測試用 ArticleResponse（liked=null，模擬 ArticleService 回傳）
+     */
+    private ArticleResponse buildResponse() {
+        return ArticleResponse.builder()
+                .uuid(ARTICLE_UUID)
+                .title("測試標題")
+                .content("測試內容")
+                .status(ArticleStatus.PUBLISHED)
+                .viewCount(0L)
+                .likeCount(0L)
+                .commentCount(0)
+                .createdAt(LocalDateTime.now())
+                .updatedAt(LocalDateTime.now())
+                .liked(null)
+                .build();
+    }
+
+    /**
+     * 建立 Article stub（僅含 uuid 和 id，供 findIdsByUuids 回傳）
+     */
+    private Article buildArticleIdRow() {
+        Article a = new Article();
+        a.setId(ARTICLE_DB_ID);
+        a.setUuid(ARTICLE_UUID);
+        return a;
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    // ─── getPublishedArticles ───
+
+    @Nested
+    @DisplayName("getPublishedArticles — liked 填充")
+    class GetPublishedArticlesTests {
+
+        @Test
+        @DisplayName("正常：未登入時，所有文章 liked=false")
+        void anonymous_likedFalse() {
+            ArticleSummaryResponse summary = buildSummary();
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
+            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
+
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords()).hasSize(1);
+            assertThat(result.getRecords().get(0).getLiked()).isFalse();
+        }
+
+        @Test
+        @DisplayName("正常：已登入且已按讚，liked=true")
+        void loggedIn_likedTrue() {
+            ArticleSummaryResponse summary = buildSummary();
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
+            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
+            when(articleLikeService.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Set.of(ARTICLE_DB_ID));
+
+            // 設定登入狀態
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords()).hasSize(1);
+            assertThat(result.getRecords().get(0).getLiked()).isTrue();
+        }
+
+        @Test
+        @DisplayName("正常：已登入但未按讚，liked=false")
+        void loggedIn_notLiked() {
+            ArticleSummaryResponse summary = buildSummary();
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
+            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
+            when(articleLikeService.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Collections.emptySet());
+
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords()).hasSize(1);
+            assertThat(result.getRecords().get(0).getLiked()).isFalse();
+        }
+
+        @Test
+        @DisplayName("正常：空列表時不出錯，直接回傳空結果")
+        void emptyList_noError() {
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 0L, Collections.emptyList());
+            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords()).isEmpty();
+        }
+    }
+
+    // ─── getArticleByUuid ───
+
+    @Nested
+    @DisplayName("getArticleByUuid — liked 填充")
+    class GetArticleByUuidTests {
+
+        @Test
+        @DisplayName("正常：未登入時，liked=false")
+        void anonymous_likedFalse() {
+            ArticleResponse resp = buildResponse();
+            when(articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            assertThat(result.getLiked()).isFalse();
+        }
+
+        @Test
+        @DisplayName("正常：已登入且已按讚，liked=true")
+        void loggedIn_likedTrue() {
+            ArticleResponse resp = buildResponse();
+            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+            when(articleLikeService.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
+
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+
+            assertThat(result.getLiked()).isTrue();
+        }
+
+        @Test
+        @DisplayName("正常：已登入但未按讚，liked=false")
+        void loggedIn_notLiked() {
+            ArticleResponse resp = buildResponse();
+            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+            when(articleLikeService.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(false);
+
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+
+            assertThat(result.getLiked()).isFalse();
+        }
+    }
+
+    // ─── getArticleBySlug ───
+
+    @Nested
+    @DisplayName("getArticleBySlug — liked 填充")
+    class GetArticleBySlugTests {
+
+        @Test
+        @DisplayName("正常：未登入時，liked=false")
+        void anonymous_likedFalse() {
+            ArticleResponse resp = buildResponse();
+            when(articleService.getArticleBySlug("test-slug", null, null, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+
+            ArticleResponse result = articleQueryService.getArticleBySlug("test-slug", null, null, "127.0.0.1");
+
+            assertThat(result.getLiked()).isFalse();
+        }
+
+        @Test
+        @DisplayName("正常：已登入且已按讚，liked=true")
+        void loggedIn_likedTrue() {
+            ArticleResponse resp = buildResponse();
+            when(articleService.getArticleBySlug("test-slug", AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+            when(articleLikeService.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
+
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            ArticleResponse result = articleQueryService.getArticleBySlug("test-slug", AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+
+            assertThat(result.getLiked()).isTrue();
+        }
+    }
+
+    // ─── getMyArticles ───
+
+    @Nested
+    @DisplayName("getMyArticles — liked 填充")
+    class GetMyArticlesTests {
+
+        @Test
+        @DisplayName("正常：已登入且有按讚，liked=true")
+        void loggedIn_likedTrue() {
+            ArticleSummaryResponse summary = buildSummary();
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
+            when(articleService.getMyArticles(AUTHOR_ID, 1, 10, null)).thenReturn(page);
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
+            when(articleLikeService.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Set.of(ARTICLE_DB_ID));
+
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getMyArticles(AUTHOR_ID, 1, 10, null);
+
+            assertThat(result.getRecords().get(0).getLiked()).isTrue();
+        }
+    }
+
+    // ─── getPendingArticles ───
+
+    @Nested
+    @DisplayName("getPendingArticles — liked 填充")
+    class GetPendingArticlesTests {
+
+        @Test
+        @DisplayName("正常：未登入時，所有待審文章 liked=false")
+        void anonymous_likedFalse() {
+            ArticleSummaryResponse summary = buildSummary();
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
+            when(articleService.getPendingArticles(1, 10)).thenReturn(page);
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
+
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPendingArticles(1, 10);
+
+            assertThat(result.getRecords().get(0).getLiked()).isFalse();
+        }
+    }
+}
