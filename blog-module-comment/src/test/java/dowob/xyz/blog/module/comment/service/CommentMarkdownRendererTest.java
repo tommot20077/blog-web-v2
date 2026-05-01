@@ -37,7 +37,9 @@ class CommentMarkdownRendererTest {
         String html = renderer.render("[Google](https://google.com)");
         assertThat(html).contains("<a");
         assertThat(html).contains("href=\"https://google.com\"");
-        assertThat(html).contains("rel=\"nofollow noopener\"");
+        // OWASP HtmlPolicyBuilder 輸出順序為 noopener nofollow（先 requireRelsOnLinks 再 requireRelNofollowOnLinks）
+        assertThat(html).contains("nofollow");
+        assertThat(html).contains("noopener");
         assertThat(html).contains("target=\"_blank\"");
     }
 
@@ -89,8 +91,32 @@ class CommentMarkdownRendererTest {
     @Test
     void render_onerrorAttribute_isSanitized() {
         String html = renderer.render("<img src=x onerror=alert(1)>");
-        assertThat(html).doesNotContain("onerror");
+        // 安全斷言：onerror 不能以可執行屬性形式存在（不是字串本身）
+        assertThat(html).doesNotContain("onerror=");
         assertThat(html).doesNotContain("<img");
+    }
+
+    @Test
+    void render_svgOnloadEvent_isSanitized() {
+        String html = renderer.render("<svg onload=alert(1)></svg>");
+        assertThat(html).doesNotContain("<svg");
+        assertThat(html).doesNotContain("onload=");
+    }
+
+    @Test
+    void render_htmlEntityEncodedJavascriptUrl_isSanitized() {
+        // 攻擊向量：用 HTML entity 偽裝 javascript: scheme
+        // &#x6A; = 'j' → "&#x6A;avascript:alert(1)"
+        String html = renderer.render("[click](&#x6A;avascript:alert(1))");
+        assertThat(html).doesNotContain("javascript:");
+        assertThat(html).doesNotContain("&#x6A;avascript:");
+    }
+
+    @Test
+    void render_rawAnchorWithJavascriptHref_isSanitized() {
+        // 攻擊向量：raw HTML <a> 而非 markdown link 語法
+        String html = renderer.render("<a href=\"javascript:alert(1)\">click</a>");
+        assertThat(html).doesNotContain("javascript:");
     }
 
     @Test
