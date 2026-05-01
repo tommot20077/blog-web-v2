@@ -27,6 +27,7 @@
         <module>blog-module-search</module>
         <module>blog-module-recommend</module>
         <module>blog-module-comment</module>
+        <module>blog-module-reading</module>
         <module>blog-start</module>
     </modules>
 
@@ -224,6 +225,11 @@
             <dependency>
                 <groupId>dowob.xyz</groupId>
                 <artifactId>blog-module-comment</artifactId>
+                <version>${blog.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dowob.xyz</groupId>
+                <artifactId>blog-module-reading</artifactId>
                 <version>${blog.version}</version>
             </dependency>
 
