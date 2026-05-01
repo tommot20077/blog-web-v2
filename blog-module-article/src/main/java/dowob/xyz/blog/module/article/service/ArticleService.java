@@ -161,4 +161,44 @@ public interface ArticleService {
      * @return 文章完整資訊
      */
     ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole, String clientIp);
+
+    /**
+     * 原子性遞增文章留言計數
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    void incrementCommentCount(Long articleId);
+
+    /**
+     * 原子性遞減文章留言計數（守衛 > 0，防 underflow）
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    void decrementCommentCount(Long articleId);
+
+    /**
+     * 原子性遞增文章按讚計數
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    void incrementLikeCount(Long articleId);
+
+    /**
+     * 原子性遞減文章按讚計數（守衛 > 0，防 underflow）
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    void decrementLikeCount(Long articleId);
+
+    /**
+     * 根據文章公開 UUID 查詢資料庫主鍵
+     *
+     * <p>
+     * 供跨模組 Service 透過公開 UUID 取得 article PK，避免直接 JOIN articles 表。
+     * </p>
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章資料庫主鍵，若不存在則回傳 null
+     */
+    Long findIdByUuid(UUID uuid);
 }

@@ -951,6 +951,57 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
+     * 原子性遞增文章留言計數
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    @Override
+    public void incrementCommentCount(Long articleId) {
+        articleMapper.incrementCommentCount(articleId);
+    }
+
+    /**
+     * 原子性遞減文章留言計數（守衛 > 0，防 underflow）
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    @Override
+    public void decrementCommentCount(Long articleId) {
+        articleMapper.decrementCommentCount(articleId);
+    }
+
+    /**
+     * 原子性遞增文章按讚計數
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    @Override
+    public void incrementLikeCount(Long articleId) {
+        articleMapper.incrementLikeCount(articleId);
+    }
+
+    /**
+     * 原子性遞減文章按讚計數（守衛 > 0，防 underflow）
+     *
+     * @param articleId 文章資料庫主鍵
+     */
+    @Override
+    public void decrementLikeCount(Long articleId) {
+        articleMapper.decrementLikeCount(articleId);
+    }
+
+    /**
+     * 根據文章公開 UUID 查詢資料庫主鍵
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章資料庫主鍵，若不存在則回傳 null
+     */
+    @Override
+    public Long findIdByUuid(UUID uuid) {
+        return articleMapper.findIdByUuid(uuid);
+    }
+
+    /**
      * 發送文章更新事件至 RabbitMQ
      *
      * <p>
