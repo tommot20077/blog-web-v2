@@ -4,6 +4,7 @@ import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.ArticleLike;
 import dowob.xyz.blog.module.article.repository.ArticleLikeRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,7 +31,12 @@ public class ArticleLikeService {
     private final ArticleMapper articleMapper;
     private final ArticleService articleService;
 
-    /** 按讚（idempotent）。 */
+    /**
+     * 按讚（idempotent）。
+     *
+     * <p>並發安全：先 fast-path 檢查存在跳過，否則 try save；若 save 撞 UNIQUE 約束（其他 tx 同時 insert），
+     * 視為「已被別人按過」吞掉例外不再 increment，保持 idempotent 語意。</p>
+     */
     @Transactional
     public void likeArticle(Long userId, Long articleId) {
         if (likeRepo.findByUserIdAndArticleId(userId, articleId).isPresent()) {
@@ -40,18 +46,27 @@ public class ArticleLikeService {
         like.setUserId(userId);
         like.setArticleId(articleId);
         like.setCreatedAt(LocalDateTime.now());
-        likeRepo.save(like);
+        try {
+            likeRepo.save(like);
+        } catch (DataIntegrityViolationException e) {
+            // UNIQUE(user_id, article_id) 撞了 — 已被並行 tx 按過，idempotent 返回
+            return;
+        }
         articleService.incrementLikeCount(articleId);
     }
 
-    /** 取消讚（idempotent）。 */
+    /**
+     * 取消讚（idempotent）。
+     *
+     * <p>並發安全：依 delete 實際 affected rows 決定要不要 decrement，
+     * 避免「先查存在但 delete 影響 0 rows」造成 like_count 漂移。</p>
+     */
     @Transactional
     public void unlikeArticle(Long userId, Long articleId) {
-        if (likeRepo.findByUserIdAndArticleId(userId, articleId).isEmpty()) {
-            return;
+        int affected = likeRepo.deleteByUserIdAndArticleId(userId, articleId);
+        if (affected > 0) {
+            articleService.decrementLikeCount(articleId);
         }
-        likeRepo.deleteByUserIdAndArticleId(userId, articleId);
-        articleService.decrementLikeCount(articleId);
     }
 
     public boolean isLiked(Long userId, Long articleId) {

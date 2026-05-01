@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.comment.service;
 
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.article.service.ArticleService;
@@ -60,7 +61,7 @@ public class CommentService {
     public CommentResponse createComment(UUID articleUuid, Long userId, CreateCommentRequest req) {
         Long articleId = articleService.findIdByUuid(articleUuid);
         if (articleId == null) {
-            throw new BusinessException(CommentErrorCode.PARENT_NOT_IN_ARTICLE);
+            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }
 
         Long parentId = null;

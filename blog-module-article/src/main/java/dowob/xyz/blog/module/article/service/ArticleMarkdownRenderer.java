@@ -90,8 +90,9 @@ public class ArticleMarkdownRenderer {
         Node doc = parser.parse(markdown);
         String html = renderer.render(doc);
         String sanitized = sanitizer.sanitize(html);
-        // OWASP policy 對 target 屬性比較嚴格，後處理強制加 target="_blank"
-        sanitized = sanitized.replaceAll("(<a\\b[^>]*?)>", "$1 target=\"_blank\">");
+        // OWASP policy 對 target 屬性比較嚴格，後處理只對「沒有 target」的 <a> 補上 target="_blank"
+        // negative lookahead 避免重複注入造成 target="_blank" target="_blank" 之類無效 HTML
+        sanitized = sanitized.replaceAll("(?i)(<a\\b(?![^>]*\\btarget\\s*=)[^>]*?)>", "$1 target=\"_blank\">");
         return sanitized;
     }
 

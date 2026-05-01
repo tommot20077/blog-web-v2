@@ -73,8 +73,13 @@ public interface CommentMapper {
     })
     List<CommentWithAuthor> findRepliesByParentIds(@Param("parentIds") List<Long> parentIds);
 
-    /** 文章總留言數（含 reply、含軟刪除佔位） */
-    @Select("SELECT COUNT(*) FROM comments WHERE article_id = #{articleId}")
+    /**
+     * 文章總留言數，與列表顯示規則一致：
+     * - 保留 top-level 軟刪除留言（顯示為 [已刪除] tombstone）
+     * - 排除軟刪除的 replies（列表 findRepliesByParentIds 會過濾，count 也應排除）
+     */
+    @Select("SELECT COUNT(*) FROM comments WHERE article_id = #{articleId} "
+            + "AND (parent_id IS NULL OR deleted_at IS NULL)")
     int countByArticle(@Param("articleId") Long articleId);
 
     /** 文章 top-level 留言數（用於分頁 totalElements） */

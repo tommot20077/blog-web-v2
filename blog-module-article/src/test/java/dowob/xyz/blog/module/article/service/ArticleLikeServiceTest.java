@@ -57,10 +57,8 @@ class ArticleLikeServiceTest {
 
     @Test
     void unlikeArticle_existing_deletesRowAndDecrementsCount() {
-        ArticleLike existing = new ArticleLike();
-        existing.setUserId(userId);
-        existing.setArticleId(articleId);
-        when(likeRepo.findByUserIdAndArticleId(userId, articleId)).thenReturn(Optional.of(existing));
+        // delete 影響 1 row → 應 decrement
+        when(likeRepo.deleteByUserIdAndArticleId(userId, articleId)).thenReturn(1);
 
         service.unlikeArticle(userId, articleId);
 
@@ -70,11 +68,12 @@ class ArticleLikeServiceTest {
 
     @Test
     void unlikeArticle_notLiked_isIdempotentNoChange() {
-        when(likeRepo.findByUserIdAndArticleId(userId, articleId)).thenReturn(Optional.empty());
+        // delete 影響 0 rows（已被別 tx 刪掉，或本來就沒按過）→ 不該 decrement
+        when(likeRepo.deleteByUserIdAndArticleId(userId, articleId)).thenReturn(0);
 
         service.unlikeArticle(userId, articleId);
 
-        verify(likeRepo, never()).deleteByUserIdAndArticleId(any(), any());
+        verify(likeRepo, times(1)).deleteByUserIdAndArticleId(userId, articleId);
         verify(articleService, never()).decrementLikeCount(any());
     }
 

@@ -1,7 +1,19 @@
 -- V13__add_comment_and_comment_likes_schema.sql
 
 -- 1. articles：統一 like_count 型別 (BIGINT → INTEGER)
-ALTER TABLE articles ALTER COLUMN like_count TYPE INTEGER;
+-- 先檢查既有資料是否落在 INTEGER 範圍，避免線上資料超界導致 migration 中段失敗
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM articles
+         WHERE like_count < -2147483648 OR like_count > 2147483647
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot convert articles.like_count from BIGINT to INTEGER: existing values out of INTEGER range';
+    END IF;
+END
+$$;
+ALTER TABLE articles ALTER COLUMN like_count TYPE INTEGER USING like_count::INTEGER;
 
 -- 2. 清理重複索引（articles_uuid_key 已是 UNIQUE，idx_articles_uuid 多餘）
 DROP INDEX IF EXISTS idx_articles_uuid;

@@ -1,6 +1,8 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.article.service.ArticleLikeService;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -38,7 +40,7 @@ public class ArticleLikeController {
     @Operation(summary = "按讚文章（idempotent）")
     public ApiResponse<Void> like(@AuthenticationPrincipal Long userId,
                                     @PathVariable UUID articleUuid) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = resolveArticleId(articleUuid);
         likeService.likeArticle(userId, articleId);
         return ApiResponse.success();
     }
@@ -48,8 +50,16 @@ public class ArticleLikeController {
     @Operation(summary = "取消按讚（idempotent）")
     public ApiResponse<Void> unlike(@AuthenticationPrincipal Long userId,
                                       @PathVariable UUID articleUuid) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = resolveArticleId(articleUuid);
         likeService.unlikeArticle(userId, articleId);
         return ApiResponse.success();
+    }
+
+    private Long resolveArticleId(UUID articleUuid) {
+        Long articleId = articleService.findIdByUuid(articleUuid);
+        if (articleId == null) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
+        }
+        return articleId;
     }
 }

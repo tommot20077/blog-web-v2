@@ -83,8 +83,9 @@ public class CommentMarkdownRenderer {
 
         String sanitized = sanitizer.sanitize(rawHtml);
 
-        // OWASP 允許 target 屬性但不自動注入，強制確保每個 <a> 含 target="_blank"
-        sanitized = sanitized.replaceAll("(<a\\b[^>]*?)>", "$1 target=\"_blank\">");
+        // OWASP 允許 target 屬性但不自動注入，後處理只對「沒有 target」的 <a> 補上 target="_blank"
+        // negative lookahead 避免重複注入造成 target="_blank" target="_blank" 之類無效 HTML
+        sanitized = sanitized.replaceAll("(?i)(<a\\b(?![^>]*\\btarget\\s*=)[^>]*?)>", "$1 target=\"_blank\">");
 
         return sanitized;
     }

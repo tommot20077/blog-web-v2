@@ -85,8 +85,8 @@ class CommentLikeServiceTest {
         c.setId(commentId);
         c.setUuid(commentUuid);
         when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
-        when(likeRepo.findByUserIdAndCommentId(userId, commentId))
-                .thenReturn(Optional.of(new CommentLike()));
+        // delete 影響 1 row → 應 decrement
+        when(likeRepo.deleteByUserIdAndCommentId(userId, commentId)).thenReturn(1);
 
         service.unlikeComment(commentUuid, userId);
 
@@ -100,11 +100,12 @@ class CommentLikeServiceTest {
         c.setId(commentId);
         c.setUuid(commentUuid);
         when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
-        when(likeRepo.findByUserIdAndCommentId(userId, commentId)).thenReturn(Optional.empty());
+        // delete 影響 0 rows → 不該 decrement
+        when(likeRepo.deleteByUserIdAndCommentId(userId, commentId)).thenReturn(0);
 
         service.unlikeComment(commentUuid, userId);
 
-        verify(likeRepo, never()).deleteByUserIdAndCommentId(any(), any());
+        verify(likeRepo).deleteByUserIdAndCommentId(userId, commentId);
         verify(commentMapper, never()).decrementLikeCount(any());
     }
 }
