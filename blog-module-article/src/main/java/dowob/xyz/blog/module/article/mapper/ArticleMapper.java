@@ -314,26 +314,4 @@ public interface ArticleMapper {
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")
     List<Article> findIdsByUuids(@Param("list") List<UUID> uuids);
-
-    /**
-     * 批次查詢文章 ID → UUID 對應關係。
-     *
-     * <p>
-     * 供 ArticleFacade.findUuidsByIds 使用，讓閱讀進度模組可透過 Facade
-     * 查詢 UUID 而不依賴 ArticleService，避免循環依賴。
-     * </p>
-     *
-     * @param ids 文章資料庫主鍵列表
-     * @return id → uuid 對應結果（以 {@code id} 和 {@code uuid} 欄位回傳）
-     */
-    @Results(value = {
-            @Result(property = "id", column = "id"),
-            @Result(property = "uuid", column = "uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class)
-    })
-    @Select("<script>" +
-            "SELECT id, uuid FROM articles " +
-            "WHERE id IN " +
-            "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach>" +
-            "</script>")
-    List<Article> findUuidsByIds(@Param("ids") List<Long> ids);
 }
