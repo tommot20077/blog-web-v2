@@ -6,6 +6,7 @@ import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
+import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -174,5 +175,112 @@ class CommentServiceTest {
         assertThatThrownBy(() -> service.createComment(articleUuid, userId, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(CommentErrorCode.PARENT_FROZEN.getMessage());
+    }
+
+    @Test
+    void editComment_within5Min_updatesContentAndSetsEditedAt() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(userId);
+        c.setContent("original");
+        c.setContentHtml("<p>original</p>");
+        c.setCreatedAt(LocalDateTime.now().minusMinutes(2));
+        c.setDeletedAt(null);
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+        when(renderer.render("edited")).thenReturn("<p>edited</p>");
+        when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        EditCommentRequest req = new EditCommentRequest();
+        req.setContent("edited");
+
+        service.editComment(commentUuid, userId, false, req);
+
+        ArgumentCaptor<Comment> captor = ArgumentCaptor.forClass(Comment.class);
+        verify(commentRepo).save(captor.capture());
+        Comment saved = captor.getValue();
+        assertThat(saved.getContent()).isEqualTo("edited");
+        assertThat(saved.getContentHtml()).isEqualTo("<p>edited</p>");
+        assertThat(saved.getEditedAt()).isNotNull();
+    }
+
+    @Test
+    void editComment_after5Min_throwsEditWindowExpired() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(userId);
+        c.setCreatedAt(LocalDateTime.now().minusMinutes(10));
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+
+        EditCommentRequest req = new EditCommentRequest();
+        req.setContent("late");
+
+        assertThatThrownBy(() -> service.editComment(commentUuid, userId, false, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(CommentErrorCode.EDIT_WINDOW_EXPIRED.getMessage());
+    }
+
+    @Test
+    void editComment_byAdminAfter5Min_succeeds() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(999L);     // 不是 admin 自己的留言
+        c.setCreatedAt(LocalDateTime.now().minusMinutes(10));
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+        when(renderer.render(any())).thenReturn("<p>x</p>");
+        when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        EditCommentRequest req = new EditCommentRequest();
+        req.setContent("admin edit");
+
+        service.editComment(commentUuid, 1L, true, req);    // adminUserId=1L, isAdmin=true
+
+        verify(commentRepo).save(any());
+    }
+
+    @Test
+    void editComment_byOtherUser_throwsAccessDenied() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(999L);     // 別人留的
+        c.setCreatedAt(LocalDateTime.now());
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+
+        EditCommentRequest req = new EditCommentRequest();
+        req.setContent("hijack");
+
+        assertThatThrownBy(() -> service.editComment(commentUuid, userId, false, req))
+                .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    }
+
+    @Test
+    void editComment_softDeletedComment_throws() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(userId);
+        c.setCreatedAt(LocalDateTime.now());
+        c.setDeletedAt(LocalDateTime.now());
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+
+        EditCommentRequest req = new EditCommentRequest();
+        req.setContent("ghost");
+
+        assertThatThrownBy(() -> service.editComment(commentUuid, userId, false, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(CommentErrorCode.COMMENT_DELETED.getMessage());
     }
 }

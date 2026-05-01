@@ -6,12 +6,16 @@ import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
+import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.response.CommentResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
@@ -26,6 +30,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class CommentService {
+
+    private static final Duration EDIT_WINDOW = Duration.ofMinutes(5);
 
     private final CommentRepository commentRepo;
     private final CommentMapper commentMapper;
@@ -87,6 +93,60 @@ public class CommentService {
         resp.setLiked(false);
         resp.setDeleted(false);
         resp.setCreatedAt(saved.getCreatedAt());
+        return resp;
+    }
+
+    /**
+     * 編輯留言內容，受 5 分鐘時限保護。
+     *
+     * <p>規則：
+     * <ul>
+     *   <li>軟刪除留言無法編輯（{@link CommentErrorCode#COMMENT_DELETED}）</li>
+     *   <li>非作者且非 Admin 拋 {@link AccessDeniedException}</li>
+     *   <li>作者超過 5 分鐘拋 {@link CommentErrorCode#EDIT_WINDOW_EXPIRED}</li>
+     *   <li>Admin 不受時限限制</li>
+     * </ul>
+     *
+     * @param commentUuid   目標留言 UUID
+     * @param currentUserId 操作者 user id
+     * @param isAdmin       是否具備 Admin 權限
+     * @param req           編輯請求（含新內容）
+     * @return 更新後的 CommentResponse
+     */
+    @Transactional
+    public CommentResponse editComment(UUID commentUuid, Long currentUserId, boolean isAdmin,
+                                       EditCommentRequest req) {
+        Comment c = commentRepo.findByUuid(commentUuid)
+                .orElseThrow(() -> new BusinessException(CommentErrorCode.COMMENT_NOT_FOUND));
+
+        if (c.getDeletedAt() != null) {
+            throw new BusinessException(CommentErrorCode.COMMENT_DELETED);
+        }
+        if (!isAdmin && !c.getUserId().equals(currentUserId)) {
+            throw new AccessDeniedException("不是留言作者");
+        }
+        if (!isAdmin) {
+            Duration sinceCreate = Duration.between(c.getCreatedAt(), LocalDateTime.now());
+            if (sinceCreate.compareTo(EDIT_WINDOW) > 0) {
+                throw new BusinessException(CommentErrorCode.EDIT_WINDOW_EXPIRED);
+            }
+        }
+
+        String contentHtml = renderer.render(req.getContent());
+        c.setContent(req.getContent());
+        c.setContentHtml(contentHtml);
+        c.setEditedAt(LocalDateTime.now());
+        commentRepo.save(c);
+
+        CommentResponse resp = new CommentResponse();
+        resp.setUuid(c.getUuid());
+        resp.setContent(c.getContent());
+        resp.setContentHtml(c.getContentHtml());
+        resp.setLikeCount(c.getLikeCount());
+        resp.setLiked(false);
+        resp.setDeleted(false);
+        resp.setCreatedAt(c.getCreatedAt());
+        resp.setEditedAt(c.getEditedAt());
         return resp;
     }
 }
