@@ -44,8 +44,10 @@ import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import dowob.xyz.blog.module.article.service.ViewCountService;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -108,6 +110,10 @@ class ArticleServiceTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
+    /** Mock：文章按讚 Service（用於 liked 欄位填充） */
+    @Mock
+    private ArticleLikeService articleLikeService;
+
     @InjectMocks
     private ArticleServiceImpl articleService;
 
@@ -147,12 +153,19 @@ class ArticleServiceTest {
     @SuppressWarnings("unchecked")
     @BeforeEach
     void setUp() {
+        // @Lazy @Autowired 欄位無法被 @InjectMocks 自動注入，需手動設定
+        org.springframework.test.util.ReflectionTestUtils.setField(articleService, "articleLikeService", articleLikeService);
+
         when(userFacade.getUserUuidById(AUTHOR_ID)).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(AUTHOR_ID)).thenReturn(Optional.of("TestAuthor"));
         when(userFacade.getUserUsernameById(AUTHOR_ID)).thenReturn(Optional.of("testuser"));
         when(viewCountService.getViewCount(any())).thenReturn(0L);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
         when(categoryMapper.findCategoriesByArticleIds(any())).thenReturn(List.of());
+
+        // 預設 liked=false（避免既有測試因 articleLikeService 呼叫出 NPE 或 strict stubbing 錯誤）
+        when(articleLikeService.isLiked(anyLong(), anyLong())).thenReturn(false);
+        when(articleLikeService.batchIsLiked(anyLong(), any())).thenReturn(java.util.Collections.emptySet());
 
         /** TransactionTemplate mock：直接執行回調 */
         when(transactionTemplate.execute(any())).thenAnswer(inv -> {
@@ -1859,6 +1872,83 @@ class ArticleServiceTest {
                     eq(ArticleRabbitMqConfig.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
                     any(ArticleTagEvent.class));
+        }
+    }
+
+    /**
+     * liked 欄位填充測試
+     */
+    @Nested
+    @DisplayName("liked 欄位")
+    class LikedFieldTests {
+
+        @Test
+        @DisplayName("正常：getPublishedArticles 未登入時，所有文章 liked=false")
+        void getPublishedArticles_anonymous_likedFalse() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleMapper.findPublishedPage(0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countPublished()).thenReturn(1L);
+            // batchIsLiked(null, ...) 由 SecurityContextHolder（anonymousUser 或 null auth）回傳 emptySet
+            when(articleLikeService.batchIsLiked(null, List.of(article.getId()))).thenReturn(java.util.Collections.emptySet());
+
+            PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords()).hasSize(1);
+            assertThat(result.getRecords().get(0).getLiked()).isFalse();
+        }
+
+        @Test
+        @DisplayName("正常：getPublishedArticles 已登入且有按讚，liked=true")
+        void getPublishedArticles_loggedIn_likedTrue() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleMapper.findPublishedPage(0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countPublished()).thenReturn(1L);
+            // 模擬 SecurityContextHolder 有登入使用者（AUTHOR_ID=1L）
+            org.springframework.security.core.Authentication auth =
+                    new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                            AUTHOR_ID, null, List.of());
+            org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+            when(articleLikeService.batchIsLiked(AUTHOR_ID, List.of(article.getId())))
+                    .thenReturn(java.util.Set.of(article.getId()));
+
+            PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords()).hasSize(1);
+            assertThat(result.getRecords().get(0).getLiked()).isTrue();
+
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+        }
+
+        @Test
+        @DisplayName("正常：getArticleByUuid 未登入時，liked=false")
+        void getArticleByUuid_anonymous_likedFalse() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            assertThat(response.getLiked()).isFalse();
+        }
+
+        @Test
+        @DisplayName("正常：getArticleByUuid 已登入且有按讚，liked=true")
+        void getArticleByUuid_loggedIn_likedTrue() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(valueOps.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+            // 模擬 SecurityContextHolder 有登入使用者
+            org.springframework.security.core.Authentication auth =
+                    new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                            AUTHOR_ID, null, List.of());
+            org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+            when(articleLikeService.isLiked(AUTHOR_ID, article.getId())).thenReturn(true);
+
+            ArticleResponse response = articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+
+            assertThat(response.getLiked()).isTrue();
+
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
         }
     }
 

@@ -116,4 +116,9 @@ public class ArticleResponse {
      * 駁回原因（Phase 3 實作後才有值）
      */
     private String rejectReason;
+
+    /**
+     * 當前登入使用者是否已對此文章按讚（未登入時為 false）
+     */
+    private Boolean liked;
 }
