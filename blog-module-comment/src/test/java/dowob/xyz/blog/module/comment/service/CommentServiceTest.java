@@ -5,8 +5,10 @@ import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
+import dowob.xyz.blog.module.comment.model.CommentWithAuthor;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
+import dowob.xyz.blog.module.comment.model.dto.response.ArticleCommentListResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -16,12 +18,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -352,5 +358,103 @@ class CommentServiceTest {
 
         verify(commentMapper, org.mockito.Mockito.never()).softDelete(any(), any());
         verify(articleService, org.mockito.Mockito.never()).decrementCommentCount(any());
+    }
+
+    @Test
+    void listComments_topLevelNewestFirstByDefault() {
+        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(commentMapper.findTopLevelByArticle(eq(articleId), eq("newest"), anyInt(), anyInt()))
+                .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
+        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of(makeRow(11L, 1L)));
+        when(commentMapper.countByArticle(articleId)).thenReturn(3);
+        when(commentMapper.countTopLevelByArticle(articleId)).thenReturn(2);
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords()).hasSize(2);
+        assertThat(resp.getTotalCommentCount()).isEqualTo(3);
+    }
+
+    @Test
+    void listComments_softDeletedTopLevelShownAsTombstone() {
+        CommentWithAuthor deletedTop = new CommentWithAuthor();
+        deletedTop.setId(1L);
+        deletedTop.setUuid(UUID.randomUUID());
+        deletedTop.setContent("original");
+        deletedTop.setContentHtml("<p>x</p>");
+        deletedTop.setDeletedAt(LocalDateTime.now());
+        deletedTop.setDeletedByRole("ADMIN");
+        deletedTop.setAuthorNickname("user");
+        deletedTop.setAuthorUuid(UUID.randomUUID());
+        deletedTop.setLikeCount(5);
+        deletedTop.setCreatedAt(LocalDateTime.now());
+
+        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(deletedTop));
+        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.countByArticle(any())).thenReturn(1);
+        when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, "newest", 1, 20);
+
+        var first = resp.getTopLevels().getRecords().get(0);
+        assertThat(first.getDeleted()).isTrue();
+        assertThat(first.getContent()).isEmpty();
+        assertThat(first.getContentHtml()).isEmpty();
+        assertThat(first.getAuthor()).isNull();
+        assertThat(first.getLikeCount()).isEqualTo(5);
+        assertThat(first.getDeletedByRole()).isEqualTo("ADMIN");
+    }
+
+    @Test
+    void listComments_includesLikedFlagForCurrentUser() {
+        Long userIdForTest = 99L;
+        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
+        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.countByArticle(any())).thenReturn(2);
+        when(commentMapper.countTopLevelByArticle(any())).thenReturn(2);
+        when(commentMapper.findLikedCommentIdsByUser(eq(userIdForTest), any()))
+                .thenReturn(List.of(1L));
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, userIdForTest, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords().get(0).getLiked()).isTrue();
+        assertThat(resp.getTopLevels().getRecords().get(1).getLiked()).isFalse();
+    }
+
+    @Test
+    void listComments_unauthenticated_likedFlagAlwaysFalse() {
+        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(makeRow(1L, null)));
+        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.countByArticle(any())).thenReturn(1);
+        when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords().get(0).getLiked()).isFalse();
+        verify(commentMapper, org.mockito.Mockito.never()).findLikedCommentIdsByUser(any(), any());
+    }
+
+    // ── 測試輔助方法 ──────────────────────────────────────────────────────
+    private CommentWithAuthor makeRow(Long id, Long parentId) {
+        CommentWithAuthor row = new CommentWithAuthor();
+        row.setId(id);
+        row.setUuid(UUID.randomUUID());
+        row.setArticleId(articleId);
+        row.setParentId(parentId);
+        row.setUserId(10L);
+        row.setContent("c" + id);
+        row.setContentHtml("<p>c" + id + "</p>");
+        row.setLikeCount(0);
+        row.setCreatedAt(LocalDateTime.now());
+        row.setAuthorUuid(UUID.randomUUID());
+        row.setAuthorNickname("user" + id);
+        row.setAuthorAvatarUrl(null);
+        return row;
     }
 }

@@ -1,12 +1,16 @@
 package dowob.xyz.blog.module.comment.service;
 
+import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
+import dowob.xyz.blog.module.comment.model.CommentWithAuthor;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
+import dowob.xyz.blog.module.comment.model.dto.response.ArticleCommentListResponse;
+import dowob.xyz.blog.module.comment.model.dto.response.AuthorSummary;
 import dowob.xyz.blog.module.comment.model.dto.response.CommentResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import lombok.RequiredArgsConstructor;
@@ -16,7 +20,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 留言 Service。
@@ -175,5 +185,101 @@ public class CommentService {
         String role = (isAdmin && !c.getUserId().equals(currentUserId)) ? "ADMIN" : "AUTHOR";
         commentMapper.softDelete(c.getId(), role);
         articleService.decrementCommentCount(c.getArticleId());
+    }
+
+    /**
+     * 列出文章留言（分頁，含 reply 與軟刪除佔位）。
+     *
+     * @param articleUuid    文章 UUID
+     * @param currentUserId  當前使用者 id；null 代表未登入
+     * @param sort           排序：newest / oldest（預設 newest）
+     * @param page           頁碼（1-based）
+     * @param size           每頁筆數（top-level 計數）
+     */
+    public ArticleCommentListResponse listComments(UUID articleUuid, Long currentUserId,
+                                                     String sort, int page, int size) {
+        Long articleId = articleService.findIdByUuid(articleUuid);
+        if (articleId == null) {
+            return new ArticleCommentListResponse(
+                    PageResult.of(page, size, 0L, Collections.emptyList()),
+                    0
+            );
+        }
+
+        String sortKey = "oldest".equals(sort) ? "oldest" : "newest";
+        int offset = Math.max(0, (page - 1) * size);
+
+        // 1. top-level 列表（含軟刪除佔位）
+        List<CommentWithAuthor> topLevels = commentMapper.findTopLevelByArticle(
+                articleId, sortKey, size, offset);
+        List<Long> topLevelIds = topLevels.stream().map(CommentWithAuthor::getId).toList();
+
+        // 2. replies 一次撈完（已過濾 deleted leaf at SQL level）
+        List<CommentWithAuthor> replies = topLevelIds.isEmpty()
+                ? List.of()
+                : commentMapper.findRepliesByParentIds(topLevelIds);
+
+        // 3. 當前使用者的 liked 集合（一次 batch；未登入跳過）
+        List<Long> allCommentIds = java.util.stream.Stream.concat(
+                topLevels.stream().map(CommentWithAuthor::getId),
+                replies.stream().map(CommentWithAuthor::getId)
+        ).toList();
+
+        Set<Long> likedIds = (currentUserId == null || allCommentIds.isEmpty())
+                ? Collections.emptySet()
+                : new HashSet<>(commentMapper.findLikedCommentIdsByUser(currentUserId, allCommentIds));
+
+        // 4. group replies by parent id
+        Map<Long, List<CommentResponse>> repliesByParent = replies.stream()
+                .collect(Collectors.groupingBy(
+                        CommentWithAuthor::getParentId,
+                        Collectors.mapping(r -> toResponse(r, likedIds), Collectors.toList())
+                ));
+
+        // 5. assemble top-level DTOs with attached replies
+        List<CommentResponse> topLevelDtos = topLevels.stream()
+                .map(t -> {
+                    CommentResponse dto = toResponse(t, likedIds);
+                    dto.setReplies(repliesByParent.getOrDefault(t.getId(), List.of()));
+                    return dto;
+                })
+                .toList();
+
+        int totalTopLevel = commentMapper.countTopLevelByArticle(articleId);
+        int totalAll = commentMapper.countByArticle(articleId);
+
+        PageResult<CommentResponse> pageResult = PageResult.of(page, size, (long) totalTopLevel, topLevelDtos);
+        return new ArticleCommentListResponse(pageResult, totalAll);
+    }
+
+    /** 將 CommentWithAuthor row 映射成 CommentResponse；軟刪除留言以佔位形式呈現。 */
+    private CommentResponse toResponse(CommentWithAuthor c, Set<Long> likedIds) {
+        CommentResponse dto = new CommentResponse();
+        dto.setUuid(c.getUuid());
+        dto.setParentUuid(c.getParentUuid());
+
+        boolean isDeleted = c.getDeletedAt() != null;
+        dto.setDeleted(isDeleted);
+        dto.setDeletedByRole(c.getDeletedByRole());
+
+        if (isDeleted) {
+            dto.setContent("");
+            dto.setContentHtml("");
+            dto.setAuthor(null);
+            dto.setLiked(false);
+        } else {
+            dto.setContent(c.getContent());
+            dto.setContentHtml(c.getContentHtml());
+            AuthorSummary author = new AuthorSummary(
+                    c.getAuthorUuid(), c.getAuthorNickname(), c.getAuthorAvatarUrl());
+            dto.setAuthor(author);
+            dto.setLiked(likedIds.contains(c.getId()));
+        }
+
+        dto.setLikeCount(c.getLikeCount());
+        dto.setCreatedAt(c.getCreatedAt());
+        dto.setEditedAt(c.getEditedAt());
+        dto.setReplies(List.of());     // top-level 在外面 set 真正 replies；reply 永遠空陣列（2 層）
+        return dto;
     }
 }
