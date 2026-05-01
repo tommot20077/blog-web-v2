@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -121,4 +122,14 @@ public class ArticleResponse {
      * 當前登入使用者是否已對此文章按讚（未登入時為 false）
      */
     private Boolean liked;
+
+    /**
+     * 當前登入使用者是否已收藏此文章（未登入時為 false）
+     */
+    private Boolean bookmarked;
+
+    /**
+     * 當前登入使用者對此文章的最後閱讀進度（未登入或無紀錄時為 null）
+     */
+    private BigDecimal lastReadProgress;
 }

@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -87,4 +88,24 @@ public interface ArticleFacade {
      * @return 文章熱門計算資料列表
      */
     List<ArticleTrendingData> getArticlesPublishedAfter(LocalDateTime since);
+
+    /**
+     * 根據文章公開 UUID 查詢資料庫主鍵
+     *
+     * <p>供閱讀進度模組等跨模組服務使用，避免循環依賴。</p>
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章資料庫主鍵，若不存在則回傳 null
+     */
+    Long findIdByUuid(UUID uuid);
+
+    /**
+     * 根據文章資料庫主鍵列表批次查詢 UUID 對應關係
+     *
+     * <p>供閱讀進度模組批次查詢 Redis key 時使用，避免循環依賴。</p>
+     *
+     * @param ids 文章資料庫主鍵列表
+     * @return articleId → UUID 對應 Map
+     */
+    Map<Long, UUID> findUuidsByIds(List<Long> ids);
 }

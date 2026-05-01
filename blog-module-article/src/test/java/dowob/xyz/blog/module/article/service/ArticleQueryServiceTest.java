@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.service;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -21,9 +22,11 @@ import org.mockito.quality.Strictness;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -53,6 +56,9 @@ class ArticleQueryServiceTest {
 
     @Mock
     private ArticleMapper articleMapper;
+
+    @Mock
+    private ReadingFacade readingFacade;
 
     @InjectMocks
     private ArticleQueryService articleQueryService;
@@ -307,6 +313,106 @@ class ArticleQueryServiceTest {
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPendingArticles(1, 10);
 
             assertThat(result.getRecords().get(0).getLiked()).isFalse();
+        }
+    }
+
+    // ─── enrich bookmarked + lastReadProgress（T12 新增）───
+
+    @Nested
+    @DisplayName("enrich 列表 — bookmarked + lastReadProgress 填充")
+    class EnrichBookmarkedAndProgressTests {
+
+        @Test
+        @DisplayName("已登入且已收藏：bookmarked=true")
+        void enrich_includesBookmarkedFlag() {
+            ArticleSummaryResponse summary = buildSummary();
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
+            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
+            when(articleLikeService.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+                    .thenReturn(Collections.emptySet());
+            when(readingFacade.batchIsBookmarked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+                    .thenReturn(Set.of(ARTICLE_DB_ID));
+            when(readingFacade.batchGetProgress(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+                    .thenReturn(Collections.emptyMap());
+
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords().get(0).getBookmarked()).isTrue();
+        }
+
+        @Test
+        @DisplayName("已登入且有閱讀進度：lastReadProgress 填入正確值")
+        void enrich_includesLastReadProgress() {
+            BigDecimal progress = new BigDecimal("0.45");
+            ArticleSummaryResponse summary = buildSummary();
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
+            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
+            when(articleLikeService.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+                    .thenReturn(Collections.emptySet());
+            when(readingFacade.batchIsBookmarked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+                    .thenReturn(Collections.emptySet());
+            when(readingFacade.batchGetProgress(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+                    .thenReturn(Map.of(ARTICLE_DB_ID, progress));
+
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords().get(0).getLastReadProgress())
+                    .isEqualByComparingTo(progress);
+        }
+
+        @Test
+        @DisplayName("匿名查詢時 bookmarked=false，lastReadProgress=null")
+        void enrich_unauthenticated_allFlagsAreFalseOrNull() {
+            ArticleSummaryResponse summary = buildSummary();
+            PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
+            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
+
+            // 不設 SecurityContext，模擬匿名
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+
+            assertThat(result.getRecords().get(0).getLiked()).isFalse();
+            assertThat(result.getRecords().get(0).getBookmarked()).isFalse();
+            assertThat(result.getRecords().get(0).getLastReadProgress()).isNull();
+        }
+    }
+
+    // ─── enrichSingle — bookmarked + lastReadProgress（T12 新增）───
+
+    @Nested
+    @DisplayName("enrichSingle — 所有欄位填充")
+    class EnrichSingleAllFieldsTests {
+
+        @Test
+        @DisplayName("已登入：liked + bookmarked + lastReadProgress 全部填入")
+        void enrichSingle_setsAllNewFields() {
+            BigDecimal progress = new BigDecimal("0.72");
+            ArticleResponse resp = buildResponse();
+
+            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1"))
+                    .thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+            when(articleLikeService.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
+            when(readingFacade.isBookmarked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
+            when(readingFacade.getProgress(AUTHOR_ID, ARTICLE_UUID)).thenReturn(progress);
+
+            SecurityContextHolder.getContext().setAuthentication(
+                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+
+            ArticleResponse result = articleQueryService.getArticleByUuid(
+                    ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+
+            assertThat(result.getLiked()).isTrue();
+            assertThat(result.getBookmarked()).isTrue();
+            assertThat(result.getLastReadProgress()).isEqualByComparingTo(progress);
         }
     }
 }

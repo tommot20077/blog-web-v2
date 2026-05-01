@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
@@ -108,6 +109,9 @@ class CategoryControllerIT {
 
     @MockitoBean
     private UserAuthService userAuthService;
+
+    @MockitoBean
+    private ReadingFacade readingFacade;
 
     private static final Long AUTHOR_ID = 1L;
     private static final UUID AUTHOR_UUID = UUID.randomUUID();

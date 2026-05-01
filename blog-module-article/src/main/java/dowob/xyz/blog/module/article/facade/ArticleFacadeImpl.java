@@ -178,6 +178,26 @@ public class ArticleFacadeImpl implements ArticleFacade {
     }
 
     /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Long findIdByUuid(UUID uuid) {
+        return articleMapper.findIdByUuid(uuid);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Map<Long, UUID> findUuidsByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Map.of();
+        }
+        return articleMapper.findUuidsByIds(ids).stream()
+                .collect(Collectors.toMap(Article::getId, Article::getUuid));
+    }
+
+    /**
      * 將 ArticleSummaryRow 列表組裝為 ArticleSummaryInfo 列表
      *
      * <p>

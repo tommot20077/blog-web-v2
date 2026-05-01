@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
@@ -142,6 +143,12 @@ class ArticleControllerIT {
      */
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /**
+     * Mock ReadingFacade（避免依賴 Reading Module 實作）
+     */
+    @MockitoBean
+    private ReadingFacade readingFacade;
 
     /**
      * 測試用預設作者 ID（對應 V1 Migration 預設資料）
