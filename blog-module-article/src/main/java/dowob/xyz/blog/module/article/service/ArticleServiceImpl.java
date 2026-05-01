@@ -31,10 +31,10 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.commonmark.node.Node;
-import org.commonmark.parser.Parser;
-import org.commonmark.renderer.html.HtmlRenderer;
-import org.commonmark.renderer.text.TextContentRenderer;
+import com.vladsch.flexmark.html.HtmlRenderer;
+import com.vladsch.flexmark.parser.Parser;
+import com.vladsch.flexmark.util.ast.Node;
+import com.vladsch.flexmark.util.data.MutableDataSet;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -731,12 +731,12 @@ public class ArticleServiceImpl implements ArticleService {
         if (markdown == null) {
             return null;
         }
-        Parser parser = Parser.builder().build();
+        MutableDataSet options = new MutableDataSet();
+        options.set(HtmlRenderer.ESCAPE_HTML, true);
+        options.set(HtmlRenderer.SUPPRESS_HTML, true);
+        Parser parser = Parser.builder(options).build();
         Node document = parser.parse(markdown);
-        HtmlRenderer renderer = HtmlRenderer.builder()
-                .escapeHtml(true)
-                .sanitizeUrls(true)
-                .build();
+        HtmlRenderer renderer = HtmlRenderer.builder(options).build();
         return renderer.render(document);
     }
 
@@ -760,8 +760,9 @@ public class ArticleServiceImpl implements ArticleService {
         }
         Parser parser = Parser.builder().build();
         Node document = parser.parse(content);
-        TextContentRenderer textRenderer = TextContentRenderer.builder().build();
-        String plainText = textRenderer.render(document);
+        com.vladsch.flexmark.util.ast.TextCollectingVisitor visitor =
+                new com.vladsch.flexmark.util.ast.TextCollectingVisitor();
+        String plainText = visitor.collectAndGetText(document);
         return plainText.substring(0, Math.min(200, plainText.length()));
     }
 
