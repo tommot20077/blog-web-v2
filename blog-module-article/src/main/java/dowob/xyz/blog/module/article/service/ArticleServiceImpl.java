@@ -1001,6 +1001,25 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
+     * 根據文章 ID 列表批次取得文章摘要（stub，Task 12 將改為批次查詢）。
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return 文章摘要列表
+     */
+    @Override
+    public List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds) {
+        if (articleIds == null || articleIds.isEmpty()) return List.of();
+        List<ArticleSummaryResponse> results = new java.util.ArrayList<>();
+        for (Long id : articleIds) {
+            articleRepository.findById(id).ifPresent(a -> {
+                Map<UUID, List<TagSummaryResponse>> tagMap = batchToTagResponsesMap(List.of(a.getUuid()));
+                results.add(toSummaryResponse(a, tagMap));
+            });
+        }
+        return results;
+    }
+
+    /**
      * 發送文章更新事件至 RabbitMQ
      *
      * <p>

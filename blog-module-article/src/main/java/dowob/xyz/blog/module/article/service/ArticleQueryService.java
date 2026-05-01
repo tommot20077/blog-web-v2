@@ -136,6 +136,22 @@ public class ArticleQueryService {
         return resp;
     }
 
+    // ─── 收藏列表查詢 ───
+
+    /**
+     * 根據文章 ID 列表批次取得文章摘要（含 liked 狀態）。
+     *
+     * <p>供 BookmarkController 使用：先取得摘要，再批次填充 liked 狀態。</p>
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return 文章摘要列表（liked 已填充）
+     */
+    public List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds) {
+        List<ArticleSummaryResponse> records = articleService.getArticleSummariesByIds(articleIds);
+        enrichLikedList(records);
+        return records;
+    }
+
     // ─── 私有 helper ───
 
     /**

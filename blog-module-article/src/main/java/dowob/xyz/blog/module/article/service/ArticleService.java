@@ -9,6 +9,7 @@ import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 
+import java.util.List;
 import java.util.UUID;
 
 
@@ -201,4 +202,14 @@ public interface ArticleService {
      * @return 文章資料庫主鍵，若不存在則回傳 null
      */
     Long findIdByUuid(UUID uuid);
+
+    /**
+     * 根據文章 ID 列表批次取得文章摘要（供收藏列表等跨模組查詢使用）。
+     *
+     * <p>Task 12 完整實作；此為 stub，逐筆查詢。</p>
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return 文章摘要列表（依 articleIds 順序）
+     */
+    List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds);
 }
