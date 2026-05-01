@@ -283,4 +283,74 @@ class CommentServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(CommentErrorCode.COMMENT_DELETED.getMessage());
     }
+
+    @Test
+    void deleteComment_byOwner_softDeletesAndMarksAuthor() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(userId);
+        c.setArticleId(articleId);
+        c.setDeletedAt(null);
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+
+        service.deleteComment(commentUuid, userId, false);
+
+        verify(commentMapper).softDelete(1L, "AUTHOR");
+        verify(articleService).decrementCommentCount(articleId);
+    }
+
+    @Test
+    void deleteComment_byAdmin_softDeletesAndMarksAdmin() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(999L);     // 別人留的
+        c.setArticleId(articleId);
+        c.setDeletedAt(null);
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+
+        service.deleteComment(commentUuid, 1L, true);    // adminUserId=1L, isAdmin=true
+
+        verify(commentMapper).softDelete(1L, "ADMIN");
+        verify(articleService).decrementCommentCount(articleId);
+    }
+
+    @Test
+    void deleteComment_byOther_throwsAccessDenied() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(999L);
+        c.setDeletedAt(null);
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+
+        assertThatThrownBy(() -> service.deleteComment(commentUuid, userId, false))
+                .isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+
+        verify(commentMapper, org.mockito.Mockito.never()).softDelete(any(), any());
+    }
+
+    @Test
+    void deleteComment_alreadyDeleted_isIdempotent() {
+        UUID commentUuid = UUID.randomUUID();
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setUserId(userId);
+        c.setDeletedAt(LocalDateTime.now());     // 已軟刪除
+
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+
+        service.deleteComment(commentUuid, userId, false);
+
+        verify(commentMapper, org.mockito.Mockito.never()).softDelete(any(), any());
+        verify(articleService, org.mockito.Mockito.never()).decrementCommentCount(any());
+    }
 }

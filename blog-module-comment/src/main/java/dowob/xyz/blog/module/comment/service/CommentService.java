@@ -149,4 +149,31 @@ public class CommentService {
         resp.setEditedAt(c.getEditedAt());
         return resp;
     }
+
+    /**
+     * 軟刪除留言。
+     *
+     * <p>記錄刪除者角色（AUTHOR / ADMIN）；已刪除留言再次刪除是 idempotent。</p>
+     *
+     * @param commentUuid    目標留言 UUID
+     * @param currentUserId  當前操作者 user id
+     * @param isAdmin        是否為 Admin（決定是否可以刪他人留言）
+     */
+    @Transactional
+    public void deleteComment(UUID commentUuid, Long currentUserId, boolean isAdmin) {
+        Comment c = commentRepo.findByUuid(commentUuid)
+                .orElseThrow(() -> new BusinessException(CommentErrorCode.COMMENT_NOT_FOUND));
+
+        if (c.getDeletedAt() != null) {
+            return;     // idempotent：已刪除直接 return
+        }
+        if (!isAdmin && !c.getUserId().equals(currentUserId)) {
+            throw new AccessDeniedException("不是留言作者");
+        }
+
+        // role 判斷：admin 操作他人留言 → ADMIN；其他情況（含 admin 操作自己留言）→ AUTHOR
+        String role = (isAdmin && !c.getUserId().equals(currentUserId)) ? "ADMIN" : "AUTHOR";
+        commentMapper.softDelete(c.getId(), role);
+        articleService.decrementCommentCount(c.getArticleId());
+    }
 }
