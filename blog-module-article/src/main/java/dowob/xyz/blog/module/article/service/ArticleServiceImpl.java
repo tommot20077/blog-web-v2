@@ -1028,6 +1028,34 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
+     * 根據文章公開 UUID 查詢文章實體（供跨模組使用）。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章 Optional
+     */
+    @Override
+    public java.util.Optional<Article> findByUuid(UUID uuid) {
+        return articleRepository.findByUuid(uuid);
+    }
+
+    /**
+     * 更新文章的 series 歸屬與排序位置。
+     *
+     * @param articleId      文章資料庫主鍵
+     * @param seriesId       所屬 series 主鍵（null 表示解除）
+     * @param seriesPosition 在 series 中的排序位置（null 表示解除）
+     */
+    @Override
+    @Transactional
+    public void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
+        articleRepository.findById(articleId).ifPresent(a -> {
+            a.setSeriesId(seriesId);
+            a.setSeriesPosition(seriesPosition);
+            articleRepository.save(a);
+        });
+    }
+
+    /**
      * 發送文章更新事件至 RabbitMQ
      *
      * <p>

@@ -1,6 +1,9 @@
 package dowob.xyz.blog.module.series.service;
 
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
@@ -27,8 +30,11 @@ class SeriesServiceTest {
 
     @Mock private SeriesRepository repo;
     @Mock private SeriesMapper mapper;
-    // 後續 task 會加 ArticleService / ReadingFacade mock
+    @Mock private ArticleService articleService;
     @InjectMocks private SeriesService service;
+
+    private final UUID articleUuid = UUID.randomUUID();
+    private final Long articleId = 200L;
 
     private final Long userId = 1L;
     private final Long seriesId = 100L;
@@ -141,5 +147,117 @@ class SeriesServiceTest {
 
         verify(repo).deleteById(seriesId);
         // ON DELETE SET NULL 由 DB 處理；service 不需顯式 update articles
+    }
+
+    // ── T11: addArticleToSeries / removeArticleFromSeries ──────────────────
+
+    @Test
+    void addArticleToSeries_publishedArticle_savesAndIncrementsCount() {
+        Series series = new Series();
+        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+
+        Article article = new Article();
+        article.setId(articleId); article.setUuid(articleUuid);
+        article.setAuthorId(userId);
+        article.setStatus(ArticleStatus.PUBLISHED);
+        article.setSeriesId(null);
+        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 3);
+
+        verify(articleService).updateSeriesAssignment(articleId, seriesId, 3);
+        verify(mapper).incrementArticleCount(seriesId);
+    }
+
+    @Test
+    void addArticleToSeries_draftArticle_throwsS0103() {
+        Series series = new Series();
+        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+
+        Article article = new Article();
+        article.setId(articleId); article.setUuid(articleUuid);
+        article.setAuthorId(userId);
+        article.setStatus(ArticleStatus.DRAFT);
+        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_PUBLISHED.getMessage());
+
+        verify(articleService, never()).updateSeriesAssignment(any(), any(), any());
+    }
+
+    @Test
+    void addArticleToSeries_articleAlreadyInOtherSeries_throwsS0106() {
+        Series series = new Series();
+        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+
+        Article article = new Article();
+        article.setId(articleId); article.setUuid(articleUuid);
+        article.setAuthorId(userId);
+        article.setStatus(ArticleStatus.PUBLISHED);
+        article.setSeriesId(999L);
+        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES.getMessage());
+    }
+
+    @Test
+    void addArticleToSeries_sameSeriesUpdatesPosition() {
+        Series series = new Series();
+        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+
+        Article article = new Article();
+        article.setId(articleId); article.setUuid(articleUuid);
+        article.setAuthorId(userId);
+        article.setStatus(ArticleStatus.PUBLISHED);
+        article.setSeriesId(seriesId);
+        article.setSeriesPosition(2);
+        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 5);
+
+        verify(articleService).updateSeriesAssignment(articleId, seriesId, 5);
+        verify(mapper, never()).incrementArticleCount(any());
+    }
+
+    @Test
+    void removeArticleFromSeries_decrementsCount() {
+        Series series = new Series();
+        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+
+        Article article = new Article();
+        article.setId(articleId); article.setUuid(articleUuid);
+        article.setSeriesId(seriesId);
+        article.setSeriesPosition(3);
+        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false);
+
+        verify(articleService).updateSeriesAssignment(articleId, null, null);
+        verify(mapper).decrementArticleCount(seriesId);
+    }
+
+    @Test
+    void removeArticleFromSeries_articleNotInThisSeries_throwsS0105() {
+        Series series = new Series();
+        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+
+        Article article = new Article();
+        article.setId(articleId); article.setUuid(articleUuid);
+        article.setSeriesId(null);
+        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_IN_SERIES.getMessage());
     }
 }

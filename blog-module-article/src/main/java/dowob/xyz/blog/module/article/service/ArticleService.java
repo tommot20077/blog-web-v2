@@ -220,4 +220,23 @@ public interface ArticleService {
      * @return 文章實體列表
      */
     java.util.List<dowob.xyz.blog.module.article.model.Article> findByIds(java.util.List<Long> ids);
+
+    /**
+     * 根據文章公開 UUID 查詢文章實體（供跨模組使用，例如 Series 模組）。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章 Optional
+     */
+    java.util.Optional<dowob.xyz.blog.module.article.model.Article> findByUuid(UUID uuid);
+
+    /**
+     * 更新文章的 series 歸屬與排序位置（供 Series 模組使用）。
+     *
+     * <p>傳入 null 表示解除 series 歸屬。</p>
+     *
+     * @param articleId      文章資料庫主鍵
+     * @param seriesId       所屬 series 主鍵（null 表示解除）
+     * @param seriesPosition 在 series 中的排序位置（null 表示解除）
+     */
+    void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition);
 }
