@@ -22,6 +22,7 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
                 "dowob.xyz.blog.common",
                 "dowob.xyz.blog.infrastructure",
                 "dowob.xyz.blog.module.article",
+                "dowob.xyz.blog.module.series",
                 "dowob.xyz.blog.module.comment",
                 "dowob.xyz.blog.module.reading"
         },
@@ -34,11 +35,13 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
         })
 @EnableJdbcRepositories(basePackages = {
         "dowob.xyz.blog.module.article.repository",
+        "dowob.xyz.blog.module.series.repository",
         "dowob.xyz.blog.module.comment.repository",
         "dowob.xyz.blog.module.reading.repository"
 })
 @MapperScan(basePackages = {
         "dowob.xyz.blog.module.article.mapper",
+        "dowob.xyz.blog.module.series.mapper",
         "dowob.xyz.blog.module.comment.mapper",
         "dowob.xyz.blog.module.reading.mapper"
 })
