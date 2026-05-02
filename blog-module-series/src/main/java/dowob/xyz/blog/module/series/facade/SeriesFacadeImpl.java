@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.series.facade;
 
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.service.ArticleService;
@@ -13,8 +14,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * SeriesFacade 實作。
@@ -47,38 +51,43 @@ public class SeriesFacadeImpl implements SeriesFacade {
         Optional<Article> articleOpt = articleService.findById(articleId);
         if (articleOpt.isEmpty()) return Optional.empty();
         Article article = articleOpt.get();
-        if (article.getSeriesId() == null) return Optional.empty();
+        if (article.getSeriesId() == null || article.getSeriesPosition() == null) {
+            return Optional.empty();
+        }
 
         Optional<Series> seriesOpt = seriesRepo.findById(article.getSeriesId());
         if (seriesOpt.isEmpty()) return Optional.empty();
         Series series = seriesOpt.get();
 
-        List<SeriesMapper.NavRow> navList = seriesMapper.findArticlesForNav(series.getId());
-
-        int currentIdx = -1;
-        for (int i = 0; i < navList.size(); i++) {
-            if (navList.get(i).getId().equals(articleId)) {
-                currentIdx = i;
-                break;
-            }
-        }
-        if (currentIdx < 0) return Optional.empty();
+        SeriesMapper.NavRow prev = seriesMapper.findPrevNav(series.getId(), article.getSeriesPosition());
+        SeriesMapper.NavRow next = seriesMapper.findNextNav(series.getId(), article.getSeriesPosition());
+        int totalCount = seriesMapper.countPublishedInSeries(series.getId());
 
         SeriesNavigation nav = new SeriesNavigation();
         nav.setSeriesUuid(series.getUuid());
         nav.setSeriesTitle(series.getTitle());
         nav.setSeriesSlug(series.getSlug());
         nav.setPosition(article.getSeriesPosition());
-        nav.setTotalCount(navList.size());
+        nav.setTotalCount(totalCount);
 
-        if (currentIdx > 0) {
-            SeriesMapper.NavRow prev = navList.get(currentIdx - 1);
+        if (prev != null) {
             nav.setPrev(new SeriesNavigation.SeriesArticleRef(prev.getUuid(), prev.getTitle(), prev.getSlug()));
         }
-        if (currentIdx < navList.size() - 1) {
-            SeriesMapper.NavRow next = navList.get(currentIdx + 1);
+        if (next != null) {
             nav.setNext(new SeriesNavigation.SeriesArticleRef(next.getUuid(), next.getTitle(), next.getSlug()));
         }
         return Optional.of(nav);
+    }
+
+    @Override
+    public Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(List<Long> articleIds) {
+        if (articleIds == null || articleIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return seriesMapper.findSeriesByArticleIds(articleIds).stream()
+                .collect(Collectors.toMap(
+                        SeriesMapper.ArticleSeriesRow::getArticleId,
+                        row -> new SeriesBasicInfo(row.getSeriesUuid(), row.getSeriesTitle())
+                ));
     }
 }

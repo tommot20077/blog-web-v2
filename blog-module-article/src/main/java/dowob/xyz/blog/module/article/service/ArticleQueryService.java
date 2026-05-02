@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -189,15 +190,17 @@ public class ArticleQueryService {
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toList());
 
-        // 補充 seriesUuid / seriesTitle（對有 seriesPosition 的文章透過 SeriesFacade 查詢）
+        // 補充 seriesUuid / seriesTitle（批次查詢，避免 N+1）
+        Map<Long, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfo(articleIds);
         records.forEach(r -> {
             if (r.getSeriesPosition() != null) {
                 Long id = uuidToId.get(r.getUuid());
                 if (id != null) {
-                    seriesFacade.getSeriesNavigation(id).ifPresent(nav -> {
-                        r.setSeriesUuid(nav.getSeriesUuid());
-                        r.setSeriesTitle(nav.getSeriesTitle());
-                    });
+                    SeriesBasicInfo info = seriesMap.get(id);
+                    if (info != null) {
+                        r.setSeriesUuid(info.getSeriesUuid());
+                        r.setSeriesTitle(info.getSeriesTitle());
+                    }
                 }
             }
         });

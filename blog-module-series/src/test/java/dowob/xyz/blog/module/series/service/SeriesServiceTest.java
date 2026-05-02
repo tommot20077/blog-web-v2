@@ -306,6 +306,63 @@ class SeriesServiceTest {
         assertThat(resp.getMyProgress().getNextUnreadArticleUuid()).isEqualTo(uuidB);
     }
 
+    // ── B: ARTICLE_NOT_FOUND (S0107) ──────────────────────────────────────
+
+    @Test
+    void addArticleToSeries_articleNotFound_throwsS0107() {
+        Series series = new Series();
+        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_FOUND.getMessage());
+    }
+
+    @Test
+    void removeArticleFromSeries_articleNotFound_throwsS0107() {
+        Series series = new Series();
+        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_FOUND.getMessage());
+    }
+
+    // ── C: getSeriesDetail articles 非空 ───────────────────────────────────
+
+    @Test
+    void getSeriesDetail_withArticles_articlesListNotEmpty() {
+        SeriesWithAuthor row = new SeriesWithAuthor();
+        row.setId(seriesId); row.setUuid(seriesUuid);
+        row.setTitle("Vue 101"); row.setSlug("vue-101");
+        row.setArticleCount(1);
+        row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
+        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
+
+        UUID uuidA = UUID.randomUUID();
+        Article article = buildArticle(1L, uuidA, "A", 1);
+        article.setSeriesId(seriesId);
+        List<Article> articles = List.of(article);
+        when(articleService.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
+
+        var summary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
+                .uuid(uuidA).title("A").seriesPosition(1).build();
+        when(articleService.getArticleSummariesByIds(List.of(1L))).thenReturn(List.of(summary));
+
+        lenient().when(readingFacade.batchGetProgress(any(), any())).thenReturn(Map.of());
+
+        dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse resp =
+                service.getSeriesDetail("vue-101", null);
+
+        assertThat(resp.getArticles()).isNotEmpty();
+        assertThat(resp.getArticles()).hasSize(1);
+        assertThat(resp.getArticles().get(0).getUuid()).isEqualTo(uuidA);
+    }
+
     private Article buildArticle(Long id, UUID uuid, String title, int position) {
         Article a = new Article();
         a.setId(id); a.setUuid(uuid); a.setTitle(title);

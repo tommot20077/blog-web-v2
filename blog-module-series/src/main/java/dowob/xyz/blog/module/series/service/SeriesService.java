@@ -6,6 +6,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
@@ -143,7 +144,7 @@ public class SeriesService {
         }
 
         Article article = articleService.findByUuid(articleUuid)
-                .orElseThrow(() -> new BusinessException(SeriesErrorCode.ARTICLE_NOT_IN_SERIES));
+                .orElseThrow(() -> new BusinessException(SeriesErrorCode.ARTICLE_NOT_FOUND));
         if (article.getStatus() != ArticleStatus.PUBLISHED) {
             throw new BusinessException(SeriesErrorCode.ARTICLE_NOT_PUBLISHED);
         }
@@ -181,7 +182,7 @@ public class SeriesService {
         }
 
         Article article = articleService.findByUuid(articleUuid)
-                .orElseThrow(() -> new BusinessException(SeriesErrorCode.ARTICLE_NOT_IN_SERIES));
+                .orElseThrow(() -> new BusinessException(SeriesErrorCode.ARTICLE_NOT_FOUND));
         if (article.getSeriesId() == null || !article.getSeriesId().equals(s.getId())) {
             throw new BusinessException(SeriesErrorCode.ARTICLE_NOT_IN_SERIES);
         }
@@ -238,7 +239,9 @@ public class SeriesService {
     /**
      * 將 SeriesWithAuthor row 轉為 SeriesDetailResponse。
      *
-     * <p>articles sub-list 暫為 List.of()，Task 14 補完。</p>
+     * <p>articles sub-list 透過 articleService.getArticleSummariesByIds 取得，
+     * 並補充 seriesUuid / seriesTitle 欄位（前端可在點進文章詳情時再查完整 seriesNav，
+     * 避免 N+1 問題）。</p>
      */
     private SeriesDetailResponse toDetailResponse(SeriesWithAuthor row, List<Article> articles) {
         SeriesDetailResponse r = new SeriesDetailResponse();
@@ -252,7 +255,17 @@ public class SeriesService {
         r.setUpdatedAt(row.getUpdatedAt());
         r.setAuthor(new AuthorSummary(
                 row.getAuthorUuid(), row.getAuthorNickname(), row.getAuthorAvatarUrl()));
-        r.setArticles(List.of());  // T14 補完 ArticleSummaryResponse mapping
+
+        // 取得 articles sub-list：以 id 列表批次查詢，再補 series 三欄
+        List<Long> articleIds = articles.stream().map(Article::getId).toList();
+        List<ArticleSummaryResponse> summaries = articleIds.isEmpty()
+                ? List.of()
+                : articleService.getArticleSummariesByIds(articleIds);
+        summaries.forEach(s -> {
+            s.setSeriesUuid(row.getUuid());
+            s.setSeriesTitle(row.getTitle());
+        });
+        r.setArticles(summaries);
         return r;
     }
 }

@@ -1,7 +1,10 @@
 package dowob.xyz.blog.infrastructure.facade;
 
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -31,4 +34,12 @@ public interface SeriesFacade {
      * @param seriesId article 原本所屬的 series id（必為非 null，由呼叫方檢查）
      */
     void notifyArticleDeletedFromSeries(Long seriesId);
+
+    /**
+     * 批次取得 articles 對應的 series 基本資訊（避免 N+1）。
+     *
+     * @param articleIds 候選 article id list
+     * @return Map(articleId -> SeriesBasicInfo)；若 article 沒在 series 中則不在 Map 內
+     */
+    Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(List<Long> articleIds);
 }

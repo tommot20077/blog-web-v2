@@ -316,13 +316,13 @@ public class ArticleServiceImpl implements ArticleService {
         checkWritePermission(operatorId, operatorRole, article);
         Long seriesId = article.getSeriesId();
 
-        /** DB 刪除在 transaction 內 */
-        transactionTemplate.executeWithoutResult(status -> articleRepository.delete(article));
-
-        /** DB 已 commit，同步通知 series 模組更新 article_count（seriesId 非 null 才通知） */
-        if (seriesId != null) {
-            seriesFacade.notifyArticleDeletedFromSeries(seriesId);
-        }
+        /** DB 刪除與 series article_count 更新在同一 transaction 內，確保原子性 */
+        transactionTemplate.executeWithoutResult(status -> {
+            articleRepository.delete(article);
+            if (seriesId != null) {
+                seriesFacade.notifyArticleDeletedFromSeries(seriesId);
+            }
+        });
 
         /** DB 已 commit，best-effort 發送刪除事件 MQ（失敗不影響刪除結果） */
         try {
