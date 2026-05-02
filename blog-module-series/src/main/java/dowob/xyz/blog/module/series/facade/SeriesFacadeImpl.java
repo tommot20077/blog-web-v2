@@ -8,6 +8,9 @@ import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -18,6 +21,9 @@ import java.util.Optional;
  *
  * <p>位於 series 模組，避免跨模組循環依賴（infrastructure 只定 interface）。</p>
  *
+ * <p>ArticleServiceImpl → SeriesFacade（interface）→ SeriesFacadeImpl → ArticleService
+ * 會形成循環依賴，因此 articleService 使用 {@code @Lazy} setter injection 打破循環。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -25,7 +31,9 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class SeriesFacadeImpl implements SeriesFacade {
 
-    private final ArticleService articleService;
+    /** 使用 @Lazy + setter injection 打破 ArticleServiceImpl <-> SeriesFacadeImpl 循環依賴 */
+    @Setter(onMethod_ = {@Autowired, @Lazy})
+    private ArticleService articleService;
     private final SeriesRepository seriesRepo;
     private final SeriesMapper seriesMapper;
 

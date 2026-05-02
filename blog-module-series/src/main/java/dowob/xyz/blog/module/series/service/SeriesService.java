@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.common.api.dto.AuthorSummary;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.module.article.model.Article;
@@ -14,6 +15,7 @@ import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.response.MyProgress;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesSummaryResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -38,6 +40,37 @@ public class SeriesService {
     private final SeriesMapper mapper;
     private final ArticleService articleService;
     private final ReadingFacade readingFacade;
+
+    /**
+     * 列出公開的 Series 列表（article_count > 0），支援分頁。
+     *
+     * @param page 當前頁碼（1-based）
+     * @param size 每頁筆數
+     * @return 分頁結果
+     */
+    @Transactional(readOnly = true)
+    public PageResult<SeriesSummaryResponse> listPublic(int page, int size) {
+        int offset = Math.max(0, (page - 1) * size);
+        List<SeriesWithAuthor> rows = mapper.findPublic(size, offset);
+        long total = mapper.countPublic();
+        List<SeriesSummaryResponse> records = rows.stream().map(this::toSummaryResponse).toList();
+        return PageResult.of(page, size, total, records);
+    }
+
+    private SeriesSummaryResponse toSummaryResponse(SeriesWithAuthor row) {
+        SeriesSummaryResponse r = new SeriesSummaryResponse();
+        r.setUuid(row.getUuid());
+        r.setTitle(row.getTitle());
+        r.setSlug(row.getSlug());
+        r.setDescription(row.getDescription());
+        r.setCoverImageUrl(row.getCoverImageUrl());
+        r.setArticleCount(row.getArticleCount());
+        r.setCreatedAt(row.getCreatedAt());
+        r.setUpdatedAt(row.getUpdatedAt());
+        r.setAuthor(new AuthorSummary(
+                row.getAuthorUuid(), row.getAuthorNickname(), row.getAuthorAvatarUrl()));
+        return r;
+    }
 
     @Transactional
     public Series createSeries(Long userId, CreateSeriesRequest req) {
