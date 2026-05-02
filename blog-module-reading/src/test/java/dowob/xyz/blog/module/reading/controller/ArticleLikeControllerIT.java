@@ -9,7 +9,6 @@ import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.reading.config.ReadingTestApplication;
 import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -87,7 +86,6 @@ class ArticleLikeControllerIT {
     private ArticleRepository articleRepository;
 
     @Autowired
-    @Qualifier("readingArticleLikeRepository")
     private ArticleLikeRepository articleLikeRepository;
 
     @MockitoBean

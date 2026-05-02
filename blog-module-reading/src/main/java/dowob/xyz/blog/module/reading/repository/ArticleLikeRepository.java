@@ -7,16 +7,12 @@ import org.springframework.stereotype.Repository;
 import java.util.Optional;
 
 /**
- * Article Like Repository（reading 模組版）
- *
- * <p>T3 期間因 article 模組有同名 interface，用 bean name 區分：
- * 此 bean 名稱為 {@code readingArticleLikeRepository}，
- * article 模組舊版為 {@code articleLikeRepository}（T5 後刪除）。</p>
+ * Article Like Repository（reading 模組）
  *
  * @author Yuan
  * @version 1.0
  */
-@Repository("readingArticleLikeRepository")
+@Repository
 public interface ArticleLikeRepository extends CrudRepository<ArticleLike, Long> {
     Optional<ArticleLike> findByUserIdAndArticleId(Long userId, Long articleId);
 

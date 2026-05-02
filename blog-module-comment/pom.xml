@@ -49,6 +49,12 @@
         </dependency>
 
         <!-- Test Dependencies -->
+        <!-- CrossModuleCommentIT 需要驗證 article_likes FK CASCADE，故引入 reading 模組的 repo -->
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-reading</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-db-migration</artifactId>

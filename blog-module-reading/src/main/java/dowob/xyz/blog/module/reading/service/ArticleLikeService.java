@@ -5,7 +5,6 @@ import dowob.xyz.blog.module.reading.mapper.ArticleLikeMapper;
 import dowob.xyz.blog.module.reading.model.ArticleLike;
 import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,27 +21,16 @@ import java.util.Set;
  * <p>提供 idempotent like / unlike 操作，並維護 articles.like_count 反正規化欄位。
  * 採用「先檢查存在性 → 再操作」模式，DB UNIQUE 約束兜底。</p>
  *
- * <p>從 blog-module-article 搬到 blog-module-reading（T3），
- * 並改用 ArticleLikeMapper 取代 ArticleMapper 處理 batch is-liked 查詢。</p>
- *
  * @author Yuan
  * @version 1.0
  */
 @Service
+@RequiredArgsConstructor
 public class ArticleLikeService {
 
     private final ArticleLikeRepository likeRepo;
     private final ArticleLikeMapper articleLikeMapper;
     private final ArticleService articleService;
-
-    public ArticleLikeService(
-            @Qualifier("readingArticleLikeRepository") ArticleLikeRepository likeRepo,
-            ArticleLikeMapper articleLikeMapper,
-            ArticleService articleService) {
-        this.likeRepo = likeRepo;
-        this.articleLikeMapper = articleLikeMapper;
-        this.articleService = articleService;
-    }
 
     /**
      * 按讚（idempotent）。

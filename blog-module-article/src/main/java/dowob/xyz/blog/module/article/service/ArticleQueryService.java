@@ -24,9 +24,9 @@ import java.util.stream.Collectors;
  * 文章查詢服務（CQRS Read 層）。
  *
  * <p>對 Controller 提供文章讀取入口；委派 {@link ArticleService} 取得原始資料，
- * 再以 {@link ArticleLikeService} 補上當前使用者的 liked 狀態。</p>
+ * 再以 {@link dowob.xyz.blog.infrastructure.facade.ReadingFacade} 補上當前使用者的 liked / bookmarked / progress 狀態。</p>
  *
- * <p>採此分層的原因：避免 ArticleServiceImpl 與 ArticleLikeService 形成循環依賴。
+ * <p>採此分層的原因：避免 ArticleServiceImpl 與其他 Service 形成循環依賴。
  * 將「Read + 使用者狀態組裝」與「Write + 計數維護」分開，符合 CQRS-lite 慣例。</p>
  *
  * <p>ArticleSummaryResponse 未暴露 DB 主鍵（id），故透過 {@link ArticleMapper#findIdsByUuids}
@@ -40,7 +40,6 @@ import java.util.stream.Collectors;
 public class ArticleQueryService {
 
     private final ArticleService articleService;
-    private final ArticleLikeService articleLikeService;
     private final ArticleMapper articleMapper;
     private final ReadingFacade readingFacade;
 
@@ -193,7 +192,7 @@ public class ArticleQueryService {
             return;
         }
 
-        Set<Long> likedIds = articleLikeService.batchIsLiked(userId, articleIds);
+        Set<Long> likedIds = readingFacade.batchIsLiked(userId, articleIds);
         Set<Long> bookmarkedIds = readingFacade.batchIsBookmarked(userId, articleIds);
         Map<Long, BigDecimal> progressMap = readingFacade.batchGetProgress(userId, articleIds);
 
@@ -225,7 +224,7 @@ public class ArticleQueryService {
             return;
         }
         Long articleId = articleService.findIdByUuid(resp.getUuid());
-        resp.setLiked(articleId != null && articleLikeService.isLiked(userId, articleId));
+        resp.setLiked(articleId != null && readingFacade.isLiked(userId, articleId));
         resp.setBookmarked(articleId != null && readingFacade.isBookmarked(userId, articleId));
         if (resp.getUuid() != null) {
             resp.setLastReadProgress(readingFacade.getProgress(userId, resp.getUuid()));
