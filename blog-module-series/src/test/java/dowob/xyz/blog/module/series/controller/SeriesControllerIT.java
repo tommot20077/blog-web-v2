@@ -267,6 +267,30 @@ class SeriesControllerIT {
     }
 
     @Test
+    @DisplayName("PUT /series/{uuid} - USER 角色（無 ARTICLE_CREATE）→ 403 A0006")
+    void put_byUserRole_returns403() throws Exception {
+        Series series = new Series();
+        series.setUuid(UUID.randomUUID());
+        series.setTitle("Series");
+        series.setSlug("series-rbac-test");
+        series.setAuthorId(USER1_ID);
+        series.setArticleCount(0);
+        series.setCreatedAt(LocalDateTime.now());
+        series.setUpdatedAt(LocalDateTime.now());
+        Series saved = seriesRepo.save(series);
+
+        Map<String, Object> updatePayload = Map.of("title", "Hijacked");
+
+        // USER 角色無 ARTICLE_CREATE，被 controller @PreAuthorize 直接擋
+        mockMvc.perform(put("/api/v1/series/{uuid}", saved.getUuid())
+                        .with(asUser(USER1_ID, Role.USER))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(updatePayload)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("A0006"));
+    }
+
+    @Test
     @DisplayName("DELETE /series/{uuid} - owner 刪除 → articles series_id 設 NULL")
     void delete_byOwner_unlinkArticles() throws Exception {
         // 建立 series

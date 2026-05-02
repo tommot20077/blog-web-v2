@@ -36,10 +36,10 @@ import java.util.UUID;
  *   <li>GET /series — 公開列表</li>
  *   <li>GET /series/{slug} — 公開詳情（含我的進度）</li>
  *   <li>POST /series — 建立 Series（需 ARTICLE_CREATE 權限）</li>
- *   <li>PUT /series/{uuid} — 更新 Series（需認證）</li>
- *   <li>DELETE /series/{uuid} — 刪除 Series（需認證）</li>
- *   <li>PUT /series/{uuid}/articles/{articleUuid} — 加文章到 Series / 改 position（需認證）</li>
- *   <li>DELETE /series/{uuid}/articles/{articleUuid} — 從 Series 移除文章（需認證）</li>
+ *   <li>PUT /series/{uuid} — 更新 Series（需 ARTICLE_CREATE + service 層 ownership）</li>
+ *   <li>DELETE /series/{uuid} — 刪除 Series（需 ARTICLE_CREATE + service 層 ownership）</li>
+ *   <li>PUT /series/{uuid}/articles/{articleUuid} — 加文章到 Series / 改 position（需 ARTICLE_CREATE + ownership）</li>
+ *   <li>DELETE /series/{uuid}/articles/{articleUuid} — 從 Series 移除文章（需 ARTICLE_CREATE + ownership）</li>
  * </ul>
  *
  * @author Yuan
@@ -79,7 +79,7 @@ public class SeriesController {
     }
 
     @PutMapping("/{uuid}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "更新 Series")
     public ApiResponse<Series> update(
             @PathVariable UUID uuid,
@@ -90,7 +90,7 @@ public class SeriesController {
     }
 
     @DeleteMapping("/{uuid}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "刪除 Series")
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
@@ -101,7 +101,7 @@ public class SeriesController {
     }
 
     @PutMapping("/{uuid}/articles/{articleUuid}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "加文章到 Series / 改 position")
     public ApiResponse<Void> addArticle(
             @PathVariable UUID uuid,
@@ -114,7 +114,7 @@ public class SeriesController {
     }
 
     @DeleteMapping("/{uuid}/articles/{articleUuid}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "從 Series 移除文章")
     public ApiResponse<Void> removeArticle(
             @PathVariable UUID uuid,
