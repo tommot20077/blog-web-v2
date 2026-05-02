@@ -72,6 +72,10 @@
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-series</artifactId>
         </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-version</artifactId>
+        </dependency>
 
         <!-- Tests -->
         <dependency>
