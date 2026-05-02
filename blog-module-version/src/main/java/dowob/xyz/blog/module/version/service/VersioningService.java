@@ -2,8 +2,12 @@ package dowob.xyz.blog.module.version.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
+import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
+import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
@@ -14,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -34,6 +39,9 @@ public class VersioningService {
     private final ArticleVersionRepository versionRepo;
     private final VersionMapper versionMapper;
     private final PreferenceResolver preferenceResolver;
+    private final ArticleMarkdownRenderer markdownRenderer;
+    private final ArticleEventPublisher articleEventPublisher;
+    private final TagFacade tagFacade;
 
     /**
      * 記錄自動快照並套用滾動保留策略。
@@ -142,6 +150,75 @@ public class VersioningService {
             throw new BusinessException(VersionErrorCode.CANNOT_DELETE_PUBLISHED);
         }
         versionRepo.delete(v);
+    }
+
+    /**
+     * 將指定版本快照還原為文章當前狀態。
+     *
+     * <p>流程：
+     * <ol>
+     *   <li>先將當前 article 狀態 stash 為 AUTO 快照（保護現有內容）</li>
+     *   <li>執行 AUTO 保留策略（retainAuto）</li>
+     *   <li>將 version 內容寫回 article（含 render contentHtml）</li>
+     *   <li>重綁 article_tags（先清後寫，透過 TagFacade.syncArticleTags）</li>
+     *   <li>發送 ContentChanged(RESTORED) 與 Updated 事件</li>
+     * </ol>
+     * </p>
+     *
+     * <ul>
+     *   <li>V0101：version 不存在</li>
+     *   <li>V0102：非 owner 且非 admin</li>
+     *   <li>V0106：article 不存在</li>
+     * </ul>
+     *
+     * <p>⚠ Limitation: categories restore 暫不處理（schema 設計缺陷 —
+     * Article 用 article_categories 多對多但 ArticleVersion 仍存 categoryId 單值欄位；
+     * 該欄位永遠 null）。</p>
+     *
+     * @param versionUuid   要還原的版本 UUID
+     * @param currentUserId 當前操作者 ID
+     * @param isAdmin       是否為管理員（繞過 owner 檢查）
+     * @return 更新後的 Article
+     */
+    @Transactional
+    public Article restore(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+        ArticleVersion v = versionRepo.findByUuid(versionUuid)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
+        if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+            throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
+        }
+
+        Article article = articleRepo.findById(v.getArticleId())
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
+
+        /* 1. stash 當前狀態為 AUTO snapshot（保護現有內容） */
+        ArticleVersion stash = snapshotFromArticle(article, TYPE_AUTO, null);
+        versionRepo.save(stash);
+        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.getAuthorId());
+        versionMapper.retainAuto(article.getId(), cfg.retain());
+
+        /* 2. 寫回 article 內容 */
+        article.setTitle(v.getTitle());
+        article.setSlug(v.getSlug());
+        article.setContent(v.getContent());
+        article.setSummary(v.getSummary());
+        article.setCoverImageUrl(v.getCoverImageUrl());
+        /* categoryId 暫不處理（schema 設計缺陷，留 dead field） */
+        if (v.getStatus() != null) {
+            article.setStatus(ArticleStatus.valueOf(v.getStatus()));
+        }
+        article.setContentHtml(markdownRenderer.render(v.getContent()));
+        Article saved = articleRepo.save(article);
+
+        /* 3. 重綁 article_tags（article_tags 使用 UUID FK，透過 TagFacade 操作） */
+        List<UUID> tags = v.getTags();
+        tagFacade.syncArticleTags(saved.getUuid(), tags != null ? tags : List.of());
+
+        /* 4. 發 events */
+        articleEventPublisher.publishContentChanged(saved, Action.RESTORED);
+        articleEventPublisher.publishUpdated(saved);
+
+        return saved;
     }
 
     /**
