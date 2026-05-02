@@ -1068,6 +1068,17 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
+     * 根據資料庫主鍵查詢文章實體（供 SeriesFacade 等跨模組使用）。
+     *
+     * @param id 文章資料庫主鍵
+     * @return 文章 Optional
+     */
+    @Override
+    public java.util.Optional<Article> findById(Long id) {
+        return articleRepository.findById(id);
+    }
+
+    /**
      * 發送文章更新事件至 RabbitMQ
      *
      * <p>

@@ -247,4 +247,12 @@ public interface ArticleService {
      * @return 按 series_position 升冪排序的文章列表
      */
     java.util.List<dowob.xyz.blog.module.article.model.Article> findBySeriesIdOrderByPosition(Long seriesId);
+
+    /**
+     * 根據資料庫主鍵查詢文章實體（供 SeriesFacade 等跨模組使用）。
+     *
+     * @param id 文章資料庫主鍵
+     * @return 文章 Optional
+     */
+    java.util.Optional<dowob.xyz.blog.module.article.model.Article> findById(Long id);
 }
