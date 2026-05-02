@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
@@ -105,6 +106,9 @@ class ArticleServiceTest {
 
     @Mock
     private TagFacade tagFacade;
+
+    @Mock
+    private SeriesFacade seriesFacade;
 
     /** Mock：Spring 宣告式事務模板（TransactionTemplate） */
     @Mock
@@ -1130,6 +1134,32 @@ class ArticleServiceTest {
             ArticleDeletedEvent event = captor.getValue();
             assertThat(event.articleUuid()).isEqualTo(ARTICLE_UUID);
             assertThat(event.deletedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("正常：刪除有 seriesId 的文章時應呼叫 SeriesFacade.notifyArticleDeletedFromSeries")
+        void deleteArticle_withSeriesId_shouldNotifySeriesFacade() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setSeriesId(50L);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            verify(articleRepository).delete(article);
+            verify(seriesFacade).notifyArticleDeletedFromSeries(50L);
+        }
+
+        @Test
+        @DisplayName("邊界：刪除無 seriesId 的文章時不應呼叫 SeriesFacade")
+        void deleteArticle_withoutSeriesId_shouldNotCallSeriesFacade() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            // seriesId 為 null（buildArticle 預設未設置）
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            verify(articleRepository).delete(article);
+            verify(seriesFacade, never()).notifyArticleDeletedFromSeries(any());
         }
     }
 

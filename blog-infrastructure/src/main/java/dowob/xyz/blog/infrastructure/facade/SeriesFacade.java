@@ -22,4 +22,13 @@ public interface SeriesFacade {
      * @return 若文章在 series 中回傳導覽；否則 Optional.empty()
      */
     Optional<SeriesNavigation> getSeriesNavigation(Long articleId);
+
+    /**
+     * 通知 series 模組：某 article 已被刪除，需要更新 series.article_count。
+     *
+     * <p>此方法為同步呼叫；對齊 ReadingFacade pattern。</p>
+     *
+     * @param seriesId article 原本所屬的 series id（必為非 null，由呼叫方檢查）
+     */
+    void notifyArticleDeletedFromSeries(Long seriesId);
 }

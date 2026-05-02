@@ -30,6 +30,11 @@ public class SeriesFacadeImpl implements SeriesFacade {
     private final SeriesMapper seriesMapper;
 
     @Override
+    public void notifyArticleDeletedFromSeries(Long seriesId) {
+        seriesMapper.decrementArticleCount(seriesId);
+    }
+
+    @Override
     public Optional<SeriesNavigation> getSeriesNavigation(Long articleId) {
         Optional<Article> articleOpt = articleService.findById(articleId);
         if (articleOpt.isEmpty()) return Optional.empty();

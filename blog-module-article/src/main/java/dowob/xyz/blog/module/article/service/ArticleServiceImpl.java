@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
@@ -108,6 +109,11 @@ public class ArticleServiceImpl implements ArticleService {
      * 標籤 Facade（跨模組標籤操作）
      */
     private final TagFacade tagFacade;
+
+    /**
+     * Series Facade（跨模組 series 操作，article 刪除時通知計數更新）
+     */
+    private final SeriesFacade seriesFacade;
 
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
@@ -308,9 +314,15 @@ public class ArticleServiceImpl implements ArticleService {
     public void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
         Article article = findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
+        Long seriesId = article.getSeriesId();
 
         /** DB 刪除在 transaction 內 */
         transactionTemplate.executeWithoutResult(status -> articleRepository.delete(article));
+
+        /** DB 已 commit，同步通知 series 模組更新 article_count（seriesId 非 null 才通知） */
+        if (seriesId != null) {
+            seriesFacade.notifyArticleDeletedFromSeries(seriesId);
+        }
 
         /** DB 已 commit，best-effort 發送刪除事件 MQ（失敗不影響刪除結果） */
         try {
