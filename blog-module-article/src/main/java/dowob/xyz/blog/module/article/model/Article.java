@@ -106,6 +106,18 @@ public class Article {
     private LocalDateTime publishedAt;
 
     /**
+     * 所屬系列 ID（FK → series.id，nullable）
+     */
+    @Column("series_id")
+    private Long seriesId;
+
+    /**
+     * 在系列中的排序位置（nullable）
+     */
+    @Column("series_position")
+    private Integer seriesPosition;
+
+    /**
      * 建立時間
      */
     @CreatedDate
