@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V14 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V15 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V14**
+> 最後更新版本：**V15**
 
 ---
 
@@ -86,6 +86,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 | like_count | INTEGER | NOT NULL DEFAULT 0 | V13 由 BIGINT 改為 INTEGER |
 | comment_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數 |
 | version | BIGINT | NOT NULL DEFAULT 1 | V7 新增；樂觀鎖 |
+| series_id | BIGINT | NULL REFERENCES series(id) ON DELETE SET NULL | V15 新增；所屬系列 |
+| series_position | INTEGER | NULL | V15 新增；在系列內的排序位置 |
 | published_at | TIMESTAMP | | |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 | updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
@@ -98,9 +100,11 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `idx_articles_status`（V2）on status
 - `idx_articles_created_at`（V2）on created_at DESC
 - ~~`idx_articles_uuid`~~ V13 已 DROP（與 UNIQUE constraint 重複）
+- `idx_articles_series_position`（V15, partial）on (series_id, series_position) WHERE series_id IS NOT NULL
 
 **Foreign keys:**
 - `author_id` → `users(id)`（NO ACTION）
+- `series_id` → `series(id)`（ON DELETE SET NULL）
 
 ---
 
@@ -210,7 +214,37 @@ PRIMARY KEY (user_id, tag_id)
 
 ---
 
-### article_likes
+### series
+
+> V15 新增。文章系列（連載），一個作者可建立多個系列。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | 對外公開識別碼 |
+| title | VARCHAR(255) | NOT NULL | 系列標題 |
+| slug | VARCHAR(255) | NOT NULL UNIQUE | SEO-friendly URL 段落 |
+| description | TEXT | NULL | 系列描述 |
+| cover_image_url | VARCHAR(512) | NULL | 封面圖 URL |
+| author_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| article_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數；由 service 維護 |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `series_pkey`（auto）on id
+- `series_uuid_key`（auto, UNIQUE）on uuid
+- `series_slug_key`（auto, UNIQUE）on slug
+- `idx_series_author`（V15）on author_id
+
+**Foreign keys:**
+- `author_id` → `users(id)`（NO ACTION）
+
+---
+
+### user_article_likes
+
+> V15 由 `article_likes` 改名（命名一致化）。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
@@ -220,11 +254,11 @@ PRIMARY KEY (user_id, tag_id)
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 
 **Constraints:**
-- `uq_article_likes_user_article` UNIQUE (user_id, article_id)（V13 重建，原為 article_id, user_id 順序）
+- `uq_user_article_likes_user_article` UNIQUE (user_id, article_id)（V15 由 `uq_article_likes_user_article` 改名）
 
 **Indexes:**
-- `article_likes_pkey`（auto）on id
-- `uq_article_likes_user_article`（auto, UNIQUE constraint）on (user_id, article_id)
+- `user_article_likes_pkey`（auto）on id
+- `uq_user_article_likes_user_article`（auto, UNIQUE constraint）on (user_id, article_id)
 
 **Foreign keys:**
 - `article_id` → `articles(id)` ON DELETE CASCADE
@@ -443,6 +477,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V12** | `article_likes.article_id`、`article_likes.user_id`、`comments.article_id`、`comments.user_id` 補 NOT NULL 約束 |
 | **V13** | `articles.like_count` BIGINT → INTEGER；DROP `idx_articles_uuid`（重複）；`comments` 改造（DROP status，新增 content_html / like_count / edited_at / deleted_at / deleted_by_role + 3 個索引）；`article_likes` UNIQUE 順序調整為 `uq_article_likes_user_article(user_id, article_id)`；新建 `comment_likes` |
 | **V14** | 新建 `user_bookmarks`（收藏，UNIQUE user×article）；`user_highlights`（劃線 + note，hex 色號 CHECK，2個索引）；`user_reading_progress`（NUMERIC(4,3) 0–1 範圍 CHECK，1個索引）；article_id 全部 ON DELETE CASCADE |
+| **V15** | 新建 `series` 表（含 article_count 反正規化欄位，`idx_series_author`）；`articles` 加 `series_id`（FK ON DELETE SET NULL）+ `series_position`（partial index `idx_articles_series_position`）；`article_likes` 改名 `user_article_likes`（含 RENAME CONSTRAINT） |
 
 ---
 
