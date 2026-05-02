@@ -108,6 +108,23 @@ public class TagServiceImpl implements TagService {
 
     @Override
     public TagDetailResponse getTagDetail(String slug) {
+        return getTagDetail(slug, null);
+    }
+
+    @Override
+    public TagDetailResponse getTagDetail(String slug, UUID currentUserUuid) {
+        // base 部分（不含 followed）走 cache；followed 為 user-aware，每次 request 從 repo 算（cache miss 一次 SQL）
+        TagDetailResponse response = loadTagDetailBase(slug);
+        boolean followed = currentUserUuid != null
+                && userTagFollowRepository.countByUserIdAndTagId(currentUserUuid, response.getId()) > 0;
+        response.setFollowed(followed);
+        return response;
+    }
+
+    /**
+     * 取得標籤詳情 base 部分（不含 followed），優先讀 Redis Hash 快取，miss 則回填快取。
+     */
+    private TagDetailResponse loadTagDetailBase(String slug) {
         String cacheKey = RedisKeyConstant.getTagDetailKey(slug);
         Map<Object, Object> cached = stringRedisTemplate.opsForHash().entries(cacheKey);
 

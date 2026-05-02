@@ -51,4 +51,9 @@ public class TagDetailResponse {
      * 文章使用次數
      */
     private int usageCount;
+
+    /**
+     * 當前使用者是否已追蹤此標籤；未認證或非當前使用者時為 false
+     */
+    private boolean followed;
 }

@@ -76,12 +76,21 @@ public class TagController {
     /**
      * 依 Slug 取得標籤詳情（公開）
      *
-     * @param slug 標籤 Slug
+     * <p>已認證使用者會在 response.followed 看到自己對該標籤的追蹤狀態；
+     * 未認證或 UserFacade 查不到 UUID 時 followed 為 false（不丟錯）。</p>
+     *
+     * @param slug   標籤 Slug
+     * @param userId 當前登入使用者 ID（可為 null，未認證時不注入）
      * @return 標籤詳情
      */
     @GetMapping("/{slug}")
-    public ApiResponse<TagDetailResponse> getTagDetail(@PathVariable String slug) {
-        return ApiResponse.success(tagService.getTagDetail(slug));
+    public ApiResponse<TagDetailResponse> getTagDetail(
+            @PathVariable String slug,
+            @AuthenticationPrincipal Long userId) {
+        UUID currentUserUuid = userId == null
+                ? null
+                : userFacade.getUserUuidById(userId).orElse(null);
+        return ApiResponse.success(tagService.getTagDetail(slug, currentUserUuid));
     }
 
     /**
