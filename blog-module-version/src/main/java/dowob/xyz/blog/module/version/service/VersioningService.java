@@ -1,8 +1,10 @@
 package dowob.xyz.blog.module.version.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.model.dto.response.AutoSnapshotConfig;
@@ -50,6 +52,96 @@ public class VersioningService {
         versionRepo.save(v);
 
         versionMapper.retainAuto(articleId, cfg.retain());
+    }
+
+    /**
+     * 記錄手動快照（type=MANUAL）。
+     * <p>不執行 retention；article 不存在時拋 V0106。</p>
+     *
+     * @param articleId 文章主鍵
+     * @param note      備注說明（可為 null）
+     * @return 已持久化的 ArticleVersion
+     */
+    @Transactional
+    public ArticleVersion recordManualSnapshot(Long articleId, String note) {
+        Article article = articleRepo.findById(articleId)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
+
+        ArticleVersion v = snapshotFromArticle(article, TYPE_MANUAL, note);
+        return versionRepo.save(v);
+    }
+
+    /**
+     * 凍結發布快照（type=PUBLISHED）並清除所有 AUTO 快照。
+     * <p>note 格式為 "Published vN"，N = 既有 PUBLISHED 數 + 1。</p>
+     * <p>article 不存在時靜默返回。</p>
+     *
+     * @param articleId 文章主鍵
+     */
+    @Transactional
+    public void freezePublished(Long articleId) {
+        Article article = articleRepo.findById(articleId).orElse(null);
+        if (article == null) return;
+
+        int count = versionMapper.countPublished(articleId);
+        String note = "Published v" + (count + 1);
+
+        ArticleVersion v = snapshotFromArticle(article, TYPE_PUBLISHED, note);
+        versionRepo.save(v);
+
+        versionMapper.deleteAutoByArticle(articleId);
+    }
+
+    /**
+     * 將 AUTO 快照升級為 MANUAL（使用者救援機制）。
+     * <ul>
+     *   <li>V0101：version 不存在</li>
+     *   <li>V0102：非 owner 且非 admin</li>
+     *   <li>V0104：type 不是 AUTO</li>
+     * </ul>
+     *
+     * @param versionUuid   版本 UUID
+     * @param currentUserId 當前操作者 ID
+     * @param isAdmin       是否為管理員（繞過 owner 檢查）
+     * @return 更新後的 ArticleVersion
+     */
+    @Transactional
+    public ArticleVersion promote(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+        ArticleVersion v = versionRepo.findByUuid(versionUuid)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
+        if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+            throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
+        }
+        if (!TYPE_AUTO.equals(v.getType())) {
+            throw new BusinessException(VersionErrorCode.CANNOT_PROMOTE_NON_AUTO);
+        }
+        v.setType(TYPE_MANUAL);
+        return versionRepo.save(v);
+    }
+
+    /**
+     * 刪除快照（僅允許 MANUAL / AUTO；PUBLISHED 不可刪）。
+     * <ul>
+     *   <li>V0101：version 不存在</li>
+     *   <li>V0102：非 owner 且非 admin</li>
+     *   <li>V0103：type = PUBLISHED，禁止刪除</li>
+     * </ul>
+     *
+     * @param versionUuid   版本 UUID
+     * @param currentUserId 當前操作者 ID
+     * @param isAdmin       是否為管理員（繞過 owner 檢查）
+     */
+    @Transactional
+    public void delete(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+        ArticleVersion v = versionRepo.findByUuid(versionUuid)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
+        if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+            throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
+        }
+        if (TYPE_PUBLISHED.equals(v.getType())) {
+            throw new BusinessException(VersionErrorCode.CANNOT_DELETE_PUBLISHED);
+        }
+        versionRepo.delete(v);
     }
 
     /**
