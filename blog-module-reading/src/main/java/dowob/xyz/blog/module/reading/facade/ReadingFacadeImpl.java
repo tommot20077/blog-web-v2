@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.reading.facade;
 
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.module.reading.model.dto.response.ProgressResponse;
+import dowob.xyz.blog.module.reading.service.ArticleLikeService;
 import dowob.xyz.blog.module.reading.service.BookmarkService;
 import dowob.xyz.blog.module.reading.service.ReadingProgressService;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ public class ReadingFacadeImpl implements ReadingFacade {
 
     private final BookmarkService bookmarkService;
     private final ReadingProgressService readingProgressService;
+    private final ArticleLikeService articleLikeService;
 
     @Override
     public Set<Long> batchIsBookmarked(Long userId, List<Long> articleIds) {
@@ -51,5 +53,15 @@ public class ReadingFacadeImpl implements ReadingFacade {
     public BigDecimal getProgress(Long userId, UUID articleUuid) {
         Optional<ProgressResponse> opt = readingProgressService.get(userId, articleUuid);
         return opt.map(ProgressResponse::getProgress).orElse(null);
+    }
+
+    @Override
+    public Set<Long> batchIsLiked(Long userId, List<Long> articleIds) {
+        return articleLikeService.batchIsLiked(userId, articleIds);
+    }
+
+    @Override
+    public boolean isLiked(Long userId, Long articleId) {
+        return articleLikeService.isLiked(userId, articleId);
     }
 }

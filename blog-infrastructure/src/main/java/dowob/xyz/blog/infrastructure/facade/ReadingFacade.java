@@ -59,4 +59,24 @@ public interface ReadingFacade {
      * @return 閱讀進度（0.00 ~ 1.00），無紀錄時回傳 null
      */
     BigDecimal getProgress(Long userId, UUID articleUuid);
+
+    /**
+     * 批次查詢使用者按讚過的文章 ID。
+     *
+     * <p>userId 為 null 時回傳空集合（未登入）。</p>
+     *
+     * @param userId     使用者 ID（null 代表未登入，回 emptySet）
+     * @param articleIds 候選 article id list
+     * @return 已按讚的 article id 集合
+     */
+    Set<Long> batchIsLiked(Long userId, List<Long> articleIds);
+
+    /**
+     * 查詢單篇文章是否被當前使用者按讚。
+     *
+     * @param userId    使用者資料庫主鍵
+     * @param articleId 文章資料庫主鍵
+     * @return 已按讚為 true，否則 false
+     */
+    boolean isLiked(Long userId, Long articleId);
 }
