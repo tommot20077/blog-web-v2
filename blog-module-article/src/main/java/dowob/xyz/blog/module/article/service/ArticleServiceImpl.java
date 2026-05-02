@@ -1056,6 +1056,18 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
+     * 查詢指定 Series 內的所有文章，按 series_position 升冪排序。
+     *
+     * @param seriesId Series 資料庫主鍵
+     * @return 按 series_position 排序的文章列表
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public List<Article> findBySeriesIdOrderByPosition(Long seriesId) {
+        return articleMapper.findBySeriesIdOrderByPosition(seriesId);
+    }
+
+    /**
      * 發送文章更新事件至 RabbitMQ
      *
      * <p>

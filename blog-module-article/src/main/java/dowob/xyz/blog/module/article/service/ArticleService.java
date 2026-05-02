@@ -239,4 +239,12 @@ public interface ArticleService {
      * @param seriesPosition 在 series 中的排序位置（null 表示解除）
      */
     void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition);
+
+    /**
+     * 查詢指定 Series 內的所有文章，按 series_position 排序（供 Series 詳情頁使用）。
+     *
+     * @param seriesId Series 資料庫主鍵
+     * @return 按 series_position 升冪排序的文章列表
+     */
+    java.util.List<dowob.xyz.blog.module.article.model.Article> findBySeriesIdOrderByPosition(Long seriesId);
 }

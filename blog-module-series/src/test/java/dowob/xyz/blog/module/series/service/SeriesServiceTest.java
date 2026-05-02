@@ -2,13 +2,16 @@ package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
+import dowob.xyz.blog.module.series.model.SeriesWithAuthor;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,12 +20,16 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -31,6 +38,7 @@ class SeriesServiceTest {
     @Mock private SeriesRepository repo;
     @Mock private SeriesMapper mapper;
     @Mock private ArticleService articleService;
+    @Mock private ReadingFacade readingFacade;
     @InjectMocks private SeriesService service;
 
     private final UUID articleUuid = UUID.randomUUID();
@@ -259,5 +267,49 @@ class SeriesServiceTest {
         assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_IN_SERIES.getMessage());
+    }
+
+    // ── T12: getSeriesDetail ───────────────────────────────────────────────
+
+    @Test
+    void getSeriesDetail_authenticated_includesMyProgress() {
+        SeriesWithAuthor row = new SeriesWithAuthor();
+        row.setId(seriesId); row.setUuid(seriesUuid);
+        row.setTitle("Vue 101"); row.setSlug("vue-101");
+        row.setArticleCount(3);
+        row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
+        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
+
+        UUID uuidA = UUID.randomUUID();
+        UUID uuidB = UUID.randomUUID();
+        UUID uuidC = UUID.randomUUID();
+        List<Article> articles = List.of(
+                buildArticle(1L, uuidA, "A", 1),
+                buildArticle(2L, uuidB, "B", 2),
+                buildArticle(3L, uuidC, "C", 3)
+        );
+        when(articleService.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
+
+        Map<Long, BigDecimal> progressMap = Map.of(
+                1L, new BigDecimal("0.98"),
+                2L, new BigDecimal("0.50")
+        );
+        lenient().when(readingFacade.batchGetProgress(eq(userId), any())).thenReturn(progressMap);
+
+        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userId);
+
+        assertThat(resp.getMyProgress()).isNotNull();
+        // article 1 進度 0.98 >= 0.95 → 算已讀；article 2 = 0.50 / article 3 無紀錄 → 未讀
+        assertThat(resp.getMyProgress().getReadCount()).isEqualTo(1);
+        assertThat(resp.getMyProgress().getTotalCount()).isEqualTo(3);
+        // 第一個未讀完的是 article 2（position=2，進度 0.50）
+        assertThat(resp.getMyProgress().getNextUnreadArticleUuid()).isEqualTo(uuidB);
+    }
+
+    private Article buildArticle(Long id, UUID uuid, String title, int position) {
+        Article a = new Article();
+        a.setId(id); a.setUuid(uuid); a.setTitle(title);
+        a.setSeriesPosition(position);
+        return a;
     }
 }

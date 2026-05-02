@@ -1,25 +1,31 @@
 package dowob.xyz.blog.module.series.service;
 
+import dowob.xyz.blog.common.api.dto.AuthorSummary;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
+import dowob.xyz.blog.module.series.model.SeriesWithAuthor;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
+import dowob.xyz.blog.module.series.model.dto.response.MyProgress;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
- * Series Service — CRUD（create / update / delete）。
- *
- * <p>add/remove article 與 detail 留給 T11 / T12。</p>
+ * Series Service — CRUD（create / update / delete）與詳情查詢。
  *
  * @author Yuan
  * @version 1.0
@@ -31,6 +37,7 @@ public class SeriesService {
     private final SeriesRepository repo;
     private final SeriesMapper mapper;
     private final ArticleService articleService;
+    private final ReadingFacade readingFacade;
 
     @Transactional
     public Series createSeries(Long userId, CreateSeriesRequest req) {
@@ -148,5 +155,71 @@ public class SeriesService {
 
         articleService.updateSeriesAssignment(article.getId(), null, null);
         mapper.decrementArticleCount(s.getId());
+    }
+
+    /**
+     * 取得 Series 詳情（含文章列表與我的進度）。
+     *
+     * <p>
+     * articles sub-list 暫為空，Task 14 補完整 ArticleSummaryResponse mapping。
+     * myProgress 僅在 currentUserId != null（已登入）時計算；
+     * progress >= 0.95 視為已讀完。
+     * </p>
+     *
+     * @param slug          Series URL slug
+     * @param currentUserId 當前使用者 ID（未登入為 null）
+     * @return Series 詳情 response
+     */
+    @Transactional(readOnly = true)
+    public SeriesDetailResponse getSeriesDetail(String slug, Long currentUserId) {
+        SeriesWithAuthor row = mapper.findBySlugWithAuthor(slug);
+        if (row == null) {
+            throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
+        }
+
+        List<Article> articles = articleService.findBySeriesIdOrderByPosition(row.getId());
+
+        SeriesDetailResponse resp = toDetailResponse(row, articles);
+
+        if (currentUserId != null) {
+            List<Long> articleIds = articles.stream().map(Article::getId).toList();
+            Map<Long, BigDecimal> progressMap = readingFacade.batchGetProgress(currentUserId, articleIds);
+
+            BigDecimal threshold = new BigDecimal("0.95");
+            int readCount = (int) progressMap.values().stream()
+                    .filter(p -> p.compareTo(threshold) >= 0).count();
+
+            UUID nextUnread = articles.stream()
+                    .filter(a -> {
+                        BigDecimal p = progressMap.get(a.getId());
+                        return p == null || p.compareTo(threshold) < 0;
+                    })
+                    .map(Article::getUuid)
+                    .findFirst().orElse(null);
+
+            resp.setMyProgress(new MyProgress(readCount, articles.size(), nextUnread));
+        }
+        return resp;
+    }
+
+    /**
+     * 將 SeriesWithAuthor row 轉為 SeriesDetailResponse。
+     *
+     * <p>articles sub-list 暫為 List.of()，Task 14 補完。</p>
+     */
+    private SeriesDetailResponse toDetailResponse(SeriesWithAuthor row, List<Article> articles) {
+        SeriesDetailResponse r = new SeriesDetailResponse();
+        r.setUuid(row.getUuid());
+        r.setTitle(row.getTitle());
+        r.setSlug(row.getSlug());
+        r.setDescription(row.getDescription());
+        r.setCoverImageUrl(row.getCoverImageUrl());
+        r.setArticleCount(row.getArticleCount());
+        r.setCreatedAt(row.getCreatedAt());
+        r.setUpdatedAt(row.getUpdatedAt());
+        r.setAuthor(new AuthorSummary(
+                row.getAuthorUuid(), row.getAuthorNickname(), row.getAuthorAvatarUrl()));
+        r.setArticles(List.of());  // T14 補完 ArticleSummaryResponse mapping
+        return r;
     }
 }
