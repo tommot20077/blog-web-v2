@@ -117,4 +117,19 @@ public class ArticleSummaryResponse {
      * 當前登入使用者對此文章的最後閱讀進度（未登入或無紀錄時為 null）
      */
     private BigDecimal lastReadProgress;
+
+    /**
+     * 所屬 series 的公開 UUID（不在 series 中時為 null）
+     */
+    private UUID seriesUuid;
+
+    /**
+     * 所屬 series 的標題（不在 series 中時為 null）
+     */
+    private String seriesTitle;
+
+    /**
+     * 文章在 series 中的排序位置（不在 series 中時為 null）
+     */
+    private Integer seriesPosition;
 }

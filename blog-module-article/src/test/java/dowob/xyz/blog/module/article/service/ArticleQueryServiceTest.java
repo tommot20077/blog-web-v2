@@ -4,6 +4,8 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -27,6 +29,7 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -56,6 +59,9 @@ class ArticleQueryServiceTest {
 
     @Mock
     private ReadingFacade readingFacade;
+
+    @Mock
+    private SeriesFacade seriesFacade;
 
     @InjectMocks
     private ArticleQueryService articleQueryService;
@@ -400,6 +406,7 @@ class ArticleQueryServiceTest {
             when(readingFacade.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
             when(readingFacade.isBookmarked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
             when(readingFacade.getProgress(AUTHOR_ID, ARTICLE_UUID)).thenReturn(progress);
+            when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.empty());
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
@@ -410,6 +417,79 @@ class ArticleQueryServiceTest {
             assertThat(result.getLiked()).isTrue();
             assertThat(result.getBookmarked()).isTrue();
             assertThat(result.getLastReadProgress()).isEqualByComparingTo(progress);
+        }
+    }
+
+    // ─── enrichSingle — SeriesNavigation（T14 新增）───
+
+    @Nested
+    @DisplayName("enrichSingle — SeriesNavigation 填充")
+    class EnrichSingleSeriesNavTests {
+
+        @Test
+        @DisplayName("文章在 series 中間位置：seriesNav 含 prev 與 next")
+        void enrichSingle_articleInSeries_includesSeriesNav() {
+            ArticleResponse resp = buildResponse();
+            SeriesNavigation.SeriesArticleRef prevRef =
+                    new SeriesNavigation.SeriesArticleRef(UUID.randomUUID(), "第一篇", "first-article");
+            SeriesNavigation.SeriesArticleRef nextRef =
+                    new SeriesNavigation.SeriesArticleRef(UUID.randomUUID(), "第三篇", "third-article");
+            SeriesNavigation nav = new SeriesNavigation(
+                    UUID.randomUUID(), "測試系列", "test-series", 2, 3, prevRef, nextRef);
+
+            when(articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+            when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.of(nav));
+
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            assertThat(result.getSeriesNav()).isNotNull();
+            assertThat(result.getSeriesNav().getPrev()).isNotNull();
+            assertThat(result.getSeriesNav().getPrev().getTitle()).isEqualTo("第一篇");
+            assertThat(result.getSeriesNav().getNext()).isNotNull();
+            assertThat(result.getSeriesNav().getNext().getTitle()).isEqualTo("第三篇");
+        }
+
+        @Test
+        @DisplayName("文章在 series 第一位：seriesNav.prev 為 null")
+        void enrichSingle_seriesPositionFirst_prevIsNull() {
+            ArticleResponse resp = buildResponse();
+            SeriesNavigation.SeriesArticleRef nextRef =
+                    new SeriesNavigation.SeriesArticleRef(UUID.randomUUID(), "第二篇", "second-article");
+            SeriesNavigation nav = new SeriesNavigation(
+                    UUID.randomUUID(), "測試系列", "test-series", 1, 2, null, nextRef);
+
+            when(articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+            when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.of(nav));
+
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            assertThat(result.getSeriesNav()).isNotNull();
+            assertThat(result.getSeriesNav().getPrev()).isNull();
+            assertThat(result.getSeriesNav().getNext()).isNotNull();
+            assertThat(result.getSeriesNav().getNext().getTitle()).isEqualTo("第二篇");
+        }
+
+        @Test
+        @DisplayName("文章在 series 最後位置：seriesNav.next 為 null")
+        void enrichSingle_seriesPositionLast_nextIsNull() {
+            ArticleResponse resp = buildResponse();
+            SeriesNavigation.SeriesArticleRef prevRef =
+                    new SeriesNavigation.SeriesArticleRef(UUID.randomUUID(), "第一篇", "first-article");
+            SeriesNavigation nav = new SeriesNavigation(
+                    UUID.randomUUID(), "測試系列", "test-series", 2, 2, prevRef, null);
+
+            when(articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
+            when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.of(nav));
+
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            assertThat(result.getSeriesNav()).isNotNull();
+            assertThat(result.getSeriesNav().getPrev()).isNotNull();
+            assertThat(result.getSeriesNav().getPrev().getTitle()).isEqualTo("第一篇");
+            assertThat(result.getSeriesNav().getNext()).isNull();
         }
     }
 }

@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -24,7 +25,8 @@ import java.util.stream.Collectors;
  * 文章查詢服務（CQRS Read 層）。
  *
  * <p>對 Controller 提供文章讀取入口；委派 {@link ArticleService} 取得原始資料，
- * 再以 {@link dowob.xyz.blog.infrastructure.facade.ReadingFacade} 補上當前使用者的 liked / bookmarked / progress 狀態。</p>
+ * 再以 {@link dowob.xyz.blog.infrastructure.facade.ReadingFacade} 補上當前使用者的 liked / bookmarked / progress 狀態，
+ * 並以 {@link dowob.xyz.blog.infrastructure.facade.SeriesFacade} 填充 series 導覽資訊（seriesNav）。</p>
  *
  * <p>採此分層的原因：避免 ArticleServiceImpl 與其他 Service 形成循環依賴。
  * 將「Read + 使用者狀態組裝」與「Write + 計數維護」分開，符合 CQRS-lite 慣例。</p>
@@ -42,6 +44,7 @@ public class ArticleQueryService {
     private final ArticleService articleService;
     private final ArticleMapper articleMapper;
     private final ReadingFacade readingFacade;
+    private final SeriesFacade seriesFacade;
 
     // ─── 列表查詢（帶 liked 填充）───
 
@@ -157,10 +160,13 @@ public class ArticleQueryService {
     // ─── 私有 helper ───
 
     /**
-     * 批次填充 ArticleSummaryResponse 列表的 liked / bookmarked / lastReadProgress 欄位。
+     * 批次填充 ArticleSummaryResponse 列表的 liked / bookmarked / lastReadProgress / seriesUuid / seriesTitle 欄位。
      *
      * <p>ArticleSummaryResponse 未暴露 DB 主鍵，故先透過 UUID 批量查詢取得 id Map，
      * 再以 id 批量查詢各狀態，避免 N+1。未登入時 liked/bookmarked=false，lastReadProgress=null。</p>
+     *
+     * <p>seriesUuid / seriesTitle 透過 SeriesFacade 補充（對有 seriesPosition 的文章）；
+     * seriesPosition 已由 ArticleServiceImpl.toSummaryResponse 填入。</p>
      *
      * @param records ArticleSummaryResponse 列表
      */
@@ -182,6 +188,19 @@ public class ArticleQueryService {
                 .map(uuidToId::get)
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toList());
+
+        // 補充 seriesUuid / seriesTitle（對有 seriesPosition 的文章透過 SeriesFacade 查詢）
+        records.forEach(r -> {
+            if (r.getSeriesPosition() != null) {
+                Long id = uuidToId.get(r.getUuid());
+                if (id != null) {
+                    seriesFacade.getSeriesNavigation(id).ifPresent(nav -> {
+                        r.setSeriesUuid(nav.getSeriesUuid());
+                        r.setSeriesTitle(nav.getSeriesTitle());
+                    });
+                }
+            }
+        });
 
         if (userId == null) {
             records.forEach(r -> {
@@ -205,10 +224,10 @@ public class ArticleQueryService {
     }
 
     /**
-     * 填充單篇 ArticleResponse 的 liked / bookmarked / lastReadProgress 欄位。
+     * 填充單篇 ArticleResponse 的 liked / bookmarked / lastReadProgress / seriesNav 欄位。
      *
      * <p>ArticleResponse 未暴露 DB 主鍵，透過 UUID 查詢 id，再判斷各狀態。
-     * 未登入時 liked/bookmarked=false，lastReadProgress=null。</p>
+     * 未登入時 liked/bookmarked=false，lastReadProgress=null；seriesNav 不受登入狀態影響。</p>
      *
      * @param resp ArticleResponse（可為 null）
      */
@@ -216,6 +235,13 @@ public class ArticleQueryService {
         if (resp == null) {
             return;
         }
+        Long articleId = articleService.findIdByUuid(resp.getUuid());
+
+        // 填充 series 導覽資訊（不受登入狀態影響）
+        if (articleId != null) {
+            seriesFacade.getSeriesNavigation(articleId).ifPresent(resp::setSeriesNav);
+        }
+
         Long userId = currentUserIdOrNull();
         if (userId == null) {
             resp.setLiked(false);
@@ -223,7 +249,6 @@ public class ArticleQueryService {
             resp.setLastReadProgress(null);
             return;
         }
-        Long articleId = articleService.findIdByUuid(resp.getUuid());
         resp.setLiked(articleId != null && readingFacade.isLiked(userId, articleId));
         resp.setBookmarked(articleId != null && readingFacade.isBookmarked(userId, articleId));
         if (resp.getUuid() != null) {

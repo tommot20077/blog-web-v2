@@ -845,6 +845,7 @@ public class ArticleServiceImpl implements ArticleService {
                 .publishedAt(article.getPublishedAt())
                 .tags(tagMap.getOrDefault(article.getUuid(), List.of()))
                 .rejectReason(article.getRejectReason())
+                .seriesPosition(article.getSeriesPosition())
                 .build();
     }
 
