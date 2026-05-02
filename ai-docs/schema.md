@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V15 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V16 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V15**
+> 最後更新版本：**V16**
 
 ---
 
@@ -459,6 +459,65 @@ PRIMARY KEY (user_id, tag_id)
 
 ---
 
+### article_versions
+
+> V16 新增。文章版本快照，用於 draft history / versioning 功能。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | 對外公開識別碼 |
+| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | |
+| author_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| type | VARCHAR(20) | NOT NULL CHECK (type IN ('AUTO','MANUAL','PUBLISHED')) | 快照類型 |
+| title | VARCHAR(255) | NOT NULL | 版本標題 |
+| slug | VARCHAR(255) | NOT NULL | 版本 slug（快照時刻） |
+| content | TEXT | NOT NULL | 版本 Markdown 內容 |
+| summary | VARCHAR(500) | NULL | |
+| category_id | BIGINT | NULL | 快照時的分類 ID（非 FK，允許分類被刪） |
+| cover_image_url | VARCHAR(512) | NULL | |
+| status | VARCHAR(20) | NOT NULL | 快照時的文章狀態 |
+| tags | UUID[] | NULL | 快照時的 tag UUID 陣列（PG array） |
+| note | VARCHAR(255) | NULL | 版本備註（MANUAL 類型可填） |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Indexes:**
+- `article_versions_pkey`（auto）on id
+- `article_versions_uuid_key`（auto, UNIQUE）on uuid
+- `idx_article_versions_article_created`（V16）on (article_id, created_at DESC)
+- `idx_article_versions_article_type`（V16）on (article_id, type)
+
+**Foreign keys:**
+- `article_id` → `articles(id)` ON DELETE CASCADE
+- `author_id` → `users(id)`（NO ACTION）
+
+---
+
+### user_preferences
+
+> V16 新增。使用者通用 K-V 偏好設定表（可擴展到任意模組）。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| user_id | BIGINT | NOT NULL REFERENCES users(id) ON DELETE CASCADE | |
+| pref_key | VARCHAR(100) | NOT NULL | 偏好鍵（如 `draft.auto_save_interval`） |
+| pref_value | TEXT | NOT NULL | 偏好值（序列化為字串） |
+| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Constraints:**
+- `uq_user_preferences_user_key` UNIQUE (user_id, pref_key)
+
+**Indexes:**
+- `user_preferences_pkey`（auto）on id
+- `uq_user_preferences_user_key`（auto, UNIQUE constraint）on (user_id, pref_key)
+
+**Foreign keys:**
+- `user_id` → `users(id)` ON DELETE CASCADE
+
+---
+
 ## Migration Index
 
 | 版本 | 描述 |
@@ -478,6 +537,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V13** | `articles.like_count` BIGINT → INTEGER；DROP `idx_articles_uuid`（重複）；`comments` 改造（DROP status，新增 content_html / like_count / edited_at / deleted_at / deleted_by_role + 3 個索引）；`article_likes` UNIQUE 順序調整為 `uq_article_likes_user_article(user_id, article_id)`；新建 `comment_likes` |
 | **V14** | 新建 `user_bookmarks`（收藏，UNIQUE user×article）；`user_highlights`（劃線 + note，hex 色號 CHECK，2個索引）；`user_reading_progress`（NUMERIC(4,3) 0–1 範圍 CHECK，1個索引）；article_id 全部 ON DELETE CASCADE |
 | **V15** | 新建 `series` 表（含 article_count 反正規化欄位，`idx_series_author`）；`articles` 加 `series_id`（FK ON DELETE SET NULL）+ `series_position`（partial index `idx_articles_series_position`）；`article_likes` 改名 `user_article_likes`（含 RENAME CONSTRAINT） |
+| **V16** | 新建 `article_versions` 表（type CHECK: AUTO/MANUAL/PUBLISHED；tags UUID[]；article_id FK ON DELETE CASCADE；2 個索引）；新建 `user_preferences` 表（K-V 通用；UNIQUE(user_id, pref_key)；user_id FK ON DELETE CASCADE） |
 
 ---
 
