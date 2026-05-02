@@ -1,0 +1,48 @@
+package dowob.xyz.blog.module.version.config;
+
+import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.TopicExchange;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.Map;
+
+/**
+ * Version 模組 RabbitMQ 設定。訂閱 article.events / article.content.changed。
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Configuration
+public class VersionRabbitMqConfig {
+
+    public static final String QUEUE_VERSION_SNAPSHOT = "version.snapshot";
+    public static final String DLQ_ROUTING_KEY = "dlq.version.snapshot";
+
+    @Bean
+    public Queue versionSnapshotQueue() {
+        return new Queue(QUEUE_VERSION_SNAPSHOT, true, false, false, dlqArgs());
+    }
+
+    @Bean
+    public Binding bindVersionSnapshot(
+            Queue versionSnapshotQueue,
+            @Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
+        return BindingBuilder
+                .bind(versionSnapshotQueue)
+                .to(articleEventsExchange)
+                .with(ArticleRabbitMqConfig.ROUTING_KEY_CONTENT_CHANGED);
+    }
+
+    private Map<String, Object> dlqArgs() {
+        return Map.of(
+            "x-dead-letter-exchange", "dlq.exchange",
+            "x-dead-letter-routing-key", DLQ_ROUTING_KEY,
+            "x-message-ttl", 600_000
+        );
+    }
+}
