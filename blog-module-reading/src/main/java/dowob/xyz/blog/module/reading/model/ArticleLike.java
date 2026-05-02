@@ -1,9 +1,8 @@
-package dowob.xyz.blog.module.article.model;
+package dowob.xyz.blog.module.reading.model;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.apache.ibatis.type.Alias;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Column;
@@ -16,18 +15,12 @@ import java.time.LocalDateTime;
  *
  * <p>採用 surrogate id + UNIQUE(user_id, article_id) 確保使用者對單一文章只能按一次讚。</p>
  *
- * <p>⚠ V15 migration 已將表名從 article_likes RENAME 為 user_article_likes。
- * 此 entity 待 T5 後由 reading 模組接管，屆時整個 class 刪除。</p>
- *
- * <p>⚠ @Alias("ArticleLikeLegacy") 避免 MyBatis type-alias 與 reading 模組的 ArticleLike 衝突。
- * T5 後與整個 class 一起刪除。</p>
+ * <p>V15 migration 將表名從 article_likes RENAME 為 user_article_likes，
+ * 並從 article 模組搬到 reading 模組統一管理。</p>
  *
  * @author Yuan
  * @version 1.0
- * @deprecated 待 T5 後刪除，請改用 dowob.xyz.blog.module.reading.model.ArticleLike
  */
-@Deprecated
-@Alias("ArticleLikeLegacy")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

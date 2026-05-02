@@ -1,14 +1,13 @@
-package dowob.xyz.blog.module.article.controller;
+package dowob.xyz.blog.module.reading.controller;
 
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.article.service.ArticleLikeService;
 import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.module.reading.service.ArticleLikeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -20,24 +19,20 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.UUID;
 
 /**
- * 文章按讚 Controller（article 模組殘留版，待 T5 刪除）。
+ * 文章按讚 Controller。
  *
  * <p>POST/DELETE 皆為 idempotent — 重複按讚或重複取消都不會報錯。</p>
  *
- * <p>⚠ 當 reading 模組存在時（classpath 上有 ArticleLikeController），
- * 此 bean 不會被建立，避免 URL 重複衝突。
- * T5 後整個 class 刪除。</p>
+ * <p>從 blog-module-article 搬到 blog-module-reading（T3）。
+ * URL 路徑保留 {@code /api/v1/articles/{articleUuid}/like}，前端不破壞。</p>
  *
  * @author Yuan
  * @version 1.0
- * @deprecated 待 T5 後刪除，請改用 dowob.xyz.blog.module.reading.controller.ArticleLikeController
  */
-@Deprecated
 @RestController
 @RequestMapping("/api/v1/articles/{articleUuid}/like")
 @RequiredArgsConstructor
 @Tag(name = "Article Like")
-@ConditionalOnMissingClass("dowob.xyz.blog.module.reading.controller.ArticleLikeController")
 public class ArticleLikeController {
 
     private final ArticleLikeService likeService;

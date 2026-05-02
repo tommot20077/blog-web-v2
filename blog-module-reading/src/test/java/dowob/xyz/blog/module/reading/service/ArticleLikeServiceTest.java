@@ -1,7 +1,9 @@
-package dowob.xyz.blog.module.article.service;
+package dowob.xyz.blog.module.reading.service;
 
-import dowob.xyz.blog.module.article.model.ArticleLike;
-import dowob.xyz.blog.module.article.repository.ArticleLikeRepository;
+import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.module.reading.mapper.ArticleLikeMapper;
+import dowob.xyz.blog.module.reading.model.ArticleLike;
+import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -14,23 +16,17 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * ArticleLikeService 單元測試（article 模組殘留版，待 T5 刪除）。
- *
- * <p>T3 後 batchIsLiked 由 reading 模組接管，此版本 batchIsLiked 測試只驗 emptySet 行為。</p>
- *
- * @deprecated 待 T5 後整個 class 刪除
- */
-@Deprecated
 @ExtendWith(MockitoExtension.class)
 class ArticleLikeServiceTest {
 
     @Mock private ArticleLikeRepository likeRepo;
+    @Mock private ArticleLikeMapper articleLikeMapper;
     @Mock private ArticleService articleService;
     @InjectMocks private ArticleLikeService service;
 
@@ -98,13 +94,14 @@ class ArticleLikeServiceTest {
     }
 
     @Test
-    void batchIsLiked_alwaysReturnsEmptySet_legacyStub() {
-        // T3 後此 service 的 batchIsLiked 僅為 stub（emptySet），真正實作在 reading 模組
+    void batchIsLiked_returnsCorrectFlagsForEachId() {
         List<Long> articleIds = List.of(1L, 2L, 3L);
+        when(articleLikeMapper.findLikedArticleIdsByUser(eq(userId), eq(articleIds)))
+                .thenReturn(List.of(1L, 3L));
 
         Set<Long> liked = service.batchIsLiked(userId, articleIds);
 
-        assertThat(liked).isEmpty();
+        assertThat(liked).containsExactlyInAnyOrder(1L, 3L);
     }
 
     @Test
@@ -112,5 +109,6 @@ class ArticleLikeServiceTest {
         Set<Long> liked = service.batchIsLiked(null, List.of(1L, 2L));
 
         assertThat(liked).isEmpty();
+        verify(articleLikeMapper, never()).findLikedArticleIdsByUser(any(), any());
     }
 }

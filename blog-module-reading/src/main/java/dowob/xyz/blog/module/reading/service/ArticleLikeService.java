@@ -1,40 +1,48 @@
-package dowob.xyz.blog.module.article.service;
+package dowob.xyz.blog.module.reading.service;
 
-import dowob.xyz.blog.module.article.model.ArticleLike;
-import dowob.xyz.blog.module.article.repository.ArticleLikeRepository;
+import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.module.reading.mapper.ArticleLikeMapper;
+import dowob.xyz.blog.module.reading.model.ArticleLike;
+import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /**
- * 文章按讚 Service（article 模組殘留版，待 T5 刪除）。
+ * 文章按讚 Service。
  *
  * <p>提供 idempotent like / unlike 操作，並維護 articles.like_count 反正規化欄位。
  * 採用「先檢查存在性 → 再操作」模式，DB UNIQUE 約束兜底。</p>
  *
- * <p>⚠ T3 後 batchIsLiked 由 reading 模組的 ArticleLikeService 提供，
- * 此版本 batchIsLiked 僅保留以供 ArticleQueryService compile，T5 後整個 class 刪除。</p>
- *
- * <p>⚠ Bean name 為 articleLikeServiceLegacy，避免與 reading 模組同名 service 衝突。
- * 注入 dowob.xyz.blog.module.article.repository.ArticleLikeRepository（bean: articleLikeRepository）。</p>
+ * <p>從 blog-module-article 搬到 blog-module-reading（T3），
+ * 並改用 ArticleLikeMapper 取代 ArticleMapper 處理 batch is-liked 查詢。</p>
  *
  * @author Yuan
  * @version 1.0
- * @deprecated 將於 T5 刪除，請改用 dowob.xyz.blog.module.reading.service.ArticleLikeService
  */
-@Service("articleLikeServiceLegacy")
-@RequiredArgsConstructor
-@Deprecated
+@Service
 public class ArticleLikeService {
 
     private final ArticleLikeRepository likeRepo;
+    private final ArticleLikeMapper articleLikeMapper;
     private final ArticleService articleService;
+
+    public ArticleLikeService(
+            @Qualifier("readingArticleLikeRepository") ArticleLikeRepository likeRepo,
+            ArticleLikeMapper articleLikeMapper,
+            ArticleService articleService) {
+        this.likeRepo = likeRepo;
+        this.articleLikeMapper = articleLikeMapper;
+        this.articleService = articleService;
+    }
 
     /**
      * 按讚（idempotent）。
@@ -74,23 +82,28 @@ public class ArticleLikeService {
         }
     }
 
+    /**
+     * 查詢使用者是否已對指定文章按讚。
+     *
+     * @param userId    使用者主鍵
+     * @param articleId 文章主鍵
+     * @return true 若已按讚
+     */
     public boolean isLiked(Long userId, Long articleId) {
         return likeRepo.findByUserIdAndArticleId(userId, articleId).isPresent();
     }
 
     /**
-     * 批次查詢使用者已按讚的 articleId。
-     *
-     * <p>⚠ T3 後此方法改由 reading 模組的 ArticleLikeService.batchIsLiked 提供；
-     * 此版本僅回傳 emptySet 保持 compile，T5 後整個 class 刪除。</p>
+     * 批次查詢使用者已按讚的 articleId（用於列表頁避免 N+1）。
      *
      * @param userId     當前使用者，null 代表未登入
      * @param articleIds 要查詢的文章 PK 列表
-     * @return 已按讚的 articleId 集合（此版本永遠回傳 emptySet）
-     * @deprecated T5 後刪除
+     * @return 已按讚的 articleId 集合；未登入或空輸入回傳 emptySet
      */
-    @Deprecated
     public Set<Long> batchIsLiked(Long userId, List<Long> articleIds) {
-        return Collections.emptySet();
+        if (userId == null || articleIds == null || articleIds.isEmpty()) {
+            return Collections.emptySet();
+        }
+        return new HashSet<>(articleLikeMapper.findLikedArticleIdsByUser(userId, articleIds));
     }
 }

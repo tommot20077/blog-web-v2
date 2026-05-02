@@ -274,26 +274,6 @@ public interface ArticleMapper {
     Long findIdByUuid(@Param("uuid") UUID uuid);
 
     /**
-     * 批次查詢「當前使用者按讚過哪些文章」。
-     *
-     * @param userId     使用者主鍵
-     * @param articleIds 要查詢的文章 PK 集合
-     * @return 已按讚的 article_id 集合
-     */
-    @Select({
-        "<script>",
-        "SELECT article_id FROM article_likes",
-        " WHERE user_id = #{userId}",
-        "   AND article_id IN",
-        "<foreach collection='articleIds' item='id' open='(' separator=',' close=')'>",
-        "  #{id}",
-        "</foreach>",
-        "</script>"
-    })
-    List<Long> findLikedArticleIdsByUser(@Param("userId") Long userId,
-                                          @Param("articleIds") List<Long> articleIds);
-
-    /**
      * 批次查詢文章 UUID → DB 主鍵對應關係。
      *
      * <p>
