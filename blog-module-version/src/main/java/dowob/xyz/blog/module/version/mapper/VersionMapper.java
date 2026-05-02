@@ -1,9 +1,12 @@
 package dowob.xyz.blog.module.version.mapper;
 
+import dowob.xyz.blog.module.version.model.dto.response.VersionSummaryResponse;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+
+import java.util.List;
 
 /**
  * Version 模組 MyBatis Mapper — retention DELETE / count 等批次操作。
@@ -41,4 +44,37 @@ public interface VersionMapper {
      */
     @Select("SELECT COUNT(*) FROM article_versions WHERE article_id = #{articleId} AND type = 'PUBLISHED'")
     int countPublished(@Param("articleId") Long articleId);
+
+    /**
+     * 分頁查詢版本 summary（不含 content，給列表頁輕量用）。
+     * typeFilter 為 null 時不做 type 篩選。
+     */
+    @Select({
+        "<script>",
+        "SELECT uuid, type, note, created_at, author_id, length(content) AS content_length",
+        "  FROM article_versions",
+        " WHERE article_id = #{articleId}",
+        " <if test='typeFilter != null'>AND type = #{typeFilter}</if>",
+        " ORDER BY created_at DESC",
+        " LIMIT #{size} OFFSET #{offset}",
+        "</script>"
+    })
+    List<VersionSummaryResponse> listSummaries(
+            @Param("articleId") Long articleId,
+            @Param("typeFilter") String typeFilter,
+            @Param("size") int size,
+            @Param("offset") int offset);
+
+    /**
+     * 計算版本總數（配合 listSummaries 分頁用）。
+     * typeFilter 為 null 時不做 type 篩選。
+     */
+    @Select({
+        "<script>",
+        "SELECT COUNT(*) FROM article_versions",
+        " WHERE article_id = #{articleId}",
+        " <if test='typeFilter != null'>AND type = #{typeFilter}</if>",
+        "</script>"
+    })
+    long countSummaries(@Param("articleId") Long articleId, @Param("typeFilter") String typeFilter);
 }

@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.version.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action;
@@ -12,6 +13,8 @@ import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.model.dto.response.AutoSnapshotConfig;
+import dowob.xyz.blog.module.version.model.dto.response.VersionDetailResponse;
+import dowob.xyz.blog.module.version.model.dto.response.VersionSummaryResponse;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -219,6 +222,102 @@ public class VersioningService {
         articleEventPublisher.publishUpdated(saved);
 
         return saved;
+    }
+
+    /**
+     * 分頁查詢 article 的版本列表（不含 content）。
+     * <ul>
+     *   <li>V0106：article 不存在</li>
+     *   <li>V0102：非 owner 且非 admin</li>
+     * </ul>
+     *
+     * @param articleUuid   文章 UUID
+     * @param typeFilter    類型篩選（可為 null = 全部）
+     * @param page          頁碼（從 1 開始）
+     * @param size          每頁筆數
+     * @param currentUserId 當前操作者 ID
+     * @param isAdmin       是否為管理員
+     * @return 版本 summary 分頁結果
+     */
+    @Transactional(readOnly = true)
+    public PageResult<VersionSummaryResponse> listByArticle(
+            UUID articleUuid, String typeFilter, int page, int size,
+            Long currentUserId, boolean isAdmin) {
+        Article article = articleRepo.findByUuid(articleUuid)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
+        if (!isAdmin && !article.getAuthorId().equals(currentUserId)) {
+            throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
+        }
+        int offset = Math.max(0, (page - 1) * size);
+        List<VersionSummaryResponse> rows = versionMapper
+            .listSummaries(article.getId(), typeFilter, size, offset);
+        long total = versionMapper.countSummaries(article.getId(), typeFilter);
+        return PageResult.of(page, size, total, rows);
+    }
+
+    /**
+     * 取版本詳情（含 content）。
+     * <ul>
+     *   <li>V0101：version 不存在</li>
+     *   <li>V0102：非 owner 且非 admin</li>
+     * </ul>
+     *
+     * @param versionUuid   版本 UUID
+     * @param currentUserId 當前操作者 ID
+     * @param isAdmin       是否為管理員
+     * @return 版本詳情 DTO
+     */
+    @Transactional(readOnly = true)
+    public VersionDetailResponse getDetail(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+        ArticleVersion v = versionRepo.findByUuid(versionUuid)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
+        if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+            throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
+        }
+        return toDetailResponse(v);
+    }
+
+    /**
+     * 查詢 article by UUID，檢查 ownership，回傳 article.id。
+     * <ul>
+     *   <li>V0106：article 不存在</li>
+     *   <li>V0102：非 owner 且非 admin</li>
+     * </ul>
+     *
+     * @param articleUuid   文章 UUID
+     * @param currentUserId 當前操作者 ID
+     * @param isAdmin       是否為管理員
+     * @return article 主鍵 id
+     */
+    @Transactional(readOnly = true)
+    public Long findArticleIdByUuidOrThrow(UUID articleUuid, Long currentUserId, boolean isAdmin) {
+        Article article = articleRepo.findByUuid(articleUuid)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
+        if (!isAdmin && !article.getAuthorId().equals(currentUserId)) {
+            throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
+        }
+        return article.getId();
+    }
+
+    /**
+     * 轉換 ArticleVersion 為 VersionDetailResponse。
+     */
+    private VersionDetailResponse toDetailResponse(ArticleVersion v) {
+        VersionDetailResponse r = new VersionDetailResponse();
+        r.setUuid(v.getUuid());
+        r.setType(v.getType());
+        r.setNote(v.getNote());
+        r.setCreatedAt(v.getCreatedAt());
+        r.setAuthorId(v.getAuthorId());
+        r.setTitle(v.getTitle());
+        r.setSlug(v.getSlug());
+        r.setContent(v.getContent());
+        r.setSummary(v.getSummary());
+        r.setCategoryId(v.getCategoryId());
+        r.setCoverImageUrl(v.getCoverImageUrl());
+        r.setStatus(v.getStatus());
+        r.setTags(v.getTags());
+        return r;
     }
 
     /**
