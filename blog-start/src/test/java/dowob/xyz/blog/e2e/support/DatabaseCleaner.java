@@ -25,17 +25,22 @@ public class DatabaseCleaner {
      * 清除所有測試資料（按外鍵順序刪除）
      */
     public void cleanAll() {
-        // 關聯表（先刪，無外鍵衝突）
+        // 關聯 / 使用者狀態表（先刪，無外鍵衝突）
         jdbcTemplate.execute("DELETE FROM article_tags");
         jdbcTemplate.execute("DELETE FROM article_categories");
         jdbcTemplate.execute("DELETE FROM user_article_likes");
+        jdbcTemplate.execute("DELETE FROM comment_likes");
         jdbcTemplate.execute("DELETE FROM user_tag_follows");
+        jdbcTemplate.execute("DELETE FROM user_bookmarks");
+        jdbcTemplate.execute("DELETE FROM user_highlights");
+        jdbcTemplate.execute("DELETE FROM user_reading_progress");
         jdbcTemplate.execute("DELETE FROM comments");
 
-        // 實體表
+        // 實體表（articles 在 series 之前刪：series_id ON DELETE SET NULL，順序不衝突）
         jdbcTemplate.execute("DELETE FROM file_metadata");
         jdbcTemplate.execute("DELETE FROM verification_tokens");
         jdbcTemplate.execute("DELETE FROM articles");
+        jdbcTemplate.execute("DELETE FROM series");
         jdbcTemplate.execute("DELETE FROM tags");
         jdbcTemplate.execute("DELETE FROM categories");
         jdbcTemplate.execute("DELETE FROM users");
