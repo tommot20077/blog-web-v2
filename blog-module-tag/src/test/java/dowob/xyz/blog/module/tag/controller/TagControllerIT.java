@@ -282,6 +282,20 @@ class TagControllerIT {
     }
 
     @Test
+    @DisplayName("GET /api/v1/tags/{slug} - 已認證但 UserFacade 查不到 UUID → $.data.followed=false 且不丟錯")
+    void getTagDetail_authenticatedButUserFacadeEmpty_returnsFollowedFalseNoError() throws Exception {
+        insertTestTag("Elixir", "elixir", 5);
+        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/api/v1/tags/elixir")
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.followed").value(false));
+    }
+
+    @Test
     @DisplayName("POST /api/v1/tags/{id}/follow - 已認證使用者追蹤標籤，回傳 200 成功")
     void followTag_authenticated_returns200() throws Exception {
         UUID tagId = insertTestTag("Kubernetes", "kubernetes", 5);
