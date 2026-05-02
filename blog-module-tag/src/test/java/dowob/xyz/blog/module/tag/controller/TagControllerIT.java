@@ -240,6 +240,48 @@ class TagControllerIT {
     }
 
     @Test
+    @DisplayName("GET /api/v1/tags/{slug} - 未認證 → $.data.followed=false")
+    void getTagDetail_unauthenticated_returnsFollowedFalse() throws Exception {
+        insertTestTag("Golang", "golang", 5);
+
+        mockMvc.perform(get("/api/v1/tags/golang"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.followed").value(false));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/tags/{slug} - 已認證但未追蹤 → $.data.followed=false")
+    void getTagDetail_authenticatedNotFollowing_returnsFollowedFalse() throws Exception {
+        insertTestTag("Rust", "rust", 5);
+        UUID userUuid = UUID.randomUUID();
+        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.of(userUuid));
+
+        mockMvc.perform(get("/api/v1/tags/rust")
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.followed").value(false));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/tags/{slug} - 已認證且已追蹤 → $.data.followed=true")
+    void getTagDetail_authenticatedFollowing_returnsFollowedTrue() throws Exception {
+        UUID tagId = insertTestTag("Scala", "scala", 5);
+        UUID userUuid = UUID.randomUUID();
+        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.of(userUuid));
+        jdbcTemplate.update(
+                "INSERT INTO user_tag_follows (user_id, tag_id) VALUES (?, ?)",
+                userUuid, tagId);
+
+        mockMvc.perform(get("/api/v1/tags/scala")
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "USER"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.followed").value(true));
+    }
+
+    @Test
     @DisplayName("POST /api/v1/tags/{id}/follow - 已認證使用者追蹤標籤，回傳 200 成功")
     void followTag_authenticated_returns200() throws Exception {
         UUID tagId = insertTestTag("Kubernetes", "kubernetes", 5);

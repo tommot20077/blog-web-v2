@@ -37,12 +37,21 @@ public interface TagService {
     List<Tag> getHotTags(int limit);
 
     /**
-     * 依 Slug 取得標籤詳情
+     * 依 Slug 取得標籤詳情（不帶 user context — followed 永遠 false）
      *
      * @param slug 標籤 Slug
      * @return 標籤詳情回應
      */
     TagDetailResponse getTagDetail(String slug);
+
+    /**
+     * 依 Slug 取得標籤詳情，附加當前使用者的追蹤狀態
+     *
+     * @param slug              標籤 Slug
+     * @param currentUserUuid   當前使用者 UUID（可為 null，未認證時即為 null）
+     * @return 標籤詳情回應，followed 反映該使用者是否已追蹤此標籤
+     */
+    TagDetailResponse getTagDetail(String slug, UUID currentUserUuid);
 
     /**
      * 使用者追蹤標籤
