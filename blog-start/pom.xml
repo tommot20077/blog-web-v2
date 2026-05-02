@@ -68,6 +68,10 @@
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-reading</artifactId>
         </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-series</artifactId>
+        </dependency>
 
         <!-- Tests -->
         <dependency>
