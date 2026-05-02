@@ -11,7 +11,7 @@ import dowob.xyz.blog.module.comment.model.CommentWithAuthor;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.response.ArticleCommentListResponse;
-import dowob.xyz.blog.module.comment.model.dto.response.AuthorSummary;
+import dowob.xyz.blog.common.api.dto.AuthorSummary;
 import dowob.xyz.blog.module.comment.model.dto.response.CommentResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import lombok.RequiredArgsConstructor;

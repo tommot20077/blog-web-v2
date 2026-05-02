@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.comment.model.dto.response;
 
+import dowob.xyz.blog.common.api.dto.AuthorSummary;
 import lombok.Data;
 
 import java.time.LocalDateTime;
