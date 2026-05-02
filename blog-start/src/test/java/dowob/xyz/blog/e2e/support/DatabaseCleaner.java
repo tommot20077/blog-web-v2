@@ -28,7 +28,7 @@ public class DatabaseCleaner {
         // 關聯表（先刪，無外鍵衝突）
         jdbcTemplate.execute("DELETE FROM article_tags");
         jdbcTemplate.execute("DELETE FROM article_categories");
-        jdbcTemplate.execute("DELETE FROM article_likes");
+        jdbcTemplate.execute("DELETE FROM user_article_likes");
         jdbcTemplate.execute("DELETE FROM user_tag_follows");
         jdbcTemplate.execute("DELETE FROM comments");
 
