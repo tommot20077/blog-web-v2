@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.version.service;
 
+import dowob.xyz.blog.module.version.mapper.UserPreferenceMapper;
 import dowob.xyz.blog.module.version.model.UserPreference;
 import dowob.xyz.blog.module.version.model.dto.response.AutoSnapshotConfig;
 import dowob.xyz.blog.module.version.repository.UserPreferenceRepository;
@@ -21,6 +22,7 @@ import static org.mockito.Mockito.when;
 class PreferenceResolverTest {
 
     @Mock private UserPreferenceRepository repo;
+    @Mock private UserPreferenceMapper userPreferenceMapper;
     @InjectMocks private PreferenceResolver resolver;
 
     private final Long userId = 1L;
