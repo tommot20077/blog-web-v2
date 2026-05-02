@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.article.model.dto.response;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import lombok.Builder;
 import lombok.Data;
 
@@ -132,4 +133,9 @@ public class ArticleResponse {
      * 當前登入使用者對此文章的最後閱讀進度（未登入或無紀錄時為 null）
      */
     private BigDecimal lastReadProgress;
+
+    /**
+     * 文章在系列中的導覽資訊（prev/next），不在 series 中時為 null
+     */
+    private SeriesNavigation seriesNav;
 }

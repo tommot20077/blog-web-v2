@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
@@ -108,6 +109,11 @@ public class ArticleServiceImpl implements ArticleService {
      * 標籤 Facade（跨模組標籤操作）
      */
     private final TagFacade tagFacade;
+
+    /**
+     * Series Facade（跨模組 series 操作，article 刪除時通知計數更新）
+     */
+    private final SeriesFacade seriesFacade;
 
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
@@ -308,9 +314,15 @@ public class ArticleServiceImpl implements ArticleService {
     public void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
         Article article = findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
+        Long seriesId = article.getSeriesId();
 
-        /** DB 刪除在 transaction 內 */
-        transactionTemplate.executeWithoutResult(status -> articleRepository.delete(article));
+        /** DB 刪除與 series article_count 更新在同一 transaction 內，確保原子性 */
+        transactionTemplate.executeWithoutResult(status -> {
+            articleRepository.delete(article);
+            if (seriesId != null) {
+                seriesFacade.notifyArticleDeletedFromSeries(seriesId);
+            }
+        });
 
         /** DB 已 commit，best-effort 發送刪除事件 MQ（失敗不影響刪除結果） */
         try {
@@ -845,6 +857,7 @@ public class ArticleServiceImpl implements ArticleService {
                 .publishedAt(article.getPublishedAt())
                 .tags(tagMap.getOrDefault(article.getUuid(), List.of()))
                 .rejectReason(article.getRejectReason())
+                .seriesPosition(article.getSeriesPosition())
                 .build();
     }
 
@@ -1025,6 +1038,57 @@ public class ArticleServiceImpl implements ArticleService {
         List<Article> result = new java.util.ArrayList<>();
         articleRepository.findAllById(ids).forEach(result::add);
         return result;
+    }
+
+    /**
+     * 根據文章公開 UUID 查詢文章實體（供跨模組使用）。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章 Optional
+     */
+    @Override
+    public java.util.Optional<Article> findByUuid(UUID uuid) {
+        return articleRepository.findByUuid(uuid);
+    }
+
+    /**
+     * 更新文章的 series 歸屬與排序位置。
+     *
+     * @param articleId      文章資料庫主鍵
+     * @param seriesId       所屬 series 主鍵（null 表示解除）
+     * @param seriesPosition 在 series 中的排序位置（null 表示解除）
+     */
+    @Override
+    @Transactional
+    public void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
+        articleRepository.findById(articleId).ifPresent(a -> {
+            a.setSeriesId(seriesId);
+            a.setSeriesPosition(seriesPosition);
+            articleRepository.save(a);
+        });
+    }
+
+    /**
+     * 查詢指定 Series 內的所有文章，按 series_position 升冪排序。
+     *
+     * @param seriesId Series 資料庫主鍵
+     * @return 按 series_position 排序的文章列表
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public List<Article> findBySeriesIdOrderByPosition(Long seriesId) {
+        return articleMapper.findBySeriesIdOrderByPosition(seriesId);
+    }
+
+    /**
+     * 根據資料庫主鍵查詢文章實體（供 SeriesFacade 等跨模組使用）。
+     *
+     * @param id 文章資料庫主鍵
+     * @return 文章 Optional
+     */
+    @Override
+    public java.util.Optional<Article> findById(Long id) {
+        return articleRepository.findById(id);
     }
 
     /**

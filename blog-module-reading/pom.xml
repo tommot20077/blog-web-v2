@@ -36,6 +36,11 @@
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-article</artifactId>
         </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-series</artifactId>
+            <scope>test</scope>
+        </dependency>
 
         <!-- Test Dependencies -->
         <dependency>

@@ -1,4 +1,4 @@
-package dowob.xyz.blog.module.reading.config;
+package dowob.xyz.blog.module.series.config;
 
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -11,7 +11,7 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * Reading 模組 IT 專用 Spring Boot 應用程式。
+ * Series 模組 IT 專用 Spring Boot 應用程式。
  *
  * @author Yuan
  */
@@ -20,8 +20,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
                 "dowob.xyz.blog.common",
                 "dowob.xyz.blog.infrastructure",
                 "dowob.xyz.blog.module.article",
-                "dowob.xyz.blog.module.series",
-                "dowob.xyz.blog.module.reading"
+                "dowob.xyz.blog.module.series"
         },
         exclude = {
                 RabbitAutoConfiguration.class,
@@ -32,14 +31,12 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         })
 @EnableJdbcRepositories(basePackages = {
         "dowob.xyz.blog.module.article.repository",
-        "dowob.xyz.blog.module.series.repository",
-        "dowob.xyz.blog.module.reading.repository"
+        "dowob.xyz.blog.module.series.repository"
 })
 @MapperScan(basePackages = {
         "dowob.xyz.blog.module.article.mapper",
-        "dowob.xyz.blog.module.series.mapper",
-        "dowob.xyz.blog.module.reading.mapper"
+        "dowob.xyz.blog.module.series.mapper"
 })
 @EnableScheduling
-public class ReadingTestApplication {
+public class SeriesTestApplication {
 }

@@ -3,6 +3,8 @@ package dowob.xyz.blog.module.series.mapper;
 import dowob.xyz.blog.module.series.model.SeriesWithAuthor;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Result;
+import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
@@ -53,17 +55,65 @@ public interface SeriesMapper {
     int decrementArticleCount(@Param("id") Long id);
 
     /**
-     * 撈 series 內某 article 的 prev/next（按 series_position 排序）。
-     *
-     * @return List 內為按 position 排序的 PUBLISHED articles 基本資訊
+     * 找 prev：series 內 PUBLISHED 且 series_position 比 current 小的最大一筆。
+     * 若無（第一篇）回傳 null。
      */
     @Select("""
             SELECT id, uuid, title, slug, series_position
               FROM articles
-             WHERE series_id = #{seriesId} AND status = 'PUBLISHED'
-             ORDER BY series_position
+             WHERE series_id = #{seriesId}
+               AND status = 'PUBLISHED'
+               AND series_position < #{currentPosition}
+             ORDER BY series_position DESC
+             LIMIT 1
             """)
-    List<NavRow> findArticlesForNav(@Param("seriesId") Long seriesId);
+    NavRow findPrevNav(@Param("seriesId") Long seriesId,
+                       @Param("currentPosition") Integer currentPosition);
+
+    /**
+     * 找 next：series 內 PUBLISHED 且 series_position 比 current 大的最小一筆。
+     * 若無（最後一篇）回傳 null。
+     */
+    @Select("""
+            SELECT id, uuid, title, slug, series_position
+              FROM articles
+             WHERE series_id = #{seriesId}
+               AND status = 'PUBLISHED'
+               AND series_position > #{currentPosition}
+             ORDER BY series_position ASC
+             LIMIT 1
+            """)
+    NavRow findNextNav(@Param("seriesId") Long seriesId,
+                       @Param("currentPosition") Integer currentPosition);
+
+    /**
+     * 計算 series 內 PUBLISHED 文章總數（避免依賴 article_count 反正規化漂移）。
+     */
+    @Select("SELECT COUNT(*) FROM articles WHERE series_id = #{seriesId} AND status = 'PUBLISHED'")
+    int countPublishedInSeries(@Param("seriesId") Long seriesId);
+
+    /**
+     * 批次取得 articles 對應的 series 基本資訊（給 ArticleQueryService.enrich 用，避免 N+1）。
+     */
+    @Select({
+        "<script>",
+        "SELECT a.id AS article_id, s.uuid AS series_uuid, s.title AS series_title",
+        "  FROM articles a",
+        "  JOIN series s ON a.series_id = s.id",
+        " WHERE a.id IN",
+        "<foreach collection='articleIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        "</script>"
+    })
+    List<ArticleSeriesRow> findSeriesByArticleIds(@Param("articleIds") List<Long> articleIds);
+
+    @lombok.Data
+    class ArticleSeriesRow {
+        private Long articleId;
+        private java.util.UUID seriesUuid;
+        private String seriesTitle;
+    }
 
     @lombok.Data
     class NavRow {

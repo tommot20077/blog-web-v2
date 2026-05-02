@@ -55,6 +55,12 @@
             <artifactId>blog-module-reading</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- CommentTestApplication 掃 article 模組，article 依賴 SeriesFacade，故需引入 series 模組 -->
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-series</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-db-migration</artifactId>

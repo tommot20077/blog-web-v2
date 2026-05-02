@@ -274,6 +274,15 @@ public interface ArticleMapper {
     Long findIdByUuid(@Param("uuid") UUID uuid);
 
     /**
+     * 查詢指定 Series 內的所有文章，按 series_position 升冪排序。
+     *
+     * @param seriesId Series 資料庫主鍵
+     * @return 按 series_position 排序的文章列表
+     */
+    @Select("SELECT * FROM articles WHERE series_id = #{seriesId} ORDER BY series_position")
+    List<Article> findBySeriesIdOrderByPosition(@Param("seriesId") Long seriesId);
+
+    /**
      * 批次查詢文章 UUID → DB 主鍵對應關係。
      *
      * <p>
