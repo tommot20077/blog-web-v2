@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.version.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.model.dto.request.CreateManualSnapshotRequest;
 import dowob.xyz.blog.module.version.model.dto.response.VersionDetailResponse;
@@ -13,8 +14,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -64,7 +63,7 @@ public class VersionController {
             @RequestParam(required = false) String type,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(
             versioningService.listByArticle(articleUuid, type, page, size, currentUserId, isAdmin));
     }
@@ -80,7 +79,7 @@ public class VersionController {
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         return ApiResponse.success(
             versioningService.getDetail(versionUuid, currentUserId, isAdmin));
@@ -97,7 +96,7 @@ public class VersionController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal Long currentUserId,
             @Valid @RequestBody(required = false) CreateManualSnapshotRequest req) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         Long articleId = versioningService.findArticleIdByUuidOrThrow(articleUuid, currentUserId, isAdmin);
         String note = req != null ? req.getNote() : null;
         ArticleVersion v = versioningService.recordManualSnapshot(articleId, note);
@@ -115,7 +114,7 @@ public class VersionController {
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         versioningService.restore(versionUuid, currentUserId, isAdmin);
         return ApiResponse.success();
@@ -132,7 +131,7 @@ public class VersionController {
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         ArticleVersion v = versioningService.promote(versionUuid, currentUserId, isAdmin);
         return ApiResponse.success(v);
@@ -149,17 +148,10 @@ public class VersionController {
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         versioningService.delete(versionUuid, currentUserId, isAdmin);
         return ApiResponse.success();
     }
 
-    /**
-     * 判斷當前認證使用者是否為 ADMIN。
-     */
-    private boolean isAdmin() {
-        return SecurityContextHolder.getContext().getAuthentication().getAuthorities()
-                .contains(new SimpleGrantedAuthority("ROLE_ADMIN"));
-    }
 }
