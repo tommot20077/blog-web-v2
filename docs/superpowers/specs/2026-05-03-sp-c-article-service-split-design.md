@@ -56,7 +56,7 @@
 | Sub-service 數量 | **3 個（Command / Query / View）** | 對齊 roadmap §5.4 + SP-B/D 確立的 facade 協調 atomic flow pattern；4 類 method 中 Counter（4）歸 Command write、Cross-module read（6）歸 Query、Cross-module write（1）歸 Command |
 | `processArticleView` 是否獨立 sub-service | **是（ArticleViewSubService）** | view tracking 是獨立 concern（Redis 防刷 + async event），未來擴展（heatmap / recommendation tracking）有清楚 entry point；testable 單純度高 |
 | 共用 helper class | **2 個（ArticleEntityFinder + ArticleResponseMapper）** | DRY — `findByUuidOrThrow` 跨 Command/Query 共用；9 個 entity → DTO 轉換 helper 集中於 ArticleResponseMapper 同職責管理 |
-| package 結構 | **`service/internal/`** 子 package | sub-service / helper 全 package-private 避免外部誤用；對齊 Java 慣例（Spring Boot starter 普遍用 `internal/` package 標記不對外） |
+| package 結構 | **`service/`** 同包 | sub-service / helper 用 Java package-private 真實限制範圍（子 package 不可繼承 package-private 訪問權）；service/ 下平鋪 8 個 file，職責清楚 |
 | Migration 策略 | **Bottom-up 7 tasks，每 task 完成後 codebase 全綠** | 增量 ship，避免一次性拆 1020 行造成 review 困難；對齊 SP-A/B/D 7-task 切法 |
 | Test 結構 | **分層：facade test + 3 sub-service test + 2 helper test** | ArticleServiceTest 既有 1981 行直接改寫單一 file 太大；分散到 6 個 test file 各自 cohesion 高 |
 | ArticleServiceImpl 是否「純 1-line delegate」 | **多數純 delegate，2 個 method 含協調邏輯** | `getArticleByUuid` / `getArticleBySlug` 必須協調 query → view 順序；對齊 SP-D `applyRestoreContent` atomic 協調 pattern |
@@ -145,15 +145,14 @@
 
 ```
 blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/
-├── ArticleService.java                  (interface 不變，24 method)
-├── ArticleServiceImpl.java              (薄 facade，~150-200 行)
-├── ArticleQueryService.java             (既有 decorator 不動)
-└── internal/                            (新建 子 package — package-private 範圍)
-    ├── ArticleCommandSubService.java    (11 method)
-    ├── ArticleQuerySubService.java      (13 method)
-    ├── ArticleViewSubService.java       (1 method)
-    ├── ArticleEntityFinder.java         (共用 — 1 method)
-    └── ArticleResponseMapper.java       (Query 用 — 9 method)
+├── ArticleService.java                  (interface 不變，24 method — public)
+├── ArticleServiceImpl.java              (薄 facade，~150-200 行 — public)
+├── ArticleQueryService.java             (既有 decorator 不動 — public)
+├── ArticleCommandSubService.java        (新建 — package-private，11 method)
+├── ArticleQuerySubService.java          (新建 — package-private，13 method)
+├── ArticleViewSubService.java           (新建 — package-private，1 method)
+├── ArticleEntityFinder.java             (新建 — package-private，1 method 共用)
+└── ArticleResponseMapper.java           (新建 — package-private，9 method)
 ```
 
 ### Dependency graph
@@ -189,7 +188,7 @@ ArticleCommandSubService   ArticleQuerySubService   ArticleViewSubService
 ### 5.1 ArticleCommandSubService（write，11 method）
 
 ```java
-package dowob.xyz.blog.module.article.service.internal;
+package dowob.xyz.blog.module.article.service;
 
 @Service
 @RequiredArgsConstructor
@@ -235,7 +234,7 @@ class ArticleCommandSubService {
 ### 5.2 ArticleQuerySubService（read，13 method）
 
 ```java
-package dowob.xyz.blog.module.article.service.internal;
+package dowob.xyz.blog.module.article.service;
 
 @Service
 @RequiredArgsConstructor
@@ -274,7 +273,7 @@ class ArticleQuerySubService {
 ### 5.3 ArticleViewSubService（read 副作用，1 method）
 
 ```java
-package dowob.xyz.blog.module.article.service.internal;
+package dowob.xyz.blog.module.article.service;
 
 @Service
 @RequiredArgsConstructor
@@ -286,14 +285,21 @@ class ArticleViewSubService {
     private static final Duration VIEW_DEDUP_TTL = Duration.ofMinutes(5);
 
     /**
-     * 記錄 article view（Redis 防刷 + 異步 ViewCountEvent）。
+     * 記錄 article view（含 published-only guard + Redis 防刷 + 異步 ViewCountEvent）。
      *
-     * <p>從 RequestContextHolder 取 clientIp 作為防刷 key 的一部分。
-     * Redis setIfAbsent 5 分鐘 TTL → firstVisit 才 publish event。</p>
+     * <p>只有 status 為公開可見時才 publish event（保持與既有 processArticleView 行為一致 —
+     * 避免 author / admin 看自己的 draft 時錯誤觸發 view counter）。</p>
+     *
+     * <p>從 RequestContextHolder 取 clientIp 作為 Redis 防刷 key 的一部分，
+     * setIfAbsent 5 分鐘 TTL → firstVisit 才 publish event。</p>
      *
      * @param articleUuid 文章 UUID
+     * @param status      文章狀態（用於 published-only guard，對齊既有 processArticleView 行為）
      */
-    void recordView(UUID articleUuid) {
+    void recordView(UUID articleUuid, ArticleStatus status) {
+        if (!status.isPubliclyVisible()) {
+            return;   // 既有 published-only guard：draft / pending review / archived 不發 event
+        }
         String clientIp = resolveClientIp();
         String viewKey = VIEW_KEY_PREFIX + articleUuid + ":" + clientIp;
         Boolean firstVisit = stringRedisTemplate.opsForValue()
@@ -317,7 +323,7 @@ class ArticleViewSubService {
 ### 6.1 ArticleEntityFinder（共用 entity lookup）
 
 ```java
-package dowob.xyz.blog.module.article.service.internal;
+package dowob.xyz.blog.module.article.service;
 
 @Component
 @RequiredArgsConstructor
@@ -341,7 +347,7 @@ class ArticleEntityFinder {
 ### 6.2 ArticleResponseMapper（Query 用 entity → DTO 轉換）
 
 ```java
-package dowob.xyz.blog.module.article.service.internal;
+package dowob.xyz.blog.module.article.service;
 
 @Component
 @RequiredArgsConstructor
@@ -403,16 +409,20 @@ public class ArticleServiceImpl implements ArticleService {
     @Override
     public ArticleResponse getArticleByUuid(UUID uuid, Long currentUserId) {
         ArticleResponse resp = querySubService.getArticleByUuid(uuid, currentUserId);
-        viewSubService.recordView(uuid);
+        viewSubService.recordView(uuid, resp.getStatus());     // 帶 status 進 sub-service 做 guard
         return resp;
     }
 
     @Override
     public ArticleResponse getArticleBySlug(String slug, Long currentUserId) {
         ArticleResponse resp = querySubService.getArticleBySlug(slug, currentUserId);
-        viewSubService.recordView(resp.getUuid());
+        viewSubService.recordView(resp.getUuid(), resp.getStatus());
         return resp;
     }
+
+    // ⚠ 注意：`ArticleResponse.getStatus()` 回傳 ArticleStatus enum — plan 階段確認既有
+    //   ArticleResponse status 欄位型別。如為 String 則 view sub-service 簽名改為
+    //   `recordView(UUID, String)` 並改用 String 比對。
 
     // ─── Counter 4 method（純 1-line delegate）───
     @Override public void incrementCommentCount(Long articleId) { commandSubService.incrementCommentCount(articleId); }
@@ -481,7 +491,12 @@ ArticleQuerySubServiceTest（新）— ~600 行
 
 ArticleViewSubServiceTest（新）— ~100 行
 ├── Redis setIfAbsent 防刷邏輯（first visit / repeat visit）
-└── publishViewed event 觸發條件（only on first visit）
+├── publishViewed event 觸發條件（only on first visit）
+└── Published-only guard cover 4 cases（Codex review feedback）：
+    - recordView_publishedArticle_publishesEvent      → 唯一觸發
+    - recordView_draftArticle_doesNotPublish          → published-only guard
+    - recordView_pendingReviewArticle_doesNotPublish  → 同上
+    - recordView_archivedArticle_doesNotPublish       → 同上（如有 ARCHIVED status）
 
 ArticleResponseMapperTest（新）— ~200 行
 └── 9 個 mapper method 各自轉換正確性
@@ -542,7 +557,7 @@ ArticleServiceImpl (薄 facade，~150-200 行)
 | 5 | ArticleControllerIT 952 行不變仍綠 | mvn test |
 | 6 | ArticleServiceTest 重整為分層（6 test files） | git ls-files 比對 |
 | 7 | 5 affected modules tests 全綠 | mvn test 全 5 模組 |
-| 8 | 全 codebase 無新 cross-module 引用 | grep `internal/` package 跨模組 import = 0 |
+| 8 | 全 codebase 無新 cross-module 引用 | grep 各 sub-service / helper class 名稱於 article module 外 = 0（package-private 保護，compile 層即攔截） |
 
 ---
 
