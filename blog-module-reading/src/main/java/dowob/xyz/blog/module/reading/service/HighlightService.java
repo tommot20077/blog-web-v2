@@ -1,7 +1,7 @@
 package dowob.xyz.blog.module.reading.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.exception.ReadingErrorCode;
 import dowob.xyz.blog.module.reading.model.UserHighlight;
 import dowob.xyz.blog.module.reading.model.dto.request.CreateHighlightRequest;
@@ -26,11 +26,11 @@ import java.util.UUID;
 public class HighlightService {
 
     private final UserHighlightRepository repo;
-    private final ArticleService articleService;
+    private final ArticleFacade articleFacade;
 
     @Transactional
     public HighlightResponse create(UUID articleUuid, Long userId, CreateHighlightRequest req) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
 
         UserHighlight h = new UserHighlight();
         h.setUuid(UUID.randomUUID());
@@ -47,7 +47,7 @@ public class HighlightService {
     }
 
     public List<HighlightResponse> getByArticle(UUID articleUuid, Long userId) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
         return repo.findByUserIdAndArticleIdOrderByCreatedAtAsc(userId, articleId)
                 .stream().map(this::toResponse).toList();
     }

@@ -1,7 +1,7 @@
 package dowob.xyz.blog.module.reading.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.exception.ReadingErrorCode;
 import dowob.xyz.blog.module.reading.model.UserHighlight;
 import dowob.xyz.blog.module.reading.model.dto.request.CreateHighlightRequest;
@@ -30,7 +30,7 @@ import static org.mockito.Mockito.when;
 class HighlightServiceTest {
 
     @Mock private UserHighlightRepository repo;
-    @Mock private ArticleService articleService;
+    @Mock private ArticleFacade articleFacade;
     @InjectMocks private HighlightService service;
 
     private final Long userId = 1L;
@@ -40,7 +40,7 @@ class HighlightServiceTest {
 
     @Test
     void createHighlight_savesWithUuidAndAllFields() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(repo.save(any(UserHighlight.class))).thenAnswer(inv -> {
             UserHighlight h = inv.getArgument(0);
             h.setId(1L);
@@ -69,7 +69,7 @@ class HighlightServiceTest {
 
     @Test
     void createHighlight_emptyNote_savesAsNull() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         CreateHighlightRequest req = new CreateHighlightRequest();
@@ -88,7 +88,7 @@ class HighlightServiceTest {
     void getByArticle_returnsUserOwnedOnly() {
         UserHighlight h1 = new UserHighlight();
         h1.setId(1L); h1.setUuid(UUID.randomUUID());
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(repo.findByUserIdAndArticleIdOrderByCreatedAtAsc(userId, articleId))
                 .thenReturn(List.of(h1));
 

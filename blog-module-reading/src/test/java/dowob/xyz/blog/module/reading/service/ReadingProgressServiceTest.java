@@ -1,8 +1,7 @@
 package dowob.xyz.blog.module.reading.service;
 
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import dowob.xyz.blog.module.reading.model.UserReadingProgress;
 import dowob.xyz.blog.module.reading.repository.UserReadingProgressRepository;
@@ -38,7 +37,7 @@ class ReadingProgressServiceTest {
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private HashOperations<String, Object, Object> hashOps;
     @Mock private SetOperations<String, String> setOps;
-    @Mock private ArticleService articleService;
+    @Mock private ArticleFacade articleFacade;
     @Mock private ReadingProgressMapper progressMapper;
     @Mock private UserReadingProgressRepository progressRepo;
     @InjectMocks private ReadingProgressService service;
@@ -57,7 +56,7 @@ class ReadingProgressServiceTest {
 
     @Test
     void update_progressBelowThreshold_writesRedisAndAddsDirty() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
 
         service.update(userId, articleUuid, new BigDecimal("0.50"), "intro");
 
@@ -67,7 +66,7 @@ class ReadingProgressServiceTest {
 
     @Test
     void update_progressBelowThreshold_setsTTL() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
 
         service.update(userId, articleUuid, new BigDecimal("0.50"), null);
 
@@ -78,7 +77,7 @@ class ReadingProgressServiceTest {
 
     @Test
     void update_progressAboveThreshold_deletesRedisAndUpsertsDb() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
 
         service.update(userId, articleUuid, new BigDecimal("0.98"), "end");
 
@@ -108,7 +107,7 @@ class ReadingProgressServiceTest {
         dbVal.setProgress(new BigDecimal("0.50"));
         dbVal.setLastHeadingAnchor("intro");
         dbVal.setUpdatedAt(LocalDateTime.now());
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(progressRepo.findByUserIdAndArticleId(userId, articleId))
                 .thenReturn(Optional.of(dbVal));
 
@@ -132,7 +131,7 @@ class ReadingProgressServiceTest {
 
     @Test
     void update_lastHeadingNull_storesEmptyString() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
 
         service.update(userId, articleUuid, new BigDecimal("0.50"), null);
 

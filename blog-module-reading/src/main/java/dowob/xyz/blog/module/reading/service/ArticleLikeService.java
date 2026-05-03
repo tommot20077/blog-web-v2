@@ -1,6 +1,6 @@
 package dowob.xyz.blog.module.reading.service;
 
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ArticleLikeMapper;
 import dowob.xyz.blog.module.reading.model.ArticleLike;
 import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
@@ -30,7 +30,7 @@ public class ArticleLikeService {
 
     private final ArticleLikeRepository likeRepo;
     private final ArticleLikeMapper articleLikeMapper;
-    private final ArticleService articleService;
+    private final ArticleFacade articleFacade;
 
     /**
      * 按讚（idempotent）。
@@ -53,7 +53,7 @@ public class ArticleLikeService {
             // UNIQUE(user_id, article_id) 撞了 — 已被並行 tx 按過，idempotent 返回
             return;
         }
-        articleService.incrementLikeCount(articleId);
+        articleFacade.incrementLikeCount(articleId);
     }
 
     /**
@@ -66,7 +66,7 @@ public class ArticleLikeService {
     public void unlikeArticle(Long userId, Long articleId) {
         int affected = likeRepo.deleteByUserIdAndArticleId(userId, articleId);
         if (affected > 0) {
-            articleService.decrementLikeCount(articleId);
+            articleFacade.decrementLikeCount(articleId);
         }
     }
 

@@ -1,8 +1,8 @@
 package dowob.xyz.blog.module.reading.service;
 
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import dowob.xyz.blog.module.reading.model.UserReadingProgress;
 import dowob.xyz.blog.module.reading.model.dto.response.ProgressResponse;
@@ -42,13 +42,13 @@ import java.util.stream.Collectors;
 public class ReadingProgressService {
 
     private final StringRedisTemplate redisTemplate;
-    private final ArticleService articleService;
+    private final ArticleFacade articleFacade;
     private final ReadingProgressMapper progressMapper;
     private final UserReadingProgressRepository progressRepo;
 
     @Transactional
     public void update(Long userId, UUID articleUuid, BigDecimal progress, String lastHeading) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
         if (articleId == null) return;
 
         String key = RedisKeyConstant.READING_PROGRESS_PREFIX + userId + ":" + articleUuid;
@@ -73,7 +73,7 @@ public class ReadingProgressService {
         if (!hash.isEmpty()) {
             return Optional.of(fromHash(hash));
         }
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
         if (articleId == null) return Optional.empty();
 
         Optional<UserReadingProgress> dbVal = progressRepo.findByUserIdAndArticleId(userId, articleId);
@@ -86,9 +86,9 @@ public class ReadingProgressService {
             return Collections.emptyMap();
         }
 
-        List<Article> articles = articleService.findByIds(articleIds);
+        List<ArticleData> articles = articleFacade.findByIds(articleIds);
         Map<Long, UUID> idToUuid = articles.stream()
-                .collect(Collectors.toMap(Article::getId, Article::getUuid));
+                .collect(Collectors.toMap(ArticleData::id, ArticleData::uuid));
 
         Map<Long, BigDecimal> result = new HashMap<>();
         List<Long> missingIds = new ArrayList<>();
