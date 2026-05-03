@@ -5,7 +5,7 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
@@ -39,7 +39,7 @@ class SeriesServiceTest {
     @Mock private SeriesRepository repo;
     @Mock private SeriesMapper mapper;
     @Mock private ArticleFacade articleFacade;
-    @Mock private ArticleService articleService;  // SP-X: 僅用於 getArticleSummariesByIds
+    @Mock private ArticleQueryService articleQueryService;
     @Mock private ReadingFacade readingFacade;
     @InjectMocks private SeriesService service;
 
@@ -331,7 +331,7 @@ class SeriesServiceTest {
 
         var summary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
                 .uuid(uuidA).title("A").seriesPosition(1).build();
-        when(articleService.getArticleSummariesByIds(List.of(1L))).thenReturn(List.of(summary));
+        when(articleQueryService.getArticleSummariesByIds(List.of(1L))).thenReturn(List.of(summary));
 
         lenient().when(readingFacade.batchGetProgress(any(), any())).thenReturn(Map.of());
 

@@ -8,7 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
@@ -41,7 +41,7 @@ public class SeriesService {
     private final SeriesRepository repo;
     private final SeriesMapper mapper;
     private final ArticleFacade articleFacade;
-    private final ArticleService articleService;  // SP-X: getArticleSummariesByIds 待移
+    private final ArticleQueryService articleQueryService;  // SP-X: ArticleQueryService 跨模組 inject 議題（spec §9）
     private final ReadingFacade readingFacade;
 
     /**
@@ -241,7 +241,7 @@ public class SeriesService {
     /**
      * 將 SeriesWithAuthor row 轉為 SeriesDetailResponse。
      *
-     * <p>articles sub-list 透過 articleService.getArticleSummariesByIds 取得，
+     * <p>articles sub-list 透過 articleQueryService.getArticleSummariesByIds 取得，
      * 並補充 seriesUuid / seriesTitle 欄位（前端可在點進文章詳情時再查完整 seriesNav，
      * 避免 N+1 問題）。</p>
      */
@@ -259,11 +259,11 @@ public class SeriesService {
                 row.getAuthorUuid(), row.getAuthorNickname(), row.getAuthorAvatarUrl()));
 
         // 取得 articles sub-list：以 id 列表批次查詢，再補 series 三欄
-        // SP-X: getArticleSummariesByIds 待移至 ArticleFacade
+        // SP-X: ArticleQueryService 跨模組 inject 議題（spec §9），同 BookmarkController pattern
         List<Long> articleIds = articles.stream().map(ArticleData::id).toList();
         List<ArticleSummaryResponse> summaries = articleIds.isEmpty()
                 ? List.of()
-                : articleService.getArticleSummariesByIds(articleIds);
+                : articleQueryService.getArticleSummariesByIds(articleIds);
         summaries.forEach(s -> {
             s.setSeriesUuid(row.getUuid());
             s.setSeriesTitle(row.getTitle());
