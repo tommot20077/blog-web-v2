@@ -283,6 +283,40 @@ public interface ArticleMapper {
     List<Article> findBySeriesIdOrderByPosition(@Param("seriesId") Long seriesId);
 
     /**
+     * 撈文章對應的 tag UUID 列表（給 ArticleDeletedEvent rich payload 用）。
+     *
+     * <p>
+     * article_tags.article_id 為 UUID（FK → articles.uuid，V9 migration），
+     * 故先以 articles.id（BIGINT）查出 articles.uuid，再 JOIN article_tags。
+     * 文章被刪前呼叫，因刪除後 ON DELETE CASCADE 會清 article_tags 撈不到。
+     * </p>
+     *
+     * @param articleId 文章資料庫主鍵（BIGINT）
+     * @return tag UUID 列表（無 tag 回 emptyList）
+     */
+    @Select("SELECT t.id FROM tags t " +
+            "INNER JOIN article_tags at ON t.id = at.tag_id " +
+            "WHERE at.article_id = (SELECT uuid FROM articles WHERE id = #{articleId})::uuid")
+    List<UUID> findTagUuidsByArticleId(@Param("articleId") Long articleId);
+
+    /**
+     * 撈文章對應的 category UUID 列表（給 ArticleDeletedEvent rich payload 用）。
+     *
+     * <p>
+     * article_categories.article_id 為 BIGINT（FK → articles.id），可直接用主鍵 JOIN。
+     * 個人部落格通常一篇文章對應一個 category，但回傳 List 保持 forward-compat。
+     * 文章被刪前呼叫，因刪除後 ON DELETE CASCADE 會清 article_categories 撈不到。
+     * </p>
+     *
+     * @param articleId 文章資料庫主鍵（BIGINT）
+     * @return category UUID 列表（無 category 回 emptyList）
+     */
+    @Select("SELECT c.uuid FROM categories c " +
+            "INNER JOIN article_categories ac ON c.id = ac.category_id " +
+            "WHERE ac.article_id = #{articleId}")
+    List<UUID> findCategoryUuidsByArticleId(@Param("articleId") Long articleId);
+
+    /**
      * 批次查詢文章 UUID → DB 主鍵對應關係。
      *
      * <p>
