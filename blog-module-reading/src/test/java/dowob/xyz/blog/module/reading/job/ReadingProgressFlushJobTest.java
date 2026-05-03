@@ -1,7 +1,7 @@
 package dowob.xyz.blog.module.reading.job;
 
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,7 +31,7 @@ class ReadingProgressFlushJobTest {
     @Mock private StringRedisTemplate redisTemplate;
     @Mock private HashOperations<String, Object, Object> hashOps;
     @Mock private SetOperations<String, String> setOps;
-    @Mock private ArticleService articleService;
+    @Mock private ArticleFacade articleFacade;
     @Mock private ReadingProgressMapper progressMapper;
     @InjectMocks private ReadingProgressFlushJob job;
 
@@ -52,7 +52,7 @@ class ReadingProgressFlushJobTest {
         hash.put("progress", "0.6");
         hash.put("lastHeading", "intro");
         when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(100L);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(100L);
 
         job.flush();
 
@@ -80,7 +80,7 @@ class ReadingProgressFlushJobTest {
         Map<Object, Object> hash = new HashMap<>();
         hash.put("progress", "0.6");
         when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(100L);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(100L);
         when(progressMapper.upsert(any(), any(), any(), any())).thenThrow(new RuntimeException("DB error"));
 
         job.flush();
@@ -96,7 +96,7 @@ class ReadingProgressFlushJobTest {
         Map<Object, Object> hash = new HashMap<>();
         hash.put("progress", "0.6");
         when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(null);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
 
         job.flush();
 
