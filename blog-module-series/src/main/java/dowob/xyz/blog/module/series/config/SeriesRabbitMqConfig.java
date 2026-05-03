@@ -21,7 +21,6 @@ import java.util.Map;
 public class SeriesRabbitMqConfig {
 
     public static final String QUEUE_SERIES_ARTICLE_DELETED = "series.article-deleted";
-    public static final String DLQ_ROUTING_KEY = "dlq.series.article-deleted";
 
     @Bean
     public Queue seriesArticleDeletedQueue() {
@@ -40,9 +39,8 @@ public class SeriesRabbitMqConfig {
 
     private Map<String, Object> dlqArgs() {
         return Map.of(
-            "x-dead-letter-exchange", "dlq.exchange",
-            "x-dead-letter-routing-key", DLQ_ROUTING_KEY,
-            "x-message-ttl", 600_000
+            "x-dead-letter-exchange", "blog.dlq",
+            "x-dead-letter-routing-key", "dead-letter"
         );
     }
 }

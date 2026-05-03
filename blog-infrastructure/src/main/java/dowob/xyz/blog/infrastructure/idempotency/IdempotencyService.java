@@ -3,7 +3,6 @@ package dowob.xyz.blog.infrastructure.idempotency;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,10 +30,12 @@ import java.util.UUID;
  * 路徑污染 outer transaction（Spring Data JDBC repo.save() 拋出 DbActionExecutionException
  * 時會 mark outer tx as rollback-only）。</p>
  *
+ * <p>Bean 建立由 {@link IdempotencyAutoConfiguration} 管理（@ConditionalOnBean(JdbcTemplate.class)），
+ * 避免 user / recommend 等沒 datasource 的模組啟動時找不到 JdbcTemplate 而失敗。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
-@Service
 @RequiredArgsConstructor
 @Slf4j
 public class IdempotencyService {

@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.series.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -149,14 +151,21 @@ class CrossModuleSeriesIT {
 
     /**
      * 模擬 consumer 收到 ArticleDeletedEvent（IT 不真起 RabbitMQ broker，直接呼叫 consumer）。
+     *
+     * <p>Channel 用 Mockito mock，deliveryTag 固定為 1L，僅讓 basicAck/basicNack 不拋例外。</p>
      */
     private void simulateConsumerProcessing(UUID eventId, Long articleId, UUID articleUuid,
                                             Long authorId, Long seriesId) {
-        ArticleDeletedEvent event = new ArticleDeletedEvent(
-            eventId, articleId, articleUuid, authorId,
-            seriesId, List.of(), List.of(), Instant.now()
-        );
-        seriesArticleDeletedConsumer.onArticleDeleted(event);
+        try {
+            ArticleDeletedEvent event = new ArticleDeletedEvent(
+                eventId, articleId, articleUuid, authorId,
+                seriesId, List.of(), List.of(), Instant.now()
+            );
+            Channel mockChannel = Mockito.mock(Channel.class);
+            seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
+        } catch (Exception e) {
+            throw new RuntimeException("simulateConsumerProcessing 失敗", e);
+        }
     }
 
     /** 直接透過 repository 建立一篇 PUBLISHED 測試文章。 */
@@ -302,12 +311,13 @@ class CrossModuleSeriesIT {
         );
 
         // 3. 第一次處理 → article_count 從 1 變 0
-        seriesArticleDeletedConsumer.onArticleDeleted(event);
+        Channel mockChannel = Mockito.mock(Channel.class);
+        seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
         Series afterFirst = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
         assertThat(afterFirst.getArticleCount()).isEqualTo(0);
 
         // 4. 第二次處理（同一 event，模擬重送）
-        seriesArticleDeletedConsumer.onArticleDeleted(event);
+        seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 2L);
 
         // 5. article_count 仍是 0（沒被扣到 -1，dedup 生效）
         Series afterReplay = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
@@ -331,7 +341,8 @@ class CrossModuleSeriesIT {
             UUID.randomUUID(), 100L, UUID.randomUUID(), AUTHOR_ID,
             null, List.of(), List.of(), Instant.now()
         );
-        seriesArticleDeletedConsumer.onArticleDeleted(event);
+        Channel mockChannel = Mockito.mock(Channel.class);
+        seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
 
         // 2. 無 processed_events 記錄（早返不寫 dedup）
         long count = jdbcTemplate.queryForObject(
