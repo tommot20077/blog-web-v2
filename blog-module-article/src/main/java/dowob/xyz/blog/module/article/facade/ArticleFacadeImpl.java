@@ -362,11 +362,11 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
-     * <p>純 delegate：直接從 ArticleRepository 查找 article entity，轉換為 ArticleContentData record。</p>
+     * <p>純 delegate：委派 articleService.findById 查找 article entity，轉換為 ArticleContentData record。</p>
      */
     @Override
     public Optional<ArticleContentData> findContentById(Long articleId) {
-        return articleRepository.findById(articleId).map(this::toContentData);
+        return articleService.findById(articleId).map(this::toContentData);
     }
 
     /**
@@ -411,20 +411,20 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * <p>比 toArticleData 多含 title / slug / content / summary / coverImageUrl 5 個欄位，
      * 適用需要完整 article 內容的場景（version snapshot / restore）。</p>
      *
-     * @param a 文章實體
+     * @param article 文章實體
      * @return ArticleContentData record
      */
-    private ArticleContentData toContentData(Article a) {
+    private ArticleContentData toContentData(Article article) {
         return new ArticleContentData(
-                a.getId(),
-                a.getUuid(),
-                a.getAuthorId(),
-                a.getTitle(),
-                a.getSlug(),
-                a.getContent(),
-                a.getSummary(),
-                a.getCoverImageUrl(),
-                a.getStatus() != null ? a.getStatus().name() : null
+                article.getId(),
+                article.getUuid(),
+                article.getAuthorId(),
+                article.getTitle(),
+                article.getSlug(),
+                article.getContent(),
+                article.getSummary(),
+                article.getCoverImageUrl(),
+                article.getStatus() != null ? article.getStatus().name() : null
         );
     }
 }

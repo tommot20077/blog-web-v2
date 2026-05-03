@@ -42,8 +42,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
-import static org.mockito.Mockito.inOrder;
-import static org.mockito.Mockito.never;
 
 /**
  * ArticleFacadeImpl 單元測試
@@ -578,7 +576,7 @@ class ArticleFacadeImplTest {
             article.setSummary("summary");
             article.setCoverImageUrl("https://cdn.example/cover.jpg");
             article.setStatus(ArticleStatus.PUBLISHED);
-            when(articleRepository.findById(articleId)).thenReturn(Optional.of(article));
+            when(articleService.findById(articleId)).thenReturn(Optional.of(article));
 
             // when
             Optional<ArticleContentData> result = facade.findContentById(articleId);
@@ -600,7 +598,7 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("article 不存在 → return Optional.empty")
         void findContentById_notFound_returnsEmpty() {
-            when(articleRepository.findById(999L)).thenReturn(Optional.empty());
+            when(articleService.findById(999L)).thenReturn(Optional.empty());
 
             Optional<ArticleContentData> result = facade.findContentById(999L);
 
@@ -615,7 +613,7 @@ class ArticleFacadeImplTest {
             article.setUuid(UUID.randomUUID());
             article.setAuthorId(5L);
             article.setStatus(null);
-            when(articleRepository.findById(100L)).thenReturn(Optional.of(article));
+            when(articleService.findById(100L)).thenReturn(Optional.of(article));
 
             Optional<ArticleContentData> result = facade.findContentById(100L);
 
@@ -656,6 +654,9 @@ class ArticleFacadeImplTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(t -> ((BusinessException) t).getCode())
                 .isEqualTo("A0201");
+
+            verify(articleRepository, never()).save(any(Article.class));
+            verifyNoInteractions(tagFacade, articleEventPublisher);
         }
 
         @Test
