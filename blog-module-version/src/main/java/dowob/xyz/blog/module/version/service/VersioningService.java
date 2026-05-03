@@ -217,9 +217,15 @@ public class VersioningService {
         List<UUID> tags = v.getTags();
         tagFacade.syncArticleTags(saved.getUuid(), tags != null ? tags : List.of());
 
-        /* 4. 發 events */
+        /* 4. 發 events
+         *   - ContentChanged 一律發（version 模組 consumer 處理快照副作用）
+         *   - publishUpdated 僅在文章為 PUBLISHED 才發；search listener 把 update event
+         *     一律 index 為 PUBLISHED（status 寫死），若還原成 DRAFT 仍發會殘留索引。
+         */
         articleEventPublisher.publishContentChanged(saved, Action.RESTORED);
-        articleEventPublisher.publishUpdated(saved);
+        if (saved.getStatus() == ArticleStatus.PUBLISHED) {
+            articleEventPublisher.publishUpdated(saved);
+        }
 
         return saved;
     }
@@ -300,6 +306,30 @@ public class VersioningService {
     }
 
     /**
+     * 驗證 versionUuid 確實屬於 articleUuid 所指的文章，
+     * 用於巢狀 URL（/articles/{articleUuid}/versions/{versionUuid}/...）的一致性檢查。
+     * <p>避免 client 用文章 A 的 URL 操作文章 B 的 version。</p>
+     * <ul>
+     *   <li>V0101：version 不存在</li>
+     *   <li>V0106：article 不存在</li>
+     *   <li>V0108：version 與 article 不對應</li>
+     * </ul>
+     *
+     * @param articleUuid 路徑中的文章 UUID
+     * @param versionUuid 路徑中的版本 UUID
+     */
+    @Transactional(readOnly = true)
+    public void assertVersionBelongsToArticle(UUID articleUuid, UUID versionUuid) {
+        ArticleVersion v = versionRepo.findByUuid(versionUuid)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
+        Article article = articleRepo.findByUuid(articleUuid)
+            .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
+        if (!v.getArticleId().equals(article.getId())) {
+            throw new BusinessException(VersionErrorCode.VERSION_ARTICLE_MISMATCH);
+        }
+    }
+
+    /**
      * 轉換 ArticleVersion 為 VersionDetailResponse。
      */
     private VersionDetailResponse toDetailResponse(ArticleVersion v) {
@@ -342,7 +372,8 @@ public class VersioningService {
         v.setCoverImageUrl(article.getCoverImageUrl());
         ArticleStatus st = article.getStatus();
         v.setStatus(st != null ? st.name() : null);
-        // tags 暫由 mapper 從 article_tags 撈（T11 restore + freezePublished 細節補上）
+        // 抄入 article 當前 tags：restore 時 syncArticleTags 才不會把 tags 清空
+        v.setTags(tagFacade.findTagIdsByArticleUuid(article.getUuid()));
         v.setNote(note);
         v.setCreatedAt(LocalDateTime.now());
         return v;

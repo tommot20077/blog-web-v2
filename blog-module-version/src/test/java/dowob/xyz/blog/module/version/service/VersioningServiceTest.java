@@ -124,6 +124,27 @@ class VersioningServiceTest {
         verify(versionMapper, never()).retainAuto(any(), org.mockito.ArgumentMatchers.anyInt());
     }
 
+    /**
+     * Regression：snapshotFromArticle 必須抄入 article 當前的 tags，
+     * 否則 restore 時 syncArticleTags 收到 List.of() 會把 article 所有 tag 清空。
+     * 對應 PR #31 Copilot review #6。
+     */
+    @Test
+    void recordManualSnapshot_copiesCurrentArticleTags() {
+        UUID t1 = UUID.randomUUID();
+        UUID t2 = UUID.randomUUID();
+        Article a = article("T", "C");
+        when(articleRepo.findById(articleId)).thenReturn(Optional.of(a));
+        when(tagFacade.findTagIdsByArticleUuid(a.getUuid())).thenReturn(List.of(t1, t2));
+        when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.recordManualSnapshot(articleId, "with-tags");
+
+        ArgumentCaptor<ArticleVersion> captor = ArgumentCaptor.forClass(ArticleVersion.class);
+        verify(versionRepo).save(captor.capture());
+        assertThat(captor.getValue().getTags()).containsExactly(t1, t2);
+    }
+
     @Test
     void recordManualSnapshot_articleNotFound_throwsV0106() {
         when(articleRepo.findById(articleId)).thenReturn(Optional.empty());
@@ -278,5 +299,31 @@ class VersioningServiceTest {
             .hasMessageContaining(VersionErrorCode.VERSION_ACCESS_DENIED.getMessage());
 
         verify(articleRepo, never()).findById(any());
+    }
+
+    /**
+     * Regression：restore 一個非 PUBLISHED 的快照時不可發 publishUpdated，
+     * 否則 search listener 會把 DRAFT 文章重新 index 為 PUBLISHED（status 寫死）。
+     * 對應 PR #31 Copilot review #1。
+     */
+    @Test
+    void restore_draftSnapshot_doesNotPublishUpdated() {
+        Article current = article("Old", "old");
+
+        ArticleVersion draftSnapshot = existingVersion("MANUAL");
+        draftSnapshot.setStatus("DRAFT");
+
+        when(versionRepo.findByUuid(versionUuid)).thenReturn(Optional.of(draftSnapshot));
+        when(articleRepo.findById(articleId)).thenReturn(Optional.of(current));
+        lenient().when(preferenceResolver.resolveForUser(authorId))
+            .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
+        when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(articleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(markdownRenderer.render(any())).thenReturn("<p/>");
+
+        service.restore(versionUuid, authorId, false);
+
+        verify(articleEventPublisher).publishContentChanged(any(), eq(Action.RESTORED));
+        verify(articleEventPublisher, never()).publishUpdated(any());
     }
 }

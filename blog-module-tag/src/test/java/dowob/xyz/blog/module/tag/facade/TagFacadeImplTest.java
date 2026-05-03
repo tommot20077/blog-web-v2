@@ -223,4 +223,38 @@ class TagFacadeImplTest {
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
     }
+
+    /** ----------------------------------------------------------------------- */
+    /** findTagIdsByArticleUuid                                                 */
+    /** ----------------------------------------------------------------------- */
+
+    @Nested
+    @DisplayName("findTagIdsByArticleUuid")
+    class FindTagIdsByArticleUuidTests {
+
+        @Test
+        @DisplayName("正常：兩個標籤，回傳對應 UUID 列表")
+        void findTagIdsByArticleUuid_returnsTagIds() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID tagId1 = UUID.randomUUID();
+            UUID tagId2 = UUID.randomUUID();
+            when(articleTagRepository.findTagsByArticleId(articleUuid))
+                    .thenReturn(List.of(buildTag(tagId1, "T1", "t-1"), buildTag(tagId2, "T2", "t-2")));
+
+            List<UUID> result = tagFacadeImpl.findTagIdsByArticleUuid(articleUuid);
+
+            assertThat(result).containsExactly(tagId1, tagId2);
+        }
+
+        @Test
+        @DisplayName("邊界：無標籤時回傳空列表（非 null）")
+        void findTagIdsByArticleUuid_noTags_returnsEmpty() {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of());
+
+            List<UUID> result = tagFacadeImpl.findTagIdsByArticleUuid(articleUuid);
+
+            assertThat(result).isNotNull().isEmpty();
+        }
+    }
 }

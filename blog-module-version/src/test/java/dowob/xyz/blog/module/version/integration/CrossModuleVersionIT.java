@@ -51,6 +51,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -218,7 +219,7 @@ class CrossModuleVersionIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event);
+        consumer.onContentChanged(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
 
         // 3. 驗證：article_versions 有至少 1 筆 type=AUTO
         long autoCount = countAutoVersions(article.getId());
@@ -248,7 +249,7 @@ class CrossModuleVersionIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event);
+        consumer.onContentChanged(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
 
         // 3. 驗證：1 筆 PUBLISHED + 0 筆 AUTO（清光）
         List<ArticleVersion> allVersions = new ArrayList<>();
@@ -279,12 +280,12 @@ class CrossModuleVersionIT {
     // ─── Test 3: restoreVersion → article 更新 + ArticleUpdatedEvent ─────────
 
     @Test
-    @DisplayName("restoreVersion → 文章內容更新 + ArticleUpdatedEvent 觸發")
-    void restoreVersion_updatesArticleAndPublishesEvent() throws Exception {
+    @DisplayName("restoreVersion (DRAFT) → 文章內容更新 + ContentChanged(RESTORED)，但不發 publishUpdated")
+    void restoreVersion_draftSnapshot_publishesContentChangedOnly() throws Exception {
         // 1. 建立 article (title=A, content=A-content)
         Article article = createDraftArticle(AUTHOR_ID, "Title A", "A-content");
 
-        // 2. 寫 1 筆 MANUAL 快照（使用 article 原始資料）
+        // 2. 寫 1 筆 MANUAL 快照（使用 article 原始資料；status=DRAFT）
         ArticleVersion snapshot = new ArticleVersion();
         snapshot.setUuid(UUID.randomUUID());
         snapshot.setArticleId(article.getId());
@@ -321,8 +322,11 @@ class CrossModuleVersionIT {
         assertThat(restored.getTitle()).isEqualTo("Title A");
         assertThat(restored.getContent()).isEqualTo("A-content");
 
-        // 6. 驗證 articleEventPublisher.publishUpdated 有被呼叫
-        verify(articleEventPublisher).publishUpdated(any(Article.class));
+        // 6. 驗證事件：DRAFT 還原應發 ContentChanged(RESTORED) 但不發 publishUpdated
+        //    （否則 search listener 會把文章 re-index 為 PUBLISHED 殘留索引）
+        verify(articleEventPublisher).publishContentChanged(any(Article.class),
+                eq(dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action.RESTORED));
+        verify(articleEventPublisher, org.mockito.Mockito.never()).publishUpdated(any(Article.class));
     }
 
     // ─── Test 4: deleteArticle → CASCADE 清除 versions ──────────────────────
@@ -365,7 +369,7 @@ class CrossModuleVersionIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event);
+        consumer.onContentChanged(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
 
         // 4. 驗證：article_versions 中該 article 的 AUTO row 為 0
         long autoCount = countAutoVersions(article.getId());

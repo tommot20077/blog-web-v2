@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.version.consumer;
 
+import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
@@ -17,6 +18,7 @@ import dowob.xyz.blog.module.version.service.VersioningService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -103,14 +105,19 @@ class ArticleVersionConsumerIT {
     private UserAuthService userAuthService;
 
     private static final Long AUTHOR_ID = 1L;
+    private static final long DELIVERY_TAG = 1L;
 
     private Article testArticle;
+    private Channel mockChannel;
 
     @BeforeEach
     void setup() {
         // 清理版本與文章資料
         versionRepo.deleteAll();
         articleRepo.deleteAll();
+
+        // 每個測試獨立的 mock channel
+        mockChannel = Mockito.mock(Channel.class);
 
         // 建立測試文章
         testArticle = new Article();
@@ -143,7 +150,7 @@ class ArticleVersionConsumerIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event);
+        consumer.onContentChanged(event, mockChannel, DELIVERY_TAG);
 
         List<ArticleVersion> versions = (List<ArticleVersion>) versionRepo.findAll();
         assertThat(versions).hasSize(1);
@@ -185,7 +192,7 @@ class ArticleVersionConsumerIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event);
+        consumer.onContentChanged(event, mockChannel, DELIVERY_TAG);
 
         // 驗證：所有 AUTO 被清除，僅留 1 個 PUBLISHED
         List<ArticleVersion> after = (List<ArticleVersion>) versionRepo.findAll();
@@ -211,7 +218,7 @@ class ArticleVersionConsumerIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event);
+        consumer.onContentChanged(event, mockChannel, DELIVERY_TAG);
 
         long countAfter = countVersionsForArticle(testArticle.getId());
         assertThat(countAfter).isZero();

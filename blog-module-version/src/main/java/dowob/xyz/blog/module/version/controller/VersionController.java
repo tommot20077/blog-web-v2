@@ -81,6 +81,7 @@ public class VersionController {
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
         boolean isAdmin = isAdmin();
+        versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         return ApiResponse.success(
             versioningService.getDetail(versionUuid, currentUserId, isAdmin));
     }
@@ -115,6 +116,7 @@ public class VersionController {
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
         boolean isAdmin = isAdmin();
+        versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         versioningService.restore(versionUuid, currentUserId, isAdmin);
         return ApiResponse.success();
     }
@@ -131,6 +133,7 @@ public class VersionController {
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
         boolean isAdmin = isAdmin();
+        versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         ArticleVersion v = versioningService.promote(versionUuid, currentUserId, isAdmin);
         return ApiResponse.success(v);
     }
@@ -147,6 +150,7 @@ public class VersionController {
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
         boolean isAdmin = isAdmin();
+        versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         versioningService.delete(versionUuid, currentUserId, isAdmin);
         return ApiResponse.success();
     }
