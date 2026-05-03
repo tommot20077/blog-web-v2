@@ -1,6 +1,7 @@
 package dowob.xyz.blog.infrastructure.facade;
 
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 
@@ -87,4 +88,77 @@ public interface ArticleFacade {
      * @return 文章熱門計算資料列表
      */
     List<ArticleTrendingData> getArticlesPublishedAfter(LocalDateTime since);
+
+    // ─── SP-B 新增 5 read method ───
+
+    /**
+     * UUID → DB id（最高頻跨模組查詢）。
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return 文章資料庫主鍵；查無時 null
+     */
+    Long findIdByUuid(UUID articleUuid);
+
+    /**
+     * UUID → ArticleData（跨模組查 article 元資料）。
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return ArticleData Optional
+     */
+    Optional<ArticleData> findByUuid(UUID articleUuid);
+
+    /**
+     * DB id → ArticleData（給 SeriesFacade.getSeriesNavigation 用 — 解 @Lazy）。
+     *
+     * @param articleId 文章資料庫主鍵
+     * @return ArticleData Optional
+     */
+    Optional<ArticleData> findById(Long articleId);
+
+    /**
+     * 批次 id 查 article（給 ReadingProgressService 用）。
+     *
+     * @param articleIds 文章主鍵列表
+     * @return ArticleData 列表
+     */
+    List<ArticleData> findByIds(List<Long> articleIds);
+
+    /**
+     * 撈 series 內 article 排序好（給 SeriesService.getSeriesDetail 用）。
+     *
+     * @param seriesId 系列主鍵
+     * @return 該 series 內 article 按 series_position 排序
+     */
+    List<ArticleData> findBySeriesIdOrderByPosition(Long seriesId);
+
+    // ─── SP-B 新增 5 write method（counter / 欄位 set，simple write）───
+
+    /**
+     * comment 模組創建 comment 時連動 article.comment_count + 1。
+     */
+    void incrementCommentCount(Long articleId);
+
+    /**
+     * comment 模組刪除 comment 時連動 article.comment_count - 1。
+     */
+    void decrementCommentCount(Long articleId);
+
+    /**
+     * reading 模組 like article 時連動 article.like_count + 1。
+     */
+    void incrementLikeCount(Long articleId);
+
+    /**
+     * reading 模組 unlike article 時連動 article.like_count - 1。
+     */
+    void decrementLikeCount(Long articleId);
+
+    /**
+     * series 模組 add / remove article from series 時 set article.series_id + series_position。
+     *
+     * @param articleId      文章主鍵
+     * @param seriesId       系列主鍵（remove 時傳 null）
+     * @param seriesPosition 在 series 內的位置（remove 時傳 null）
+     */
+    void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition);
 }
