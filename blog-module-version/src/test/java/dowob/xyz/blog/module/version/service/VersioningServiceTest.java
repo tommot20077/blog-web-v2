@@ -1,11 +1,11 @@
 package dowob.xyz.blog.module.version.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.repository.ArticleRepository;
-import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
@@ -36,12 +36,11 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class VersioningServiceTest {
 
-    @Mock private ArticleRepository articleRepo;
+    @Mock private ArticleFacade articleFacade;
     @Mock private ArticleVersionRepository versionRepo;
     @Mock private VersionMapper versionMapper;
     @Mock private PreferenceResolver preferenceResolver;
     @Mock private ArticleMarkdownRenderer markdownRenderer;
-    @Mock private ArticleEventPublisher articleEventPublisher;
     @Mock private TagFacade tagFacade;
 
     @InjectMocks private VersioningService service;
@@ -51,16 +50,17 @@ class VersioningServiceTest {
     private final Long versionId = 200L;
     private final UUID versionUuid = UUID.randomUUID();
 
-    private Article article(String title, String content) {
-        Article a = new Article();
-        a.setId(articleId);
-        a.setUuid(UUID.randomUUID());
-        a.setAuthorId(authorId);
-        a.setTitle(title);
-        a.setSlug("test-slug");
-        a.setContent(content);
-        a.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.DRAFT);
-        return a;
+    /** 建立帶有固定 uuid 的 ArticleContentData stub（snapshot 流程用）。 */
+    private ArticleContentData contentData(Long id, Long aAuthorId, String title, String content) {
+        return new ArticleContentData(
+            id, UUID.randomUUID(), aAuthorId,
+            title, "test-slug", content, "summary", null, "DRAFT"
+        );
+    }
+
+    /** 建立 ArticleData stub（權限驗證 / id 比對用）。 */
+    private ArticleData articleData(Long id, UUID uuid, Long aAuthorId) {
+        return new ArticleData(id, uuid, aAuthorId, "DRAFT", null, null);
     }
 
     private ArticleVersion existingVersion(String type) {
@@ -78,7 +78,8 @@ class VersioningServiceTest {
 
     @Test
     void recordAutoSnapshot_savesAndAppliesRetention() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("Test", "Hello world")));
+        when(articleFacade.findContentById(articleId))
+            .thenReturn(Optional.of(contentData(articleId, authorId, "Test", "Hello world")));
         when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -100,7 +101,7 @@ class VersioningServiceTest {
 
     @Test
     void recordAutoSnapshot_articleNotFound_doesNothing() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.empty());
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.empty());
 
         service.recordAutoSnapshot(articleId);
 
@@ -112,7 +113,8 @@ class VersioningServiceTest {
 
     @Test
     void recordManualSnapshot_savesWithNote_noRetention() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("T", "C")));
+        when(articleFacade.findContentById(articleId))
+            .thenReturn(Optional.of(contentData(articleId, authorId, "T", "C")));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.recordManualSnapshot(articleId, "milestone");
@@ -125,7 +127,7 @@ class VersioningServiceTest {
     }
 
     /**
-     * Regression：snapshotFromArticle 必須抄入 article 當前的 tags，
+     * Regression：snapshotFromContent 必須抄入 article 當前的 tags，
      * 否則 restore 時 syncArticleTags 收到 List.of() 會把 article 所有 tag 清空。
      * 對應 PR #31 Copilot review #6。
      */
@@ -133,9 +135,9 @@ class VersioningServiceTest {
     void recordManualSnapshot_copiesCurrentArticleTags() {
         UUID t1 = UUID.randomUUID();
         UUID t2 = UUID.randomUUID();
-        Article a = article("T", "C");
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(a));
-        when(tagFacade.findTagIdsByArticleUuid(a.getUuid())).thenReturn(List.of(t1, t2));
+        ArticleContentData cd = contentData(articleId, authorId, "T", "C");
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(cd));
+        when(tagFacade.findTagIdsByArticleUuid(cd.uuid())).thenReturn(List.of(t1, t2));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         service.recordManualSnapshot(articleId, "with-tags");
@@ -147,7 +149,7 @@ class VersioningServiceTest {
 
     @Test
     void recordManualSnapshot_articleNotFound_throwsV0106() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.empty());
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.recordManualSnapshot(articleId, null))
             .isInstanceOf(BusinessException.class)
@@ -158,7 +160,8 @@ class VersioningServiceTest {
 
     @Test
     void freezePublished_writesPublishedAndClearsAutos() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("T", "C")));
+        when(articleFacade.findContentById(articleId))
+            .thenReturn(Optional.of(contentData(articleId, authorId, "T", "C")));
         when(versionMapper.countPublished(articleId)).thenReturn(0);
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -174,7 +177,8 @@ class VersioningServiceTest {
 
     @Test
     void freezePublished_secondPublishIncrementsVN() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("T", "C")));
+        when(articleFacade.findContentById(articleId))
+            .thenReturn(Optional.of(contentData(articleId, authorId, "T", "C")));
         when(versionMapper.countPublished(articleId)).thenReturn(1);
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -245,9 +249,9 @@ class VersioningServiceTest {
     // ─── restore ─────────────
 
     @Test
-    void restore_stashesAndOverwritesArticle() {
+    void restore_stashesAndDelegatesAtomicRestore() {
         UUID tagUuid = UUID.randomUUID();
-        Article current = article("Old", "old content");
+        ArticleContentData current = contentData(articleId, authorId, "Old", "old content");
 
         ArticleVersion target = existingVersion("AUTO");
         target.setTitle("New");
@@ -256,11 +260,10 @@ class VersioningServiceTest {
         target.setTags(List.of(tagUuid));
 
         when(versionRepo.findByUuid(versionUuid)).thenReturn(Optional.of(target));
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(current));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(current));
         lenient().when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(articleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(markdownRenderer.render("new content")).thenReturn("<p>new content</p>");
 
         service.restore(versionUuid, authorId, false);
@@ -274,19 +277,15 @@ class VersioningServiceTest {
         /* 2. retention 執行 */
         verify(versionMapper).retainAuto(eq(articleId), org.mockito.ArgumentMatchers.anyInt());
 
-        /* 3. article 寫回 + render */
-        ArgumentCaptor<Article> articleCap = ArgumentCaptor.forClass(Article.class);
-        verify(articleRepo).save(articleCap.capture());
-        assertThat(articleCap.getValue().getTitle()).isEqualTo("New");
-        assertThat(articleCap.getValue().getContent()).isEqualTo("new content");
-        assertThat(articleCap.getValue().getContentHtml()).isEqualTo("<p>new content</p>");
-
-        /* 4. tags 重綁（透過 TagFacade.syncArticleTags） */
-        verify(tagFacade).syncArticleTags(eq(current.getUuid()), eq(List.of(tagUuid)));
-
-        /* 5. events 發出 */
-        verify(articleEventPublisher).publishContentChanged(any(), eq(Action.RESTORED));
-        verify(articleEventPublisher).publishUpdated(any());
+        /* 3. atomic restore 委派給 ArticleFacade */
+        ArgumentCaptor<ArticleRestoreData> restoreCap =
+            ArgumentCaptor.forClass(ArticleRestoreData.class);
+        verify(articleFacade).applyRestoreContent(eq(articleId), restoreCap.capture());
+        ArticleRestoreData rd = restoreCap.getValue();
+        assertThat(rd.title()).isEqualTo("New");
+        assertThat(rd.content()).isEqualTo("new content");
+        assertThat(rd.contentHtml()).isEqualTo("<p>new content</p>");
+        assertThat(rd.tags()).containsExactly(tagUuid);
     }
 
     @Test
@@ -298,32 +297,31 @@ class VersioningServiceTest {
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining(VersionErrorCode.VERSION_ACCESS_DENIED.getMessage());
 
-        verify(articleRepo, never()).findById(any());
+        verify(articleFacade, never()).findContentById(any());
     }
 
     /**
-     * Regression：restore 一個非 PUBLISHED 的快照時不可發 publishUpdated，
-     * 否則 search listener 會把 DRAFT 文章重新 index 為 PUBLISHED（status 寫死）。
-     * 對應 PR #31 Copilot review #1。
+     * Regression：restore 一個非 PUBLISHED 的快照時不可由 VersioningService 發 publishUpdated；
+     * event 的條件判斷已移入 ArticleFacade.applyRestoreContent 內部。
+     * VersioningService 層只需確認 applyRestoreContent 被呼叫，
+     * event 條件由 ArticleFacadeImplTest 驗證。
      */
     @Test
-    void restore_draftSnapshot_doesNotPublishUpdated() {
-        Article current = article("Old", "old");
+    void restore_draftSnapshot_delegatesToFacadeApplyRestore() {
+        ArticleContentData current = contentData(articleId, authorId, "Old", "old");
 
         ArticleVersion draftSnapshot = existingVersion("MANUAL");
         draftSnapshot.setStatus("DRAFT");
 
         when(versionRepo.findByUuid(versionUuid)).thenReturn(Optional.of(draftSnapshot));
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(current));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(current));
         lenient().when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(articleRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(markdownRenderer.render(any())).thenReturn("<p/>");
 
         service.restore(versionUuid, authorId, false);
 
-        verify(articleEventPublisher).publishContentChanged(any(), eq(Action.RESTORED));
-        verify(articleEventPublisher, never()).publishUpdated(any());
+        verify(articleFacade).applyRestoreContent(eq(articleId), any(ArticleRestoreData.class));
     }
 }
