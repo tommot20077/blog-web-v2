@@ -64,6 +64,9 @@ public class ArticleRabbitMqConfig {
      */
     public static final String ROUTING_KEY_TAGGED = "article.tagged";
 
+    /** 文章內容變更（含 SAVED / PUBLISHED / RESTORED）— 給 version 模組訂閱 */
+    public static final String ROUTING_KEY_CONTENT_CHANGED = "article.content.changed";
+
     /**
      * 建立死信隊列（DLQ）參數
      *

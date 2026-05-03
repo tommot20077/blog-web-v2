@@ -26,18 +26,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
-import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
-import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
-import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
-import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
-import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
+import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
 import dowob.xyz.blog.module.article.model.Category;
 import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
@@ -90,7 +84,7 @@ class ArticleServiceTest {
     private UserFacade userFacade;
 
     @Mock
-    private RabbitTemplate rabbitTemplate;
+    private ArticleEventPublisher articleEventPublisher;
 
     @Mock
     private ViewCountService viewCountService;
@@ -670,10 +664,7 @@ class ArticleServiceTest {
             ArticleResponse response = articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED),
-                    any(ArticlePublishedEvent.class));
+            verify(articleEventPublisher).publishPublished(any(Article.class), any());
         }
 
         @Test
@@ -737,20 +728,17 @@ class ArticleServiceTest {
 
             articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
-            ArgumentCaptor<ArticlePublishedEvent> captor = ArgumentCaptor.forClass(ArticlePublishedEvent.class);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED),
-                    captor.capture());
+            ArgumentCaptor<Article> articleCaptor = ArgumentCaptor.forClass(Article.class);
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<java.util.List<TagInfo>> tagsCaptor = ArgumentCaptor.forClass(java.util.List.class);
+            verify(articleEventPublisher).publishPublished(articleCaptor.capture(), tagsCaptor.capture());
 
-            ArticlePublishedEvent event = captor.getValue();
-            assertThat(event.slug()).isEqualTo(article.getSlug());
-            assertThat(event.summary()).isEqualTo("測試摘要");
-            assertThat(event.contentText()).isNotBlank();
-            assertThat(event.authorUsername()).isEqualTo("testuser");
-            assertThat(event.authorNickname()).isEqualTo("TestAuthor");
-            assertThat(event.tags()).hasSize(1);
-            assertThat(event.tags().get(0).name()).isEqualTo("Spring");
+            Article publishedArticle = articleCaptor.getValue();
+            java.util.List<TagInfo> capturedTags = tagsCaptor.getValue();
+            assertThat(publishedArticle.getSlug()).isEqualTo(article.getSlug());
+            assertThat(publishedArticle.getSummary()).isEqualTo("測試摘要");
+            assertThat(capturedTags).hasSize(1);
+            assertThat(capturedTags.get(0).name()).isEqualTo("Spring");
         }
 
         @Test
@@ -764,7 +752,8 @@ class ArticleServiceTest {
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
 
-            verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any(Object.class));
+            verify(articleEventPublisher, never()).publishPublished(any(), any());
+            verify(articleEventPublisher, never()).publishContentChanged(any(), any());
         }
     }
 
@@ -786,8 +775,7 @@ class ArticleServiceTest {
 
             assertThat(response).isNotNull();
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
-            verify(rabbitTemplate).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
+            verify(articleEventPublisher).publishViewed(ARTICLE_UUID);
         }
 
         @Test
@@ -800,8 +788,7 @@ class ArticleServiceTest {
                     "127.0.0.1");
 
             assertThat(response).isNotNull();
-            verify(rabbitTemplate, never()).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
+            verify(articleEventPublisher, never()).publishViewed(any());
         }
 
         @Test
@@ -839,8 +826,7 @@ class ArticleServiceTest {
 
             assertThat(response).isNotNull();
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
-            verify(rabbitTemplate, never()).convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED), any(ArticleViewedEvent.class));
+            verify(articleEventPublisher, never()).publishViewed(any());
         }
 
         @Test
@@ -864,10 +850,7 @@ class ArticleServiceTest {
 
             articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
 
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
-                    any(ArticleViewedEvent.class));
+            verify(articleEventPublisher).publishViewed(ARTICLE_UUID);
             verify(articleMapper, never()).incrementViewCountBatch(any(UUID.class), anyLong());
         }
 
@@ -880,10 +863,7 @@ class ArticleServiceTest {
 
             articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
 
-            verify(rabbitTemplate, never()).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
-                    any(ArticleViewedEvent.class));
+            verify(articleEventPublisher, never()).publishViewed(any());
         }
 
         @Test
@@ -1125,15 +1105,11 @@ class ArticleServiceTest {
 
             articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
-            ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
-                    captor.capture());
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleEventPublisher).publishDeleted(captor.capture());
 
-            ArticleDeletedEvent event = captor.getValue();
-            assertThat(event.articleUuid()).isEqualTo(ARTICLE_UUID);
-            assertThat(event.deletedAt()).isNotNull();
+            Article deletedArticle = captor.getValue();
+            assertThat(deletedArticle.getUuid()).isEqualTo(ARTICLE_UUID);
         }
 
         @Test
@@ -1274,15 +1250,12 @@ class ArticleServiceTest {
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
 
-            verify(rabbitTemplate, never()).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_UPDATED),
-                    any(ArticleUpdatedEvent.class));
+            verify(articleEventPublisher, never()).publishUpdated(any());
         }
 
         @Test
-        @DisplayName("正常：更新 DRAFT 文章時，不應發送 ArticleUpdatedEvent")
-        void updateDraftArticle_shouldNotPublishUpdatedEvent() {
+        @DisplayName("正常：更新 DRAFT 文章時，不應發送 ArticleUpdatedEvent；但仍發送 ContentChanged(SAVED)")
+        void updateDraftArticle_shouldNotPublishUpdatedEvent_butShouldPublishContentChanged() {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
             when(articleRepository.save(any(Article.class))).thenReturn(article);
@@ -1292,10 +1265,8 @@ class ArticleServiceTest {
 
             articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
 
-            verify(rabbitTemplate, never()).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_UPDATED),
-                    any(ArticleUpdatedEvent.class));
+            verify(articleEventPublisher, never()).publishUpdated(any());
+            verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
         }
     }
 
@@ -1765,10 +1736,7 @@ class ArticleServiceTest {
 
             articleService.getArticleBySlug("view-slug-1234", null, null, "127.0.0.1");
 
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
-                    any(ArticleViewedEvent.class));
+            verify(articleEventPublisher).publishViewed(any(UUID.class));
         }
     }
 
@@ -1794,15 +1762,13 @@ class ArticleServiceTest {
 
             articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
-            ArgumentCaptor<ArticleTagEvent> captor = ArgumentCaptor.forClass(ArticleTagEvent.class);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
-                    captor.capture());
+            ArgumentCaptor<Article> articleCaptor2 = ArgumentCaptor.forClass(Article.class);
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<java.util.List<UUID>> tagIdsCaptor = ArgumentCaptor.forClass(java.util.List.class);
+            verify(articleEventPublisher).publishTagged(articleCaptor2.capture(), tagIdsCaptor.capture());
 
-            ArticleTagEvent event = captor.getValue();
-            assertThat(event.articleId()).isEqualTo(ARTICLE_UUID);
-            assertThat(event.tagIds()).containsExactlyInAnyOrder(tagId1, tagId2);
+            assertThat(articleCaptor2.getValue().getUuid()).isEqualTo(ARTICLE_UUID);
+            assertThat(tagIdsCaptor.getValue()).containsExactlyInAnyOrder(tagId1, tagId2);
         }
 
         @Test
@@ -1815,10 +1781,7 @@ class ArticleServiceTest {
 
             articleService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
-            verify(rabbitTemplate, never()).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
-                    any(ArticleTagEvent.class));
+            verify(articleEventPublisher, never()).publishTagged(any(), any());
         }
 
         @Test
@@ -1841,15 +1804,13 @@ class ArticleServiceTest {
 
             articleService.createArticle(AUTHOR_ID, request);
 
-            ArgumentCaptor<ArticleTagEvent> captor = ArgumentCaptor.forClass(ArticleTagEvent.class);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
-                    captor.capture());
+            ArgumentCaptor<Article> articleCaptorCreate = ArgumentCaptor.forClass(Article.class);
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<java.util.List<UUID>> tagIdsCaptorCreate = ArgumentCaptor.forClass(java.util.List.class);
+            verify(articleEventPublisher).publishTagged(articleCaptorCreate.capture(), tagIdsCaptorCreate.capture());
 
-            ArticleTagEvent event = captor.getValue();
-            assertThat(event.articleId()).isEqualTo(ARTICLE_UUID);
-            assertThat(event.tagIds()).containsExactlyInAnyOrder(tagId1, tagId2);
+            assertThat(articleCaptorCreate.getValue().getUuid()).isEqualTo(ARTICLE_UUID);
+            assertThat(tagIdsCaptorCreate.getValue()).containsExactlyInAnyOrder(tagId1, tagId2);
         }
 
         @Test
@@ -1864,10 +1825,7 @@ class ArticleServiceTest {
 
             articleService.createArticle(AUTHOR_ID, request);
 
-            verify(rabbitTemplate, never()).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
-                    any(ArticleTagEvent.class));
+            verify(articleEventPublisher, never()).publishTagged(any(), any());
         }
 
         @Test
@@ -1886,15 +1844,13 @@ class ArticleServiceTest {
 
             articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
 
-            ArgumentCaptor<ArticleTagEvent> captor = ArgumentCaptor.forClass(ArticleTagEvent.class);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
-                    captor.capture());
+            ArgumentCaptor<Article> articleCaptorUpdate = ArgumentCaptor.forClass(Article.class);
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<java.util.List<UUID>> tagIdsCaptorUpdate = ArgumentCaptor.forClass(java.util.List.class);
+            verify(articleEventPublisher).publishTagged(articleCaptorUpdate.capture(), tagIdsCaptorUpdate.capture());
 
-            ArticleTagEvent event = captor.getValue();
-            assertThat(event.articleId()).isEqualTo(ARTICLE_UUID);
-            assertThat(event.tagIds()).containsExactly(tagId1);
+            assertThat(articleCaptorUpdate.getValue().getUuid()).isEqualTo(ARTICLE_UUID);
+            assertThat(tagIdsCaptorUpdate.getValue()).containsExactly(tagId1);
         }
 
         @Test
@@ -1908,10 +1864,7 @@ class ArticleServiceTest {
 
             articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
 
-            verify(rabbitTemplate, never()).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_TAGGED),
-                    any(ArticleTagEvent.class));
+            verify(articleEventPublisher, never()).publishTagged(any(), any());
         }
     }
 

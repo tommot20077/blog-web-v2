@@ -36,6 +36,10 @@ public class DatabaseCleaner {
         jdbcTemplate.execute("DELETE FROM user_reading_progress");
         jdbcTemplate.execute("DELETE FROM comments");
 
+        // V16 新增表（article_id/user_id FK ON DELETE CASCADE，但顯式刪更直觀）
+        jdbcTemplate.execute("DELETE FROM article_versions");
+        jdbcTemplate.execute("DELETE FROM user_preferences");
+
         // 實體表（articles 在 series 之前刪：series_id ON DELETE SET NULL，順序不衝突）
         jdbcTemplate.execute("DELETE FROM file_metadata");
         jdbcTemplate.execute("DELETE FROM verification_tokens");
