@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.service;
 
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.exception.ReadingErrorCode;
@@ -31,6 +32,9 @@ public class HighlightService {
     @Transactional
     public HighlightResponse create(UUID articleUuid, Long userId, CreateHighlightRequest req) {
         Long articleId = articleFacade.findIdByUuid(articleUuid);
+        if (articleId == null) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
+        }
 
         UserHighlight h = new UserHighlight();
         h.setUuid(UUID.randomUUID());
@@ -48,6 +52,9 @@ public class HighlightService {
 
     public List<HighlightResponse> getByArticle(UUID articleUuid, Long userId) {
         Long articleId = articleFacade.findIdByUuid(articleUuid);
+        if (articleId == null) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
+        }
         return repo.findByUserIdAndArticleIdOrderByCreatedAtAsc(userId, articleId)
                 .stream().map(this::toResponse).toList();
     }

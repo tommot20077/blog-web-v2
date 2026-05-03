@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.service;
 
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.exception.ReadingErrorCode;
@@ -8,6 +9,7 @@ import dowob.xyz.blog.module.reading.model.dto.request.CreateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.request.UpdateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.response.HighlightResponse;
 import dowob.xyz.blog.module.reading.repository.UserHighlightRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -182,5 +184,35 @@ class HighlightServiceTest {
         assertThatThrownBy(() -> service.delete(highlightUuid, userId))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(ReadingErrorCode.HIGHLIGHT_NOT_FOUND.getMessage());
+    }
+
+    @Test
+    @DisplayName("create：article 不存在 → throw ARTICLE_NOT_FOUND")
+    void create_articleNotFound_throwsArticleNotFound() {
+        UUID articleUuid = UUID.randomUUID();
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
+
+        CreateHighlightRequest req = new CreateHighlightRequest();
+        req.setSnippet("text");
+        req.setColor("yellow");
+
+        assertThatThrownBy(() -> service.create(articleUuid, 1L, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+        verify(repo, never()).save(any(UserHighlight.class));
+    }
+
+    @Test
+    @DisplayName("getByArticle：article 不存在 → throw ARTICLE_NOT_FOUND")
+    void getByArticle_articleNotFound_throwsArticleNotFound() {
+        UUID articleUuid = UUID.randomUUID();
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.getByArticle(articleUuid, 1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+        verify(repo, never()).findByUserIdAndArticleIdOrderByCreatedAtAsc(any(), any());
     }
 }

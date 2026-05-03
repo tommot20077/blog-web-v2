@@ -1,7 +1,7 @@
 package dowob.xyz.blog.module.version.service;
 
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.model.dto.response.AutoSnapshotConfig;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
@@ -20,7 +21,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class AutoSnapshotPolicyTest {
 
-    @Mock private ArticleRepository articleRepo;
+    @Mock private ArticleFacade articleFacade;
     @Mock private ArticleVersionRepository versionRepo;
     @Mock private PreferenceResolver preferenceResolver;
     @InjectMocks private AutoSnapshotPolicy policy;
@@ -28,12 +29,11 @@ class AutoSnapshotPolicyTest {
     private final Long articleId = 100L;
     private final Long authorId = 1L;
 
-    private Article article(String content) {
-        Article a = new Article();
-        a.setId(articleId);
-        a.setAuthorId(authorId);
-        a.setContent(content);
-        return a;
+    private ArticleContentData buildContentData(Long id, Long authorId, String content) {
+        return new ArticleContentData(
+            id, UUID.randomUUID(), authorId,
+            "T", "s", content, "sum", null, "PUBLISHED"
+        );
     }
 
     private ArticleVersion lastAuto(String content, LocalDateTime createdAt) {
@@ -45,7 +45,7 @@ class AutoSnapshotPolicyTest {
 
     @Test
     void shouldSnapshot_disabled_returnsFalse() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("aaa")));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "aaa")));
         when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(false, 50, 60, 50));
 
@@ -54,7 +54,7 @@ class AutoSnapshotPolicyTest {
 
     @Test
     void shouldSnapshot_firstTime_returnsTrue() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("aaa")));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "aaa")));
         when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
@@ -65,7 +65,7 @@ class AutoSnapshotPolicyTest {
 
     @Test
     void shouldSnapshot_intervalNotElapsed_returnsFalse() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("a".repeat(200))));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "a".repeat(200))));
         when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
@@ -76,7 +76,7 @@ class AutoSnapshotPolicyTest {
 
     @Test
     void shouldSnapshot_diffNotEnough_returnsFalse() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("a".repeat(110))));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "a".repeat(110))));
         when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
@@ -87,7 +87,7 @@ class AutoSnapshotPolicyTest {
 
     @Test
     void shouldSnapshot_diffCharsZero_skipsDiffCheck_returnsTrueWhenIntervalPassed() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("a".repeat(100))));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "a".repeat(100))));
         when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 0));
         when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
@@ -98,7 +98,7 @@ class AutoSnapshotPolicyTest {
 
     @Test
     void shouldSnapshot_intervalAndDiffPass_returnsTrue() {
-        when(articleRepo.findById(articleId)).thenReturn(Optional.of(article("a".repeat(200))));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "a".repeat(200))));
         when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))

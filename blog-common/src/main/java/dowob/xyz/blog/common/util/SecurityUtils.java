@@ -5,6 +5,7 @@ import lombok.experimental.UtilityClass;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.Objects;
 
@@ -42,5 +43,29 @@ public class SecurityUtils {
                 .filter(Objects::nonNull)
                 .findFirst()
                 .orElse(null);
+    }
+
+    /**
+     * 從 SecurityContextHolder 直接取 — controller 內最簡呼叫方式。
+     *
+     * @return 當前 thread 的 authentication 是否為 ROLE_ADMIN
+     */
+    public static boolean isAdmin() {
+        return isAdmin(SecurityContextHolder.getContext().getAuthentication());
+    }
+
+    /**
+     * 帶參版 — unit test / 自行傳 Authentication 的 caller 用。
+     *
+     * @param authentication Spring Security 認證物件（可為 null / AnonymousAuthenticationToken / 認證 token）
+     * @return 是否為 ROLE_ADMIN（null / 匿名 / 未認證 / 其他角色一律 false）
+     */
+    public static boolean isAdmin(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || authentication instanceof AnonymousAuthenticationToken) {
+            return false;
+        }
+        return authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
     }
 }

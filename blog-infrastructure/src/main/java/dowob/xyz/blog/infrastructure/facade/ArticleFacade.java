@@ -1,7 +1,9 @@
 package dowob.xyz.blog.infrastructure.facade;
 
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 
@@ -27,6 +29,8 @@ import java.util.UUID;
  *   <li><b>SP-B 新增 simple write</b>（incrementCommentCount / decrementCommentCount /
  *       incrementLikeCount / decrementLikeCount / updateSeriesAssignment）：counter /
  *       欄位 set 類型，直接更新 article 欄位，無業務邏輯觸發。</li>
+ *   <li><b>SP-D 新增 read</b>（findContentById）：完整 content 內容 DTO，給 version 模組 snapshot / restore stash 流程用。</li>
+ *   <li><b>SP-D 新增 atomic write</b>（applyRestoreContent）：version 模組 restore 用，內部接管 mutate / save / syncArticleTags / publish events 順序。</li>
  * </ul>
  *
  * @author Yuan
@@ -171,4 +175,40 @@ public interface ArticleFacade {
      * @param seriesPosition 在 series 內的位置（remove 時傳 null）
      */
     void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition);
+
+    // ─── SP-D 新增 1 read ───
+
+    /**
+     * DB id → ArticleContentData（給 VersioningService stash 流程 + AutoSnapshotPolicy 用）。
+     *
+     * <p>比 findById（return ArticleData）多含 title / slug / content / summary / coverImageUrl 等欄位。</p>
+     *
+     * @param articleId 文章資料庫主鍵
+     * @return ArticleContentData Optional；查無時 empty
+     */
+    Optional<ArticleContentData> findContentById(Long articleId);
+
+    // ─── SP-D 新增 1 atomic write ───
+
+    /**
+     * 還原 article 內容到指定版本（atomic）。
+     *
+     * <p>內部完整流程：</p>
+     * <ol>
+     *   <li>撈 Article entity（不存在 throw ARTICLE_NOT_FOUND）</li>
+     *   <li>mutate 7 個欄位（title / slug / content / summary / coverImageUrl / status / contentHtml）</li>
+     *   <li>save Article</li>
+     *   <li>syncArticleTags — 必須在 publish events 之前</li>
+     *   <li>publishContentChanged(article, RESTORED)</li>
+     *   <li>若 article.status == PUBLISHED：publishUpdated(article)</li>
+     * </ol>
+     *
+     * <p>caller 不需要再 inject ArticleEventPublisher / TagFacade write methods，
+     * 也不會看到 Article entity。</p>
+     *
+     * @param articleId 文章資料庫主鍵
+     * @param data      還原所需資料（含 tags）
+     * @throws dowob.xyz.blog.common.exception.BusinessException ARTICLE_NOT_FOUND 若 articleId 對應 article 不存在
+     */
+    void applyRestoreContent(Long articleId, ArticleRestoreData data);
 }

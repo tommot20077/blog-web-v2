@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.comment.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.response.ArticleCommentListResponse;
@@ -12,8 +13,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -77,8 +76,7 @@ public class CommentController {
             @PathVariable UUID uuid,
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody EditCommentRequest req) {
-        boolean isAdmin = SecurityContextHolder.getContext().getAuthentication()
-                .getAuthorities().contains(new SimpleGrantedAuthority("ROLE_ADMIN"));
+        boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(commentService.editComment(uuid, userId, isAdmin, req));
     }
 
@@ -88,8 +86,7 @@ public class CommentController {
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal Long userId) {
-        boolean isAdmin = SecurityContextHolder.getContext().getAuthentication()
-                .getAuthorities().contains(new SimpleGrantedAuthority("ROLE_ADMIN"));
+        boolean isAdmin = SecurityUtils.isAdmin();
         commentService.deleteComment(uuid, userId, isAdmin);
         return ApiResponse.success();
     }

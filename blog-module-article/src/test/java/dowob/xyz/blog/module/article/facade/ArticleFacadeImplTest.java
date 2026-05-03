@@ -1,24 +1,32 @@
 package dowob.xyz.blog.module.article.facade;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
+import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -31,6 +39,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -58,6 +67,15 @@ class ArticleFacadeImplTest {
     @Mock
     private ArticleService articleService;
 
+    @Mock
+    private ArticleRepository articleRepository;
+
+    @Mock
+    private TagFacade tagFacade;
+
+    @Mock
+    private ArticleEventPublisher articleEventPublisher;
+
     private ArticleFacadeImpl facade;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
@@ -65,7 +83,10 @@ class ArticleFacadeImplTest {
 
     @BeforeEach
     void setUp() {
-        facade = new ArticleFacadeImpl(articleMapper, userFacade, recommendMapper, articleService);
+        facade = new ArticleFacadeImpl(
+            articleMapper, userFacade, recommendMapper, articleService,
+            articleRepository, tagFacade, articleEventPublisher
+        );
     }
 
     // ─── SP-B helper：建立測試用 Article entity ───
@@ -530,6 +551,191 @@ class ArticleFacadeImplTest {
         void updateSeriesAssignment_delegatesToArticleService() {
             facade.updateSeriesAssignment(100L, 50L, 3);
             verify(articleService).updateSeriesAssignment(100L, 50L, 3);
+        }
+    }
+
+    // ─── SP-D 新增：findContentById + applyRestoreContent ───
+
+    @Nested
+    @DisplayName("findContentById（SP-D 新增）")
+    class FindContentById {
+
+        @Test
+        @DisplayName("article 存在 → return Optional 含 ArticleContentData")
+        void findContentById_existing_returnsContentData() {
+            // given
+            Long articleId = 100L;
+            UUID articleUuid = UUID.randomUUID();
+            Article article = new Article();
+            article.setId(articleId);
+            article.setUuid(articleUuid);
+            article.setAuthorId(5L);
+            article.setTitle("Test Title");
+            article.setSlug("test-slug");
+            article.setContent("# Hello");
+            article.setSummary("summary");
+            article.setCoverImageUrl("https://cdn.example/cover.jpg");
+            article.setStatus(ArticleStatus.PUBLISHED);
+            when(articleService.findById(articleId)).thenReturn(Optional.of(article));
+
+            // when
+            Optional<ArticleContentData> result = facade.findContentById(articleId);
+
+            // then
+            assertThat(result).isPresent();
+            ArticleContentData data = result.get();
+            assertThat(data.id()).isEqualTo(articleId);
+            assertThat(data.uuid()).isEqualTo(articleUuid);
+            assertThat(data.authorId()).isEqualTo(5L);
+            assertThat(data.title()).isEqualTo("Test Title");
+            assertThat(data.slug()).isEqualTo("test-slug");
+            assertThat(data.content()).isEqualTo("# Hello");
+            assertThat(data.summary()).isEqualTo("summary");
+            assertThat(data.coverImageUrl()).isEqualTo("https://cdn.example/cover.jpg");
+            assertThat(data.status()).isEqualTo("PUBLISHED");
+        }
+
+        @Test
+        @DisplayName("article 不存在 → return Optional.empty")
+        void findContentById_notFound_returnsEmpty() {
+            when(articleService.findById(999L)).thenReturn(Optional.empty());
+
+            Optional<ArticleContentData> result = facade.findContentById(999L);
+
+            assertThat(result).isEmpty();
+        }
+
+        @Test
+        @DisplayName("article.status 為 null → ArticleContentData.status 為 null")
+        void findContentById_statusNull_statusFieldNull() {
+            Article article = new Article();
+            article.setId(100L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(5L);
+            article.setStatus(null);
+            when(articleService.findById(100L)).thenReturn(Optional.of(article));
+
+            Optional<ArticleContentData> result = facade.findContentById(100L);
+
+            assertThat(result).isPresent();
+            assertThat(result.get().status()).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("applyRestoreContent atomic（SP-D 新增）")
+    class ApplyRestoreContent {
+
+        private Long articleId;
+        private UUID articleUuid;
+        private Article existing;
+
+        @BeforeEach
+        void setUpArticle() {
+            articleId = 100L;
+            articleUuid = UUID.randomUUID();
+            existing = new Article();
+            existing.setId(articleId);
+            existing.setUuid(articleUuid);
+            existing.setStatus(ArticleStatus.DRAFT);
+            when(articleRepository.findById(articleId)).thenReturn(Optional.of(existing));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+        }
+
+        @Test
+        @DisplayName("article 不存在 → throw ARTICLE_NOT_FOUND（code A0201）")
+        void applyRestoreContent_articleNotFound_throws() {
+            when(articleRepository.findById(999L)).thenReturn(Optional.empty());
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", List.of()
+            );
+
+            assertThatThrownBy(() -> facade.applyRestoreContent(999L, data))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo("A0201");
+
+            verify(articleRepository, never()).save(any(Article.class));
+            verifyNoInteractions(tagFacade, articleEventPublisher);
+        }
+
+        @Test
+        @DisplayName("PUBLISHED article 還原 → publishContentChanged(RESTORED) + publishUpdated 都發")
+        void applyRestoreContent_publishedArticle_publishesBoth() {
+            ArticleRestoreData data = new ArticleRestoreData(
+                "New Title", "new-slug", "# New", "New summary", "https://cdn/new.jpg",
+                "PUBLISHED", "<p>New</p>", List.of(UUID.randomUUID(), UUID.randomUUID())
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getTitle()).isEqualTo("New Title");
+            assertThat(existing.getSlug()).isEqualTo("new-slug");
+            assertThat(existing.getContent()).isEqualTo("# New");
+            assertThat(existing.getSummary()).isEqualTo("New summary");
+            assertThat(existing.getCoverImageUrl()).isEqualTo("https://cdn/new.jpg");
+            assertThat(existing.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
+            assertThat(existing.getContentHtml()).isEqualTo("<p>New</p>");
+
+            verify(articleRepository).save(existing);
+            verify(tagFacade).syncArticleTags(eq(articleUuid), eq(data.tags()));
+            verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
+            verify(articleEventPublisher).publishUpdated(existing);
+        }
+
+        @Test
+        @DisplayName("DRAFT article 還原 → 只發 publishContentChanged，不發 publishUpdated")
+        void applyRestoreContent_draftArticle_publishesOnlyContentChanged() {
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+            verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
+            verify(articleEventPublisher, never()).publishUpdated(any());
+        }
+
+        @Test
+        @DisplayName("status 為 null → 不更新 article.status")
+        void applyRestoreContent_statusNull_doesNotChangeStatus() {
+            ArticleStatus before = existing.getStatus();
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, null, "<p>c</p>", List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getStatus()).isEqualTo(before);
+        }
+
+        @Test
+        @DisplayName("tags 為 null → syncArticleTags 用空清單")
+        void applyRestoreContent_tagsNull_syncWithEmptyList() {
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", null
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            verify(tagFacade).syncArticleTags(articleUuid, List.of());
+        }
+
+        @Test
+        @DisplayName("invocation 順序：save → syncArticleTags → publishEvents")
+        void applyRestoreContent_invocationOrder_saveThenSyncTagsThenPublish() {
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            InOrder inOrder = inOrder(articleRepository, tagFacade, articleEventPublisher);
+            inOrder.verify(articleRepository).save(existing);
+            inOrder.verify(tagFacade).syncArticleTags(eq(articleUuid), anyList());
+            inOrder.verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
+            inOrder.verify(articleEventPublisher).publishUpdated(existing);
         }
     }
 }

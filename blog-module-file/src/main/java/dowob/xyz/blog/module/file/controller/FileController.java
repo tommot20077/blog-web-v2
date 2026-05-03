@@ -100,8 +100,7 @@ public class FileController {
             @AuthenticationPrincipal Long userId,
             Authentication authentication) {
         UUID requesterId = resolveUserUuid(userId);
-        boolean isAdmin = authentication.getAuthorities().stream()
-                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        boolean isAdmin = SecurityUtils.isAdmin(authentication);
         fileService.deleteFile(id, requesterId, isAdmin);
         return ApiResponse.success();
     }

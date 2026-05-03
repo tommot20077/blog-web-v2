@@ -1,13 +1,12 @@
 package dowob.xyz.blog.module.version.service;
 
-import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.repository.ArticleRepository;
-import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
@@ -38,12 +37,11 @@ public class VersioningService {
     public static final String TYPE_MANUAL = "MANUAL";
     public static final String TYPE_PUBLISHED = "PUBLISHED";
 
-    private final ArticleRepository articleRepo;
+    private final ArticleFacade articleFacade;
     private final ArticleVersionRepository versionRepo;
     private final VersionMapper versionMapper;
     private final PreferenceResolver preferenceResolver;
     private final ArticleMarkdownRenderer markdownRenderer;
-    private final ArticleEventPublisher articleEventPublisher;
     private final TagFacade tagFacade;
 
     /**
@@ -54,12 +52,12 @@ public class VersioningService {
      */
     @Transactional
     public void recordAutoSnapshot(Long articleId) {
-        Article article = articleRepo.findById(articleId).orElse(null);
+        ArticleContentData article = articleFacade.findContentById(articleId).orElse(null);
         if (article == null) return;
 
-        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.getAuthorId());
+        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorId());
 
-        ArticleVersion v = snapshotFromArticle(article, TYPE_AUTO, null);
+        ArticleVersion v = snapshotFromContent(article, TYPE_AUTO, null);
         versionRepo.save(v);
 
         versionMapper.retainAuto(articleId, cfg.retain());
@@ -75,10 +73,10 @@ public class VersioningService {
      */
     @Transactional
     public ArticleVersion recordManualSnapshot(Long articleId, String note) {
-        Article article = articleRepo.findById(articleId)
+        ArticleContentData article = articleFacade.findContentById(articleId)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
 
-        ArticleVersion v = snapshotFromArticle(article, TYPE_MANUAL, note);
+        ArticleVersion v = snapshotFromContent(article, TYPE_MANUAL, note);
         return versionRepo.save(v);
     }
 
@@ -91,13 +89,13 @@ public class VersioningService {
      */
     @Transactional
     public void freezePublished(Long articleId) {
-        Article article = articleRepo.findById(articleId).orElse(null);
+        ArticleContentData article = articleFacade.findContentById(articleId).orElse(null);
         if (article == null) return;
 
         int count = versionMapper.countPublished(articleId);
         String note = "Published v" + (count + 1);
 
-        ArticleVersion v = snapshotFromArticle(article, TYPE_PUBLISHED, note);
+        ArticleVersion v = snapshotFromContent(article, TYPE_PUBLISHED, note);
         versionRepo.save(v);
 
         versionMapper.deleteAutoByArticle(articleId);
@@ -162,9 +160,8 @@ public class VersioningService {
      * <ol>
      *   <li>先將當前 article 狀態 stash 為 AUTO 快照（保護現有內容）</li>
      *   <li>執行 AUTO 保留策略（retainAuto）</li>
-     *   <li>將 version 內容寫回 article（含 render contentHtml）</li>
-     *   <li>重綁 article_tags（先清後寫，透過 TagFacade.syncArticleTags）</li>
-     *   <li>發送 ContentChanged(RESTORED) 與 Updated 事件</li>
+     *   <li>呼叫 ArticleFacade.applyRestoreContent atomic 寫回內容
+     *       （mutate / save / syncArticleTags / publish events 全由 facade 內部接管）</li>
      * </ol>
      * </p>
      *
@@ -181,53 +178,36 @@ public class VersioningService {
      * @param versionUuid   要還原的版本 UUID
      * @param currentUserId 當前操作者 ID
      * @param isAdmin       是否為管理員（繞過 owner 檢查）
-     * @return 更新後的 Article
      */
     @Transactional
-    public Article restore(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+    public void restore(UUID versionUuid, Long currentUserId, boolean isAdmin) {
         ArticleVersion v = versionRepo.findByUuid(versionUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
         if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
             throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
         }
 
-        Article article = articleRepo.findById(v.getArticleId())
+        ArticleContentData article = articleFacade.findContentById(v.getArticleId())
             .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
 
-        /* 1. stash 當前狀態為 AUTO snapshot（保護現有內容） */
-        ArticleVersion stash = snapshotFromArticle(article, TYPE_AUTO, null);
+        /* 1. stash 當前 article 狀態為 AUTO snapshot（保護現有內容） */
+        ArticleVersion stash = snapshotFromContent(article, TYPE_AUTO, null);
         versionRepo.save(stash);
-        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.getAuthorId());
-        versionMapper.retainAuto(article.getId(), cfg.retain());
+        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorId());
+        versionMapper.retainAuto(article.id(), cfg.retain());
 
-        /* 2. 寫回 article 內容 */
-        article.setTitle(v.getTitle());
-        article.setSlug(v.getSlug());
-        article.setContent(v.getContent());
-        article.setSummary(v.getSummary());
-        article.setCoverImageUrl(v.getCoverImageUrl());
-        /* categoryId 暫不處理（schema 設計缺陷，留 dead field） */
-        if (v.getStatus() != null) {
-            article.setStatus(ArticleStatus.valueOf(v.getStatus()));
-        }
-        article.setContentHtml(markdownRenderer.render(v.getContent()));
-        Article saved = articleRepo.save(article);
-
-        /* 3. 重綁 article_tags（article_tags 使用 UUID FK，透過 TagFacade 操作） */
-        List<UUID> tags = v.getTags();
-        tagFacade.syncArticleTags(saved.getUuid(), tags != null ? tags : List.of());
-
-        /* 4. 發 events
-         *   - ContentChanged 一律發（version 模組 consumer 處理快照副作用）
-         *   - publishUpdated 僅在文章為 PUBLISHED 才發；search listener 把 update event
-         *     一律 index 為 PUBLISHED（status 寫死），若還原成 DRAFT 仍發會殘留索引。
-         */
-        articleEventPublisher.publishContentChanged(saved, Action.RESTORED);
-        if (saved.getStatus() == ArticleStatus.PUBLISHED) {
-            articleEventPublisher.publishUpdated(saved);
-        }
-
-        return saved;
+        /* 2. atomic restore via ArticleFacade（mutate / save / syncArticleTags / publish events 全內部接管） */
+        ArticleRestoreData restoreData = new ArticleRestoreData(
+            v.getTitle(),
+            v.getSlug(),
+            v.getContent(),
+            v.getSummary(),
+            v.getCoverImageUrl(),
+            v.getStatus(),
+            markdownRenderer.render(v.getContent()),
+            v.getTags() != null ? v.getTags() : List.of()
+        );
+        articleFacade.applyRestoreContent(article.id(), restoreData);
     }
 
     /**
@@ -249,15 +229,15 @@ public class VersioningService {
     public PageResult<VersionSummaryResponse> listByArticle(
             UUID articleUuid, String typeFilter, int page, int size,
             Long currentUserId, boolean isAdmin) {
-        Article article = articleRepo.findByUuid(articleUuid)
+        ArticleData article = articleFacade.findByUuid(articleUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
-        if (!isAdmin && !article.getAuthorId().equals(currentUserId)) {
+        if (!isAdmin && !article.authorId().equals(currentUserId)) {
             throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
         }
         int offset = Math.max(0, (page - 1) * size);
         List<VersionSummaryResponse> rows = versionMapper
-            .listSummaries(article.getId(), typeFilter, size, offset);
-        long total = versionMapper.countSummaries(article.getId(), typeFilter);
+            .listSummaries(article.id(), typeFilter, size, offset);
+        long total = versionMapper.countSummaries(article.id(), typeFilter);
         return PageResult.of(page, size, total, rows);
     }
 
@@ -297,12 +277,12 @@ public class VersioningService {
      */
     @Transactional(readOnly = true)
     public Long findArticleIdByUuidOrThrow(UUID articleUuid, Long currentUserId, boolean isAdmin) {
-        Article article = articleRepo.findByUuid(articleUuid)
+        ArticleData article = articleFacade.findByUuid(articleUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
-        if (!isAdmin && !article.getAuthorId().equals(currentUserId)) {
+        if (!isAdmin && !article.authorId().equals(currentUserId)) {
             throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
         }
-        return article.getId();
+        return article.id();
     }
 
     /**
@@ -322,9 +302,9 @@ public class VersioningService {
     public void assertVersionBelongsToArticle(UUID articleUuid, UUID versionUuid) {
         ArticleVersion v = versionRepo.findByUuid(versionUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
-        Article article = articleRepo.findByUuid(articleUuid)
+        ArticleData article = articleFacade.findByUuid(articleUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
-        if (!v.getArticleId().equals(article.getId())) {
+        if (!v.getArticleId().equals(article.id())) {
             throw new BusinessException(VersionErrorCode.VERSION_ARTICLE_MISMATCH);
         }
     }
@@ -354,26 +334,25 @@ public class VersioningService {
      * 把 article 當前狀態複製成一份 ArticleVersion（不寫入 DB）。
      * <p>供 manual / published / pre-restore 共用。</p>
      *
-     * @param article 來源文章
+     * @param article 來源文章內容 DTO
      * @param type    快照類型（TYPE_AUTO / TYPE_MANUAL / TYPE_PUBLISHED）
      * @param note    備注說明（可為 null）
      * @return 尚未持久化的 ArticleVersion
      */
-    protected ArticleVersion snapshotFromArticle(Article article, String type, String note) {
+    protected ArticleVersion snapshotFromContent(ArticleContentData article, String type, String note) {
         ArticleVersion v = new ArticleVersion();
         v.setUuid(UUID.randomUUID());
-        v.setArticleId(article.getId());
-        v.setAuthorId(article.getAuthorId());
+        v.setArticleId(article.id());
+        v.setAuthorId(article.authorId());
         v.setType(type);
-        v.setTitle(article.getTitle());
-        v.setSlug(article.getSlug());
-        v.setContent(article.getContent());
-        v.setSummary(article.getSummary());
-        v.setCoverImageUrl(article.getCoverImageUrl());
-        ArticleStatus st = article.getStatus();
-        v.setStatus(st != null ? st.name() : null);
+        v.setTitle(article.title());
+        v.setSlug(article.slug());
+        v.setContent(article.content());
+        v.setSummary(article.summary());
+        v.setCoverImageUrl(article.coverImageUrl());
+        v.setStatus(article.status());
         // 抄入 article 當前 tags：restore 時 syncArticleTags 才不會把 tags 清空
-        v.setTags(tagFacade.findTagIdsByArticleUuid(article.getUuid()));
+        v.setTags(tagFacade.findTagIdsByArticleUuid(article.uuid()));
         v.setNote(note);
         v.setCreatedAt(LocalDateTime.now());
         return v;

@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.series.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.model.dto.request.AddArticleToSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
@@ -15,8 +16,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -85,7 +84,7 @@ public class SeriesController {
             @PathVariable UUID uuid,
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody UpdateSeriesRequest req) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(seriesService.updateSeries(uuid, userId, isAdmin, req));
     }
 
@@ -95,7 +94,7 @@ public class SeriesController {
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal Long userId) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         seriesService.deleteSeries(uuid, userId, isAdmin);
         return ApiResponse.success();
     }
@@ -108,7 +107,7 @@ public class SeriesController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody AddArticleToSeriesRequest req) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         seriesService.addArticleToSeries(uuid, articleUuid, userId, isAdmin, req.getPosition());
         return ApiResponse.success();
     }
@@ -120,13 +119,9 @@ public class SeriesController {
             @PathVariable UUID uuid,
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal Long userId) {
-        boolean isAdmin = isAdmin();
+        boolean isAdmin = SecurityUtils.isAdmin();
         seriesService.removeArticleFromSeries(uuid, articleUuid, userId, isAdmin);
         return ApiResponse.success();
     }
 
-    private boolean isAdmin() {
-        return SecurityContextHolder.getContext().getAuthentication().getAuthorities()
-                .contains(new SimpleGrantedAuthority("ROLE_ADMIN"));
-    }
 }

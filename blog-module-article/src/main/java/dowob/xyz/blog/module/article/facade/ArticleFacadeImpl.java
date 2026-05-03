@@ -1,21 +1,31 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
+import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
+import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -61,6 +71,21 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * 文章 Service（SP-B 新增：供 10 個新 delegate method 使用）
      */
     private final ArticleService articleService;
+
+    /**
+     * 文章 Repository（SP-D 新增：供 findContentById / applyRestoreContent 使用）
+     */
+    private final ArticleRepository articleRepository;
+
+    /**
+     * 標籤 Facade（SP-D 新增：供 applyRestoreContent syncArticleTags 使用）
+     */
+    private final TagFacade tagFacade;
+
+    /**
+     * 文章事件發布元件（SP-D 新增：供 applyRestoreContent publish events 使用）
+     */
+    private final ArticleEventPublisher articleEventPublisher;
 
     /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
@@ -329,6 +354,77 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 article.getStatus() != null ? article.getStatus().name() : null,
                 article.getSeriesId(),
                 article.getSeriesPosition()
+        );
+    }
+
+    // ─── SP-D 新增：findContentById + applyRestoreContent ───
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>純 delegate：委派 articleService.findById 查找 article entity，轉換為 ArticleContentData record。</p>
+     */
+    @Override
+    public Optional<ArticleContentData> findContentById(Long articleId) {
+        return articleService.findById(articleId).map(this::toContentData);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>atomic flow：撈 article → mutate 7 欄位 → save → syncArticleTags → publish events。</p>
+     *
+     * <p>重要：syncArticleTags 必須在 publish events 之前完成，
+     * 確保 search index update consumer 拿到的 tags 已是最新狀態。</p>
+     */
+    @Override
+    @Transactional
+    public void applyRestoreContent(Long articleId, ArticleRestoreData data) {
+        Article article = articleRepository.findById(articleId)
+                .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
+
+        article.setTitle(data.title());
+        article.setSlug(data.slug());
+        article.setContent(data.content());
+        article.setSummary(data.summary());
+        article.setCoverImageUrl(data.coverImageUrl());
+        if (data.status() != null) {
+            article.setStatus(ArticleStatus.valueOf(data.status()));
+        }
+        article.setContentHtml(data.contentHtml());
+
+        Article saved = articleRepository.save(article);
+
+        // IMPORTANT: syncArticleTags 必須在 publish events 之前發 — search index update 需拿到正確 tags
+        tagFacade.syncArticleTags(saved.getUuid(),
+                data.tags() != null ? data.tags() : List.of());
+
+        articleEventPublisher.publishContentChanged(saved, ArticleContentChangedEvent.Action.RESTORED);
+        if (saved.getStatus() == ArticleStatus.PUBLISHED) {
+            articleEventPublisher.publishUpdated(saved);
+        }
+    }
+
+    /**
+     * 將文章實體轉換為跨模組 ArticleContentData DTO（SP-D 新增）
+     *
+     * <p>比 toArticleData 多含 title / slug / content / summary / coverImageUrl 5 個欄位，
+     * 適用需要完整 article 內容的場景（version snapshot / restore）。</p>
+     *
+     * @param article 文章實體
+     * @return ArticleContentData record
+     */
+    private ArticleContentData toContentData(Article article) {
+        return new ArticleContentData(
+                article.getId(),
+                article.getUuid(),
+                article.getAuthorId(),
+                article.getTitle(),
+                article.getSlug(),
+                article.getContent(),
+                article.getSummary(),
+                article.getCoverImageUrl(),
+                article.getStatus() != null ? article.getStatus().name() : null
         );
     }
 }
