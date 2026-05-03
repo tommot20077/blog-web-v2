@@ -9,6 +9,7 @@ import dowob.xyz.blog.module.reading.model.dto.request.CreateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.request.UpdateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.response.HighlightResponse;
 import dowob.xyz.blog.module.reading.repository.UserHighlightRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -186,7 +187,7 @@ class HighlightServiceTest {
     }
 
     @Test
-    @org.junit.jupiter.api.DisplayName("create：article 不存在 → throw ARTICLE_NOT_FOUND")
+    @DisplayName("create：article 不存在 → throw ARTICLE_NOT_FOUND")
     void create_articleNotFound_throwsArticleNotFound() {
         UUID articleUuid = UUID.randomUUID();
         when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
@@ -199,10 +200,11 @@ class HighlightServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(t -> ((BusinessException) t).getCode())
                 .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+        verify(repo, never()).save(any(UserHighlight.class));
     }
 
     @Test
-    @org.junit.jupiter.api.DisplayName("getByArticle：article 不存在 → throw ARTICLE_NOT_FOUND")
+    @DisplayName("getByArticle：article 不存在 → throw ARTICLE_NOT_FOUND")
     void getByArticle_articleNotFound_throwsArticleNotFound() {
         UUID articleUuid = UUID.randomUUID();
         when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
@@ -211,5 +213,6 @@ class HighlightServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(t -> ((BusinessException) t).getCode())
                 .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+        verify(repo, never()).findByUserIdAndArticleIdOrderByCreatedAtAsc(any(), any());
     }
 }
