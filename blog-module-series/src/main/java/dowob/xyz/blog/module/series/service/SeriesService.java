@@ -4,8 +4,9 @@ import dowob.xyz.blog.common.api.dto.AuthorSummary;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
-import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
@@ -39,7 +40,8 @@ public class SeriesService {
 
     private final SeriesRepository repo;
     private final SeriesMapper mapper;
-    private final ArticleService articleService;
+    private final ArticleFacade articleFacade;
+    private final ArticleService articleService;  // SP-X: getArticleSummariesByIds 待移
     private final ReadingFacade readingFacade;
 
     /**
@@ -143,20 +145,20 @@ public class SeriesService {
             throw new BusinessException(SeriesErrorCode.SERIES_ACCESS_DENIED);
         }
 
-        Article article = articleService.findByUuid(articleUuid)
+        ArticleData article = articleFacade.findByUuid(articleUuid)
                 .orElseThrow(() -> new BusinessException(SeriesErrorCode.ARTICLE_NOT_FOUND));
-        if (article.getStatus() != ArticleStatus.PUBLISHED) {
+        if (!ArticleStatus.PUBLISHED.name().equals(article.status())) {
             throw new BusinessException(SeriesErrorCode.ARTICLE_NOT_PUBLISHED);
         }
-        if (!isAdmin && !article.getAuthorId().equals(userId)) {
+        if (!isAdmin && !article.authorId().equals(userId)) {
             throw new BusinessException(SeriesErrorCode.SERIES_ACCESS_DENIED);
         }
-        if (article.getSeriesId() != null && !article.getSeriesId().equals(s.getId())) {
+        if (article.seriesId() != null && !article.seriesId().equals(s.getId())) {
             throw new BusinessException(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES);
         }
 
-        boolean isNewMember = (article.getSeriesId() == null);
-        articleService.updateSeriesAssignment(article.getId(), s.getId(), position);
+        boolean isNewMember = (article.seriesId() == null);
+        articleFacade.updateSeriesAssignment(article.id(), s.getId(), position);
 
         if (isNewMember) {
             mapper.incrementArticleCount(s.getId());
@@ -181,13 +183,13 @@ public class SeriesService {
             throw new BusinessException(SeriesErrorCode.SERIES_ACCESS_DENIED);
         }
 
-        Article article = articleService.findByUuid(articleUuid)
+        ArticleData article = articleFacade.findByUuid(articleUuid)
                 .orElseThrow(() -> new BusinessException(SeriesErrorCode.ARTICLE_NOT_FOUND));
-        if (article.getSeriesId() == null || !article.getSeriesId().equals(s.getId())) {
+        if (article.seriesId() == null || !article.seriesId().equals(s.getId())) {
             throw new BusinessException(SeriesErrorCode.ARTICLE_NOT_IN_SERIES);
         }
 
-        articleService.updateSeriesAssignment(article.getId(), null, null);
+        articleFacade.updateSeriesAssignment(article.id(), null, null);
         mapper.decrementArticleCount(s.getId());
     }
 
@@ -211,12 +213,12 @@ public class SeriesService {
             throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
         }
 
-        List<Article> articles = articleService.findBySeriesIdOrderByPosition(row.getId());
+        List<ArticleData> articles = articleFacade.findBySeriesIdOrderByPosition(row.getId());
 
         SeriesDetailResponse resp = toDetailResponse(row, articles);
 
         if (currentUserId != null) {
-            List<Long> articleIds = articles.stream().map(Article::getId).toList();
+            List<Long> articleIds = articles.stream().map(ArticleData::id).toList();
             Map<Long, BigDecimal> progressMap = readingFacade.batchGetProgress(currentUserId, articleIds);
 
             BigDecimal threshold = new BigDecimal("0.95");
@@ -225,10 +227,10 @@ public class SeriesService {
 
             UUID nextUnread = articles.stream()
                     .filter(a -> {
-                        BigDecimal p = progressMap.get(a.getId());
+                        BigDecimal p = progressMap.get(a.id());
                         return p == null || p.compareTo(threshold) < 0;
                     })
-                    .map(Article::getUuid)
+                    .map(ArticleData::uuid)
                     .findFirst().orElse(null);
 
             resp.setMyProgress(new MyProgress(readCount, articles.size(), nextUnread));
@@ -243,7 +245,7 @@ public class SeriesService {
      * 並補充 seriesUuid / seriesTitle 欄位（前端可在點進文章詳情時再查完整 seriesNav，
      * 避免 N+1 問題）。</p>
      */
-    private SeriesDetailResponse toDetailResponse(SeriesWithAuthor row, List<Article> articles) {
+    private SeriesDetailResponse toDetailResponse(SeriesWithAuthor row, List<ArticleData> articles) {
         SeriesDetailResponse r = new SeriesDetailResponse();
         r.setUuid(row.getUuid());
         r.setTitle(row.getTitle());
@@ -257,7 +259,8 @@ public class SeriesService {
                 row.getAuthorUuid(), row.getAuthorNickname(), row.getAuthorAvatarUrl()));
 
         // 取得 articles sub-list：以 id 列表批次查詢，再補 series 三欄
-        List<Long> articleIds = articles.stream().map(Article::getId).toList();
+        // SP-X: getArticleSummariesByIds 待移至 ArticleFacade
+        List<Long> articleIds = articles.stream().map(ArticleData::id).toList();
         List<ArticleSummaryResponse> summaries = articleIds.isEmpty()
                 ? List.of()
                 : articleService.getArticleSummariesByIds(articleIds);
