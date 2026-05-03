@@ -33,6 +33,8 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
                 ReactiveElasticsearchRepositoriesAutoConfiguration.class
         }
 )
-@EnableJdbcRepositories(basePackages = "dowob.xyz.blog.module.tag.repository")
+@EnableJdbcRepositories(basePackages = {
+        "dowob.xyz.blog.module.tag.repository"
+})
 public class TestTagApplication {
 }
