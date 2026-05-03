@@ -1,10 +1,8 @@
 package dowob.xyz.blog.infrastructure.idempotency;
 
-import dowob.xyz.blog.infrastructure.idempotency.model.ProcessedEvent;
-import dowob.xyz.blog.infrastructure.idempotency.repository.ProcessedEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +27,10 @@ import java.util.UUID;
  * <p>Trade-off：用 {@code REQUIRES_NEW} 確保 caller transaction rollback 不會連帶
  * rollback 此記錄。寧可漏處理一次也不重複扣（如 series.article_count 寧可少扣不多扣）。</p>
  *
+ * <p>實作選擇：使用 {@code ON CONFLICT DO NOTHING} 的 upsert pattern，避免 exception
+ * 路徑污染 outer transaction（Spring Data JDBC repo.save() 拋出 DbActionExecutionException
+ * 時會 mark outer tx as rollback-only）。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -37,15 +39,15 @@ import java.util.UUID;
 @Slf4j
 public class IdempotencyService {
 
-    private final ProcessedEventRepository repo;
+    private final JdbcTemplate jdbcTemplate;
 
     /**
      * 標記 event 已被某 consumer 處理。
      *
-     * <p>用 UNIQUE constraint (event_id, consumer_name) 兜底：</p>
+     * <p>用 INSERT ... ON CONFLICT DO NOTHING 實作原子性 dedup：</p>
      * <ul>
-     *   <li>第一次處理 → INSERT 成功 → return true（caller 繼續業務）</li>
-     *   <li>重送處理 → INSERT 衝突 → return false（caller skip）</li>
+     *   <li>第一次處理 → INSERT 成功 → affected rows = 1 → return true（caller 繼續業務）</li>
+     *   <li>重送處理 → INSERT 被 CONFLICT skip → affected rows = 0 → return false（caller skip）</li>
      * </ul>
      *
      * @param eventId      event 的 dedup key
@@ -54,13 +56,15 @@ public class IdempotencyService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean markProcessed(UUID eventId, String consumerName) {
-        try {
-            ProcessedEvent pe = new ProcessedEvent(null, eventId, consumerName, LocalDateTime.now());
-            repo.save(pe);
-            return true;
-        } catch (DataIntegrityViolationException e) {
+        int affected = jdbcTemplate.update(
+            "INSERT INTO processed_events (event_id, consumer_name, processed_at) "
+            + "VALUES (?, ?, ?) ON CONFLICT (event_id, consumer_name) DO NOTHING",
+            eventId, consumerName, LocalDateTime.now()
+        );
+        if (affected == 0) {
             log.debug("Event {} 已被 consumer {} 處理過，skip", eventId, consumerName);
             return false;
         }
+        return true;
     }
 }

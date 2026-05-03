@@ -25,6 +25,9 @@ public class DatabaseCleaner {
      * 清除所有測試資料（按外鍵順序刪除）
      */
     public void cleanAll() {
+        // 冪等 dedup 表（無 FK 依賴，最先清）
+        jdbcTemplate.execute("DELETE FROM processed_events");
+
         // 關聯 / 使用者狀態表（先刪，無外鍵衝突）
         jdbcTemplate.execute("DELETE FROM article_tags");
         jdbcTemplate.execute("DELETE FROM article_categories");

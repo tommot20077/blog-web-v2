@@ -1,30 +1,30 @@
 package dowob.xyz.blog.infrastructure.idempotency;
 
-import dowob.xyz.blog.infrastructure.idempotency.model.ProcessedEvent;
-import dowob.xyz.blog.infrastructure.idempotency.repository.ProcessedEventRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class IdempotencyServiceTest {
 
-    @Mock private ProcessedEventRepository repo;
+    @Mock private JdbcTemplate jdbcTemplate;
     @InjectMocks private IdempotencyService service;
 
     @Test
     void markProcessed_firstCall_returnsTrue() {
         UUID eventId = UUID.randomUUID();
-        when(repo.save(any(ProcessedEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+        // INSERT ... ON CONFLICT DO NOTHING 成功 → affected rows = 1
+        when(jdbcTemplate.update(any(String.class), eq(eventId), any(), any())).thenReturn(1);
 
         boolean result = service.markProcessed(eventId, "test.consumer");
 
@@ -34,8 +34,8 @@ class IdempotencyServiceTest {
     @Test
     void markProcessed_uniqueConflict_returnsFalse() {
         UUID eventId = UUID.randomUUID();
-        when(repo.save(any(ProcessedEvent.class)))
-            .thenThrow(new DataIntegrityViolationException("uq_processed_events_event_consumer"));
+        // ON CONFLICT DO NOTHING → affected rows = 0
+        when(jdbcTemplate.update(any(String.class), eq(eventId), any(), any())).thenReturn(0);
 
         boolean result = service.markProcessed(eventId, "test.consumer");
 
@@ -45,9 +45,8 @@ class IdempotencyServiceTest {
     @Test
     void markProcessed_differentConsumers_independent() {
         UUID eventId = UUID.randomUUID();
-        when(repo.save(any(ProcessedEvent.class)))
-            .thenAnswer(inv -> inv.getArgument(0))
-            .thenAnswer(inv -> inv.getArgument(0));
+        // 兩個不同 consumer 各自 INSERT 成功 → 各自 affected rows = 1
+        when(jdbcTemplate.update(any(String.class), eq(eventId), any(), any())).thenReturn(1);
 
         boolean a = service.markProcessed(eventId, "consumer.a");
         boolean b = service.markProcessed(eventId, "consumer.b");
