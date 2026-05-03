@@ -1,7 +1,7 @@
 package dowob.xyz.blog.module.comment.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
@@ -37,7 +37,7 @@ class CommentServiceTest {
     @Mock private CommentRepository commentRepo;
     @Mock private CommentMapper commentMapper;
     @Mock private CommentMarkdownRenderer renderer;
-    @Mock private ArticleService articleService;
+    @Mock private ArticleFacade articleFacade;
     @InjectMocks private CommentService service;
 
     private final Long userId = 10L;
@@ -46,7 +46,7 @@ class CommentServiceTest {
 
     @Test
     void createComment_topLevel_savesWithUuidAndDefaults() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(renderer.render("hello")).thenReturn("<p>hello</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> {
             Comment c = inv.getArgument(0);
@@ -74,7 +74,7 @@ class CommentServiceTest {
 
     @Test
     void createComment_topLevel_incrementsArticleCommentCount() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(renderer.render(any())).thenReturn("<p>x</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> {
             Comment c = inv.getArgument(0);
@@ -87,7 +87,7 @@ class CommentServiceTest {
 
         service.createComment(articleUuid, userId, req);
 
-        verify(articleService).incrementCommentCount(articleId);
+        verify(articleFacade).incrementCommentCount(articleId);
     }
 
     @Test
@@ -99,7 +99,7 @@ class CommentServiceTest {
         parent.setArticleId(articleId);
         parent.setParentId(null);  // top-level
 
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(commentRepo.findByUuid(parentUuid)).thenReturn(Optional.of(parent));
         when(renderer.render(any())).thenReturn("<p>reply</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> {
@@ -128,7 +128,7 @@ class CommentServiceTest {
         reply.setArticleId(articleId);
         reply.setParentId(40L);   // 已是 reply
 
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(commentRepo.findByUuid(parentUuid)).thenReturn(Optional.of(reply));
 
         CreateCommentRequest req = new CreateCommentRequest();
@@ -149,7 +149,7 @@ class CommentServiceTest {
         parent.setArticleId(999L);    // 不同文章
         parent.setParentId(null);
 
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(commentRepo.findByUuid(parentUuid)).thenReturn(Optional.of(parent));
 
         CreateCommentRequest req = new CreateCommentRequest();
@@ -171,7 +171,7 @@ class CommentServiceTest {
         parent.setParentId(null);
         parent.setDeletedAt(LocalDateTime.now());     // 軟刪除
 
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(commentRepo.findByUuid(parentUuid)).thenReturn(Optional.of(parent));
 
         CreateCommentRequest req = new CreateCommentRequest();
@@ -305,7 +305,7 @@ class CommentServiceTest {
         service.deleteComment(commentUuid, userId, false);
 
         verify(commentMapper).softDelete(1L, "AUTHOR");
-        verify(articleService).decrementCommentCount(articleId);
+        verify(articleFacade).decrementCommentCount(articleId);
     }
 
     @Test
@@ -323,7 +323,7 @@ class CommentServiceTest {
         service.deleteComment(commentUuid, 1L, true);    // adminUserId=1L, isAdmin=true
 
         verify(commentMapper).softDelete(1L, "ADMIN");
-        verify(articleService).decrementCommentCount(articleId);
+        verify(articleFacade).decrementCommentCount(articleId);
     }
 
     @Test
@@ -357,12 +357,12 @@ class CommentServiceTest {
         service.deleteComment(commentUuid, userId, false);
 
         verify(commentMapper, org.mockito.Mockito.never()).softDelete(any(), any());
-        verify(articleService, org.mockito.Mockito.never()).decrementCommentCount(any());
+        verify(articleFacade, org.mockito.Mockito.never()).decrementCommentCount(any());
     }
 
     @Test
     void listComments_topLevelNewestFirstByDefault() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(commentMapper.findTopLevelByArticle(eq(articleId), eq("newest"), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
         when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of(makeRow(11L, 1L)));
@@ -389,7 +389,7 @@ class CommentServiceTest {
         deletedTop.setLikeCount(5);
         deletedTop.setCreatedAt(LocalDateTime.now());
 
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(deletedTop));
         when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
@@ -410,7 +410,7 @@ class CommentServiceTest {
     @Test
     void listComments_includesLikedFlagForCurrentUser() {
         Long userIdForTest = 99L;
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
         when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
@@ -427,7 +427,7 @@ class CommentServiceTest {
 
     @Test
     void listComments_unauthenticated_likedFlagAlwaysFalse() {
-        when(articleService.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null)));
         when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());

@@ -13,7 +13,7 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
  * Comment 模組整合測試專用 Spring Boot 應用程式。
  *
  * <p>排除 RabbitMQ / Elasticsearch 等非本模組需求的 auto-config，
- * 並掃描 article 模組（comment 透過 ArticleService 操作）。</p>
+ * 並掃描 article 模組（comment 透過 ArticleFacade 操作）。</p>
  *
  * @author Yuan
  */
