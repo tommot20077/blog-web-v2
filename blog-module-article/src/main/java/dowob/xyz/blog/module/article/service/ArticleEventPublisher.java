@@ -139,18 +139,32 @@ public class ArticleEventPublisher {
     // ──────────────────────────────────────────────
 
     /**
-     * 發送文章刪除事件至 RabbitMQ（供搜尋模組移除索引等下游消費）。
+     * 發 ArticleDeletedEvent — rich payload，因文章已刪 consumer 撈不到 entity。
      *
-     * @param article 已刪除的文章實體
+     * @param article      文章 entity（提供 id / uuid / authorId）
+     * @param seriesId     文章所屬 series id（nullable）
+     * @param categoryIds  文章 categories（caller 在 delete 前讀取；空 list 不可 null）
+     * @param tagIds       文章 tags（caller 在 delete 前讀取；空 list 不可 null）
      */
-    public void publishDeleted(Article article) {
+    public void publishDeleted(Article article, Long seriesId,
+                               List<UUID> categoryIds, List<UUID> tagIds) {
         try {
+            ArticleDeletedEvent event = new ArticleDeletedEvent(
+                UUID.randomUUID(),
+                article.getId(),
+                article.getUuid(),
+                article.getAuthorId(),
+                seriesId,
+                categoryIds != null ? categoryIds : List.of(),
+                tagIds != null ? tagIds : List.of(),
+                Instant.now()
+            );
             rabbitTemplate.convertAndSend(
                     ArticleRabbitMqConfig.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_DELETED,
-                    new ArticleDeletedEvent(article.getUuid(), Instant.now()));
+                    event);
         } catch (Exception e) {
-            log.warn("ArticleDeletedEvent MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+            log.warn("ArticleDeletedEvent 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
     }
 

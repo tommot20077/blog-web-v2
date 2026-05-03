@@ -306,7 +306,7 @@ public class ArticleServiceImpl implements ArticleService {
         });
 
         /** DB 已 commit，best-effort 發送刪除事件 MQ（失敗不影響刪除結果） */
-        articleEventPublisher.publishDeleted(article);
+        articleEventPublisher.publishDeleted(article, seriesId, java.util.List.of(), java.util.List.of());  // T5 改寫
     }
 
     /**
