@@ -9,12 +9,12 @@ import java.util.UUID;
  * 因此不能直接回傳 Article entity。本 record 含跨模組常用欄位，
  * 由 ArticleFacadeImpl 從 Article entity 轉換。</p>
  *
- * <p>欄位選擇對應 audit 報告中跨模組實際用法：
+ * <p>欄位選擇對應 audit 報告中跨模組實際用法：</p>
  * <ul>
  *   <li>SeriesService: status / authorId / seriesId / id / uuid</li>
  *   <li>SeriesFacadeImpl: seriesId / seriesPosition</li>
  *   <li>ReadingProgressService: id → uuid mapping</li>
- * </ul></p>
+ * </ul>
  *
  * @param id              文章資料庫主鍵
  * @param uuid            文章公開 UUID

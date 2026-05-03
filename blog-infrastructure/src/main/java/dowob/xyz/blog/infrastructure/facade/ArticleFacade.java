@@ -11,16 +11,26 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 文章模組跨模組查詢 Facade 介面
+ * 文章模組跨模組 Facade 介面
  *
- * <p>
- * 定義推薦模組、搜尋模組等跨模組存取文章資料的合約。
- * 實作由 blog-module-article 提供，透過 Spring DI 注入。
- * 所有方法僅查詢已發布（PUBLISHED）狀態的文章。
- * </p>
+ * <p>定義跨模組存取文章資料的合約（含 read + simple write）。
+ * 實作由 blog-module-article 提供，透過 Spring DI 注入。</p>
+ *
+ * <p>方法分類：</p>
+ * <ul>
+ *   <li><b>recommend / search read</b>（findAllPublishedForIndex / getPublishedArticleBasicInfo /
+ *       getArticlesByTagIds / getRecentPublishedArticles / getPublishedArticlesByUuids /
+ *       getArticlesPublishedAfter）：僅查 PUBLISHED 文章。</li>
+ *   <li><b>SP-B 新增 read</b>（findIdByUuid / findByUuid / findById / findByIds /
+ *       findBySeriesIdOrderByPosition）：不限狀態，回傳含 status 的 ArticleData，
+ *       caller 自行依 status 判斷（如 SeriesService 過濾 DRAFT）。</li>
+ *   <li><b>SP-B 新增 simple write</b>（incrementCommentCount / decrementCommentCount /
+ *       incrementLikeCount / decrementLikeCount / updateSeriesAssignment）：counter /
+ *       欄位 set 類型，直接更新 article 欄位，無業務邏輯觸發。</li>
+ * </ul>
  *
  * @author Yuan
- * @version 1.0
+ * @version 1.1
  */
 public interface ArticleFacade {
 

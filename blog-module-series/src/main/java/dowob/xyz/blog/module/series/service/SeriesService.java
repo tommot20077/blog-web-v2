@@ -197,8 +197,8 @@ public class SeriesService {
      * 取得 Series 詳情（含文章列表與我的進度）。
      *
      * <p>
-     * articles sub-list 暫為空，Task 14 補完整 ArticleSummaryResponse mapping。
-     * myProgress 僅在 currentUserId != null（已登入）時計算；
+     * articles sub-list 透過 articleQueryService.getArticleSummariesByIds 取得 enrich 後的 summary
+     * （含作者與標籤）。myProgress 僅在 currentUserId != null（已登入）時計算；
      * progress >= 0.95 視為已讀完。
      * </p>
      *
