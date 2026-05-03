@@ -350,7 +350,7 @@ public class VersioningService {
         v.setContent(article.content());
         v.setSummary(article.summary());
         v.setCoverImageUrl(article.coverImageUrl());
-        v.setStatus(article.status());                          // 已是 String，直接 set
+        v.setStatus(article.status());
         // 抄入 article 當前 tags：restore 時 syncArticleTags 才不會把 tags 清空
         v.setTags(tagFacade.findTagIdsByArticleUuid(article.uuid()));
         v.setNote(note);

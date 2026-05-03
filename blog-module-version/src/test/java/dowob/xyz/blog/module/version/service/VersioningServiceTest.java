@@ -4,7 +4,6 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
@@ -56,11 +55,6 @@ class VersioningServiceTest {
             id, UUID.randomUUID(), aAuthorId,
             title, "test-slug", content, "summary", null, "DRAFT"
         );
-    }
-
-    /** 建立 ArticleData stub（權限驗證 / id 比對用）。 */
-    private ArticleData articleData(Long id, UUID uuid, Long aAuthorId) {
-        return new ArticleData(id, uuid, aAuthorId, "DRAFT", null, null);
     }
 
     private ArticleVersion existingVersion(String type) {
@@ -322,6 +316,8 @@ class VersioningServiceTest {
 
         service.restore(versionUuid, authorId, false);
 
-        verify(articleFacade).applyRestoreContent(eq(articleId), any(ArticleRestoreData.class));
+        ArgumentCaptor<ArticleRestoreData> rdCaptor = ArgumentCaptor.forClass(ArticleRestoreData.class);
+        verify(articleFacade).applyRestoreContent(eq(articleId), rdCaptor.capture());
+        assertThat(rdCaptor.getValue().status()).isEqualTo("DRAFT");
     }
 }

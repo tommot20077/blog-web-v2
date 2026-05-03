@@ -6,7 +6,7 @@ import java.util.UUID;
  * 跨模組 article content 完整內容 DTO。
  *
  * <p>比 ArticleData 多含 title / slug / content / summary / coverImageUrl 5 個欄位，
- * 適用 VersioningService.snapshotFromArticle / AutoSnapshotPolicy.shouldSnapshot 等
+ * 適用 VersioningService.snapshotFromContent / AutoSnapshotPolicy.shouldSnapshot 等
  * 需要「完整 article 內容快照」的場景。</p>
  *
  * <p>由 ArticleFacadeImpl 從 Article entity 轉換。</p>
