@@ -5,7 +5,6 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
@@ -100,9 +99,6 @@ class ArticleServiceTest {
 
     @Mock
     private TagFacade tagFacade;
-
-    @Mock
-    private SeriesFacade seriesFacade;
 
     /** Mock：Spring 宣告式事務模板（TransactionTemplate） */
     @Mock
@@ -1073,11 +1069,16 @@ class ArticleServiceTest {
     @DisplayName("deleteArticle")
     class DeleteArticleTests {
 
+        private static final UUID CATEGORY_UUID = UUID.randomUUID();
+        private static final UUID TAG_UUID = UUID.randomUUID();
+
         @Test
         @DisplayName("正常：作者刪除自己的文章")
         void deleteArticle_authorDeleteOwn() {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of());
+            when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of());
 
             articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
@@ -1098,41 +1099,62 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent 至 MQ")
+        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent（精準驗 4 params）")
         void deleteArticle_shouldPublishDeletedEvent() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of(CATEGORY_UUID));
+            when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of(TAG_UUID));
 
             articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
-            // T5 改寫：簽名已改為 4 params，暫時用寬鬆 any() 驗呼叫發生
-            verify(articleEventPublisher).publishDeleted(any(), any(), any(), any());
+            verify(articleEventPublisher).publishDeleted(
+                    eq(article),
+                    eq(article.getSeriesId()),
+                    eq(List.of(CATEGORY_UUID)),
+                    eq(List.of(TAG_UUID))
+            );
         }
 
         @Test
-        @DisplayName("正常：刪除有 seriesId 的文章時應呼叫 SeriesFacade.notifyArticleDeletedFromSeries")
-        void deleteArticle_withSeriesId_shouldNotifySeriesFacade() {
+        @DisplayName("正常：delete 前讀 categoryIds/tagIds 並正確傳給 publisher")
+        void deleteArticle_collectsCategoryAndTagIds_passesToPublisher() {
             Article article = buildArticle(ArticleStatus.DRAFT);
             article.setSeriesId(50L);
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of(CATEGORY_UUID));
+            when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of(TAG_UUID));
 
             articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
-            verify(articleRepository).delete(article);
-            verify(seriesFacade).notifyArticleDeletedFromSeries(50L);
+            verify(articleMapper).findCategoryUuidsByArticleId(article.getId());
+            verify(articleMapper).findTagUuidsByArticleId(article.getId());
+            verify(articleEventPublisher).publishDeleted(
+                    eq(article),
+                    eq(50L),
+                    eq(List.of(CATEGORY_UUID)),
+                    eq(List.of(TAG_UUID))
+            );
         }
 
         @Test
-        @DisplayName("邊界：刪除無 seriesId 的文章時不應呼叫 SeriesFacade")
-        void deleteArticle_withoutSeriesId_shouldNotCallSeriesFacade() {
+        @DisplayName("邊界：刪除無 seriesId 的文章時 publisher 收到 null seriesId")
+        void deleteArticle_withoutSeriesId_publisherReceivesNullSeriesId() {
             Article article = buildArticle(ArticleStatus.DRAFT);
             // seriesId 為 null（buildArticle 預設未設置）
             when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+            when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of());
+            when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of());
 
             articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
             verify(articleRepository).delete(article);
-            verify(seriesFacade, never()).notifyArticleDeletedFromSeries(any());
+            verify(articleEventPublisher).publishDeleted(
+                    eq(article),
+                    eq((Long) null),
+                    eq(List.of()),
+                    eq(List.of())
+            );
         }
     }
 

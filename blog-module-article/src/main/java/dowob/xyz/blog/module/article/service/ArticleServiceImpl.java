@@ -5,7 +5,6 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
@@ -101,11 +100,6 @@ public class ArticleServiceImpl implements ArticleService {
      * 標籤 Facade（跨模組標籤操作）
      */
     private final TagFacade tagFacade;
-
-    /**
-     * Series Facade（跨模組 series 操作，article 刪除時通知計數更新）
-     */
-    private final SeriesFacade seriesFacade;
 
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
@@ -295,18 +289,25 @@ public class ArticleServiceImpl implements ArticleService {
     public void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
         Article article = findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
-        Long seriesId = article.getSeriesId();
 
-        /** DB 刪除與 series article_count 更新在同一 transaction 內，確保原子性 */
+        /* delete 前讀取：article 刪除後 FK CASCADE 會清 article_tags / article_categories，
+         * series consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。*/
+        Long seriesId = article.getSeriesId();
+        List<UUID> categoryIds = articleMapper.findCategoryUuidsByArticleId(article.getId());
+        List<UUID> tagIds = articleMapper.findTagUuidsByArticleId(article.getId());
+
+        /* DB 刪除（含 FK CASCADE 自動清 article_versions / article_tags / article_categories）*/
         transactionTemplate.executeWithoutResult(status -> {
             articleRepository.delete(article);
-            if (seriesId != null) {
-                seriesFacade.notifyArticleDeletedFromSeries(seriesId);
-            }
+            /*
+             * SP-A: 移除 seriesFacade.notifyArticleDeletedFromSeries(seriesId)
+             * 改由 SeriesArticleDeletedConsumer 訂閱 ArticleDeletedEvent 處理（冪等）。
+             * ArticleServiceImpl 不再依賴 SeriesFacade interface。
+             */
         });
 
-        /** DB 已 commit，best-effort 發送刪除事件 MQ（失敗不影響刪除結果） */
-        articleEventPublisher.publishDeleted(article, seriesId, java.util.List.of(), java.util.List.of());  // T5 改寫
+        /* DB 已 commit，best-effort 發送 ArticleDeletedEvent（rich payload）*/
+        articleEventPublisher.publishDeleted(article, seriesId, categoryIds, tagIds);
     }
 
     /**
