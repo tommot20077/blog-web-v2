@@ -33,8 +33,7 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
                 ReactiveElasticsearchRepositoriesAutoConfiguration.class
         })
 @EnableJdbcRepositories(basePackages = {
-        "dowob.xyz.blog.module.article.repository",
-        "dowob.xyz.blog.infrastructure.idempotency.repository"
+        "dowob.xyz.blog.module.article.repository"
 })
 public class ArticleTestApplication {
 }

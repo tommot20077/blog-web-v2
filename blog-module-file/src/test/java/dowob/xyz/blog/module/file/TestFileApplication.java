@@ -34,8 +34,7 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
         }
 )
 @EnableJdbcRepositories(basePackages = {
-        "dowob.xyz.blog.module.file.repository",
-        "dowob.xyz.blog.infrastructure.idempotency.repository"
+        "dowob.xyz.blog.module.file.repository"
 })
 public class TestFileApplication {
 }

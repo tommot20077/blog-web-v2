@@ -31,8 +31,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         })
 @EnableJdbcRepositories(basePackages = {
         "dowob.xyz.blog.module.article.repository",
-        "dowob.xyz.blog.module.version.repository",
-        "dowob.xyz.blog.infrastructure.idempotency.repository"
+        "dowob.xyz.blog.module.version.repository"
 })
 @MapperScan(basePackages = {
         "dowob.xyz.blog.module.article.mapper",
