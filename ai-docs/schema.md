@@ -2,7 +2,7 @@
 
 > **真相來源**：本文件描述套用所有 migrations V1–V16 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V16**
+> 最後更新版本：**V17**
 
 ---
 
@@ -518,6 +518,29 @@ PRIMARY KEY (user_id, tag_id)
 
 ---
 
+### processed_events
+
+> V17 新增。MQ event 冪等記錄表。所有 consumer 透過 `IdempotencyService` 對 (event_id, consumer_name) UNIQUE 做 dedup，避免重送導致重複扣分。
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| id | BIGSERIAL | PRIMARY KEY | |
+| event_id | UUID | NOT NULL | event 的 dedup key（producer 每次 publish random gen）|
+| consumer_name | VARCHAR(100) | NOT NULL | 哪個 consumer 處理過 |
+| processed_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Constraints:**
+- `uq_processed_events_event_consumer` UNIQUE (event_id, consumer_name) — 一個 event 多 consumer 訂閱時各自獨立冪等
+
+**Indexes:**
+- `processed_events_pkey`（auto）
+- `uq_processed_events_event_consumer`（auto, UNIQUE）
+- `idx_processed_events_processed_at` on (processed_at) — 給未來 cleanup 用
+
+**Foreign keys:** 無
+
+---
+
 ## Migration Index
 
 | 版本 | 描述 |
@@ -538,6 +561,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V14** | 新建 `user_bookmarks`（收藏，UNIQUE user×article）；`user_highlights`（劃線 + note，hex 色號 CHECK，2個索引）；`user_reading_progress`（NUMERIC(4,3) 0–1 範圍 CHECK，1個索引）；article_id 全部 ON DELETE CASCADE |
 | **V15** | 新建 `series` 表（含 article_count 反正規化欄位，`idx_series_author`）；`articles` 加 `series_id`（FK ON DELETE SET NULL）+ `series_position`（partial index `idx_articles_series_position`）；`article_likes` 改名 `user_article_likes`（含 RENAME CONSTRAINT） |
 | **V16** | 新建 `article_versions` 表（type CHECK: AUTO/MANUAL/PUBLISHED；tags UUID[]；article_id FK ON DELETE CASCADE；2 個索引）；新建 `user_preferences` 表（K-V 通用；UNIQUE(user_id, pref_key)；user_id FK ON DELETE CASCADE） |
+| **V17** | 新建 `processed_events` 表（MQ event 冪等記錄）|
 
 ---
 
