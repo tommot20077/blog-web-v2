@@ -11,6 +11,7 @@ import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.model.dto.response.AutoSnapshotConfig;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -48,6 +49,15 @@ class VersioningServiceTest {
     private final Long authorId = 1L;
     private final Long versionId = 200L;
     private final UUID versionUuid = UUID.randomUUID();
+
+    @BeforeEach
+    void setUp() {
+        // Default stub: TagFacade.findTagIdsByArticleUuid 回空列表（對齊 interface contract）
+        // - snapshotFromContent 內部會呼叫此 method（多個 test path 走過）
+        // - 個別 test 需要特定 tags 時可以 override（例如 recordManualSnapshot_copiesCurrentArticleTags）
+        lenient().when(tagFacade.findTagIdsByArticleUuid(any(UUID.class)))
+            .thenReturn(java.util.List.of());
+    }
 
     /** 建立帶有固定 uuid 的 ArticleContentData stub（snapshot 流程用）。 */
     private ArticleContentData contentData(Long id, Long aAuthorId, String title, String content) {
