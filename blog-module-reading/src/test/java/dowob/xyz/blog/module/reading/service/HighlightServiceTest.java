@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.service;
 
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.exception.ReadingErrorCode;
@@ -182,5 +183,33 @@ class HighlightServiceTest {
         assertThatThrownBy(() -> service.delete(highlightUuid, userId))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(ReadingErrorCode.HIGHLIGHT_NOT_FOUND.getMessage());
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("create：article 不存在 → throw ARTICLE_NOT_FOUND")
+    void create_articleNotFound_throwsArticleNotFound() {
+        UUID articleUuid = UUID.randomUUID();
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
+
+        CreateHighlightRequest req = new CreateHighlightRequest();
+        req.setSnippet("text");
+        req.setColor("yellow");
+
+        assertThatThrownBy(() -> service.create(articleUuid, 1L, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+    }
+
+    @Test
+    @org.junit.jupiter.api.DisplayName("getByArticle：article 不存在 → throw ARTICLE_NOT_FOUND")
+    void getByArticle_articleNotFound_throwsArticleNotFound() {
+        UUID articleUuid = UUID.randomUUID();
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.getByArticle(articleUuid, 1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
     }
 }
