@@ -30,7 +30,7 @@
 2. 全 codebase grep `private final ArticleEventPublisher` 在 **`blog-module-version/`** 為 0（順帶清掉）
 3. 全 codebase grep `private boolean isAdmin` **任何模組** 為 0（VersionController + SeriesController）
 4. HighlightService.create() / getByArticle() 對 null articleId 一律 throw `BusinessException(ARTICLE_NOT_FOUND)`，不再撞 FK constraint
-5. 5 個 affected modules tests 全綠：infrastructure / article / version / reading / series（含跨模組 IT）
+5. 8 個 affected modules tests 全綠：common / infrastructure / article / version / reading / series / comment / file（含跨模組 IT）
 
 ---
 
