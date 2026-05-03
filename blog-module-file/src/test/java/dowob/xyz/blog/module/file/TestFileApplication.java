@@ -33,6 +33,9 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
                 ReactiveElasticsearchRepositoriesAutoConfiguration.class
         }
 )
-@EnableJdbcRepositories(basePackages = "dowob.xyz.blog.module.file.repository")
+@EnableJdbcRepositories(basePackages = {
+        "dowob.xyz.blog.module.file.repository",
+        "dowob.xyz.blog.infrastructure.idempotency.repository"
+})
 public class TestFileApplication {
 }
