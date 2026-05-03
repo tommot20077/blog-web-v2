@@ -21,7 +21,6 @@ import java.util.Map;
 public class VersionRabbitMqConfig {
 
     public static final String QUEUE_VERSION_SNAPSHOT = "version.snapshot";
-    public static final String DLQ_ROUTING_KEY = "dlq.version.snapshot";
 
     @Bean
     public Queue versionSnapshotQueue() {
@@ -38,10 +37,14 @@ public class VersionRabbitMqConfig {
                 .with(ArticleRabbitMqConfig.ROUTING_KEY_CONTENT_CHANGED);
     }
 
+    /**
+     * 對齊全站 DLQ 慣例：失敗訊息經 blog.dlq exchange + dead-letter routing key
+     * 進入 infrastructure 宣告的共用死信佇列，避免訊息靜默丟失。
+     */
     private Map<String, Object> dlqArgs() {
         return Map.of(
-            "x-dead-letter-exchange", "dlq.exchange",
-            "x-dead-letter-routing-key", DLQ_ROUTING_KEY,
+            "x-dead-letter-exchange", "blog.dlq",
+            "x-dead-letter-routing-key", "dead-letter",
             "x-message-ttl", 600_000
         );
     }

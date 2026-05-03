@@ -39,4 +39,14 @@ public interface TagFacade {
      * @param articleUuid 文章公開 UUID
      */
     void deleteArticleTags(UUID articleUuid);
+
+    /**
+     * 查詢文章當前綁定的所有標籤 UUID
+     *
+     * <p>供 version 模組建立快照時使用，避免 restore 時 tags = null 而清空所有標籤。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return 標籤 UUID 列表（無關聯時回傳空列表，不會回 null）
+     */
+    List<UUID> findTagIdsByArticleUuid(UUID articleUuid);
 }

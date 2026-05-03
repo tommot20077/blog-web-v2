@@ -61,4 +61,11 @@ public class TagFacadeImpl implements TagFacade {
         List<Tag> existingTags = articleTagRepository.findTagsByArticleId(articleUuid);
         existingTags.forEach(tag -> articleTagRepository.deleteByArticleIdAndTagId(articleUuid, tag.getId()));
     }
+
+    @Override
+    public List<UUID> findTagIdsByArticleUuid(UUID articleUuid) {
+        return articleTagRepository.findTagsByArticleId(articleUuid).stream()
+                .map(Tag::getId)
+                .collect(Collectors.toList());
+    }
 }

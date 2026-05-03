@@ -1,6 +1,8 @@
 package dowob.xyz.blog.module.version.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.model.dto.request.UpdatePreferenceRequest;
 import dowob.xyz.blog.module.version.model.dto.response.EffectiveConfigResponse;
 import dowob.xyz.blog.module.version.service.PreferenceResolver;
@@ -81,6 +83,10 @@ public class PreferenceController {
     /**
      * 將 short key 映射到完整的 pref_key。
      * 支援 camelCase 與 kebab-case 兩種格式。
+     *
+     * @param shortKey 客戶端傳入的 key（如 "retain" / "diff-chars"）
+     * @return 對應的內部 pref_key
+     * @throws BusinessException 當 key 不在白名單中（V0107）
      */
     private String mapKey(String shortKey) {
         return switch (shortKey) {
@@ -88,7 +94,7 @@ public class PreferenceController {
             case "retain" -> PreferenceResolver.KEY_RETAIN;
             case "intervalSeconds", "interval-seconds" -> PreferenceResolver.KEY_INTERVAL_SECONDS;
             case "diffChars", "diff-chars" -> PreferenceResolver.KEY_DIFF_CHARS;
-            default -> throw new IllegalArgumentException("Unknown preference key: " + shortKey);
+            default -> throw new BusinessException(VersionErrorCode.INVALID_PREFERENCE_KEY);
         };
     }
 }

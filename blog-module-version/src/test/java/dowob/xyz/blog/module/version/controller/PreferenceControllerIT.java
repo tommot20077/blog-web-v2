@@ -181,6 +181,17 @@ class PreferenceControllerIT {
                 .andExpect(jsonPath("$.data.retain.source").value("system"));
     }
 
+    // ─────────────────────────────── ERROR PATHS ────────────────────────────
+
+    @Test
+    @DisplayName("DELETE /preferences/version/{unknownKey} - 未知 key 應回 HTTP 400 + body code V0107")
+    void delete_unknownKey_returns400WithV0107() throws Exception {
+        mockMvc.perform(delete("/api/v1/me/preferences/version/notARealKey")
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0107"));
+    }
+
     // ─────────────────────────────── PARTIAL ────────────────────────────────
 
     @Test

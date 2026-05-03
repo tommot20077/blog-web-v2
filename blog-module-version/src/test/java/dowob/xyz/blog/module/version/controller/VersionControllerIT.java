@@ -325,4 +325,62 @@ class VersionControllerIT {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("V0103"));
     }
+
+    // ─────────────────── ARTICLE-VERSION MISMATCH（巢狀 URL 一致性） ───────────────
+
+    @Test
+    @DisplayName("GET /articles/{A}/versions/{B} - version 屬於另一篇 → 400 V0108")
+    void getDetail_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
+        Article articleA = createArticle(USER1_ID);
+        Article articleB = createArticle(USER1_ID);
+        ArticleVersion vOfB = createVersion(articleB.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "B's version");
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        articleA.getUuid(), vOfB.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0108"));
+    }
+
+    @Test
+    @DisplayName("POST /articles/{A}/versions/{B}/restore - version 屬於另一篇 → 400 V0108")
+    void restore_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
+        Article articleA = createArticle(USER1_ID);
+        Article articleB = createArticle(USER1_ID);
+        ArticleVersion vOfB = createVersion(articleB.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "B's snap");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        articleA.getUuid(), vOfB.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0108"));
+    }
+
+    @Test
+    @DisplayName("POST /articles/{A}/versions/{B}/promote - version 屬於另一篇 → 400 V0108")
+    void promote_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
+        Article articleA = createArticle(USER1_ID);
+        Article articleB = createArticle(USER1_ID);
+        ArticleVersion vOfB = createVersion(articleB.getId(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
+                        articleA.getUuid(), vOfB.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0108"));
+    }
+
+    @Test
+    @DisplayName("DELETE /articles/{A}/versions/{B} - version 屬於另一篇 → 400 V0108")
+    void delete_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
+        Article articleA = createArticle(USER1_ID);
+        Article articleB = createArticle(USER1_ID);
+        ArticleVersion vOfB = createVersion(articleB.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "B's");
+
+        mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        articleA.getUuid(), vOfB.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0108"));
+    }
 }
