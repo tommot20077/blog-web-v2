@@ -1,8 +1,10 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
@@ -11,6 +13,7 @@ import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
+import dowob.xyz.blog.module.article.service.ArticleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -52,6 +55,9 @@ class ArticleFacadeImplTest {
     @Mock
     private ArticleRecommendMapper recommendMapper;
 
+    @Mock
+    private ArticleService articleService;
+
     private ArticleFacadeImpl facade;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
@@ -59,7 +65,19 @@ class ArticleFacadeImplTest {
 
     @BeforeEach
     void setUp() {
-        facade = new ArticleFacadeImpl(articleMapper, userFacade, recommendMapper);
+        facade = new ArticleFacadeImpl(articleMapper, userFacade, recommendMapper, articleService);
+    }
+
+    // ─── SP-B helper：建立測試用 Article entity ───
+    private Article buildArticle(Long id, UUID uuid, ArticleStatus status, Long seriesId, Integer pos) {
+        Article a = new Article();
+        a.setId(id);
+        a.setUuid(uuid);
+        a.setAuthorId(99L);
+        a.setStatus(status);
+        a.setSeriesId(seriesId);
+        a.setSeriesPosition(pos);
+        return a;
     }
 
     private ArticleSummaryRow row(Long id, UUID uuid, String title) {
@@ -357,6 +375,161 @@ class ArticleFacadeImplTest {
 
             assertThat(result).hasSize(1);
             assertThat(result.get(0).uuid()).isEqualTo(ARTICLE_UUID);
+        }
+    }
+
+    // ─── SP-B: 5 read method delegate + Article→ArticleData 轉換 ───
+
+    @Nested
+    @DisplayName("SP-B findIdByUuid")
+    class FindIdByUuid {
+
+        @Test
+        @DisplayName("委派 articleService.findIdByUuid 並回傳結果")
+        void delegatesToArticleService() {
+            UUID uuid = UUID.randomUUID();
+            when(articleService.findIdByUuid(uuid)).thenReturn(100L);
+
+            Long result = facade.findIdByUuid(uuid);
+
+            assertThat(result).isEqualTo(100L);
+            verify(articleService).findIdByUuid(uuid);
+        }
+    }
+
+    @Nested
+    @DisplayName("SP-B findByUuid")
+    class FindByUuidDelegate {
+
+        @Test
+        @DisplayName("文章存在時回傳 ArticleData（含 Article→ArticleData 轉換驗證）")
+        void returnsArticleData_convertedFromEntity() {
+            UUID uuid = UUID.randomUUID();
+            Article a = buildArticle(100L, uuid, ArticleStatus.PUBLISHED, 50L, 3);
+            when(articleService.findByUuid(uuid)).thenReturn(Optional.of(a));
+
+            Optional<ArticleData> result = facade.findByUuid(uuid);
+
+            assertThat(result).isPresent();
+            ArticleData data = result.get();
+            assertThat(data.id()).isEqualTo(100L);
+            assertThat(data.uuid()).isEqualTo(uuid);
+            assertThat(data.authorId()).isEqualTo(99L);
+            assertThat(data.status()).isEqualTo("PUBLISHED");
+            assertThat(data.seriesId()).isEqualTo(50L);
+            assertThat(data.seriesPosition()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("文章不存在時回傳 empty Optional")
+        void emptyArticle_returnsEmptyOptional() {
+            UUID uuid = UUID.randomUUID();
+            when(articleService.findByUuid(uuid)).thenReturn(Optional.empty());
+
+            Optional<ArticleData> result = facade.findByUuid(uuid);
+
+            assertThat(result).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("SP-B findById")
+    class FindByIdDelegate {
+
+        @Test
+        @DisplayName("回傳 ArticleData（null seriesId / seriesPosition）")
+        void returnsArticleData_convertedFromEntity() {
+            Article a = buildArticle(100L, UUID.randomUUID(), ArticleStatus.DRAFT, null, null);
+            when(articleService.findById(100L)).thenReturn(Optional.of(a));
+
+            Optional<ArticleData> result = facade.findById(100L);
+
+            assertThat(result).isPresent();
+            assertThat(result.get().status()).isEqualTo("DRAFT");
+            assertThat(result.get().seriesId()).isNull();
+            assertThat(result.get().seriesPosition()).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("SP-B findByIds")
+    class FindByIdsDelegate {
+
+        @Test
+        @DisplayName("回傳 ArticleData 列表（含 status 驗證）")
+        void returnsArticleDataList() {
+            Article a1 = buildArticle(1L, UUID.randomUUID(), ArticleStatus.PUBLISHED, null, null);
+            Article a2 = buildArticle(2L, UUID.randomUUID(), ArticleStatus.DRAFT, null, null);
+            when(articleService.findByIds(List.of(1L, 2L))).thenReturn(List.of(a1, a2));
+
+            List<ArticleData> result = facade.findByIds(List.of(1L, 2L));
+
+            assertThat(result).hasSize(2);
+            assertThat(result.get(0).id()).isEqualTo(1L);
+            assertThat(result.get(0).status()).isEqualTo("PUBLISHED");
+            assertThat(result.get(1).id()).isEqualTo(2L);
+            assertThat(result.get(1).status()).isEqualTo("DRAFT");
+        }
+    }
+
+    @Nested
+    @DisplayName("SP-B findBySeriesIdOrderByPosition")
+    class FindBySeriesIdOrderByPositionDelegate {
+
+        @Test
+        @DisplayName("回傳 ArticleData 列表（含 seriesPosition 驗證）")
+        void returnsArticleDataList() {
+            Article a1 = buildArticle(1L, UUID.randomUUID(), ArticleStatus.PUBLISHED, 50L, 1);
+            Article a2 = buildArticle(2L, UUID.randomUUID(), ArticleStatus.PUBLISHED, 50L, 2);
+            when(articleService.findBySeriesIdOrderByPosition(50L)).thenReturn(List.of(a1, a2));
+
+            List<ArticleData> result = facade.findBySeriesIdOrderByPosition(50L);
+
+            assertThat(result).hasSize(2);
+            assertThat(result.get(0).seriesPosition()).isEqualTo(1);
+            assertThat(result.get(1).seriesPosition()).isEqualTo(2);
+        }
+    }
+
+    // ─── SP-B: 5 write method delegate verify ───
+
+    @Nested
+    @DisplayName("SP-B write method delegates")
+    class WriteMethodDelegates {
+
+        @Test
+        @DisplayName("incrementCommentCount 委派 articleService")
+        void incrementCommentCount_delegatesToArticleService() {
+            facade.incrementCommentCount(100L);
+            verify(articleService).incrementCommentCount(100L);
+        }
+
+        @Test
+        @DisplayName("decrementCommentCount 委派 articleService")
+        void decrementCommentCount_delegatesToArticleService() {
+            facade.decrementCommentCount(100L);
+            verify(articleService).decrementCommentCount(100L);
+        }
+
+        @Test
+        @DisplayName("incrementLikeCount 委派 articleService")
+        void incrementLikeCount_delegatesToArticleService() {
+            facade.incrementLikeCount(100L);
+            verify(articleService).incrementLikeCount(100L);
+        }
+
+        @Test
+        @DisplayName("decrementLikeCount 委派 articleService")
+        void decrementLikeCount_delegatesToArticleService() {
+            facade.decrementLikeCount(100L);
+            verify(articleService).decrementLikeCount(100L);
+        }
+
+        @Test
+        @DisplayName("updateSeriesAssignment 委派 articleService")
+        void updateSeriesAssignment_delegatesToArticleService() {
+            facade.updateSeriesAssignment(100L, 50L, 3);
+            verify(articleService).updateSeriesAssignment(100L, 50L, 3);
         }
     }
 }

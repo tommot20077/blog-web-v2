@@ -4,6 +4,7 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
@@ -12,6 +13,7 @@ import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
+import dowob.xyz.blog.module.article.service.ArticleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -54,6 +56,11 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * 推薦功能專用 MyBatis Mapper
      */
     private final ArticleRecommendMapper recommendMapper;
+
+    /**
+     * 文章 Service（SP-B 新增：供 10 個新 delegate method 使用）
+     */
+    private final ArticleService articleService;
 
     /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
@@ -216,5 +223,112 @@ public class ArticleFacadeImpl implements ArticleFacade {
                         row.getPublishedAt()
                 ))
                 .toList();
+    }
+
+    // ─── SP-B 新增 5 read method（純 delegate + Article→ArticleData 轉換）───
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Long findIdByUuid(UUID articleUuid) {
+        return articleService.findIdByUuid(articleUuid);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<ArticleData> findByUuid(UUID articleUuid) {
+        return articleService.findByUuid(articleUuid).map(this::toArticleData);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<ArticleData> findById(Long articleId) {
+        return articleService.findById(articleId).map(this::toArticleData);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public List<ArticleData> findByIds(List<Long> articleIds) {
+        return articleService.findByIds(articleIds).stream()
+                .map(this::toArticleData)
+                .toList();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public List<ArticleData> findBySeriesIdOrderByPosition(Long seriesId) {
+        return articleService.findBySeriesIdOrderByPosition(seriesId).stream()
+                .map(this::toArticleData)
+                .toList();
+    }
+
+    // ─── SP-B 新增 5 write method（純 delegate）───
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void incrementCommentCount(Long articleId) {
+        articleService.incrementCommentCount(articleId);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void decrementCommentCount(Long articleId) {
+        articleService.decrementCommentCount(articleId);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void incrementLikeCount(Long articleId) {
+        articleService.incrementLikeCount(articleId);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void decrementLikeCount(Long articleId) {
+        articleService.decrementLikeCount(articleId);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
+        articleService.updateSeriesAssignment(articleId, seriesId, seriesPosition);
+    }
+
+    /**
+     * 將文章實體轉換為跨模組 ArticleData DTO
+     *
+     * <p>status 使用 {@code .name()} 字串化，避免跨模組直接 import article enum。</p>
+     *
+     * @param article 文章實體
+     * @return ArticleData record
+     */
+    private ArticleData toArticleData(Article article) {
+        return new ArticleData(
+                article.getId(),
+                article.getUuid(),
+                article.getAuthorId(),
+                article.getStatus() != null ? article.getStatus().name() : null,
+                article.getSeriesId(),
+                article.getSeriesPosition()
+        );
     }
 }

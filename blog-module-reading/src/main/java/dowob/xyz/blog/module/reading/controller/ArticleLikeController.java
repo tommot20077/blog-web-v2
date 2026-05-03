@@ -3,7 +3,7 @@ package dowob.xyz.blog.module.reading.controller;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.service.ArticleLikeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,7 +36,7 @@ import java.util.UUID;
 public class ArticleLikeController {
 
     private final ArticleLikeService likeService;
-    private final ArticleService articleService;
+    private final ArticleFacade articleFacade;
 
     @PostMapping
     @PreAuthorize("isAuthenticated()")
@@ -59,7 +59,7 @@ public class ArticleLikeController {
     }
 
     private Long resolveArticleId(UUID articleUuid) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
         if (articleId == null) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }

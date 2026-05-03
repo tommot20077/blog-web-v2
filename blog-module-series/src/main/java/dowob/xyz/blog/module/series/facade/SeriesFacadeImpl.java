@@ -1,17 +1,14 @@
 package dowob.xyz.blog.module.series.facade;
 
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.Setter;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
@@ -25,8 +22,9 @@ import java.util.stream.Collectors;
  *
  * <p>位於 series 模組，避免跨模組循環依賴（infrastructure 只定 interface）。</p>
  *
- * <p>ArticleServiceImpl → SeriesFacade（interface）→ SeriesFacadeImpl → ArticleService
- * 會形成循環依賴，因此 articleService 使用 {@code @Lazy} setter injection 打破循環。</p>
+ * <p>透過 inject {@link ArticleFacade}（infrastructure interface）解耦：
+ * ArticleFacadeImpl（article 模組）→ ArticleFacade（infrastructure interface）→ SeriesFacadeImpl
+ * 形成 DAG，無循環依賴。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -35,34 +33,32 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SeriesFacadeImpl implements SeriesFacade {
 
-    /** 使用 @Lazy + setter injection 打破 ArticleServiceImpl <-> SeriesFacadeImpl 循環依賴 */
-    @Setter(onMethod_ = {@Autowired, @Lazy})
-    private ArticleService articleService;
+    private final ArticleFacade articleFacade;
     private final SeriesRepository seriesRepo;
     private final SeriesMapper seriesMapper;
 
     @Override
     public Optional<SeriesNavigation> getSeriesNavigation(Long articleId) {
-        Optional<Article> articleOpt = articleService.findById(articleId);
+        Optional<ArticleData> articleOpt = articleFacade.findById(articleId);
         if (articleOpt.isEmpty()) return Optional.empty();
-        Article article = articleOpt.get();
-        if (article.getSeriesId() == null || article.getSeriesPosition() == null) {
+        ArticleData article = articleOpt.get();
+        if (article.seriesId() == null || article.seriesPosition() == null) {
             return Optional.empty();
         }
 
-        Optional<Series> seriesOpt = seriesRepo.findById(article.getSeriesId());
+        Optional<Series> seriesOpt = seriesRepo.findById(article.seriesId());
         if (seriesOpt.isEmpty()) return Optional.empty();
         Series series = seriesOpt.get();
 
-        SeriesMapper.NavRow prev = seriesMapper.findPrevNav(series.getId(), article.getSeriesPosition());
-        SeriesMapper.NavRow next = seriesMapper.findNextNav(series.getId(), article.getSeriesPosition());
+        SeriesMapper.NavRow prev = seriesMapper.findPrevNav(series.getId(), article.seriesPosition());
+        SeriesMapper.NavRow next = seriesMapper.findNextNav(series.getId(), article.seriesPosition());
         int totalCount = seriesMapper.countPublishedInSeries(series.getId());
 
         SeriesNavigation nav = new SeriesNavigation();
         nav.setSeriesUuid(series.getUuid());
         nav.setSeriesTitle(series.getTitle());
         nav.setSeriesSlug(series.getSlug());
-        nav.setPosition(article.getSeriesPosition());
+        nav.setPosition(article.seriesPosition());
         nav.setTotalCount(totalCount);
 
         if (prev != null) {

@@ -3,8 +3,8 @@ package dowob.xyz.blog.module.reading.controller;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
-import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.reading.service.BookmarkService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,7 +29,7 @@ import java.util.UUID;
 public class BookmarkController {
 
     private final BookmarkService bookmarkService;
-    private final ArticleService articleService;
+    private final ArticleFacade articleFacade;
     private final ArticleQueryService articleQueryService;
 
     @PostMapping("/articles/{articleUuid}/bookmark")
@@ -37,7 +37,7 @@ public class BookmarkController {
     @Operation(summary = "收藏文章（idempotent）")
     public ApiResponse<Void> bookmark(@AuthenticationPrincipal Long userId,
                                         @PathVariable UUID articleUuid) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
         bookmarkService.bookmark(userId, articleId);
         return ApiResponse.success();
     }
@@ -47,7 +47,7 @@ public class BookmarkController {
     @Operation(summary = "取消收藏（idempotent）")
     public ApiResponse<Void> unbookmark(@AuthenticationPrincipal Long userId,
                                           @PathVariable UUID articleUuid) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
         bookmarkService.unbookmark(userId, articleId);
         return ApiResponse.success();
     }

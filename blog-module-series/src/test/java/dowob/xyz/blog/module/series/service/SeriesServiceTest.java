@@ -2,9 +2,10 @@ package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
@@ -37,7 +38,8 @@ class SeriesServiceTest {
 
     @Mock private SeriesRepository repo;
     @Mock private SeriesMapper mapper;
-    @Mock private ArticleService articleService;
+    @Mock private ArticleFacade articleFacade;
+    @Mock private ArticleQueryService articleQueryService;
     @Mock private ReadingFacade readingFacade;
     @InjectMocks private SeriesService service;
 
@@ -165,16 +167,12 @@ class SeriesServiceTest {
         series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
 
-        Article article = new Article();
-        article.setId(articleId); article.setUuid(articleUuid);
-        article.setAuthorId(userId);
-        article.setStatus(ArticleStatus.PUBLISHED);
-        article.setSeriesId(null);
-        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), null, null);
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
         service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 3);
 
-        verify(articleService).updateSeriesAssignment(articleId, seriesId, 3);
+        verify(articleFacade).updateSeriesAssignment(articleId, seriesId, 3);
         verify(mapper).incrementArticleCount(seriesId);
     }
 
@@ -184,17 +182,14 @@ class SeriesServiceTest {
         series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
 
-        Article article = new Article();
-        article.setId(articleId); article.setUuid(articleUuid);
-        article.setAuthorId(userId);
-        article.setStatus(ArticleStatus.DRAFT);
-        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.DRAFT.name(), null, null);
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
         assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_PUBLISHED.getMessage());
 
-        verify(articleService, never()).updateSeriesAssignment(any(), any(), any());
+        verify(articleFacade, never()).updateSeriesAssignment(any(), any(), any());
     }
 
     @Test
@@ -203,12 +198,8 @@ class SeriesServiceTest {
         series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
 
-        Article article = new Article();
-        article.setId(articleId); article.setUuid(articleUuid);
-        article.setAuthorId(userId);
-        article.setStatus(ArticleStatus.PUBLISHED);
-        article.setSeriesId(999L);
-        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), 999L, 1);
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
         assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
                 .isInstanceOf(BusinessException.class)
@@ -221,17 +212,12 @@ class SeriesServiceTest {
         series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
 
-        Article article = new Article();
-        article.setId(articleId); article.setUuid(articleUuid);
-        article.setAuthorId(userId);
-        article.setStatus(ArticleStatus.PUBLISHED);
-        article.setSeriesId(seriesId);
-        article.setSeriesPosition(2);
-        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), seriesId, 2);
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
         service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 5);
 
-        verify(articleService).updateSeriesAssignment(articleId, seriesId, 5);
+        verify(articleFacade).updateSeriesAssignment(articleId, seriesId, 5);
         verify(mapper, never()).incrementArticleCount(any());
     }
 
@@ -241,15 +227,12 @@ class SeriesServiceTest {
         series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
 
-        Article article = new Article();
-        article.setId(articleId); article.setUuid(articleUuid);
-        article.setSeriesId(seriesId);
-        article.setSeriesPosition(3);
-        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), seriesId, 3);
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
         service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false);
 
-        verify(articleService).updateSeriesAssignment(articleId, null, null);
+        verify(articleFacade).updateSeriesAssignment(articleId, null, null);
         verify(mapper).decrementArticleCount(seriesId);
     }
 
@@ -259,10 +242,8 @@ class SeriesServiceTest {
         series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
 
-        Article article = new Article();
-        article.setId(articleId); article.setUuid(articleUuid);
-        article.setSeriesId(null);
-        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), null, null);
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
         assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false))
                 .isInstanceOf(BusinessException.class)
@@ -283,12 +264,12 @@ class SeriesServiceTest {
         UUID uuidA = UUID.randomUUID();
         UUID uuidB = UUID.randomUUID();
         UUID uuidC = UUID.randomUUID();
-        List<Article> articles = List.of(
-                buildArticle(1L, uuidA, "A", 1),
-                buildArticle(2L, uuidB, "B", 2),
-                buildArticle(3L, uuidC, "C", 3)
+        List<ArticleData> articles = List.of(
+                new ArticleData(1L, uuidA, userId, ArticleStatus.PUBLISHED.name(), seriesId, 1),
+                new ArticleData(2L, uuidB, userId, ArticleStatus.PUBLISHED.name(), seriesId, 2),
+                new ArticleData(3L, uuidC, userId, ArticleStatus.PUBLISHED.name(), seriesId, 3)
         );
-        when(articleService.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
+        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
 
         Map<Long, BigDecimal> progressMap = Map.of(
                 1L, new BigDecimal("0.98"),
@@ -313,7 +294,7 @@ class SeriesServiceTest {
         Series series = new Series();
         series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
-        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.empty());
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
                 .isInstanceOf(BusinessException.class)
@@ -325,7 +306,7 @@ class SeriesServiceTest {
         Series series = new Series();
         series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
-        when(articleService.findByUuid(articleUuid)).thenReturn(Optional.empty());
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false))
                 .isInstanceOf(BusinessException.class)
@@ -344,14 +325,13 @@ class SeriesServiceTest {
         when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
 
         UUID uuidA = UUID.randomUUID();
-        Article article = buildArticle(1L, uuidA, "A", 1);
-        article.setSeriesId(seriesId);
-        List<Article> articles = List.of(article);
-        when(articleService.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
+        ArticleData articleData = new ArticleData(1L, uuidA, userId, ArticleStatus.PUBLISHED.name(), seriesId, 1);
+        List<ArticleData> articles = List.of(articleData);
+        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
 
         var summary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
                 .uuid(uuidA).title("A").seriesPosition(1).build();
-        when(articleService.getArticleSummariesByIds(List.of(1L))).thenReturn(List.of(summary));
+        when(articleQueryService.getArticleSummariesByIds(List.of(1L))).thenReturn(List.of(summary));
 
         lenient().when(readingFacade.batchGetProgress(any(), any())).thenReturn(Map.of());
 
@@ -363,10 +343,5 @@ class SeriesServiceTest {
         assertThat(resp.getArticles().get(0).getUuid()).isEqualTo(uuidA);
     }
 
-    private Article buildArticle(Long id, UUID uuid, String title, int position) {
-        Article a = new Article();
-        a.setId(id); a.setUuid(uuid); a.setTitle(title);
-        a.setSeriesPosition(position);
-        return a;
-    }
 }
+

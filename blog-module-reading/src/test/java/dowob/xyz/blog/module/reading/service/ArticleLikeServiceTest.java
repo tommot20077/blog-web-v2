@@ -1,6 +1,6 @@
 package dowob.xyz.blog.module.reading.service;
 
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ArticleLikeMapper;
 import dowob.xyz.blog.module.reading.model.ArticleLike;
 import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
@@ -27,7 +27,7 @@ class ArticleLikeServiceTest {
 
     @Mock private ArticleLikeRepository likeRepo;
     @Mock private ArticleLikeMapper articleLikeMapper;
-    @Mock private ArticleService articleService;
+    @Mock private ArticleFacade articleFacade;
     @InjectMocks private ArticleLikeService service;
 
     private final Long userId = 1L;
@@ -40,7 +40,7 @@ class ArticleLikeServiceTest {
         service.likeArticle(userId, articleId);
 
         verify(likeRepo, times(1)).save(any(ArticleLike.class));
-        verify(articleService, times(1)).incrementLikeCount(articleId);
+        verify(articleFacade, times(1)).incrementLikeCount(articleId);
     }
 
     @Test
@@ -53,7 +53,7 @@ class ArticleLikeServiceTest {
         service.likeArticle(userId, articleId);
 
         verify(likeRepo, never()).save(any());
-        verify(articleService, never()).incrementLikeCount(any());
+        verify(articleFacade, never()).incrementLikeCount(any());
     }
 
     @Test
@@ -64,7 +64,7 @@ class ArticleLikeServiceTest {
         service.unlikeArticle(userId, articleId);
 
         verify(likeRepo, times(1)).deleteByUserIdAndArticleId(userId, articleId);
-        verify(articleService, times(1)).decrementLikeCount(articleId);
+        verify(articleFacade, times(1)).decrementLikeCount(articleId);
     }
 
     @Test
@@ -75,7 +75,7 @@ class ArticleLikeServiceTest {
         service.unlikeArticle(userId, articleId);
 
         verify(likeRepo, times(1)).deleteByUserIdAndArticleId(userId, articleId);
-        verify(articleService, never()).decrementLikeCount(any());
+        verify(articleFacade, never()).decrementLikeCount(any());
     }
 
     @Test

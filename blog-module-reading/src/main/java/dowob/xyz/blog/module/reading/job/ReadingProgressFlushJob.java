@@ -1,7 +1,7 @@
 package dowob.xyz.blog.module.reading.job;
 
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +28,7 @@ import java.util.UUID;
 public class ReadingProgressFlushJob {
 
     private final StringRedisTemplate redisTemplate;
-    private final ArticleService articleService;
+    private final ArticleFacade articleFacade;
     private final ReadingProgressMapper progressMapper;
 
     @Scheduled(fixedDelayString = "${reading.progress.flush-interval-ms:300000}")
@@ -49,7 +49,7 @@ public class ReadingProgressFlushJob {
                     continue;
                 }
 
-                Long articleId = articleService.findIdByUuid(articleUuid);
+                Long articleId = articleFacade.findIdByUuid(articleUuid);
                 if (articleId == null) {
                     redisTemplate.delete(key);
                     redisTemplate.opsForSet().remove(RedisKeyConstant.READING_DIRTY_KEY, entry);

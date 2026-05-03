@@ -3,7 +3,7 @@ package dowob.xyz.blog.module.comment.service;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
@@ -33,7 +33,7 @@ import java.util.stream.Collectors;
  * 留言 Service。
  *
  * <p>處理留言的建立、編輯、刪除、查詢。
- * 跨模組計數更新走 ArticleService 介面，遵守中庸級別模組邊界。</p>
+ * 跨模組計數更新走 ArticleFacade 介面，遵守模組邊界（不直接依賴 article 模組 service）。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -47,7 +47,7 @@ public class CommentService {
     private final CommentRepository commentRepo;
     private final CommentMapper commentMapper;
     private final CommentMarkdownRenderer renderer;
-    private final ArticleService articleService;
+    private final ArticleFacade articleFacade;
 
     /**
      * 建立留言（top-level 或 reply）。
@@ -59,7 +59,7 @@ public class CommentService {
      */
     @Transactional
     public CommentResponse createComment(UUID articleUuid, Long userId, CreateCommentRequest req) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
         if (articleId == null) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }
@@ -93,7 +93,7 @@ public class CommentService {
         c.setLikeCount(0);
         Comment saved = commentRepo.save(c);
 
-        articleService.incrementCommentCount(articleId);
+        articleFacade.incrementCommentCount(articleId);
 
         // 簡化 response — 列表查詢有完整版（含 author / liked）
         CommentResponse resp = new CommentResponse();
@@ -185,7 +185,7 @@ public class CommentService {
         // role 判斷：admin 操作他人留言 → ADMIN；其他情況（含 admin 操作自己留言）→ AUTHOR
         String role = (isAdmin && !c.getUserId().equals(currentUserId)) ? "ADMIN" : "AUTHOR";
         commentMapper.softDelete(c.getId(), role);
-        articleService.decrementCommentCount(c.getArticleId());
+        articleFacade.decrementCommentCount(c.getArticleId());
     }
 
     /**
@@ -199,7 +199,7 @@ public class CommentService {
      */
     public ArticleCommentListResponse listComments(UUID articleUuid, Long currentUserId,
                                                      String sort, int page, int size) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
         if (articleId == null) {
             return new ArticleCommentListResponse(
                     PageResult.of(page, size, 0L, Collections.emptyList()),
