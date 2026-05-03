@@ -27,15 +27,6 @@ public interface SeriesFacade {
     Optional<SeriesNavigation> getSeriesNavigation(Long articleId);
 
     /**
-     * 通知 series 模組：某 article 已被刪除，需要更新 series.article_count。
-     *
-     * <p>此方法為同步呼叫；對齊 ReadingFacade pattern。</p>
-     *
-     * @param seriesId article 原本所屬的 series id（必為非 null，由呼叫方檢查）
-     */
-    void notifyArticleDeletedFromSeries(Long seriesId);
-
-    /**
      * 批次取得 articles 對應的 series 基本資訊（避免 N+1）。
      *
      * @param articleIds 候選 article id list
