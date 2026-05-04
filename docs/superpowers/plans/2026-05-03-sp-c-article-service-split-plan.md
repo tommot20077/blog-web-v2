@@ -15,6 +15,30 @@
 
 ---
 
+## Implementer Note: Method Body Extraction Pattern
+
+本 plan 部分 task（特別 T1 / T3 / T4 / T5）的 method body 標註為「**從 ArticleServiceImpl L###-### 搬過來**」。這是 SP-C「搬既有 1020 行 code 到新位置」refactor 的工作 pattern。Implementer 執行此類 step 時必須：
+
+1. **Read tool 取既有 code**：用 Read tool 取得 `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java` 指定行範圍的完整 method body
+2. **Paste 到新位置**：將完整 body paste 到新 sub-service / helper class
+3. **改 access modifier**：將 `public` 改為無 modifier（package-private）；private helper 保留 private 或改為 package-private 視 sub-service 內部需求
+4. **更新 helper call sites**：method body 內既有 helper 呼叫對應改：
+   - `findByUuidOrThrow(uuid)` → `entityFinder.findByUuidOrThrow(uuid)`
+   - `toResponse(article, ...)` → `responseMapper.toResponse(article, tags, categories, liked, bookmarked, lastReadProgress, seriesNav)`
+   - `toEditorResponse(article)` → `responseMapper.toEditorResponse(article, tagNames, categoryUuids)`
+   - `toSummaryResponse(article)` → `responseMapper.toSummaryResponse(article, tags, categories)`
+   - `toTagSummaryResponses(...)` → `responseMapper.toTagSummaryResponses(...)`
+   - `batchToTagResponsesMap(...)` → `responseMapper.batchToTagResponsesMap(...)`
+   - `toCategoryResponses(...)` → `responseMapper.toCategoryResponses(...)`
+   - `batchToCategoryResponsesMap(...)` → `responseMapper.batchToCategoryResponsesMap(...)`
+   - `resolveAuthorUuid(authorId)` → `responseMapper.resolveAuthorUuid(authorId)`
+   - `resolveAuthorNickname(authorId)` → `responseMapper.resolveAuthorNickname(authorId)`
+   - `processArticleView(article, ..., clientIp)` → 拆為 `entityFinder.findByUuidOrThrow + querySubService.checkReadPermission` 等（依 task 而定）
+
+Implementer 不需要重新發明 method body — 只需將 existing logic 搬遷 + 修 helper call sites。每個搬遷 step 後對應 test（搬到 sub-service test file）的 verify 為「行為等價」的證據。
+
+---
+
 ## File Structure
 
 ### 新建檔案 (5 個 production + 5 個 test)
@@ -22,7 +46,7 @@
 | File | 職責 |
 |---|---|
 | `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleEntityFinder.java` | 共用 — `findByUuidOrThrow(UUID): Article`，給 Command + Query 共用 |
-| `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleResponseMapper.java` | Query 用 — Article entity → ArticleResponse / ArticleEditorResponse / ArticleSummaryResponse 9 個 mapper method |
+| `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleResponseMapper.java` | Query 用 — Article entity → ArticleResponse / EditorArticleResponse / ArticleSummaryResponse 9 個 mapper method |
 | `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleViewSubService.java` | View tracking — `recordView(UUID, ArticleStatus)`，含 `isPubliclyVisible` guard + Redis 防刷 + publishViewed event |
 | `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleCommandSubService.java` | Write — 11 method (6 Command + 4 Counter + 1 cross-module write) + 5 private helper |
 | `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleQuerySubService.java` | Read — 13 method (7 Query + 6 cross-module read)，含 read-permission guard |
@@ -57,55 +81,7 @@
 - Create: `blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleResponseMapperTest.java`
 - Modify: `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java`（加 inject + 改 caller 用新 helper）
 
-- [ ] **Step 1: 建 ArticleEntityFinder（package-private，1 method）**
-
-```bash
-Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleEntityFinder.java
-```
-
-```java
-package dowob.xyz.blog.module.article.service;
-
-import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
-import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.repository.ArticleRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
-
-import java.util.UUID;
-
-/**
- * Article entity 查找共用 helper。
- *
- * <p>給 Command / Query sub-service 共用 — 避免 findByUuidOrThrow 在多個 sub-service 重複實作。</p>
- *
- * <p><strong>Package-private</strong>：僅 article 模組 service package 內可訪問，不對外暴露。</p>
- *
- * @author Yuan
- * @version 1.0
- */
-@Component
-@RequiredArgsConstructor
-class ArticleEntityFinder {
-
-    private final ArticleRepository articleRepository;
-
-    /**
-     * 撈 Article entity，不存在 throw ARTICLE_NOT_FOUND。
-     *
-     * @param articleUuid 文章公開 UUID
-     * @return Article entity
-     * @throws BusinessException ARTICLE_NOT_FOUND 若 uuid 對應 article 不存在
-     */
-    Article findByUuidOrThrow(UUID articleUuid) {
-        return articleRepository.findByUuid(articleUuid)
-            .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
-    }
-}
-```
-
-- [ ] **Step 2: 建 ArticleEntityFinderTest（2 cases）**
+- [ ] **Step 1: 寫 ArticleEntityFinderTest（TDD red — 2 cases）**
 
 ```bash
 Write blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleEntityFinderTest.java
@@ -172,193 +148,71 @@ class ArticleEntityFinderTest {
 }
 ```
 
-- [ ] **Step 3: 建 ArticleResponseMapper（package-private，9 method）**
+- [ ] **Step 2: Run tests — verify RED**
 
 ```bash
-Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleResponseMapper.java
+./mvnw.cmd -pl blog-module-article test -Dtest=ArticleEntityFinderTest 2>&1 | tee logs/t1-finder-red.log | grep -E "Tests run:|BUILD|ERROR" | tail -5
+```
+
+Expected: 編譯失敗 — `ArticleEntityFinder` class 還不存在。
+
+- [ ] **Step 3: 建 ArticleEntityFinder（package-private，1 method — GREEN）**
+
+```bash
+Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleEntityFinder.java
 ```
 
 ```java
 package dowob.xyz.blog.module.article.service;
 
-import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
+import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleEditorResponse;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
-import dowob.xyz.blog.module.article.service.ViewCountService;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /**
- * Article entity → response DTO 轉換 helper（Query sub-service 用）。
+ * Article entity 查找共用 helper。
  *
- * <p>9 個 method：3 個主轉換（toResponse / toEditorResponse / toSummaryResponse）+
- * 4 個子轉換（tag / category，含 batch 版）+ 2 個 author resolver。</p>
+ * <p>給 Command / Query sub-service 共用 — 避免 findByUuidOrThrow 在多個 sub-service 重複實作。</p>
  *
- * <p><strong>Package-private</strong>：僅 article 模組 service package 內可訪問。
- * Command sub-service 不負責 response 構造（write 流程不需 response）。</p>
+ * <p><strong>Package-private</strong>：僅 article 模組 service package 內可訪問，不對外暴露。</p>
  *
  * @author Yuan
  * @version 1.0
  */
 @Component
 @RequiredArgsConstructor
-class ArticleResponseMapper {
+class ArticleEntityFinder {
 
-    private final UserFacade userFacade;
-    private final ViewCountService viewCountService;
-
-    // 主要 mapper 3 個（從 ArticleServiceImpl L710-787 搬過來）
+    private final ArticleRepository articleRepository;
 
     /**
-     * Article entity → ArticleResponse。完整 response（給 getArticleByUuid / getArticleBySlug 用）。
+     * 撈 Article entity，不存在 throw ARTICLE_NOT_FOUND。
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return Article entity
+     * @throws BusinessException ARTICLE_NOT_FOUND 若 uuid 對應 article 不存在
      */
-    ArticleResponse toResponse(Article article, List<TagSummaryResponse> tags,
-                                List<CategoryResponse> categories,
-                                Boolean liked, Boolean bookmarked, BigDecimal lastReadProgress,
-                                SeriesNavigationResponse seriesNav) {
-        // 從既有 ArticleServiceImpl.toResponse (L710-733) 完整搬過來
-        // 24 行邏輯，含 viewCountService.getViewCount(article.getId()) 取 view count
-        // builder 設值：uuid/title/content/contentHtml/summary/coverImageUrl/authorUuid/authorNickname/
-        //              status/viewCount/createdAt/updatedAt/categories/slug/likeCount/commentCount/
-        //              publishedAt/tags/rejectReason/liked/bookmarked/lastReadProgress/seriesNav
-        return ArticleResponse.builder()
-            .uuid(article.getUuid())
-            .title(article.getTitle())
-            .content(article.getContent())
-            .contentHtml(article.getContentHtml())
-            .summary(article.getSummary())
-            .coverImageUrl(article.getCoverImageUrl())
-            .authorUuid(resolveAuthorUuid(article.getAuthorId()))
-            .authorNickname(resolveAuthorNickname(article.getAuthorId()))
-            .status(article.getStatus())
-            .viewCount(viewCountService.getViewCount(article.getId()))
-            .createdAt(article.getCreatedAt())
-            .updatedAt(article.getUpdatedAt())
-            .categories(categories)
-            .slug(article.getSlug())
-            .likeCount(article.getLikeCount())
-            .commentCount(article.getCommentCount())
-            .publishedAt(article.getPublishedAt())
-            .tags(tags)
-            .rejectReason(article.getRejectReason())
-            .liked(liked)
-            .bookmarked(bookmarked)
-            .lastReadProgress(lastReadProgress)
-            .seriesNav(seriesNav)
-            .build();
-    }
-
-    /**
-     * Article entity → ArticleEditorResponse（給 getArticleForEdit 用，作者編輯器需要原始內容）。
-     */
-    ArticleEditorResponse toEditorResponse(Article article, List<String> tagNames, List<UUID> categoryUuids) {
-        // 從既有 ArticleServiceImpl.toEditorResponse (L745-759) 搬過來，15 行
-        return ArticleEditorResponse.builder()
-            .uuid(article.getUuid())
-            .title(article.getTitle())
-            .content(article.getContent())
-            .summary(article.getSummary())
-            .coverImageUrl(article.getCoverImageUrl())
-            .slug(article.getSlug())
-            .status(article.getStatus())
-            .tagNames(tagNames)
-            .categoryUuids(categoryUuids)
-            .build();
-    }
-
-    /**
-     * Article entity → ArticleSummaryResponse（給 list 用，省略 content / contentHtml）。
-     */
-    ArticleSummaryResponse toSummaryResponse(Article article, List<TagSummaryResponse> tags,
-                                              List<CategoryResponse> categories) {
-        // 從既有 ArticleServiceImpl.toSummaryResponse (L767-787) 搬過來，21 行
-        return ArticleSummaryResponse.builder()
-            .uuid(article.getUuid())
-            .title(article.getTitle())
-            .summary(article.getSummary())
-            .coverImageUrl(article.getCoverImageUrl())
-            .authorUuid(resolveAuthorUuid(article.getAuthorId()))
-            .authorNickname(resolveAuthorNickname(article.getAuthorId()))
-            .status(article.getStatus())
-            .viewCount(viewCountService.getViewCount(article.getId()))
-            .createdAt(article.getCreatedAt())
-            .updatedAt(article.getUpdatedAt())
-            .categories(categories)
-            .slug(article.getSlug())
-            .likeCount(article.getLikeCount())
-            .commentCount(article.getCommentCount())
-            .publishedAt(article.getPublishedAt())
-            .tags(tags)
-            .build();
-    }
-
-    // 子轉換 4 個（tag / category，含 batch）
-
-    List<TagSummaryResponse> toTagSummaryResponses(List<TagInfo> tagInfos) {
-        // 從既有 toTagSummaryResponses (L822-830) 搬過來，9 行
-        if (tagInfos == null) return List.of();
-        return tagInfos.stream()
-            .map(t -> TagSummaryResponse.builder()
-                .uuid(t.id())
-                .name(t.name())
-                .slug(t.slug())
-                .build())
-            .toList();
-    }
-
-    Map<Long, List<TagSummaryResponse>> batchToTagResponsesMap(Map<Long, List<TagInfo>> batchTags) {
-        // 從既有 batchToTagResponsesMap (L842-853) 搬過來，12 行
-        if (batchTags == null) return Map.of();
-        return batchTags.entrySet().stream()
-            .collect(java.util.stream.Collectors.toMap(
-                Map.Entry::getKey,
-                e -> toTagSummaryResponses(e.getValue())
-            ));
-    }
-
-    List<CategoryResponse> toCategoryResponses(List<Category> categories) {
-        // 從既有 toCategoryResponses (L861-866) 搬過來，6 行
-        if (categories == null) return List.of();
-        return categories.stream()
-            .map(c -> CategoryResponse.builder()
-                .uuid(c.getUuid())
-                .name(c.getName())
-                .slug(c.getSlug())
-                .build())
-            .toList();
-    }
-
-    Map<Long, List<CategoryResponse>> batchToCategoryResponsesMap(Map<Long, List<Category>> batchCategories) {
-        // 從既有 batchToCategoryResponsesMap (L874-888) 搬過來，15 行
-        if (batchCategories == null) return Map.of();
-        return batchCategories.entrySet().stream()
-            .collect(java.util.stream.Collectors.toMap(
-                Map.Entry::getKey,
-                e -> toCategoryResponses(e.getValue())
-            ));
-    }
-
-    // Author resolver 2 個（userFacade wrapper）
-
-    UUID resolveAuthorUuid(Long authorId) {
-        return userFacade.getUserUuid(authorId);
-    }
-
-    String resolveAuthorNickname(Long authorId) {
-        return userFacade.getUserNickname(authorId);
+    Article findByUuidOrThrow(UUID articleUuid) {
+        return articleRepository.findByUuid(articleUuid)
+            .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
     }
 }
 ```
 
-⚠ method body 細節（builder fields、helper 內部 collector）以「從 ArticleServiceImpl L710-888 搬過來」為原則。implementer 應從既有 method **複製** body 後改 access modifier 為 package-private。
+- [ ] **Step 4: Run tests — verify GREEN**
 
-- [ ] **Step 4: 建 ArticleResponseMapperTest（9 method × 1-2 cases each）**
+```bash
+./mvnw.cmd -pl blog-module-article test -Dtest=ArticleEntityFinderTest 2>&1 | tee logs/t1-finder-green.log | grep -E "Tests run:|BUILD" | tail -5
+```
+
+Expected: 2 cases pass。
+
+- [ ] **Step 5: 寫 ArticleResponseMapperTest（TDD red — 7 cases）**
 
 ```bash
 Write blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleResponseMapperTest.java
@@ -465,7 +319,7 @@ class ArticleResponseMapperTest {
             article.setStatus(ArticleStatus.DRAFT);
             article.setSlug("edit-slug");
 
-            ArticleEditorResponse resp = mapper.toEditorResponse(article, List.of("Java"), List.of());
+            EditorArticleResponse resp = mapper.toEditorResponse(article, List.of("Java"), List.of());
 
             assertThat(resp.getTitle()).isEqualTo("Edit");
             assertThat(resp.getContent()).isEqualTo("raw md");
@@ -543,7 +397,209 @@ class ArticleResponseMapperTest {
 }
 ```
 
-- [ ] **Step 5: 修 ArticleServiceImpl — 加 inject helper class + 改 caller**
+- [ ] **Step 6: Run tests — verify RED**
+
+```bash
+./mvnw.cmd -pl blog-module-article test -Dtest=ArticleResponseMapperTest 2>&1 | tee logs/t1-mapper-red.log | grep -E "Tests run:|BUILD|ERROR" | tail -5
+```
+
+Expected: 編譯失敗 — `ArticleResponseMapper` class 還不存在。
+
+- [ ] **Step 7: 建 ArticleResponseMapper（package-private，9 method — GREEN）**
+
+```bash
+Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleResponseMapper.java
+```
+
+```java
+package dowob.xyz.blog.module.article.service;
+
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.service.ViewCountService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * Article entity → response DTO 轉換 helper（Query sub-service 用）。
+ *
+ * <p>9 個 method：3 個主轉換（toResponse / toEditorResponse / toSummaryResponse）+
+ * 4 個子轉換（tag / category，含 batch 版）+ 2 個 author resolver。</p>
+ *
+ * <p><strong>Package-private</strong>：僅 article 模組 service package 內可訪問。
+ * Command sub-service 不負責 response 構造（write 流程不需 response）。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Component
+@RequiredArgsConstructor
+class ArticleResponseMapper {
+
+    private final UserFacade userFacade;
+    private final ViewCountService viewCountService;
+
+    // 主要 mapper 3 個（從 ArticleServiceImpl L710-787 搬過來）
+
+    /**
+     * Article entity → ArticleResponse。完整 response（給 getArticleByUuid / getArticleBySlug 用）。
+     */
+    ArticleResponse toResponse(Article article, List<TagSummaryResponse> tags,
+                                List<CategoryResponse> categories,
+                                Boolean liked, Boolean bookmarked, BigDecimal lastReadProgress,
+                                SeriesNavigationResponse seriesNav) {
+        // 從既有 ArticleServiceImpl.toResponse (L710-733) 完整搬過來
+        // 24 行邏輯，含 viewCountService.getViewCount(article.getId()) 取 view count
+        // builder 設值：uuid/title/content/contentHtml/summary/coverImageUrl/authorUuid/authorNickname/
+        //              status/viewCount/createdAt/updatedAt/categories/slug/likeCount/commentCount/
+        //              publishedAt/tags/rejectReason/liked/bookmarked/lastReadProgress/seriesNav
+        return ArticleResponse.builder()
+            .uuid(article.getUuid())
+            .title(article.getTitle())
+            .content(article.getContent())
+            .contentHtml(article.getContentHtml())
+            .summary(article.getSummary())
+            .coverImageUrl(article.getCoverImageUrl())
+            .authorUuid(resolveAuthorUuid(article.getAuthorId()))
+            .authorNickname(resolveAuthorNickname(article.getAuthorId()))
+            .status(article.getStatus())
+            .viewCount(viewCountService.getViewCount(article.getId()))
+            .createdAt(article.getCreatedAt())
+            .updatedAt(article.getUpdatedAt())
+            .categories(categories)
+            .slug(article.getSlug())
+            .likeCount(article.getLikeCount())
+            .commentCount(article.getCommentCount())
+            .publishedAt(article.getPublishedAt())
+            .tags(tags)
+            .rejectReason(article.getRejectReason())
+            .liked(liked)
+            .bookmarked(bookmarked)
+            .lastReadProgress(lastReadProgress)
+            .seriesNav(seriesNav)
+            .build();
+    }
+
+    /**
+     * Article entity → EditorArticleResponse（給 getArticleForEdit 用，作者編輯器需要原始內容）。
+     */
+    EditorArticleResponse toEditorResponse(Article article, List<String> tagNames, List<UUID> categoryUuids) {
+        // 從既有 ArticleServiceImpl.toEditorResponse (L745-759) 搬過來，15 行
+        return EditorArticleResponse.builder()
+            .uuid(article.getUuid())
+            .title(article.getTitle())
+            .content(article.getContent())
+            .summary(article.getSummary())
+            .coverImageUrl(article.getCoverImageUrl())
+            .slug(article.getSlug())
+            .status(article.getStatus())
+            .tagNames(tagNames)
+            .categoryUuids(categoryUuids)
+            .build();
+    }
+
+    /**
+     * Article entity → ArticleSummaryResponse（給 list 用，省略 content / contentHtml）。
+     */
+    ArticleSummaryResponse toSummaryResponse(Article article, List<TagSummaryResponse> tags,
+                                              List<CategoryResponse> categories) {
+        // 從既有 ArticleServiceImpl.toSummaryResponse (L767-787) 搬過來，21 行
+        return ArticleSummaryResponse.builder()
+            .uuid(article.getUuid())
+            .title(article.getTitle())
+            .summary(article.getSummary())
+            .coverImageUrl(article.getCoverImageUrl())
+            .authorUuid(resolveAuthorUuid(article.getAuthorId()))
+            .authorNickname(resolveAuthorNickname(article.getAuthorId()))
+            .status(article.getStatus())
+            .viewCount(viewCountService.getViewCount(article.getId()))
+            .createdAt(article.getCreatedAt())
+            .updatedAt(article.getUpdatedAt())
+            .categories(categories)
+            .slug(article.getSlug())
+            .likeCount(article.getLikeCount())
+            .commentCount(article.getCommentCount())
+            .publishedAt(article.getPublishedAt())
+            .tags(tags)
+            .build();
+    }
+
+    // 子轉換 4 個（tag / category，含 batch）
+
+    List<TagSummaryResponse> toTagSummaryResponses(List<TagInfo> tagInfos) {
+        // 從既有 toTagSummaryResponses (L822-830) 搬過來，9 行
+        if (tagInfos == null) return List.of();
+        return tagInfos.stream()
+            .map(t -> TagSummaryResponse.builder()
+                .uuid(t.id())
+                .name(t.name())
+                .slug(t.slug())
+                .build())
+            .toList();
+    }
+
+    Map<Long, List<TagSummaryResponse>> batchToTagResponsesMap(Map<Long, List<TagInfo>> batchTags) {
+        // 從既有 batchToTagResponsesMap (L842-853) 搬過來，12 行
+        if (batchTags == null) return Map.of();
+        return batchTags.entrySet().stream()
+            .collect(java.util.stream.Collectors.toMap(
+                Map.Entry::getKey,
+                e -> toTagSummaryResponses(e.getValue())
+            ));
+    }
+
+    List<CategoryResponse> toCategoryResponses(List<Category> categories) {
+        // 從既有 toCategoryResponses (L861-866) 搬過來，6 行
+        if (categories == null) return List.of();
+        return categories.stream()
+            .map(c -> CategoryResponse.builder()
+                .uuid(c.getUuid())
+                .name(c.getName())
+                .slug(c.getSlug())
+                .build())
+            .toList();
+    }
+
+    Map<Long, List<CategoryResponse>> batchToCategoryResponsesMap(Map<Long, List<Category>> batchCategories) {
+        // 從既有 batchToCategoryResponsesMap (L874-888) 搬過來，15 行
+        if (batchCategories == null) return Map.of();
+        return batchCategories.entrySet().stream()
+            .collect(java.util.stream.Collectors.toMap(
+                Map.Entry::getKey,
+                e -> toCategoryResponses(e.getValue())
+            ));
+    }
+
+    // Author resolver 2 個（userFacade wrapper）
+
+    UUID resolveAuthorUuid(Long authorId) {
+        return userFacade.getUserUuid(authorId);
+    }
+
+    String resolveAuthorNickname(Long authorId) {
+        return userFacade.getUserNickname(authorId);
+    }
+}
+```
+
+⚠ method body 細節（builder fields、helper 內部 collector）以「從 ArticleServiceImpl L710-888 搬過來」為原則。implementer 應從既有 method **複製** body 後改 access modifier 為 package-private。
+
+- [ ] **Step 8: Run tests — verify GREEN**
+
+```bash
+./mvnw.cmd -pl blog-module-article test -Dtest=ArticleResponseMapperTest 2>&1 | tee logs/t1-mapper-green.log | grep -E "Tests run:|BUILD" | tail -5
+```
+
+Expected: ~7 cases pass。
+
+- [ ] **Step 9: 修 ArticleServiceImpl — 加 inject helper class + 改 caller**
 
 於 `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java` 既有 11 inject 之後加：
 
@@ -552,7 +608,7 @@ private final ArticleEntityFinder entityFinder;
 private final ArticleResponseMapper responseMapper;
 ```
 
-⚠ T1 階段 inject 13 個（11 既有 + 2 新 helper）。T6 將清理為只 inject 3 個 sub-service。
+⚠ T1 階段 inject 13 個（11 既有 + 2 新 helper）。T5 將清理為只 inject 3 個 sub-service。
 
 修改既有 method body：
 - 既有 `findByUuidOrThrow(UUID)` private method — 移除（外部移到 ArticleEntityFinder），所有 caller 改 `entityFinder.findByUuidOrThrow(uuid)`
@@ -562,7 +618,7 @@ private final ArticleResponseMapper responseMapper;
 
 ⚠ ArticleServiceImpl 行數此時減約 100-130 行（17 helper 中的 9 個移走）。
 
-- [ ] **Step 6: install + Run tests verify GREEN**
+- [ ] **Step 10: install + Run all article 模組 tests verify 無 regression**
 
 ```bash
 ./mvnw.cmd -pl blog-module-article test 2>&1 | tee logs/t1-tests.log | grep -E "Tests run:|BUILD" | tail -10
@@ -573,7 +629,7 @@ Expected:
 - ArticleResponseMapperTest ~7 cases pass
 - 既有 ArticleServiceTest 1981 行邏輯 pass（caller 換成 helper class call，行為等價）
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleEntityFinder.java \
@@ -774,7 +830,7 @@ class ArticleViewSubService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ArticleEventPublisher articleEventPublisher;
 
-    private static final String VIEW_KEY_PREFIX = "view:article:";
+    private static final String VIEW_KEY_PREFIX = "view:";
     private static final Duration VIEW_DEDUP_TTL = Duration.ofMinutes(5);
 
     /**
@@ -900,151 +956,7 @@ EOF
 - Modify: `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java`（11 method 改 1-line delegate to commandSubService）
 - Modify: `blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleServiceTest.java`（既有 11 method 對應的 test 從這裡搬到新 ArticleCommandSubServiceTest）
 
-- [ ] **Step 1: 建 ArticleCommandSubService（package-private，11 method + 5 private helper）**
-
-```bash
-Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleCommandSubService.java
-```
-
-⚠ 內容 = 從 ArticleServiceImpl L135-577（Command 6 method）+ L896-928（Counter 4 method）+ L988-994（updateSeriesAssignment）+ L597-642 / L686-698 / L800-809（5 private helper）**完整搬過來**。
-
-```java
-package dowob.xyz.blog.module.article.service;
-
-import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.common.api.enums.Role;
-import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
-import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.infrastructure.facade.TagFacade;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
-import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
-import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
-import dowob.xyz.blog.module.article.repository.ArticleRepository;
-import dowob.xyz.blog.module.category.mapper.CategoryMapper;
-import dowob.xyz.blog.module.category.repository.CategoryRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionTemplate;
-
-import java.util.List;
-import java.util.UUID;
-
-/**
- * Article command sub-service — 11 method (write 業務邏輯)。
- *
- * <p><strong>Package-private</strong>：僅 article 模組 service package 內可訪問。
- * 由 ArticleServiceImpl 委派 Command / Counter / Cross-module write 流程。</p>
- *
- * @author Yuan
- * @version 1.0
- */
-@Component
-@RequiredArgsConstructor
-class ArticleCommandSubService {
-
-    private final ArticleRepository articleRepository;
-    private final ArticleEventPublisher articleEventPublisher;
-    private final CategoryMapper categoryMapper;
-    private final CategoryRepository categoryRepository;
-    private final TagFacade tagFacade;
-    private final ArticleMarkdownRenderer markdownRenderer;
-    private final TransactionTemplate transactionTemplate;
-    private final ArticleEntityFinder entityFinder;
-
-    // ─── Command 6 method（write 業務邏輯）───
-
-    EditorArticleResponse createArticle(Long authorId, CreateArticleRequest request) {
-        // 從 ArticleServiceImpl.createArticle (L135-186) 完整搬過來
-        // 52 行邏輯：generateSlug + extractSummary + convertToHtml + 持久化 + tag/category sync + publishCreated
-        // ... method body
-    }
-
-    EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
-                                         UpdateArticleRequest request) {
-        // 從 ArticleServiceImpl.updateArticle (L198-279) 完整搬過來
-        // 82 行邏輯：findByUuidOrThrow → checkWritePermission → mutate fields → save → tag/category sync
-        // 注意：findByUuidOrThrow 改 call entityFinder.findByUuidOrThrow
-        // ... method body
-    }
-
-    void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        // 從 ArticleServiceImpl.deleteArticle (L289-311) 完整搬過來
-        // 23 行邏輯：含 publishDeleted with rich payload (seriesId, categoryIds, tagIds)
-        // ... method body
-    }
-
-    EditorArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        // 從 ArticleServiceImpl.publishArticle (L477-511) 搬過來，35 行
-    }
-
-    EditorArticleResponse rejectArticle(Long operatorId, Role operatorRole, UUID articleUuid, String reason) {
-        // 從 ArticleServiceImpl.rejectArticle (L524-538) 搬過來，15 行
-    }
-
-    EditorArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
-        // 從 ArticleServiceImpl.submitForReview (L570-577) 搬過來，8 行
-    }
-
-    // ─── Counter 4 method（純 mapper.update，無業務邏輯）───
-
-    void incrementCommentCount(Long articleId) {
-        // 從 ArticleServiceImpl.incrementCommentCount (L896-898) 搬過來，3 行
-        articleRepository.incrementCommentCount(articleId);
-    }
-
-    void decrementCommentCount(Long articleId) {
-        // 從 ArticleServiceImpl.decrementCommentCount (L906-908) 搬過來，3 行
-        articleRepository.decrementCommentCount(articleId);
-    }
-
-    void incrementLikeCount(Long articleId) {
-        // L916-918 搬過來
-        articleRepository.incrementLikeCount(articleId);
-    }
-
-    void decrementLikeCount(Long articleId) {
-        // L926-928 搬過來
-        articleRepository.decrementLikeCount(articleId);
-    }
-
-    // ─── Cross-module write 1 method ───
-
-    void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
-        // 從 ArticleServiceImpl.updateSeriesAssignment (L988-994) 搬過來，7 行
-        articleRepository.updateSeriesAssignment(articleId, seriesId, seriesPosition);
-    }
-
-    // ─── 5 個 private helper（從 ArticleServiceImpl 移過來）───
-
-    private void checkWritePermission(Long operatorId, Role operatorRole, Article article) {
-        // L597-604 完整搬過來，8 行
-    }
-
-    private void validateStatusTransition(ArticleStatus from, ArticleStatus to) {
-        // L617-628 搬過來，12 行
-    }
-
-    private String generateSlug(String title) {
-        // L636-642 搬過來，7 行
-    }
-
-    private String extractSummary(String content) {
-        // L686-698 搬過來，13 行
-    }
-
-    private void syncCategories(Long articleId, List<UUID> categoryUuids) {
-        // L800-809 搬過來，10 行
-    }
-
-    // 注意：convertToHtml(String) 既有只是 markdownRenderer.render 包裝（3 行），
-    // 此 task 改 inline 為 markdownRenderer.render(content) 直接呼叫。
-}
-```
-
-⚠ implementer 須從既有 ArticleServiceImpl method body **完整複製** body（不可摘要）。method body 內任何 `findByUuidOrThrow(...)` 呼叫改成 `entityFinder.findByUuidOrThrow(...)`；`toResponse(...)` 改成 `responseMapper.toResponse(...)`；`processArticleView(...)` 不出現在 Command（Command 不需 view tracking）。
-
-- [ ] **Step 2: 建 ArticleCommandSubServiceTest（從既有 ArticleServiceTest 搬 11 method 對應的 test）**
+- [ ] **Step 1: 建 ArticleCommandSubServiceTest（從既有 ArticleServiceTest 搬 11 method 對應的 test — TDD red）**
 
 ```bash
 Write blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleCommandSubServiceTest.java
@@ -1116,7 +1028,168 @@ class ArticleCommandSubServiceTest {
 - toResponse 相關 mock 移除（Command 不負責 toResponse）
 - 不再需要的 mock fields（StringRedisTemplate, ViewCountService, UserFacade）移除
 
-- [ ] **Step 3: 修 ArticleServiceImpl — 11 method 改 1-line delegate**
+- [ ] **Step 2: Run tests — verify RED**
+
+```bash
+./mvnw.cmd -pl blog-module-article test -Dtest=ArticleCommandSubServiceTest 2>&1 | tee logs/t3-red.log | grep -E "Tests run:|BUILD|ERROR" | tail -5
+```
+
+Expected: 編譯失敗 — `ArticleCommandSubService` class 還不存在。
+
+- [ ] **Step 3: 建 ArticleCommandSubService（package-private，11 method + 5 private helper — GREEN）**
+
+```bash
+Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleCommandSubService.java
+```
+
+⚠ 內容 = 從 ArticleServiceImpl L135-577（Command 6 method）+ L896-928（Counter 4 method）+ L988-994（updateSeriesAssignment）+ L597-642 / L686-698 / L800-809（5 private helper）**完整搬過來**。
+
+```java
+package dowob.xyz.blog.module.article.service;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.article.mapper.CategoryMapper;
+import dowob.xyz.blog.module.category.repository.CategoryRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Article command sub-service — 11 method (write 業務邏輯)。
+ *
+ * <p><strong>Package-private</strong>：僅 article 模組 service package 內可訪問。
+ * 由 ArticleServiceImpl 委派 Command / Counter / Cross-module write 流程。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Component
+@RequiredArgsConstructor
+class ArticleCommandSubService {
+
+    private final ArticleRepository articleRepository;
+    private final ArticleEventPublisher articleEventPublisher;
+    private final CategoryMapper categoryMapper;
+    private final CategoryRepository categoryRepository;
+    private final TagFacade tagFacade;
+    private final ArticleMarkdownRenderer markdownRenderer;
+    private final TransactionTemplate transactionTemplate;
+    private final ArticleEntityFinder entityFinder;
+
+    // ─── Command 6 method（write 業務邏輯）───
+
+    EditorArticleResponse createArticle(Long authorId, CreateArticleRequest request) {
+        // 從 ArticleServiceImpl.createArticle (L135-186) 完整搬過來
+        // 52 行邏輯：generateSlug + extractSummary + convertToHtml + 持久化 + tag/category sync + publishCreated
+        // ... method body
+    }
+
+    EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
+                                         UpdateArticleRequest request) {
+        // 從 ArticleServiceImpl.updateArticle (L198-279) 完整搬過來
+        // 82 行邏輯：findByUuidOrThrow → checkWritePermission → mutate fields → save → tag/category sync
+        // 注意：findByUuidOrThrow 改 call entityFinder.findByUuidOrThrow
+        // ... method body
+    }
+
+    void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+        // 從 ArticleServiceImpl.deleteArticle (L289-311) 完整搬過來
+        // 23 行邏輯：含 publishDeleted with rich payload (seriesId, categoryIds, tagIds)
+        // ... method body
+    }
+
+    ArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+        // 從 ArticleServiceImpl.publishArticle (L477-511) 搬過來，35 行
+    }
+
+    ArticleResponse rejectArticle(Long operatorId, Role operatorRole, UUID articleUuid, String reason) {
+        // 從 ArticleServiceImpl.rejectArticle (L524-538) 搬過來，15 行
+    }
+
+    ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
+        // 從 ArticleServiceImpl.submitForReview (L570-577) 搬過來，8 行
+    }
+
+    // ─── Counter 4 method（純 mapper.update，無業務邏輯）───
+
+    void incrementCommentCount(Long articleId) {
+        // 從 ArticleServiceImpl.incrementCommentCount (L896-898) 搬過來，3 行
+        articleRepository.incrementCommentCount(articleId);
+    }
+
+    void decrementCommentCount(Long articleId) {
+        // 從 ArticleServiceImpl.decrementCommentCount (L906-908) 搬過來，3 行
+        articleRepository.decrementCommentCount(articleId);
+    }
+
+    void incrementLikeCount(Long articleId) {
+        // L916-918 搬過來
+        articleRepository.incrementLikeCount(articleId);
+    }
+
+    void decrementLikeCount(Long articleId) {
+        // L926-928 搬過來
+        articleRepository.decrementLikeCount(articleId);
+    }
+
+    // ─── Cross-module write 1 method ───
+
+    void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
+        // 從 ArticleServiceImpl.updateSeriesAssignment (L988-994) 搬過來，7 行
+        articleRepository.updateSeriesAssignment(articleId, seriesId, seriesPosition);
+    }
+
+    // ─── 5 個 private helper（從 ArticleServiceImpl 移過來）───
+
+    private void checkWritePermission(Long operatorId, Role operatorRole, Article article) {
+        // L597-604 完整搬過來，8 行
+    }
+
+    private void validateStatusTransition(ArticleStatus from, ArticleStatus to) {
+        // L617-628 搬過來，12 行
+    }
+
+    private String generateSlug(String title) {
+        // L636-642 搬過來，7 行
+    }
+
+    private String extractSummary(String content) {
+        // L686-698 搬過來，13 行
+    }
+
+    private void syncCategories(Long articleId, List<UUID> categoryUuids) {
+        // L800-809 搬過來，10 行
+    }
+
+    // 注意：convertToHtml(String) 既有只是 markdownRenderer.render 包裝（3 行），
+    // 此 task 改 inline 為 markdownRenderer.render(content) 直接呼叫。
+}
+```
+
+⚠ implementer 須從既有 ArticleServiceImpl method body **完整複製** body（不可摘要）。method body 內任何 `findByUuidOrThrow(...)` 呼叫改成 `entityFinder.findByUuidOrThrow(...)`；`toResponse(...)` 改成 `responseMapper.toResponse(...)`；`processArticleView(...)` 不出現在 Command（Command 不需 view tracking）。
+
+- [ ] **Step 4: Run tests — verify GREEN**
+
+```bash
+./mvnw.cmd -pl blog-module-article test -Dtest=ArticleCommandSubServiceTest 2>&1 | tee logs/t3-green.log | grep -E "Tests run:|BUILD" | tail -5
+```
+
+Expected: 10 個 @Nested class 全綠（~100+ tests pass）。
+
+- [ ] **Step 5: 修 ArticleServiceImpl — 11 method 改 1-line delegate**
 
 ```java
 // 加 inject（既有 14 → 15）
@@ -1140,17 +1213,17 @@ public void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) 
 }
 
 @Override
-public EditorArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+public ArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
     return commandSubService.publishArticle(operatorId, operatorRole, articleUuid);
 }
 
 @Override
-public EditorArticleResponse rejectArticle(Long operatorId, Role operatorRole, UUID articleUuid, String reason) {
+public ArticleResponse rejectArticle(Long operatorId, Role operatorRole, UUID articleUuid, String reason) {
     return commandSubService.rejectArticle(operatorId, operatorRole, articleUuid, reason);
 }
 
 @Override
-public EditorArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
+public ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
     return commandSubService.submitForReview(operatorId, operatorRole, articleUuid);
 }
 
@@ -1178,7 +1251,7 @@ public void updateSeriesAssignment(Long articleId, Long seriesId, Integer series
 
 ⚠ 5 個 private helper（checkWritePermission / validateStatusTransition / generateSlug / extractSummary / syncCategories）也從 ArticleServiceImpl 移除（搬到 CommandSubService）— 再減 50 行。
 
-- [ ] **Step 4: 修 ArticleServiceTest — 移除已搬走的 11 method 對應 test**
+- [ ] **Step 6: 修 ArticleServiceTest — 移除已搬走的 11 method 對應 test**
 
 從既有 ArticleServiceTest 移除以下 @Nested class（已搬到 ArticleCommandSubServiceTest）：
 - CreateArticleTests / UpdateArticleTests / DeleteArticleTests
@@ -1188,7 +1261,7 @@ public void updateSeriesAssignment(Long articleId, Long seriesId, Integer series
 
 ArticleServiceTest 從 1981 行 → 約 1100 行（仍含 Query 7 + Cross-module read 6 + 內部 helper 等）。
 
-- [ ] **Step 5: install + Run all article 模組 tests**
+- [ ] **Step 7: install + Run all article 模組 tests**
 
 ```bash
 ./mvnw.cmd -pl blog-module-article test 2>&1 | tee logs/t3-article-tests.log | grep -E "^\[INFO\] Tests run:" | tail -5
@@ -1199,7 +1272,7 @@ Expected:
 - ArticleServiceTest 縮減後 ~50+ tests pass
 - ArticleViewSubServiceTest 6 + ArticleEntityFinderTest 2 + ArticleResponseMapperTest 7 仍綠
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleCommandSubService.java \
@@ -1235,7 +1308,64 @@ EOF
 - Modify: `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java`（13 method 改 delegate；getArticleByUuid / getArticleBySlug 含協調邏輯）
 - Modify: `blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleServiceTest.java`（13 method 對應 test 搬走）
 
-- [ ] **Step 1: 建 ArticleQuerySubService（package-private，13 method）**
+- [ ] **Step 1: 建 ArticleQuerySubServiceTest（從既有 ArticleServiceTest 搬 13 method 對應 test — TDD red）**
+
+```bash
+Write blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleQuerySubServiceTest.java
+```
+
+⚠ 從既有 ArticleServiceTest 搬以下 @Nested class（已知 line refs）：
+- L1046 GetArticleByUuidTests（注意：此 test 之前測「getArticleByUuid 含 view tracking」— SP-C T2 後 view tracking 拆出，T4 階段測試的 getArticleByUuid 只測 read-permission + response build，**不測 view event**；view event 測試已在 ArticleViewSubServiceTest）
+- L1068 GetArticleBySlugTests
+- L1164 GetArticleForEditTests
+- L1254 GetPublishedArticlesTests
+- L1295 GetPublishedArticlesByCategorySlugTests
+- L1335 GetMyArticlesTests
+- L1377 GetPendingArticlesTests
+- L1765 FindIdByUuidTests
+- L1897 FindByUuidTests
+- L1930 OtherCrossModuleTests（findById / findByIds / findBySeriesIdOrderByPosition / getArticleSummariesByIds 部分）
+
+新 test class setUp：
+
+```java
+package dowob.xyz.blog.module.article.service;
+
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+class ArticleQuerySubServiceTest {
+
+    @Mock private ArticleRepository articleRepository;
+    @Mock private ArticleMapper articleMapper;
+    @Mock private ArticleEntityFinder entityFinder;
+    @Mock private ArticleResponseMapper responseMapper;
+
+    private ArticleQuerySubService querySubService;
+
+    @BeforeEach
+    void setUp() {
+        querySubService = new ArticleQuerySubService(
+            articleRepository, articleMapper, entityFinder, responseMapper
+        );
+    }
+
+    // 從 ArticleServiceTest 搬 10 個 @Nested 過來（注意 GetArticleByUuid / Slug 移除 view event 相關 verify）
+    @Nested class GetArticleByUuidTests { /* ... */ }
+    @Nested class GetArticleBySlugTests { /* ... */ }
+    @Nested class GetArticleForEditTests { /* ... */ }
+    // ...
+}
+```
+
+- [ ] **Step 2: Run tests — verify RED**
+
+```bash
+./mvnw.cmd -pl blog-module-article test -Dtest=ArticleQuerySubServiceTest 2>&1 | tee logs/t4-red.log | grep -E "Tests run:|BUILD|ERROR" | tail -5
+```
+
+Expected: 編譯失敗 — `ArticleQuerySubService` class 還不存在。
+
+- [ ] **Step 3: 建 ArticleQuerySubService（package-private，13 method — GREEN）**
 
 ```bash
 Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleQuerySubService.java
@@ -1252,7 +1382,7 @@ import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleEditorResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
@@ -1311,7 +1441,7 @@ class ArticleQuerySubService {
     /**
      * 取編輯器 response（給 controller getArticleForEdit 用，僅 author / admin）。
      */
-    ArticleEditorResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
+    EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
         // 從 ArticleServiceImpl.getArticleForEdit (L341-347) 搬過來，7 行
     }
 
@@ -1385,56 +1515,15 @@ class ArticleQuerySubService {
 
 ⚠ checkReadPermission helper 從既有 `processArticleView` L378-381 抽出（見 audit 完整 method body）— `getArticleByUuid` 與 `getArticleBySlug` 共用 read-permission guard。
 
-- [ ] **Step 2: 建 ArticleQuerySubServiceTest（從既有 ArticleServiceTest 搬 13 method 對應 test）**
+- [ ] **Step 4: Run tests — verify GREEN**
 
 ```bash
-Write blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleQuerySubServiceTest.java
+./mvnw.cmd -pl blog-module-article test -Dtest=ArticleQuerySubServiceTest 2>&1 | tee logs/t4-green.log | grep -E "Tests run:|BUILD" | tail -5
 ```
 
-⚠ 從既有 ArticleServiceTest 搬以下 @Nested class（已知 line refs）：
-- L1046 GetArticleByUuidTests（注意：此 test 之前測「getArticleByUuid 含 view tracking」— SP-C T2 後 view tracking 拆出，T4 階段測試的 getArticleByUuid 只測 read-permission + response build，**不測 view event**；view event 測試已在 ArticleViewSubServiceTest）
-- L1068 GetArticleBySlugTests
-- L1164 GetArticleForEditTests
-- L1254 GetPublishedArticlesTests
-- L1295 GetPublishedArticlesByCategorySlugTests
-- L1335 GetMyArticlesTests
-- L1377 GetPendingArticlesTests
-- L1765 FindIdByUuidTests
-- L1897 FindByUuidTests
-- L1930 OtherCrossModuleTests（findById / findByIds / findBySeriesIdOrderByPosition / getArticleSummariesByIds 部分）
+Expected: 10 個 @Nested class 全綠（~50+ tests pass）。
 
-新 test class setUp：
-
-```java
-package dowob.xyz.blog.module.article.service;
-
-@ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.LENIENT)
-class ArticleQuerySubServiceTest {
-
-    @Mock private ArticleRepository articleRepository;
-    @Mock private ArticleMapper articleMapper;
-    @Mock private ArticleEntityFinder entityFinder;
-    @Mock private ArticleResponseMapper responseMapper;
-
-    private ArticleQuerySubService querySubService;
-
-    @BeforeEach
-    void setUp() {
-        querySubService = new ArticleQuerySubService(
-            articleRepository, articleMapper, entityFinder, responseMapper
-        );
-    }
-
-    // 從 ArticleServiceTest 搬 10 個 @Nested 過來（注意 GetArticleByUuid / Slug 移除 view event 相關 verify）
-    @Nested class GetArticleByUuidTests { /* ... */ }
-    @Nested class GetArticleBySlugTests { /* ... */ }
-    @Nested class GetArticleForEditTests { /* ... */ }
-    // ...
-}
-```
-
-- [ ] **Step 3: 修 ArticleServiceImpl — 13 method 改 delegate；getArticleByUuid / Slug 含協調邏輯**
+- [ ] **Step 5: 修 ArticleServiceImpl — 13 method 改 delegate；getArticleByUuid / Slug 含協調邏輯**
 
 ```java
 // 加 inject（既有 15 → 16）
@@ -1442,7 +1531,7 @@ private final ArticleQuerySubService querySubService;
 
 // Query 5 個純 delegate
 @Override
-public ArticleEditorResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
+public EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
     return querySubService.getArticleForEdit(articleUuid, requesterId);
 }
 
@@ -1474,11 +1563,11 @@ public Long findIdByUuid(UUID articleUuid) { return querySubService.findIdByUuid
 // ... 其他 5 個同樣 delegate
 ```
 
-- [ ] **Step 4: 修 ArticleServiceTest — 移除已搬走的 13 method 對應 test**
+- [ ] **Step 6: 修 ArticleServiceTest — 移除已搬走的 13 method 對應 test**
 
 從既有 ArticleServiceTest 移除 10 個 @Nested class（已搬到 QuerySubServiceTest）。剩餘 ~200 行：facade test 部分（驗委派 + 協調順序）。
 
-- [ ] **Step 5: install + Run all article 模組 tests**
+- [ ] **Step 7: install + Run all article 模組 tests**
 
 ```bash
 ./mvnw.cmd -pl blog-module-article test 2>&1 | tee logs/t4-article-tests.log | grep -E "^\[INFO\] Tests run:" | tail -5
@@ -1486,7 +1575,7 @@ public Long findIdByUuid(UUID articleUuid) { return querySubService.findIdByUuid
 
 Expected: 全綠（既有 + 新 sub-service test 共 ~150-200+ tests）。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleQuerySubService.java \
@@ -1519,12 +1608,13 @@ EOF
 
 ---
 
-## Task 5: ArticleServiceTest 重整為純 facade test
+## Task 5: ArticleServiceImpl 變薄 facade + ArticleServiceTest 重整為純 facade test
 
 **Files:**
-- Modify: `blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleServiceTest.java`
+- Modify: `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java`（11 inject → 3，行數 1020 → ~200）
+- Modify: `blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleServiceTest.java`（從 1981 行縮為 ~200 行純 facade test）
 
-T3/T4 已將大部分 test 搬走，本 task 把剩下的 ArticleServiceTest 改寫為「純驗 facade 委派 + 協調順序」。
+T3/T4 已將大部分 test 搬走，本 task 同時完成 ArticleServiceImpl 薄 facade 重寫 + ArticleServiceTest 重整（兩者必須同步完成，避免中間態 setUp inject 數不一致導致編譯不過）。
 
 - [ ] **Step 1: ArticleServiceTest 完全重寫為 facade test（~200 行）**
 
@@ -1696,35 +1786,9 @@ class ArticleServiceTest {
 }
 ```
 
-⚠ 此 test 假設 ArticleServiceImpl T6 後 inject 變 3 個 sub-service — 本 task 暫時 setUp 用 13/14/15 inject 仍 OK，T6 完成後 setUp 對應改 3 個 sub-service。Plan 階段保 setUp 為 3 個（T5 與 T6 同步完成 ArticleServiceImpl 薄 facade）。
+⚠ setUp 假設 3 inject（commandSubService / querySubService / viewSubService）— 必須與下一 step 的 ArticleServiceImpl 重寫同步完成。
 
-- [ ] **Step 2: install + Run tests verify**
-
-```bash
-./mvnw.cmd -pl blog-module-article test -Dtest=ArticleServiceTest 2>&1 | tee logs/t5-tests.log | grep -E "Tests run:|BUILD" | tail -5
-```
-
-Expected: ArticleServiceTest 約 9 cases 全綠（純 facade test）。
-
-⚠ 此時 ArticleServiceImpl 內仍含 14 個 inject + 部分舊邏輯 — 本 task **暫時編譯不過**或 ArticleServiceTest 暫時 fail（因 setUp 假設 3 inject）。T6 完成 cleanup 後才能跑 ArticleServiceTest。
-
-實際做法：T5 寫完 ArticleServiceTest 後，**一併合併 T6 cleanup 在同 commit**，避免中間態無法跑 test。或 T5 與 T6 順序合併為單一 task。
-
-**修正 task 順序：T5 + T6 合併為單一 task**（避免中間態編譯不過）。原 7 task 改為 6 task。
-
-- [ ] **Step 3: Commit (T5 + T6 合併)**
-
-⚠ 本 task 與 T6 合併執行 — see T6 完整 commit。
-
----
-
-## Task 6: ArticleServiceImpl 變薄 facade + cleanup（合併 T5 ArticleServiceTest 重整）
-
-**Files:**
-- Modify: `blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java`（11 inject → 3，行數 1020 → ~200）
-- Modify: `blog-module-article/src/test/java/dowob/xyz/blog/module/article/service/ArticleServiceTest.java`（已在 T5 step 1 完成寫入；本 task 階段執行）
-
-- [ ] **Step 1: ArticleServiceImpl 完全重寫為薄 facade**
+- [ ] **Step 2: ArticleServiceImpl 完全重寫為薄 facade**
 
 ```bash
 Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java
@@ -1890,10 +1954,10 @@ public class ArticleServiceImpl implements ArticleService {
 
 ⚠ 既有所有 11 inject 全部移除（已搬到 sub-service），改為 3 個 sub-service inject。
 
-- [ ] **Step 2: install + Run all article 模組 tests**
+- [ ] **Step 3: install + Run all article 模組 tests**
 
 ```bash
-./mvnw.cmd -pl blog-module-article test 2>&1 | tee logs/t6-article-tests.log | grep -E "^\[INFO\] Tests run:" | tail -5
+./mvnw.cmd -pl blog-module-article test 2>&1 | tee logs/t5-article-tests.log | grep -E "^\[INFO\] Tests run:" | tail -5
 ```
 
 Expected: 所有 test 全綠：
@@ -1905,15 +1969,15 @@ Expected: 所有 test 全綠：
 - ArticleServiceTest ~9（純 facade test）
 - ArticleControllerIT 13（IT 不變仍綠 — 對外 API 行為等價）
 
-- [ ] **Step 3: Run cross-module IT 確認跨模組 caller 行為等價**
+- [ ] **Step 4: Run cross-module IT 確認跨模組 caller 行為等價**
 
 ```bash
-./mvnw.cmd -pl blog-module-comment,blog-module-reading,blog-module-series,blog-module-version test 2>&1 | tee logs/t6-cross-tests.log | grep -E "^\[INFO\] Tests run:" | tail -5
+./mvnw.cmd -pl blog-module-comment,blog-module-reading,blog-module-series,blog-module-version test 2>&1 | tee logs/t5-cross-tests.log | grep -E "^\[INFO\] Tests run:" | tail -5
 ```
 
 Expected: 4 個跨模組模組 tests 全綠（comment 67 + reading 68 + series 36 + version 63 = 234 tests 全綠）。
 
-- [ ] **Step 4: Commit T5 + T6 合併**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/ArticleServiceImpl.java \
@@ -1921,7 +1985,7 @@ git add blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/
 git commit -m "$(cat <<'EOF'
 refactor(article): ArticleServiceImpl 變薄 facade + ArticleServiceTest 重整為純 facade test
 
-SP-C T5+T6 合併 — god class 消失：
+SP-C T5 — god class 消失：
 - ArticleServiceImpl 從 1020 行 → ~200 行
 - inject 從 11 個 → 3 個（commandSubService / querySubService / viewSubService）
 - 22/24 method 純 1-line delegate；getArticleByUuid / getArticleBySlug 含協調 query → view 順序
@@ -1955,7 +2019,7 @@ EOF
 
 ---
 
-## Task 7: 全模組 grep verify + sanity test
+## Task 6: 全模組 grep verify + sanity test
 
 **Files:** （無修改，純驗證）
 
@@ -2001,7 +2065,7 @@ Expected: empty 或僅 trivial 變化。
 - [ ] **Step 2: 跑 SP-C affected 5 個模組 tests**
 
 ```bash
-./mvnw.cmd -pl blog-module-article,blog-module-comment,blog-module-reading,blog-module-series,blog-module-version test 2>&1 | tee logs/t7-all.log | grep -E "^\[INFO\] Tests run:" | tail -10
+./mvnw.cmd -pl blog-module-article,blog-module-comment,blog-module-reading,blog-module-series,blog-module-version test 2>&1 | tee logs/t6-all.log | grep -E "^\[INFO\] Tests run:" | tail -10
 ```
 
 Expected: 全綠：
@@ -2016,7 +2080,7 @@ Expected: 全綠：
 - [ ] **Step 3: BUILD SUCCESS verify**
 
 ```bash
-tail -5 logs/t7-all.log | grep "BUILD"
+tail -5 logs/t6-all.log | grep "BUILD"
 ```
 
 Expected: BUILD SUCCESS。
@@ -2049,8 +2113,8 @@ grep -E "^public class (ArticleEntityFinder|ArticleResponseMapper|ArticleViewSub
 - [ ] T2: ArticleViewSubService.recordView(UUID, ArticleStatus, String) + 6 unit tests（4 visibility + 1 repeat-visit dedup + 1 published-publish）
 - [ ] T3: ArticleCommandSubService 11 method（含 215 行 Command + Counter 4 + cross-write 1 + 5 helper）+ test 從 ArticleServiceTest 搬 10 個 @Nested
 - [ ] T4: ArticleQuerySubService 13 method（含 read-permission guard）+ test 從 ArticleServiceTest 搬 10 個 @Nested
-- [ ] T5+T6: ArticleServiceImpl 變薄 facade（1020 → ~200 行，11 → 3 inject）+ ArticleServiceTest 重整為純 facade test
-- [ ] T7: grep verify 全部通過 + 5 模組 tests 全綠（~600+ tests）
+- [ ] T5: ArticleServiceImpl 變薄 facade（1020 → ~200 行，11 → 3 inject）+ ArticleServiceTest 重整為純 facade test
+- [ ] T6: grep verify 全部通過 + 5 模組 tests 全綠（~600+ tests）
 
 - [ ] 全 codebase `grep public class (ArticleEntityFinder|ArticleResponseMapper|...)` 為 0
 - [ ] ArticleService interface 24 method 不變（git diff develop empty）
@@ -2067,6 +2131,6 @@ SP-C 完成後：
 - ArticleService 對外 contract 24 method 完全不變（caller 零改動）
 - 業務邏輯分散到 sub-service，各自獨立測試
 
-預期 commit count：5（T1, T2, T3, T4, T5+T6 合併 — T7 純驗證）。比 SP-A/B/D 略少（T5+T6 合併避免中間態編譯不過）。
+預期 commit count：5（T1, T2, T3, T4, T5 合併 — T6 純驗證）。比 SP-A/B/D 略少（T5 同時完成 ArticleServiceImpl 薄 facade 重寫 + ArticleServiceTest 重整，避免中間態編譯不過）。
 
 SP-C 完成代表 architecture decoupling roadmap 4 個 sub-projects 全部結束。
