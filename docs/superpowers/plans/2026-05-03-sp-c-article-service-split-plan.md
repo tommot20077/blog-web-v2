@@ -24,16 +24,16 @@
 3. **改 access modifier**：將 `public` 改為無 modifier（package-private）；private helper 保留 private 或改為 package-private 視 sub-service 內部需求
 4. **更新 helper call sites**：method body 內既有 helper 呼叫對應改：
    - `findByUuidOrThrow(uuid)` → `entityFinder.findByUuidOrThrow(uuid)`
-   - `toResponse(article, ...)` → `responseMapper.toResponse(article, tags, categories, liked, bookmarked, lastReadProgress, seriesNav)`
-   - `toEditorResponse(article)` → `responseMapper.toEditorResponse(article, tagNames, categoryUuids)`
+   - `toResponse(article)` or existing response helper call → `responseMapper.toResponse(article, tags, categories, liked, bookmarked, lastReadProgress, seriesNav)`
+   - `toEditorResponse(article)` → `responseMapper.toEditorResponse(article, tags, categories)`
    - `toSummaryResponse(article)` → `responseMapper.toSummaryResponse(article, tags, categories)`
-   - `toTagSummaryResponses(...)` → `responseMapper.toTagSummaryResponses(...)`
-   - `batchToTagResponsesMap(...)` → `responseMapper.batchToTagResponsesMap(...)`
-   - `toCategoryResponses(...)` → `responseMapper.toCategoryResponses(...)`
-   - `batchToCategoryResponsesMap(...)` → `responseMapper.batchToCategoryResponsesMap(...)`
+   - `toTagSummaryResponses(tagInfos)` → `responseMapper.toTagSummaryResponses(tagInfos)`
+   - `batchToTagResponsesMap(batchTags)` → `responseMapper.batchToTagResponsesMap(batchTags)`
+   - `toCategoryResponses(categories)` → `responseMapper.toCategoryResponses(categories)`
+   - `batchToCategoryResponsesMap(batchCategories)` → `responseMapper.batchToCategoryResponsesMap(batchCategories)`
    - `resolveAuthorUuid(authorId)` → `responseMapper.resolveAuthorUuid(authorId)`
    - `resolveAuthorNickname(authorId)` → `responseMapper.resolveAuthorNickname(authorId)`
-   - `processArticleView(article, ..., clientIp)` → 拆為 `entityFinder.findByUuidOrThrow + querySubService.checkReadPermission` 等（依 task 而定）
+   - `processArticleView(article, viewerId, viewerRole, clientIp)` → 拆為 read-permission check 與 `viewSubService.recordView`
 
 Implementer 不需要重新發明 method body — 只需將 existing logic 搬遷 + 修 helper call sites。每個搬遷 step 後對應 test（搬到 sub-service test file）的 verify 為「行為等價」的證據。
 
@@ -240,6 +240,7 @@ import org.mockito.quality.Strictness;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -283,9 +284,9 @@ class ArticleResponseMapperTest {
             article.setCreatedAt(LocalDateTime.now());
             article.setPublishedAt(LocalDateTime.now());
 
-            when(userFacade.getUserUuid(5L)).thenReturn(authorUuid);
-            when(userFacade.getUserNickname(5L)).thenReturn("Yuan");
-            when(viewCountService.getViewCount(100L)).thenReturn(1234L);
+            when(userFacade.getUserUuidById(5L)).thenReturn(Optional.of(authorUuid));
+            when(userFacade.getUserNicknameById(5L)).thenReturn(Optional.of("Yuan"));
+            when(viewCountService.getViewCount(uuid)).thenReturn(1234L);
 
             ArticleResponse resp = mapper.toResponse(article, List.of(), List.of(),
                 false, false, null, null);
@@ -319,12 +320,17 @@ class ArticleResponseMapperTest {
             article.setStatus(ArticleStatus.DRAFT);
             article.setSlug("edit-slug");
 
-            EditorArticleResponse resp = mapper.toEditorResponse(article, List.of("Java"), List.of());
+            EditorArticleResponse resp = mapper.toEditorResponse(
+                article,
+                List.of(TagSummaryResponse.builder().name("Java").slug("java").build()),
+                List.of(CategoryResponse.builder().name("Backend").slug("backend").build())
+            );
 
             assertThat(resp.getTitle()).isEqualTo("Edit");
             assertThat(resp.getContent()).isEqualTo("raw md");
             assertThat(resp.getStatus()).isEqualTo(ArticleStatus.DRAFT);
-            assertThat(resp.getTagNames()).containsExactly("Java");
+            assertThat(resp.getTags()).extracting(TagSummaryResponse::getName).containsExactly("Java");
+            assertThat(resp.getCategories()).extracting(CategoryResponse::getName).containsExactly("Backend");
         }
     }
 
@@ -344,9 +350,9 @@ class ArticleResponseMapperTest {
             article.setSummary("summary");
             article.setStatus(ArticleStatus.PUBLISHED);
 
-            when(userFacade.getUserUuid(3L)).thenReturn(UUID.randomUUID());
-            when(userFacade.getUserNickname(3L)).thenReturn("Author");
-            when(viewCountService.getViewCount(200L)).thenReturn(50L);
+            article.setViewCount(50L);
+            when(userFacade.getUserUuidById(3L)).thenReturn(Optional.of(UUID.randomUUID()));
+            when(userFacade.getUserNicknameById(3L)).thenReturn(Optional.of("Author"));
 
             ArticleSummaryResponse resp = mapper.toSummaryResponse(article, List.of(), List.of());
 
@@ -381,7 +387,7 @@ class ArticleResponseMapperTest {
         @DisplayName("resolveAuthorUuid — delegate to userFacade")
         void resolveAuthorUuid_delegates() {
             UUID expected = UUID.randomUUID();
-            when(userFacade.getUserUuid(7L)).thenReturn(expected);
+            when(userFacade.getUserUuidById(7L)).thenReturn(Optional.of(expected));
 
             assertThat(mapper.resolveAuthorUuid(7L)).isEqualTo(expected);
         }
@@ -389,7 +395,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("resolveAuthorNickname — delegate to userFacade")
         void resolveAuthorNickname_delegates() {
-            when(userFacade.getUserNickname(7L)).thenReturn("Yuan");
+            when(userFacade.getUserNicknameById(7L)).thenReturn(Optional.of("Yuan"));
 
             assertThat(mapper.resolveAuthorNickname(7L)).isEqualTo("Yuan");
         }
@@ -415,17 +421,26 @@ Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/Ar
 package dowob.xyz.blog.module.article.service;
 
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
+import dowob.xyz.blog.infrastructure.event.TagInfo;
+import dowob.xyz.blog.module.article.model.Category;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.CategoryWithArticleId;
+import dowob.xyz.blog.module.article.model.TagWithArticleUuid;
+import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
 import dowob.xyz.blog.module.article.service.ViewCountService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Article entity → response DTO 轉換 helper（Query sub-service 用）。
@@ -452,11 +467,11 @@ class ArticleResponseMapper {
      * Article entity → ArticleResponse。完整 response（給 getArticleByUuid / getArticleBySlug 用）。
      */
     ArticleResponse toResponse(Article article, List<TagSummaryResponse> tags,
-                                List<CategoryResponse> categories,
-                                Boolean liked, Boolean bookmarked, BigDecimal lastReadProgress,
-                                SeriesNavigationResponse seriesNav) {
+                                 List<CategoryResponse> categories,
+                                 Boolean liked, Boolean bookmarked, BigDecimal lastReadProgress,
+                                 SeriesNavigation seriesNav) {
         // 從既有 ArticleServiceImpl.toResponse (L710-733) 完整搬過來
-        // 24 行邏輯，含 viewCountService.getViewCount(article.getId()) 取 view count
+        // 24 行邏輯，含 viewCountService.getViewCount(article.getUuid()) 取 view count
         // builder 設值：uuid/title/content/contentHtml/summary/coverImageUrl/authorUuid/authorNickname/
         //              status/viewCount/createdAt/updatedAt/categories/slug/likeCount/commentCount/
         //              publishedAt/tags/rejectReason/liked/bookmarked/lastReadProgress/seriesNav
@@ -470,7 +485,7 @@ class ArticleResponseMapper {
             .authorUuid(resolveAuthorUuid(article.getAuthorId()))
             .authorNickname(resolveAuthorNickname(article.getAuthorId()))
             .status(article.getStatus())
-            .viewCount(viewCountService.getViewCount(article.getId()))
+            .viewCount(viewCountService.getViewCount(article.getUuid()))
             .createdAt(article.getCreatedAt())
             .updatedAt(article.getUpdatedAt())
             .categories(categories)
@@ -490,7 +505,8 @@ class ArticleResponseMapper {
     /**
      * Article entity → EditorArticleResponse（給 getArticleForEdit 用，作者編輯器需要原始內容）。
      */
-    EditorArticleResponse toEditorResponse(Article article, List<String> tagNames, List<UUID> categoryUuids) {
+    EditorArticleResponse toEditorResponse(Article article, List<TagSummaryResponse> tags,
+                                           List<CategoryResponse> categories) {
         // 從既有 ArticleServiceImpl.toEditorResponse (L745-759) 搬過來，15 行
         return EditorArticleResponse.builder()
             .uuid(article.getUuid())
@@ -498,10 +514,12 @@ class ArticleResponseMapper {
             .content(article.getContent())
             .summary(article.getSummary())
             .coverImageUrl(article.getCoverImageUrl())
-            .slug(article.getSlug())
             .status(article.getStatus())
-            .tagNames(tagNames)
-            .categoryUuids(categoryUuids)
+            .categories(categories)
+            .tags(tags)
+            .rejectReason(article.getRejectReason())
+            .createdAt(article.getCreatedAt())
+            .updatedAt(article.getUpdatedAt())
             .build();
     }
 
@@ -519,7 +537,7 @@ class ArticleResponseMapper {
             .authorUuid(resolveAuthorUuid(article.getAuthorId()))
             .authorNickname(resolveAuthorNickname(article.getAuthorId()))
             .status(article.getStatus())
-            .viewCount(viewCountService.getViewCount(article.getId()))
+            .viewCount(article.getViewCount())
             .createdAt(article.getCreatedAt())
             .updatedAt(article.getUpdatedAt())
             .categories(categories)
@@ -538,7 +556,7 @@ class ArticleResponseMapper {
         if (tagInfos == null) return List.of();
         return tagInfos.stream()
             .map(t -> TagSummaryResponse.builder()
-                .uuid(t.id())
+                .id(t.id())
                 .name(t.name())
                 .slug(t.slug())
                 .build())
@@ -580,11 +598,11 @@ class ArticleResponseMapper {
     // Author resolver 2 個（userFacade wrapper）
 
     UUID resolveAuthorUuid(Long authorId) {
-        return userFacade.getUserUuid(authorId);
+        return userFacade.getUserUuidById(authorId).orElse(null);
     }
 
     String resolveAuthorNickname(Long authorId) {
-        return userFacade.getUserNickname(authorId);
+        return userFacade.getUserNicknameById(authorId).orElse(null);
     }
 }
 ```
@@ -897,8 +915,7 @@ public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role vi
     }
 
     // Build response (既有 processArticleView 內的 return toResponse)
-    ArticleResponse resp = responseMapper.toResponse(article, /* tags */ null, /* categories */ null,
-        /* liked */ null, /* bookmarked */ null, /* lastReadProgress */ null, /* seriesNav */ null);
+    ArticleResponse resp = responseMapper.toResponse(article, null, null, null, null, null, null);
     // 註：tags/categories/liked/bookmarked 等 enrich 邏輯仍在 ArticleServiceImpl，由
     // ArticleQueryService decorator 之後 enrich。此 task 維持既有行為。
 
@@ -1007,18 +1024,10 @@ class ArticleCommandSubServiceTest {
             ((TransactionCallback<Object>) inv.getArgument(0)).doInTransaction(null));
     }
 
-    // 從 ArticleServiceTest 搬 10 個 @Nested class 過來，將 articleService.xxx 改 commandSubService.xxx
-    @Nested class CreateArticleTests { /* 從 L185-418 搬過來 */ }
-    @Nested class UpdateArticleTests { /* 從 L419-648 搬過來 */ }
-    @Nested class DeleteArticleTests { /* 從 L649-758 搬過來 */ }
-    @Nested class PublishArticleTests { /* 從 L759-915 搬過來 */ }
-    @Nested class RejectArticleTests { /* 從 L916-950 搬過來 */ }
-    @Nested class SubmitForReviewTests { /* 從 L951-1045 搬過來 */ }
-    @Nested class IncrementCommentCountTests { /* 從 L1468-1559 搬過來 */ }
-    @Nested class DecrementCommentCountTests { /* 從 L1560-1625 搬過來 */ }
-    @Nested class IncrementLikeCountTests { /* 從 L1626-1706 搬過來 */ }
-    @Nested class DecrementLikeCountTests { /* 從 L1707-1764 搬過來 */ }
-    @Nested class UpdateSeriesAssignmentTests { /* 從 L1930+ OtherCrossModuleTests 搬 updateSeriesAssignment 部分 */ }
+    // Move the existing nested test classes listed above into this file.
+    // Do not leave placeholder nested classes; each nested class must contain
+    // its original test methods with the service under test renamed from
+    // articleService to commandSubService.
 }
 ```
 
@@ -1044,142 +1053,38 @@ Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/Ar
 
 ⚠ 內容 = 從 ArticleServiceImpl L135-577（Command 6 method）+ L896-928（Counter 4 method）+ L988-994（updateSeriesAssignment）+ L597-642 / L686-698 / L800-809（5 private helper）**完整搬過來**。
 
+**Production extraction contract（不可貼 placeholder skeleton）：**
+
+Create `ArticleCommandSubService.java` with package `dowob.xyz.blog.module.article.service`, `@Component`, `@RequiredArgsConstructor`, and these exact fields:
+
 ```java
-package dowob.xyz.blog.module.article.service;
-
-import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.common.api.enums.Role;
-import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
-import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.infrastructure.facade.TagFacade;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
-import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
-import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
-import dowob.xyz.blog.module.article.repository.ArticleRepository;
-import dowob.xyz.blog.module.article.mapper.CategoryMapper;
-import dowob.xyz.blog.module.category.repository.CategoryRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionTemplate;
-
-import java.util.List;
-import java.util.UUID;
-
-/**
- * Article command sub-service — 11 method (write 業務邏輯)。
- *
- * <p><strong>Package-private</strong>：僅 article 模組 service package 內可訪問。
- * 由 ArticleServiceImpl 委派 Command / Counter / Cross-module write 流程。</p>
- *
- * @author Yuan
- * @version 1.0
- */
-@Component
-@RequiredArgsConstructor
-class ArticleCommandSubService {
-
-    private final ArticleRepository articleRepository;
-    private final ArticleEventPublisher articleEventPublisher;
-    private final CategoryMapper categoryMapper;
-    private final CategoryRepository categoryRepository;
-    private final TagFacade tagFacade;
-    private final ArticleMarkdownRenderer markdownRenderer;
-    private final TransactionTemplate transactionTemplate;
-    private final ArticleEntityFinder entityFinder;
-
-    // ─── Command 6 method（write 業務邏輯）───
-
-    EditorArticleResponse createArticle(Long authorId, CreateArticleRequest request) {
-        // 從 ArticleServiceImpl.createArticle (L135-186) 完整搬過來
-        // 52 行邏輯：generateSlug + extractSummary + convertToHtml + 持久化 + tag/category sync + publishCreated
-        // ... method body
-    }
-
-    EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
-                                         UpdateArticleRequest request) {
-        // 從 ArticleServiceImpl.updateArticle (L198-279) 完整搬過來
-        // 82 行邏輯：findByUuidOrThrow → checkWritePermission → mutate fields → save → tag/category sync
-        // 注意：findByUuidOrThrow 改 call entityFinder.findByUuidOrThrow
-        // ... method body
-    }
-
-    void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        // 從 ArticleServiceImpl.deleteArticle (L289-311) 完整搬過來
-        // 23 行邏輯：含 publishDeleted with rich payload (seriesId, categoryIds, tagIds)
-        // ... method body
-    }
-
-    ArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        // 從 ArticleServiceImpl.publishArticle (L477-511) 搬過來，35 行
-    }
-
-    ArticleResponse rejectArticle(Long operatorId, Role operatorRole, UUID articleUuid, String reason) {
-        // 從 ArticleServiceImpl.rejectArticle (L524-538) 搬過來，15 行
-    }
-
-    ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
-        // 從 ArticleServiceImpl.submitForReview (L570-577) 搬過來，8 行
-    }
-
-    // ─── Counter 4 method（純 mapper.update，無業務邏輯）───
-
-    void incrementCommentCount(Long articleId) {
-        // 從 ArticleServiceImpl.incrementCommentCount (L896-898) 搬過來，3 行
-        articleRepository.incrementCommentCount(articleId);
-    }
-
-    void decrementCommentCount(Long articleId) {
-        // 從 ArticleServiceImpl.decrementCommentCount (L906-908) 搬過來，3 行
-        articleRepository.decrementCommentCount(articleId);
-    }
-
-    void incrementLikeCount(Long articleId) {
-        // L916-918 搬過來
-        articleRepository.incrementLikeCount(articleId);
-    }
-
-    void decrementLikeCount(Long articleId) {
-        // L926-928 搬過來
-        articleRepository.decrementLikeCount(articleId);
-    }
-
-    // ─── Cross-module write 1 method ───
-
-    void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
-        // 從 ArticleServiceImpl.updateSeriesAssignment (L988-994) 搬過來，7 行
-        articleRepository.updateSeriesAssignment(articleId, seriesId, seriesPosition);
-    }
-
-    // ─── 5 個 private helper（從 ArticleServiceImpl 移過來）───
-
-    private void checkWritePermission(Long operatorId, Role operatorRole, Article article) {
-        // L597-604 完整搬過來，8 行
-    }
-
-    private void validateStatusTransition(ArticleStatus from, ArticleStatus to) {
-        // L617-628 搬過來，12 行
-    }
-
-    private String generateSlug(String title) {
-        // L636-642 搬過來，7 行
-    }
-
-    private String extractSummary(String content) {
-        // L686-698 搬過來，13 行
-    }
-
-    private void syncCategories(Long articleId, List<UUID> categoryUuids) {
-        // L800-809 搬過來，10 行
-    }
-
-    // 注意：convertToHtml(String) 既有只是 markdownRenderer.render 包裝（3 行），
-    // 此 task 改 inline 為 markdownRenderer.render(content) 直接呼叫。
-}
+private final ArticleRepository articleRepository;
+private final ArticleEventPublisher articleEventPublisher;
+private final CategoryMapper categoryMapper;
+private final CategoryRepository categoryRepository;
+private final TagFacade tagFacade;
+private final ArticleMarkdownRenderer markdownRenderer;
+private final TransactionTemplate transactionTemplate;
+private final ArticleEntityFinder entityFinder;
 ```
 
-⚠ implementer 須從既有 ArticleServiceImpl method body **完整複製** body（不可摘要）。method body 內任何 `findByUuidOrThrow(...)` 呼叫改成 `entityFinder.findByUuidOrThrow(...)`；`toResponse(...)` 改成 `responseMapper.toResponse(...)`；`processArticleView(...)` 不出現在 Command（Command 不需 view tracking）。
+Required imports include `dowob.xyz.blog.module.article.mapper.CategoryMapper` and `dowob.xyz.blog.module.article.repository.CategoryRepository`.
+
+Copy the complete method bodies from the current `ArticleServiceImpl.java` into this class in this order:
+
+| Target method/helper | Source in `ArticleServiceImpl.java` | Required edit after paste |
+|---|---|---|
+| `EditorArticleResponse createArticle(Long, CreateArticleRequest)` | `createArticle` method | Replace `toEditorResponse(saved)` with `responseMapper` only if T1 has not already moved caller logic; otherwise keep the behavior-equivalent response mapping used after T1. Replace `findByUuidOrThrow` calls with `entityFinder.findByUuidOrThrow`. |
+| `EditorArticleResponse updateArticle(Long, Role, UUID, UpdateArticleRequest)` | `updateArticle` method | Replace `findByUuidOrThrow` with `entityFinder.findByUuidOrThrow`; preserve category/tag sync and ContentChanged event behavior. |
+| `void deleteArticle(Long, Role, UUID)` | `deleteArticle` method | Preserve rich `publishDeleted` payload and pre-delete category/tag id collection. |
+| `ArticleResponse publishArticle(Long, Role, UUID)` | `publishArticle` method | Preserve transactionTemplate behavior and all three event publishes. |
+| `ArticleResponse rejectArticle(Long, Role, UUID, String)` | `rejectArticle` method | Preserve ADMIN guard and rejectReason persistence. |
+| `ArticleResponse submitForReview(Long, Role, UUID)` | `submitForReview` method | Preserve status transition guard. |
+| four counter methods | `increment/decrement Comment/LikeCount` methods | Copy exactly; they delegate to `articleRepository`. |
+| `void updateSeriesAssignment(Long, Long, Integer)` | `updateSeriesAssignment` method | Copy exactly; it delegates to `articleRepository`. |
+| `checkWritePermission`, `validateStatusTransition`, `generateSlug`, `extractSummary`, `syncCategories` | same private helpers | Copy exactly; `convertToHtml` is not retained, call `markdownRenderer.render(content)` directly where needed. |
+
+Before GREEN verification, grep the new file for `TODO`, `placeholder`, `UnsupportedOperationException`, and `method body`; expected 0 matches.
 
 - [ ] **Step 4: Run tests — verify GREEN**
 
@@ -1349,11 +1254,11 @@ class ArticleQuerySubServiceTest {
         );
     }
 
-    // 從 ArticleServiceTest 搬 10 個 @Nested 過來（注意 GetArticleByUuid / Slug 移除 view event 相關 verify）
-    @Nested class GetArticleByUuidTests { /* ... */ }
-    @Nested class GetArticleBySlugTests { /* ... */ }
-    @Nested class GetArticleForEditTests { /* ... */ }
-    // ...
+    // Move the existing nested test classes listed above into this file.
+    // Do not leave placeholder nested classes; each nested class must contain
+    // its original test methods, with view-event verification removed from
+    // GetArticleByUuid/GetArticleBySlug because ArticleViewSubServiceTest owns
+    // that behavior after T2.
 }
 ```
 
@@ -1373,145 +1278,29 @@ Write blog-module-article/src/main/java/dowob/xyz/blog/module/article/service/Ar
 
 ⚠ 內容 = 從 ArticleServiceImpl L322-466 + L548-558（Query 7 method）+ L937-1017（Cross-module read 6 method）完整搬過來。
 
+**Production extraction contract（不可貼 placeholder skeleton）：**
+
+Create `ArticleQuerySubService.java` with package `dowob.xyz.blog.module.article.service`, `@Component`, `@RequiredArgsConstructor`, and these exact fields:
+
 ```java
-package dowob.xyz.blog.module.article.service;
-
-import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.common.api.enums.Role;
-import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
-import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.article.mapper.ArticleMapper;
-import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
-import dowob.xyz.blog.module.article.repository.ArticleRepository;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
-
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.UUID;
-
-/**
- * Article query sub-service — 13 method (read 業務邏輯)。
- *
- * <p><strong>Package-private</strong>：僅 article 模組 service package 內可訪問。</p>
- *
- * <p>不負責 view tracking — 由 ArticleServiceImpl 在 query 後協調呼叫 ArticleViewSubService.recordView。</p>
- *
- * @author Yuan
- * @version 1.0
- */
-@Component
-@RequiredArgsConstructor
-class ArticleQuerySubService {
-
-    private final ArticleRepository articleRepository;
-    private final ArticleMapper articleMapper;
-    private final ArticleEntityFinder entityFinder;
-    private final ArticleResponseMapper responseMapper;
-
-    // ─── Query 7 method ───
-
-    /**
-     * 取單篇 article（給 controller getArticleByUuid 用）。
-     *
-     * <p>含 read-permission check：非公開狀態（draft / pending / archived / rejected）僅 author / admin 可看，
-     * 其他 viewer throw ARTICLE_NOT_FOUND（避免洩漏 article 存在事實）。</p>
-     */
-    ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole) {
-        Article article = entityFinder.findByUuidOrThrow(articleUuid);
-        checkReadPermission(article, viewerId, viewerRole);
-        return responseMapper.toResponse(article, /* tags / categories / liked / bookmarked / lastRead / seriesNav from enrich */);
-        // ⚠ tags / categories enrich 邏輯從既有 ArticleServiceImpl.toResponse 內部 call 處搬過來
-    }
-
-    /**
-     * 取單篇 article by slug。同 getArticleByUuid 但用 slug 查找。
-     */
-    ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole) {
-        Article article = articleRepository.findBySlug(slug)
-            .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
-        checkReadPermission(article, viewerId, viewerRole);
-        return responseMapper.toResponse(article, /* enrich */);
-    }
-
-    /**
-     * 取編輯器 response（給 controller getArticleForEdit 用，僅 author / admin）。
-     */
-    EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
-        // 從 ArticleServiceImpl.getArticleForEdit (L341-347) 搬過來，7 行
-    }
-
-    /**
-     * 已發布文章分頁列表（首頁用）。
-     */
-    PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int size) {
-        // 從 ArticleServiceImpl.getPublishedArticles (L405-415) 搬過來，11 行
-    }
-
-    /**
-     * 依 category slug 過濾的已發布文章分頁列表。
-     */
-    PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(String categorySlug, int page, int size) {
-        // 從 ArticleServiceImpl.getPublishedArticlesByCategorySlug (L426-437) 搬過來，12 行
-    }
-
-    /**
-     * 我的文章分頁列表（作者後台用，含 status filter）。
-     */
-    PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int page, int size, ArticleStatus status) {
-        // 從 ArticleServiceImpl.getMyArticles (L449-466) 搬過來，18 行
-    }
-
-    /**
-     * 待審核文章分頁列表（admin 後台用）。
-     */
-    PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size) {
-        // 從 ArticleServiceImpl.getPendingArticles (L548-558) 搬過來，11 行
-    }
-
-    // ─── Cross-module read 6 method ───
-
-    Long findIdByUuid(UUID articleUuid) {
-        // 從 ArticleServiceImpl.findIdByUuid (L937-939) 搬過來，3 行
-    }
-
-    Optional<Article> findById(Long articleId) {
-        // 從 ArticleServiceImpl.findById (L1015-1017) 搬過來，3 行
-    }
-
-    Optional<Article> findByUuid(UUID articleUuid) {
-        // 從 ArticleServiceImpl.findByUuid (L975-977) 搬過來，3 行
-    }
-
-    List<Article> findByIds(List<Long> articleIds) {
-        // 從 ArticleServiceImpl.findByIds (L961-966) 搬過來，6 行
-    }
-
-    List<Article> findBySeriesIdOrderByPosition(Long seriesId) {
-        // 從 ArticleServiceImpl.findBySeriesIdOrderByPosition (L1004-1006) 搬過來，3 行
-    }
-
-    List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds) {
-        // 從 ArticleServiceImpl.getArticleSummariesByIds (L948-958) 搬過來，11 行
-    }
-
-    // ─── Private helper ───
-
-    private void checkReadPermission(Article article, Long viewerId, Role viewerRole) {
-        boolean isAdmin = Role.ADMIN == viewerRole;
-        boolean isAuthor = Objects.equals(article.getAuthorId(), viewerId);
-        if (!article.getStatus().isPubliclyVisible() && !isAdmin && !isAuthor) {
-            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
-        }
-    }
-}
+private final ArticleRepository articleRepository;
+private final ArticleMapper articleMapper;
+private final ArticleEntityFinder entityFinder;
+private final ArticleResponseMapper responseMapper;
 ```
 
-⚠ implementer 須從既有 ArticleServiceImpl method body **完整複製**，所有 `findByUuidOrThrow(...)` 呼叫改 `entityFinder.findByUuidOrThrow(...)`，所有 `toResponse / toSummaryResponse / toEditorResponse` 改 `responseMapper.toXxx(...)`。
+Copy complete method bodies from the current `ArticleServiceImpl.java` into this class in this order:
+
+| Target method/helper | Source in `ArticleServiceImpl.java` | Required edit after paste |
+|---|---|---|
+| `ArticleResponse getArticleByUuid(UUID, Long, Role)` | `getArticleByUuid` + read-permission portion of `processArticleView` | Remove `clientIp`; do not publish view events here. Run `checkReadPermission` before mapping response. |
+| `ArticleResponse getArticleBySlug(String, Long, Role)` | `getArticleBySlug` + read-permission portion of `processArticleView` | Remove `clientIp`; do not publish view events here. Run `checkReadPermission` before mapping response. |
+| `EditorArticleResponse getArticleForEdit(UUID, Long)` | `getArticleForEdit` | Replace `findByUuidOrThrow` with `entityFinder.findByUuidOrThrow`; replace response helper with `responseMapper`. |
+| five paging/query methods | `getPublishedArticles`, `getPublishedArticlesByCategorySlug`, `getMyArticles`, `getPendingArticles`, `getArticleSummariesByIds` | Preserve batching for tags/categories and page calculation. Replace summary mapping with `responseMapper.toSummaryResponse`. |
+| five cross-read methods | `findIdByUuid`, `findById`, `findByUuid`, `findByIds`, `findBySeriesIdOrderByPosition` | Copy exactly; these are repository or mapper delegates. |
+| `checkReadPermission` | Extract from `processArticleView` lines that compute admin/author/public visibility | Throw `BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND)` for non-public, non-author, non-admin access. |
+
+Before GREEN verification, grep the new file for `TODO`, `placeholder`, `UnsupportedOperationException`, and `method body`; expected 0 matches.
 
 ⚠ checkReadPermission helper 從既有 `processArticleView` L378-381 抽出（見 audit 完整 method body）— `getArticleByUuid` 與 `getArticleBySlug` 共用 read-permission guard。
 
@@ -1540,7 +1329,7 @@ public PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int siz
     return querySubService.getPublishedArticles(page, size);
 }
 
-// ... getPublishedArticlesByCategorySlug / getMyArticles / getPendingArticles 同樣純 delegate
+// 其餘 query delegate method 在 T5 最終 facade code block 完整列出。
 
 // 2 個含協調邏輯（query → view 順序）
 @Override
@@ -1560,7 +1349,7 @@ public ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerR
 // Cross-module read 6 個純 delegate
 @Override
 public Long findIdByUuid(UUID articleUuid) { return querySubService.findIdByUuid(articleUuid); }
-// ... 其他 5 個同樣 delegate
+// 其餘 cross-read delegate method 在 T5 最終 facade code block 完整列出。
 ```
 
 - [ ] **Step 6: 修 ArticleServiceTest — 移除已搬走的 13 method 對應 test**
@@ -1592,7 +1381,7 @@ SP-C T4 — ArticleServiceImpl 既有 13 個 read method 邏輯搬到獨立 sub-
   findBySeriesIdOrderByPosition / getArticleSummariesByIds）
 
 ArticleServiceImpl getArticleByUuid / getArticleBySlug 改為「協調 query → view」pattern：
-ArticleResponse resp = querySubService.getXxx(...);
+ArticleResponse resp = querySubService.getArticleByUuid(articleUuid, viewerId, viewerRole);
 viewSubService.recordView(uuid, resp.getStatus(), clientIp);
 return resp;
 
@@ -1683,7 +1472,7 @@ class ArticleServiceTest {
         @Test
         @DisplayName("createArticle → commandSubService.createArticle")
         void createArticle_delegates() {
-            articleService.createArticle(1L, /* CreateArticleRequest */ null);
+            articleService.createArticle(1L, null);
             verify(commandSubService).createArticle(eq(1L), any());
         }
 
@@ -2116,7 +1905,7 @@ grep -E "^public class (ArticleEntityFinder|ArticleResponseMapper|ArticleViewSub
 - [ ] T5: ArticleServiceImpl 變薄 facade（1020 → ~200 行，11 → 3 inject）+ ArticleServiceTest 重整為純 facade test
 - [ ] T6: grep verify 全部通過 + 5 模組 tests 全綠（~600+ tests）
 
-- [ ] 全 codebase `grep public class (ArticleEntityFinder|ArticleResponseMapper|...)` 為 0
+- [ ] 全 codebase `grep public class` 對 5 個新 class 為 0
 - [ ] ArticleService interface 24 method 不變（git diff develop empty）
 - [ ] ArticleControllerIT 952 行不變仍綠
 - [ ] CrossModuleArticleIT / CrossModuleCommentIT / CrossModuleSeriesIT / CrossModuleVersionIT / CrossModuleReadingIT 全綠
