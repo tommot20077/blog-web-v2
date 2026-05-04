@@ -23,7 +23,6 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -35,7 +34,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -79,11 +77,6 @@ public class ArticleServiceImpl implements ArticleService {
     private final ViewCountService viewCountService;
 
     /**
-     * Redis 字串操作模板（用於瀏覽數防刷原子性設值）
-     */
-    private final StringRedisTemplate stringRedisTemplate;
-
-    /**
      * 分類 Mapper（同步 article_categories + 查詢分類）
      */
     private final CategoryMapper categoryMapper;
@@ -105,15 +98,12 @@ public class ArticleServiceImpl implements ArticleService {
 
     private final ArticleResponseMapper articleResponseMapper;
 
+    private final ArticleViewSubService articleViewSubService;
+
     /**
      * Markdown 渲染器（含 OWASP HtmlSanitizer 白名單防護）
      */
     private final ArticleMarkdownRenderer markdownRenderer;
-
-    /**
-     * Redis 防刷 Key 前綴
-     */
-    private static final String VIEW_KEY_PREFIX = "view:";
 
     /**
      * 合法狀態轉換規則
@@ -383,14 +373,7 @@ public class ArticleServiceImpl implements ArticleService {
         }
 
         /** 增加瀏覽次數（Redis 防刷：同 IP 5 分鐘內只計算一次，使用原子性 setIfAbsent 防競態） */
-        if (isPublished) {
-            String viewKey = VIEW_KEY_PREFIX + article.getUuid() + ":" + clientIp;
-            Boolean firstVisit = stringRedisTemplate.opsForValue()
-                    .setIfAbsent(viewKey, "1", 5, TimeUnit.MINUTES);
-            if (Boolean.TRUE.equals(firstVisit)) {
-                articleEventPublisher.publishViewed(article.getUuid());
-            }
-        }
+        articleViewSubService.recordView(article.getUuid(), article.getStatus(), clientIp);
 
         return articleResponseMapper.toResponse(article);
     }

@@ -179,19 +179,21 @@ class ArticleServiceTest {
         ArticleEntityFinder articleEntityFinder = new ArticleEntityFinder(articleRepository);
         ArticleResponseMapper articleResponseMapper =
                 new ArticleResponseMapper(articleMapper, categoryMapper, userFacade, viewCountService);
+        ArticleViewSubService articleViewSubService =
+                new ArticleViewSubService(stringRedisTemplate, articleEventPublisher);
         articleService = new ArticleServiceImpl(
                 articleRepository,
                 articleMapper,
                 userFacade,
                 articleEventPublisher,
                 viewCountService,
-                stringRedisTemplate,
                 categoryMapper,
                 categoryRepository,
                 tagFacade,
                 transactionTemplate,
                 articleEntityFinder,
                 articleResponseMapper,
+                articleViewSubService,
                 markdownRenderer);
     }
 
