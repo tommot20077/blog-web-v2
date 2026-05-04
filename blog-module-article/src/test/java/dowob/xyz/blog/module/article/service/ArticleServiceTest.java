@@ -20,7 +20,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -108,7 +107,6 @@ class ArticleServiceTest {
     @Mock
     private ArticleMarkdownRenderer markdownRenderer;
 
-    @InjectMocks
     private ArticleServiceImpl articleService;
 
     /**
@@ -177,6 +175,24 @@ class ArticleServiceTest {
             action.accept(null);
             return null;
         }).when(transactionTemplate).executeWithoutResult(any());
+
+        ArticleEntityFinder articleEntityFinder = new ArticleEntityFinder(articleRepository);
+        ArticleResponseMapper articleResponseMapper =
+                new ArticleResponseMapper(articleMapper, categoryMapper, userFacade, viewCountService);
+        articleService = new ArticleServiceImpl(
+                articleRepository,
+                articleMapper,
+                userFacade,
+                articleEventPublisher,
+                viewCountService,
+                stringRedisTemplate,
+                categoryMapper,
+                categoryRepository,
+                tagFacade,
+                transactionTemplate,
+                articleEntityFinder,
+                articleResponseMapper,
+                markdownRenderer);
     }
 
     /**

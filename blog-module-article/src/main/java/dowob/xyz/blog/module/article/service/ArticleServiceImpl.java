@@ -23,7 +23,6 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -102,11 +101,9 @@ public class ArticleServiceImpl implements ArticleService {
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
 
-    @Autowired
-    private ArticleEntityFinder articleEntityFinder;
+    private final ArticleEntityFinder articleEntityFinder;
 
-    @Autowired
-    private ArticleResponseMapper articleResponseMapper;
+    private final ArticleResponseMapper articleResponseMapper;
 
     /**
      * Markdown 渲染器（含 OWASP HtmlSanitizer 白名單防護）
@@ -186,7 +183,7 @@ public class ArticleServiceImpl implements ArticleService {
             articleEventPublisher.publishTagged(saved, tagIds);
         }
 
-        return articleResponseMapper().toEditorResponse(saved);
+        return articleResponseMapper.toEditorResponse(saved);
     }
 
     /**
@@ -201,7 +198,7 @@ public class ArticleServiceImpl implements ArticleService {
     @Override
     public EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
             UpdateArticleRequest request) {
-        Article article = articleEntityFinder().findByUuidOrThrow(articleUuid);
+        Article article = articleEntityFinder.findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
 
         // 狀態守衛：只有 DRAFT 或 REJECTED 允許透過 PUT 編輯內容
@@ -279,7 +276,7 @@ public class ArticleServiceImpl implements ArticleService {
             articleEventPublisher.publishTagged(updated, tagIds);
         }
 
-        return articleResponseMapper().toEditorResponse(updated);
+        return articleResponseMapper.toEditorResponse(updated);
     }
 
     /**
@@ -291,7 +288,7 @@ public class ArticleServiceImpl implements ArticleService {
      */
     @Override
     public void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        Article article = articleEntityFinder().findByUuidOrThrow(articleUuid);
+        Article article = articleEntityFinder.findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
 
         /* delete 前讀取：article 刪除後 FK CASCADE 會清 article_tags / article_categories，
@@ -330,7 +327,7 @@ public class ArticleServiceImpl implements ArticleService {
     @Override
     @Transactional
     public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
-        Article article = articleEntityFinder().findByUuidOrThrow(articleUuid);
+        Article article = articleEntityFinder.findByUuidOrThrow(articleUuid);
         return processArticleView(article, viewerId, viewerRole, clientIp);
     }
 
@@ -343,11 +340,11 @@ public class ArticleServiceImpl implements ArticleService {
      */
     @Override
     public EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
-        Article article = articleEntityFinder().findByUuidOrThrow(articleUuid);
+        Article article = articleEntityFinder.findByUuidOrThrow(articleUuid);
         if (!article.getAuthorId().equals(requesterId)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
-        return articleResponseMapper().toEditorResponse(article);
+        return articleResponseMapper.toEditorResponse(article);
     }
 
     /**
@@ -395,7 +392,7 @@ public class ArticleServiceImpl implements ArticleService {
             }
         }
 
-        return articleResponseMapper().toResponse(article);
+        return articleResponseMapper.toResponse(article);
     }
 
     /**
@@ -411,9 +408,9 @@ public class ArticleServiceImpl implements ArticleService {
         List<Article> articles = articleMapper.findPublishedPage(offset, size);
         long total = articleMapper.countPublished();
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
-        Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper().batchToTagResponsesMap(uuids);
+        Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper.batchToTagResponsesMap(uuids);
         List<ArticleSummaryResponse> list = articles.stream()
-                .map(a -> articleResponseMapper().toSummaryResponse(a, tagMap))
+                .map(a -> articleResponseMapper.toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
         return PageResult.of(page, size, total, list);
     }
@@ -433,9 +430,9 @@ public class ArticleServiceImpl implements ArticleService {
         List<Article> articles = articleMapper.findPublishedPageByCategorySlug(categorySlug, offset, size);
         long total = articleMapper.countPublishedByCategorySlug(categorySlug);
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
-        Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper().batchToTagResponsesMap(uuids);
+        Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper.batchToTagResponsesMap(uuids);
         List<ArticleSummaryResponse> list = articles.stream()
-                .map(a -> articleResponseMapper().toSummaryResponse(a, tagMap))
+                .map(a -> articleResponseMapper.toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
         return PageResult.of(page, size, total, list);
     }
@@ -462,9 +459,9 @@ public class ArticleServiceImpl implements ArticleService {
             total = articleMapper.countByAuthorId(authorId);
         }
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
-        Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper().batchToTagResponsesMap(uuids);
+        Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper.batchToTagResponsesMap(uuids);
         List<ArticleSummaryResponse> list = articles.stream()
-                .map(a -> articleResponseMapper().toSummaryResponse(a, tagMap))
+                .map(a -> articleResponseMapper.toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
         return PageResult.of(page, size, total, list);
     }
@@ -479,7 +476,7 @@ public class ArticleServiceImpl implements ArticleService {
      */
     @Override
     public ArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        Article article = articleEntityFinder().findByUuidOrThrow(articleUuid);
+        Article article = articleEntityFinder.findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
         validateStatusTransition(article.getStatus(), ArticleStatus.PUBLISHED, operatorRole);
 
@@ -511,7 +508,7 @@ public class ArticleServiceImpl implements ArticleService {
             articleEventPublisher.publishTagged(saved, tagIds);
         }
 
-        return articleResponseMapper().toResponse(saved);
+        return articleResponseMapper.toResponse(saved);
     }
 
     /**
@@ -530,7 +527,7 @@ public class ArticleServiceImpl implements ArticleService {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
 
-        Article article = articleEntityFinder().findByUuidOrThrow(articleUuid);
+        Article article = articleEntityFinder.findByUuidOrThrow(articleUuid);
         validateStatusTransition(article.getStatus(), ArticleStatus.REJECTED, operatorRole);
 
         article.setStatus(ArticleStatus.REJECTED);
@@ -538,7 +535,7 @@ public class ArticleServiceImpl implements ArticleService {
         article.setRejectReason(reason);
 
         Article updated = articleRepository.save(article);
-        return articleResponseMapper().toResponse(updated);
+        return articleResponseMapper.toResponse(updated);
     }
 
     /**
@@ -554,9 +551,9 @@ public class ArticleServiceImpl implements ArticleService {
         List<Article> articles = articleMapper.findPendingReviewPage(offset, size);
         long total = articleMapper.countPendingReview();
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
-        Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper().batchToTagResponsesMap(uuids);
+        Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper.batchToTagResponsesMap(uuids);
         List<ArticleSummaryResponse> list = articles.stream()
-                .map(a -> articleResponseMapper().toSummaryResponse(a, tagMap))
+                .map(a -> articleResponseMapper.toSummaryResponse(a, tagMap))
                 .collect(Collectors.toList());
         return PageResult.of(page, size, total, list);
     }
@@ -572,32 +569,12 @@ public class ArticleServiceImpl implements ArticleService {
     @Override
     @Transactional
     public ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
-        Article article = articleEntityFinder().findByUuidOrThrow(articleUuid);
+        Article article = articleEntityFinder.findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
         validateStatusTransition(article.getStatus(), ArticleStatus.PENDING_REVIEW, operatorRole);
         article.setStatus(ArticleStatus.PENDING_REVIEW);
         Article updated = articleRepository.save(article);
-        return articleResponseMapper().toResponse(updated);
-    }
-
-    /**
-     * 根據 UUID 查詢文章，不存在則拋出例外
-     *
-     * 單元測試未注入 Spring field 時使用既有相依性建立 fallback。
-     */
-    private ArticleEntityFinder articleEntityFinder() {
-        if (articleEntityFinder == null) {
-            articleEntityFinder = new ArticleEntityFinder(articleRepository);
-        }
-        return articleEntityFinder;
-    }
-
-    private ArticleResponseMapper articleResponseMapper() {
-        if (articleResponseMapper == null) {
-            articleResponseMapper =
-                    new ArticleResponseMapper(articleMapper, categoryMapper, userFacade, viewCountService);
-        }
-        return articleResponseMapper;
+        return articleResponseMapper.toResponse(updated);
     }
 
     /**
@@ -655,20 +632,6 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
-     * 取得作者 UUID，查無結果時回傳 null
-     *
-     * @param authorId 作者 DB ID
-     * @return 作者 UUID
-     */
-
-    /**
-     * 取得作者暱稱，查無結果時回傳 null
-     *
-     * @param authorId 作者 DB ID
-     * @return 作者暱稱
-     */
-
-    /**
      * 將 Markdown 轉換為安全 HTML 字串。
      *
      * <p>委派給 {@link ArticleMarkdownRenderer}，輸出已通過 OWASP 白名單消毒。</p>
@@ -705,35 +668,6 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     /**
-     * 轉換文章實體為完整回應 DTO
-     *
-     * <p>
-     * liked 欄位由 ArticleQueryService 負責填充（CQRS Read 層），此處預設為 null。
-     * </p>
-     *
-     * @param article 文章實體
-     * @return ArticleResponse（liked 欄位為 null，由呼叫方自行填充）
-     */
-
-    /**
-     * 轉換文章實體為 Editor 專用回應 DTO
-     *
-     * <p>
-     * 僅包含編輯器所需欄位，不含 contentHtml、slug、viewCount 等閱讀端欄位。
-     * </p>
-     *
-     * @param article 文章實體
-     * @return EditorArticleResponse
-     */
-
-    /**
-     * 轉換文章實體為摘要回應 DTO
-     *
-     * @param article 文章實體
-     * @return ArticleSummaryResponse
-     */
-
-    /**
      * 同步文章分類關聯
      *
      * <p>
@@ -754,43 +688,6 @@ public class ArticleServiceImpl implements ArticleService {
             }
         }
     }
-
-    /**
-     * 查詢單篇文章標籤並轉換為 TagSummaryResponse 列表
-     *
-     * <p>
-     * 供 {@link #toResponse(Article)} 單篇文章使用，單次查詢即可。
-     * 注意：{@link dowob.xyz.blog.infrastructure.event.TagInfo} 是 Record，需使用 id()、name()、slug() 方法。
-     * </p>
-     *
-     * @param articleUuid 文章公開 UUID
-     * @return 標籤摘要回應列表
-     */
-
-    /**
-     * 批次查詢多篇文章標籤並建立文章 UUID → TagSummaryResponse 列表的對應 Map
-     *
-     * <p>
-     * 供列表場景使用，一次查詢避免 N+1 問題。
-     * </p>
-     *
-     * @param articleUuids 文章公開 UUID 列表
-     * @return Map&lt;articleUuid, 標籤摘要回應列表&gt;
-     */
-
-    /**
-     * 查詢文章分類並轉換為 Response（委派批次查詢，支援單篇使用）
-     *
-     * @param articleId 文章資料庫主鍵
-     * @return 分類回應列表
-     */
-
-    /**
-     * 批次查詢多篇文章分類並轉換為 Map（供列表場景使用，避免 N+1）
-     *
-     * @param articleIds 文章資料庫主鍵列表
-     * @return Map&lt;articleId, 分類回應列表&gt;
-     */
 
     /**
      * 原子性遞增文章留言計數
@@ -855,8 +752,9 @@ public class ArticleServiceImpl implements ArticleService {
         List<ArticleSummaryResponse> results = new java.util.ArrayList<>();
         for (Long id : articleIds) {
             articleRepository.findById(id).ifPresent(a -> {
-                Map<UUID, List<TagSummaryResponse>> tagMap = articleResponseMapper().batchToTagResponsesMap(List.of(a.getUuid()));
-                results.add(articleResponseMapper().toSummaryResponse(a, tagMap));
+                Map<UUID, List<TagSummaryResponse>> tagMap =
+                        articleResponseMapper.batchToTagResponsesMap(List.of(a.getUuid()));
+                results.add(articleResponseMapper.toSummaryResponse(a, tagMap));
             });
         }
         return results;
