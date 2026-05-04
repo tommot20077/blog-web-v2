@@ -1322,7 +1322,7 @@ Expected: 10 個 @Nested class 全綠（~50+ tests pass）。
 - [ ] **Step 5: 修 ArticleServiceImpl — 13 method 改 delegate；getArticleByUuid / Slug 含協調邏輯**
 
 ```java
-// 加 inject（既有 15 → 16）
+// 加 inject
 private final ArticleQuerySubService querySubService;
 
 // Query 5 個純 delegate
@@ -1342,14 +1342,14 @@ public PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int siz
 @Override
 public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
     ArticleResponse resp = querySubService.getArticleByUuid(articleUuid, viewerId, viewerRole);
-    viewSubService.recordView(articleUuid, resp.getStatus(), clientIp);
+    articleViewSubService.recordView(articleUuid, resp.getStatus(), clientIp);
     return resp;
 }
 
 @Override
 public ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole, String clientIp) {
     ArticleResponse resp = querySubService.getArticleBySlug(slug, viewerId, viewerRole);
-    viewSubService.recordView(resp.getUuid(), resp.getStatus(), clientIp);
+    articleViewSubService.recordView(resp.getUuid(), resp.getStatus(), clientIp);
     return resp;
 }
 
@@ -1389,7 +1389,7 @@ SP-C T4 — ArticleServiceImpl 既有 13 個 read method 邏輯搬到獨立 sub-
 
 ArticleServiceImpl getArticleByUuid / getArticleBySlug 改為「協調 query → view」pattern：
 ArticleResponse resp = querySubService.getArticleByUuid(articleUuid, viewerId, viewerRole);
-viewSubService.recordView(uuid, resp.getStatus(), clientIp);
+articleViewSubService.recordView(uuid, resp.getStatus(), clientIp);
 return resp;
 
 對齊 SP-D applyRestoreContent 的 facade 協調 atomic flow pattern。
@@ -1463,13 +1463,13 @@ class ArticleServiceTest {
 
     @Mock private ArticleCommandSubService commandSubService;
     @Mock private ArticleQuerySubService querySubService;
-    @Mock private ArticleViewSubService viewSubService;
+    @Mock private ArticleViewSubService articleViewSubService;
 
     private ArticleServiceImpl articleService;
 
     @BeforeEach
     void setUp() {
-        articleService = new ArticleServiceImpl(commandSubService, querySubService, viewSubService);
+        articleService = new ArticleServiceImpl(commandSubService, querySubService, articleViewSubService);
     }
 
     @Nested
@@ -1526,7 +1526,7 @@ class ArticleServiceTest {
     class GetArticleByUuidCoordination {
 
         @Test
-        @DisplayName("query 完成後 call viewSubService.recordView，傳 status + clientIp")
+        @DisplayName("query 完成後 call articleViewSubService.recordView，傳 status + clientIp")
         void getArticleByUuid_coordinatesQueryThenView() {
             UUID uuid = UUID.randomUUID();
             ArticleResponse resp = mock(ArticleResponse.class);
@@ -1538,13 +1538,13 @@ class ArticleServiceTest {
             assertThat(result).isSameAs(resp);
 
             // InOrder verify：query 必須先於 view
-            InOrder inOrder = inOrder(querySubService, viewSubService);
+            InOrder inOrder = inOrder(querySubService, articleViewSubService);
             inOrder.verify(querySubService).getArticleByUuid(uuid, 1L, Role.USER);
-            inOrder.verify(viewSubService).recordView(uuid, ArticleStatus.PUBLISHED, "1.2.3.4");
+            inOrder.verify(articleViewSubService).recordView(uuid, ArticleStatus.PUBLISHED, "1.2.3.4");
         }
 
         @Test
-        @DisplayName("query 拋 ARTICLE_NOT_FOUND → 不 call viewSubService")
+        @DisplayName("query 拋 ARTICLE_NOT_FOUND → 不 call articleViewSubService")
         void getArticleByUuid_queryThrows_doesNotRecordView() {
             UUID uuid = UUID.randomUUID();
             when(querySubService.getArticleByUuid(any(), any(), any()))
@@ -1553,7 +1553,7 @@ class ArticleServiceTest {
             assertThatThrownBy(() -> articleService.getArticleByUuid(uuid, 1L, Role.USER, "1.2.3.4"))
                 .isInstanceOf(BusinessException.class);
 
-            verifyNoInteractions(viewSubService);
+            verifyNoInteractions(articleViewSubService);
         }
     }
 
@@ -1562,7 +1562,7 @@ class ArticleServiceTest {
     class GetArticleBySlugCoordination {
 
         @Test
-        @DisplayName("query 完成後 call viewSubService.recordView 傳 resp.getUuid() + status + clientIp")
+        @DisplayName("query 完成後 call articleViewSubService.recordView 傳 resp.getUuid() + status + clientIp")
         void getArticleBySlug_coordinatesQueryThenView() {
             UUID uuid = UUID.randomUUID();
             ArticleResponse resp = mock(ArticleResponse.class);
@@ -1574,15 +1574,15 @@ class ArticleServiceTest {
 
             assertThat(result).isSameAs(resp);
 
-            InOrder inOrder = inOrder(querySubService, viewSubService);
+            InOrder inOrder = inOrder(querySubService, articleViewSubService);
             inOrder.verify(querySubService).getArticleBySlug("slug", 1L, Role.USER);
-            inOrder.verify(viewSubService).recordView(uuid, ArticleStatus.PUBLISHED, "1.2.3.4");
+            inOrder.verify(articleViewSubService).recordView(uuid, ArticleStatus.PUBLISHED, "1.2.3.4");
         }
     }
 }
 ```
 
-⚠ setUp 假設 3 inject（commandSubService / querySubService / viewSubService）— 必須與下一 step 的 ArticleServiceImpl 重寫同步完成。
+⚠ setUp 假設 3 inject（commandSubService / querySubService / articleViewSubService）— 必須與下一 step 的 ArticleServiceImpl 重寫同步完成。
 
 - [ ] **Step 2: ArticleServiceImpl 完全重寫為薄 facade**
 
@@ -1625,7 +1625,7 @@ public class ArticleServiceImpl implements ArticleService {
 
     private final ArticleCommandSubService commandSubService;
     private final ArticleQuerySubService querySubService;
-    private final ArticleViewSubService viewSubService;
+    private final ArticleViewSubService articleViewSubService;
 
     // ─── Command 6 method（純 1-line delegate）───
 
@@ -1665,14 +1665,14 @@ public class ArticleServiceImpl implements ArticleService {
     @Override
     public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
         ArticleResponse resp = querySubService.getArticleByUuid(articleUuid, viewerId, viewerRole);
-        viewSubService.recordView(articleUuid, resp.getStatus(), clientIp);
+        articleViewSubService.recordView(articleUuid, resp.getStatus(), clientIp);
         return resp;
     }
 
     @Override
     public ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole, String clientIp) {
         ArticleResponse resp = querySubService.getArticleBySlug(slug, viewerId, viewerRole);
-        viewSubService.recordView(resp.getUuid(), resp.getStatus(), clientIp);
+        articleViewSubService.recordView(resp.getUuid(), resp.getStatus(), clientIp);
         return resp;
     }
 
@@ -1783,7 +1783,7 @@ refactor(article): ArticleServiceImpl 變薄 facade + ArticleServiceTest 重整�
 
 SP-C T5 — god class 消失：
 - ArticleServiceImpl 從 1020 行 → ~200 行
-- inject 從 11 個 → 3 個（commandSubService / querySubService / viewSubService）
+- inject 從 11 個 → 3 個（commandSubService / querySubService / articleViewSubService）
 - 22/24 method 純 1-line delegate；getArticleByUuid / getArticleBySlug 含協調 query → view 順序
 - 17 private helper 全部搬走（9 → ResponseMapper/EntityFinder，5 → CommandSubService，1 → ViewSubService，
   2 inline / 移除）
