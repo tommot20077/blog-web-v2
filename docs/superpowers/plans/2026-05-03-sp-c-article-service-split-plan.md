@@ -1002,6 +1002,7 @@ package dowob.xyz.blog.module.article.service;
 class ArticleCommandSubServiceTest {
 
     @Mock private ArticleRepository articleRepository;
+    @Mock private ArticleMapper articleMapper;
     @Mock private ArticleEventPublisher articleEventPublisher;
     @Mock private CategoryMapper categoryMapper;
     @Mock private CategoryRepository categoryRepository;
@@ -1009,14 +1010,16 @@ class ArticleCommandSubServiceTest {
     @Mock private ArticleMarkdownRenderer markdownRenderer;
     @Mock private TransactionTemplate transactionTemplate;
     @Mock private ArticleEntityFinder entityFinder;
+    @Mock private ArticleResponseMapper articleResponseMapper;
 
     private ArticleCommandSubService commandSubService;
 
     @BeforeEach
     void setUp() {
         commandSubService = new ArticleCommandSubService(
-            articleRepository, articleEventPublisher, categoryMapper, categoryRepository,
-            tagFacade, markdownRenderer, transactionTemplate, entityFinder
+            articleRepository, articleMapper, articleEventPublisher, categoryMapper,
+            categoryRepository, tagFacade, markdownRenderer, transactionTemplate,
+            entityFinder, articleResponseMapper
         );
 
         // transactionTemplate.execute → 立即執行 callback
@@ -1034,7 +1037,7 @@ class ArticleCommandSubServiceTest {
 ⚠ 從既有 ArticleServiceTest 搬時：
 - `articleService.createArticle(...)` 改 `commandSubService.createArticle(...)`
 - `articleService.findByUuidOrThrow(...)` 改 `entityFinder.findByUuidOrThrow(...)`（mock entityFinder 取代既有 articleRepository.findByUuid mock）
-- toResponse 相關 mock 移除（Command 不負責 toResponse）
+- response mapping 相關 mock 改由 `articleResponseMapper` 提供（CommandSubService 仍負責回傳 DTO）
 - 不再需要的 mock fields（StringRedisTemplate, ViewCountService, UserFacade）移除
 
 - [ ] **Step 2: Run tests — verify RED**
@@ -1059,6 +1062,7 @@ Create `ArticleCommandSubService.java` with package `dowob.xyz.blog.module.artic
 
 ```java
 private final ArticleRepository articleRepository;
+private final ArticleMapper articleMapper;
 private final ArticleEventPublisher articleEventPublisher;
 private final CategoryMapper categoryMapper;
 private final CategoryRepository categoryRepository;
@@ -1066,21 +1070,24 @@ private final TagFacade tagFacade;
 private final ArticleMarkdownRenderer markdownRenderer;
 private final TransactionTemplate transactionTemplate;
 private final ArticleEntityFinder entityFinder;
+private final ArticleResponseMapper articleResponseMapper;
 ```
 
-Required imports include `dowob.xyz.blog.module.article.mapper.CategoryMapper` and `dowob.xyz.blog.module.article.repository.CategoryRepository`.
+Required imports include `dowob.xyz.blog.module.article.mapper.ArticleMapper`,
+`dowob.xyz.blog.module.article.mapper.CategoryMapper`, and
+`dowob.xyz.blog.module.article.repository.CategoryRepository`.
 
 Copy the complete method bodies from the current `ArticleServiceImpl.java` into this class in this order:
 
 | Target method/helper | Source in `ArticleServiceImpl.java` | Required edit after paste |
 |---|---|---|
-| `EditorArticleResponse createArticle(Long, CreateArticleRequest)` | `createArticle` method | Replace `toEditorResponse(saved)` with `responseMapper` only if T1 has not already moved caller logic; otherwise keep the behavior-equivalent response mapping used after T1. Replace `findByUuidOrThrow` calls with `entityFinder.findByUuidOrThrow`. |
-| `EditorArticleResponse updateArticle(Long, Role, UUID, UpdateArticleRequest)` | `updateArticle` method | Replace `findByUuidOrThrow` with `entityFinder.findByUuidOrThrow`; preserve category/tag sync and ContentChanged event behavior. |
-| `void deleteArticle(Long, Role, UUID)` | `deleteArticle` method | Preserve rich `publishDeleted` payload and pre-delete category/tag id collection. |
-| `ArticleResponse publishArticle(Long, Role, UUID)` | `publishArticle` method | Preserve transactionTemplate behavior and all three event publishes. |
-| `ArticleResponse rejectArticle(Long, Role, UUID, String)` | `rejectArticle` method | Preserve ADMIN guard and rejectReason persistence. |
-| `ArticleResponse submitForReview(Long, Role, UUID)` | `submitForReview` method | Preserve status transition guard. |
-| four counter methods | `increment/decrement Comment/LikeCount` methods | Copy exactly; they delegate to `articleRepository`. |
+| `EditorArticleResponse createArticle(Long, CreateArticleRequest)` | `createArticle` method | Keep T1 behavior: return `articleResponseMapper.toEditorResponse(saved)`. Replace `convertToHtml(...)` with `markdownRenderer.render(...)` if the helper is removed. |
+| `EditorArticleResponse updateArticle(Long, Role, UUID, UpdateArticleRequest)` | `updateArticle` method | Replace `articleEntityFinder.findByUuidOrThrow` with `entityFinder.findByUuidOrThrow`; keep `articleResponseMapper.toEditorResponse(updated)` and preserve category/tag sync and ContentChanged event behavior. |
+| `void deleteArticle(Long, Role, UUID)` | `deleteArticle` method | Replace `articleEntityFinder.findByUuidOrThrow` with `entityFinder.findByUuidOrThrow`; preserve `articleMapper.findCategoryUuidsByArticleId`, `articleMapper.findTagUuidsByArticleId`, rich `publishDeleted` payload, and pre-delete category/tag id collection. |
+| `ArticleResponse publishArticle(Long, Role, UUID)` | `publishArticle` method | Replace `articleEntityFinder.findByUuidOrThrow` with `entityFinder.findByUuidOrThrow`; preserve `articleMapper.findTagsByArticleUuid`, transactionTemplate behavior, all three event publishes, and `articleResponseMapper.toResponse(saved)`. |
+| `ArticleResponse rejectArticle(Long, Role, UUID, String)` | `rejectArticle` method | Replace `articleEntityFinder.findByUuidOrThrow` with `entityFinder.findByUuidOrThrow`; preserve ADMIN guard, rejectReason persistence, and `articleResponseMapper.toResponse(updated)`. |
+| `ArticleResponse submitForReview(Long, Role, UUID)` | `submitForReview` method | Replace `articleEntityFinder.findByUuidOrThrow` with `entityFinder.findByUuidOrThrow`; preserve status transition guard and `articleResponseMapper.toResponse(updated)`. |
+| four counter methods | `increment/decrement Comment/LikeCount` methods | Copy exactly; they delegate to `articleMapper`. |
 | `void updateSeriesAssignment(Long, Long, Integer)` | `updateSeriesAssignment` method | Copy exactly; it delegates to `articleRepository`. |
 | `checkWritePermission`, `validateStatusTransition`, `generateSlug`, `extractSummary`, `syncCategories` | same private helpers | Copy exactly; `convertToHtml` is not retained, call `markdownRenderer.render(content)` directly where needed. |
 
@@ -1097,7 +1104,7 @@ Expected: 10 個 @Nested class 全綠（~100+ tests pass）。
 - [ ] **Step 5: 修 ArticleServiceImpl — 11 method 改 1-line delegate**
 
 ```java
-// 加 inject（既有 14 → 15）
+// 加 inject
 private final ArticleCommandSubService commandSubService;
 
 // Command 6 method 改 delegate
@@ -1196,7 +1203,7 @@ SP-C T3 — ArticleServiceImpl 既有 11 個 write method 邏輯搬到獨立 sub
 
 ArticleServiceImpl 對應 11 method 改 1-line delegate，行數減約 285 行。
 ArticleCommandSubServiceTest 從既有 ArticleServiceTest 搬 10 個 @Nested 過來（mock 改用
-CommandSubService inject + entityFinder）— 行為等價驗證仍綠。
+CommandSubService inject + entityFinder + articleResponseMapper）— 行為等價驗證仍綠。
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
