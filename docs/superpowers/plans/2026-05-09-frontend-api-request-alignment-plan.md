@@ -92,7 +92,8 @@ describe('real bookmarkService', () => {
 Run from frontend repo:
 
 ```bash
-npm test -- src/api/real/bookmarkService.test.ts 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-bookmark-red.log
+mkdir -p logs
+npm test -- src/api/real/bookmarkService.test.ts 2>&1 | tee logs/frontend-api-request-alignment-bookmark-red.log
 ```
 
 Expected: FAIL because `./bookmarkService` does not exist.
@@ -142,7 +143,7 @@ export const bookmarkService = {
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-npm test -- src/api/real/bookmarkService.test.ts 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-bookmark-green.log
+npm test -- src/api/real/bookmarkService.test.ts 2>&1 | tee logs/frontend-api-request-alignment-bookmark-green.log
 ```
 
 Expected: PASS.
@@ -235,7 +236,7 @@ describe('real readingProgressService', () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 ```bash
-npm test -- src/api/real/highlightService.test.ts src/api/real/readingProgressService.test.ts 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-reading-red.log
+npm test -- src/api/real/highlightService.test.ts src/api/real/readingProgressService.test.ts 2>&1 | tee logs/frontend-api-request-alignment-reading-red.log
 ```
 
 Expected: FAIL because service modules do not exist.
@@ -322,7 +323,7 @@ export const readingProgressService = {
 - [ ] **Step 6: Run tests to verify they pass**
 
 ```bash
-npm test -- src/api/real/highlightService.test.ts src/api/real/readingProgressService.test.ts 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-reading-green.log
+npm test -- src/api/real/highlightService.test.ts src/api/real/readingProgressService.test.ts 2>&1 | tee logs/frontend-api-request-alignment-reading-green.log
 ```
 
 Expected: PASS.
@@ -432,7 +433,7 @@ describe('real articleVersionService', () => {
 - [ ] **Step 3: Run tests to verify they fail**
 
 ```bash
-npm test -- src/api/real/versionPreferenceService.test.ts src/api/real/articleVersionService.test.ts 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-version-red.log
+npm test -- src/api/real/versionPreferenceService.test.ts src/api/real/articleVersionService.test.ts 2>&1 | tee logs/frontend-api-request-alignment-version-red.log
 ```
 
 Expected: FAIL because service modules do not exist.
@@ -559,7 +560,7 @@ export const articleVersionService = {
 - [ ] **Step 6: Run tests to verify they pass**
 
 ```bash
-npm test -- src/api/real/versionPreferenceService.test.ts src/api/real/articleVersionService.test.ts 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-version-green.log
+npm test -- src/api/real/versionPreferenceService.test.ts src/api/real/articleVersionService.test.ts 2>&1 | tee logs/frontend-api-request-alignment-version-green.log
 ```
 
 Expected: PASS.
@@ -640,7 +641,7 @@ describe('real seriesService', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-npm test -- src/api/real/seriesService.test.ts 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-series-red.log
+npm test -- src/api/real/seriesService.test.ts 2>&1 | tee logs/frontend-api-request-alignment-series-red.log
 ```
 
 Expected: FAIL because `./seriesService` does not exist.
@@ -737,7 +738,7 @@ export const seriesService = {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-npm test -- src/api/real/seriesService.test.ts 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-series-green.log
+npm test -- src/api/real/seriesService.test.ts 2>&1 | tee logs/frontend-api-request-alignment-series-green.log
 ```
 
 Expected: PASS.
@@ -750,7 +751,7 @@ Expected: PASS.
 - [ ] **Step 1: Capture current hard-coded URL usage**
 
 ```bash
-rg -n "http://localhost:9010" e2e 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-e2e-url-red.log
+rg -n "http://localhost:9010" e2e 2>&1 | tee logs/frontend-api-request-alignment-e2e-url-red.log
 ```
 
 Expected: output lists hard-coded E2E URLs.
@@ -782,7 +783,7 @@ Do not change endpoint paths or test assertions.
 - [ ] **Step 3: Verify no E2E hard-coded URL remains**
 
 ```bash
-rg -n "http://localhost:9010" e2e 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-e2e-url-green.log
+rg -n "http://localhost:9010" e2e 2>&1 | tee logs/frontend-api-request-alignment-e2e-url-green.log
 ```
 
 Expected: no output and `rg` exits `1`.
@@ -790,7 +791,7 @@ Expected: no output and `rg` exits `1`.
 - [ ] **Step 4: Run a TypeScript check for changed E2E files**
 
 ```bash
-npm run build 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-e2e-build.log
+npm run build 2>&1 | tee logs/frontend-api-request-alignment-e2e-build.log
 ```
 
 Expected: PASS. If unrelated existing build failures appear, record the failure and run targeted Vitest tests from Tasks 1-4 instead; do not change UI code to fix unrelated build failures.
@@ -804,7 +805,7 @@ Expected: PASS. If unrelated existing build failures appear, record the failure 
 - [ ] **Step 1: Capture stale doc references**
 
 ```bash
-rg -n "/api/admin|pending/count" diff.md runbook-integration.md 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-docs-red.log
+rg -n "/api/admin|pending/count" diff.md runbook-integration.md 2>&1 | tee logs/frontend-api-request-alignment-docs-red.log
 ```
 
 Expected: output includes stale references.
@@ -821,7 +822,7 @@ In both docs:
 - [ ] **Step 3: Verify stale docs are gone**
 
 ```bash
-rg -n "/api/admin|pending/count" diff.md runbook-integration.md 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-docs-green.log
+rg -n "/api/admin|pending/count" diff.md runbook-integration.md 2>&1 | tee logs/frontend-api-request-alignment-docs-green.log
 ```
 
 Expected: no output, or only explicitly historical wording containing `removed` or `舊`. Prefer no output.
@@ -841,7 +842,7 @@ npm test -- \
   src/api/real/versionPreferenceService.test.ts \
   src/api/real/articleVersionService.test.ts \
   src/api/real/seriesService.test.ts \
-  2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-services-all.log
+  2>&1 | tee logs/frontend-api-request-alignment-services-all.log
 ```
 
 Expected: PASS.
@@ -849,7 +850,7 @@ Expected: PASS.
 - [ ] **Step 2: Verify no stale current API references remain in target areas**
 
 ```bash
-rg -n "/api/admin|pending/count" diff.md runbook-integration.md src e2e 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-stale-all.log
+rg -n "/api/admin|pending/count" diff.md runbook-integration.md src e2e 2>&1 | tee logs/frontend-api-request-alignment-stale-all.log
 ```
 
 Expected: no output, except historical removed references if explicitly justified.
@@ -857,7 +858,7 @@ Expected: no output, except historical removed references if explicitly justifie
 - [ ] **Step 3: Verify no E2E hard-coded backend URL remains**
 
 ```bash
-rg -n "http://localhost:9010" e2e 2>&1 | tee /mnt/d/end/workspace/java/blog-web-v2/logs/frontend-api-request-alignment-e2e-url-final.log
+rg -n "http://localhost:9010" e2e 2>&1 | tee logs/frontend-api-request-alignment-e2e-url-final.log
 ```
 
 Expected: no output.

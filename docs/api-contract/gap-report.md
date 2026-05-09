@@ -2,10 +2,10 @@
 
 ## Summary
 
-- Runtime backend OpenAPI source: `logs/api-contract-align-openapi-runtime.json`
-- Runtime backend endpoints: `logs/api-contract-align-runtime-endpoints.txt`
-- Frontend OpenAPI endpoints: `logs/api-contract-align-frontend-endpoints.txt`
-- Health check evidence: `logs/api-contract-align-health.json`
+- Runtime backend OpenAPI source: regenerate with `curl -fsS http://localhost:9010/v3/api-docs | jq '.'`.
+- Runtime backend endpoints: regenerate from the runtime OpenAPI JSON with `jq -r '.paths | to_entries[] as $p | $p.value | keys[] | "\(. | ascii_upcase) \($p.key)"'`.
+- Frontend OpenAPI endpoints: regenerate from the checked-in frontend `api-reference/openapi.json` with the same endpoint extraction command.
+- Health check evidence: regenerate with `curl -fsS http://localhost:9010/actuator/health`.
 - Frontend OpenAPI was regenerated from Flyway-enabled backend runtime `/v3/api-docs`.
 - No current backend OpenAPI alignment fix requires using a Flyway bypass.
 
@@ -17,27 +17,20 @@ No unresolved current required fixes remain for the previously reported admin pr
 
 - `pending/count` remains intentionally removed from the contract; the frontend derives pending count from `GET /api/v1/admin/articles/pending?page=1&size=1`.
 - Frontend OpenAPI was regenerated from Flyway-enabled backend runtime `/v3/api-docs`.
-- Verification evidence:
-  - `logs/api-contract-align-health.json`
-  - `logs/api-contract-align-openapi-runtime.json`
-  - `logs/api-contract-align-runtime-endpoints.txt`
-  - `logs/api-contract-align-frontend-endpoints.txt`
+- Verification evidence is intentionally local and ignored by git. Recreate it by running the commands in `docs/superpowers/plans/2026-05-09-api-contract-alignment-plan.md` after starting the backend with the `dev` profile.
 
 ## Flyway Safety Evidence
 
-- Canonical safety evidence for the Flyway repair:
-  - `logs/api-contract-align-v13-full-schema-check.tsv`
-  - `logs/api-contract-align-flyway-docker-repair.log`
-  - `logs/api-contract-align-flyway-history-after.tsv`
-- V14-V17 were applied to the shared dev DB during Flyway-enabled startup, based on `logs/api-contract-align-backend-dev.log`.
+- Canonical safety evidence for the Flyway repair is local and ignored by git; recreate it with the Flyway history, schema check, and repair commands in `docs/superpowers/plans/2026-05-09-api-contract-alignment-plan.md`.
+- V14-V17 were applied to the shared dev DB during Flyway-enabled startup in the local execution record; rerun the Flyway-enabled startup command in the alignment plan to verify this in a fresh environment.
 
 ## Resolved Alignment Items
 
 | Finding | Resolution | Evidence |
 |---|---|---|
-| Frontend OpenAPI previously documented stale `/api/admin/*` paths while backend runtime exposed `/api/v1/admin/*`. | Resolved by regenerating frontend OpenAPI from the Flyway-enabled backend runtime `/v3/api-docs`. | `logs/api-contract-align-openapi-runtime.json`, `logs/api-contract-align-frontend-endpoints.txt` |
-| Frontend OpenAPI previously included the removed admin pending count endpoint. | Resolved; `pending/count` is intentionally absent from the contract, and pending count is derived from `GET /api/v1/admin/articles/pending?page=1&size=1`. | `logs/api-contract-align-runtime-endpoints.txt`, `logs/api-contract-align-frontend-endpoints.txt` |
-| Earlier runtime capture required bypassing Flyway because of the V13 checksum mismatch. | Resolved for alignment evidence; current OpenAPI evidence came from Flyway-enabled backend startup, with Flyway repair evidence recorded separately. | `logs/api-contract-align-backend-dev.log`, `logs/api-contract-align-flyway-history-after.tsv` |
+| Frontend OpenAPI previously documented stale `/api/admin/*` paths while backend runtime exposed `/api/v1/admin/*`. | Resolved by regenerating frontend OpenAPI from the Flyway-enabled backend runtime `/v3/api-docs`. | Recreate runtime and frontend endpoint lists with the alignment plan commands, then compare the sorted `METHOD path` output. |
+| Frontend OpenAPI previously included the removed admin pending count endpoint. | Resolved; `pending/count` is intentionally absent from the contract, and pending count is derived from `GET /api/v1/admin/articles/pending?page=1&size=1`. | Recreate runtime and frontend endpoint lists with the alignment plan commands, then confirm neither list contains `pending/count`. |
+| Earlier runtime capture required bypassing Flyway because of the V13 checksum mismatch. | Resolved for alignment evidence; current OpenAPI evidence came from Flyway-enabled backend startup, with Flyway repair evidence recorded separately. | Rerun the Flyway-enabled backend startup and Flyway history commands in the alignment plan. |
 
 ## Non-Blocking Follow-Up
 
