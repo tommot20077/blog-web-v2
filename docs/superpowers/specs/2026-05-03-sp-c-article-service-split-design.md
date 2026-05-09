@@ -25,7 +25,7 @@
    - `ArticleViewSubService`（1 method：`recordView`，從 private `processArticleView` 提升）
 3. **新建 2 個 helper class**：
    - `ArticleEntityFinder`（共用 `findByUuidOrThrow`，給 Command + Query 共用）
-   - `ArticleResponseMapper`（9 個 entity → DTO 轉換 method，Query 唯一 caller）
+   - `ArticleResponseMapper`（9 個 entity → DTO 轉換 method，Command / Query 共用 caller）
 4. **17 個 private helper 重新分配**到對應 sub-service / helper class
 5. **ArticleServiceTest 1981 行重整**為分層 test：facade test + 3 個 sub-service test + 2 個 helper class test
 
@@ -173,13 +173,13 @@ ArticleCommandSubService   ArticleQuerySubService   ArticleViewSubService
             ┌────────┴────────┐                         │
             ▼                 ▼                         ▼
    ArticleEntityFinder  ArticleResponseMapper      (StringRedisTemplate
-   (共用 helper)        (Query 用 helper)         + ArticleEventPublisher)
+   (共用 helper)        (Command/Query 共用)      + ArticleEventPublisher)
 ```
 
 **關鍵設計屬性：**
 - 3 個 sub-service 之間**零互依**（協調由 ArticleServiceImpl 負責 — 對齊 SP-D applyRestoreContent atomic flow pattern）
 - 2 個 helper class 純 dumb mapper / finder（無業務邏輯，testable）
-- Sub-service 對 helper class 的依賴**單向**（Command/Query → EntityFinder；Query → ResponseMapper）
+- Sub-service 對 helper class 的依賴**單向**（Command/Query → EntityFinder；Command/Query → ResponseMapper）
 
 ---
 
@@ -281,8 +281,8 @@ class ArticleViewSubService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ArticleEventPublisher articleEventPublisher;
 
-    private static final String VIEW_KEY_PREFIX = "view:article:";
-    private static final Duration VIEW_DEDUP_TTL = Duration.ofMinutes(5);
+    private static final String VIEW_KEY_PREFIX = "view:";
+    private static final long VIEW_DEDUP_TTL_MINUTES = 5;
 
     /**
      * 記錄 article view（含 published-only guard + Redis 防刷 + 異步 ViewCountEvent）。
@@ -290,28 +290,23 @@ class ArticleViewSubService {
      * <p>只有 status 為公開可見時才 publish event（保持與既有 processArticleView 行為一致 —
      * 避免 author / admin 看自己的 draft 時錯誤觸發 view counter）。</p>
      *
-     * <p>從 RequestContextHolder 取 clientIp 作為 Redis 防刷 key 的一部分，
+     * <p>由 ArticleServiceImpl 從 ArticleService caller 傳入 clientIp 作為 Redis 防刷 key 的一部分，
      * setIfAbsent 5 分鐘 TTL → firstVisit 才 publish event。</p>
      *
      * @param articleUuid 文章 UUID
      * @param status      文章狀態（用於 published-only guard，對齊既有 processArticleView 行為）
+     * @param clientIp    呼叫端解析出的 client IP
      */
-    void recordView(UUID articleUuid, ArticleStatus status) {
+    void recordView(UUID articleUuid, ArticleStatus status, String clientIp) {
         if (!status.isPubliclyVisible()) {
             return;   // 既有 published-only guard：draft / pending review / archived 不發 event
         }
-        String clientIp = resolveClientIp();
         String viewKey = VIEW_KEY_PREFIX + articleUuid + ":" + clientIp;
         Boolean firstVisit = stringRedisTemplate.opsForValue()
-            .setIfAbsent(viewKey, "1", VIEW_DEDUP_TTL);
+            .setIfAbsent(viewKey, "1", VIEW_DEDUP_TTL_MINUTES, TimeUnit.MINUTES);
         if (Boolean.TRUE.equals(firstVisit)) {
             articleEventPublisher.publishViewed(articleUuid);
         }
-    }
-
-    private String resolveClientIp() {
-        // 既有 processArticleView 的 IP 解析邏輯（HttpServletRequest）
-        ...
     }
 }
 ```
@@ -344,7 +339,7 @@ class ArticleEntityFinder {
 
 職責單一 — 唯一一個 method，1 行邏輯。
 
-### 6.2 ArticleResponseMapper（Query 用 entity → DTO 轉換）
+### 6.2 ArticleResponseMapper（Command / Query 共用 entity → DTO 轉換）
 
 ```java
 package dowob.xyz.blog.module.article.service;
@@ -372,7 +367,7 @@ class ArticleResponseMapper {
 }
 ```
 
-職責：Article entity 與子 entity（Tag / Category）轉換為各種 response DTO。**Query sub-service 唯一 caller**（Command 不負責 response 構造）。
+職責：Article entity 與子 entity（Tag / Category）轉換為各種 response DTO。**Command / Query sub-service 共用 caller**：Query 負責 read response 構造，Command 在 create/update/publish/reject 等 write flow 回傳 `EditorArticleResponse` / `ArticleResponse` 時也使用同一個 mapper，避免 DTO 組裝邏輯回流到 command class。
 
 ---
 
@@ -407,22 +402,22 @@ public class ArticleServiceImpl implements ArticleService {
 
     // 2 個含協調邏輯（query → view 順序）：
     @Override
-    public ArticleResponse getArticleByUuid(UUID uuid, Long currentUserId) {
-        ArticleResponse resp = querySubService.getArticleByUuid(uuid, currentUserId);
-        viewSubService.recordView(uuid, resp.getStatus());     // 帶 status 進 sub-service 做 guard
+    public ArticleResponse getArticleByUuid(UUID uuid, Long viewerId, Role viewerRole, String clientIp) {
+        ArticleResponse resp = querySubService.getArticleByUuid(uuid, viewerId, viewerRole);
+        viewSubService.recordView(uuid, resp.getStatus(), clientIp);     // 帶 status + clientIp 進 sub-service
         return resp;
     }
 
     @Override
-    public ArticleResponse getArticleBySlug(String slug, Long currentUserId) {
-        ArticleResponse resp = querySubService.getArticleBySlug(slug, currentUserId);
-        viewSubService.recordView(resp.getUuid(), resp.getStatus());
+    public ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole, String clientIp) {
+        ArticleResponse resp = querySubService.getArticleBySlug(slug, viewerId, viewerRole);
+        viewSubService.recordView(resp.getUuid(), resp.getStatus(), clientIp);
         return resp;
     }
 
     // ⚠ 注意：`ArticleResponse.getStatus()` 回傳 ArticleStatus enum — plan 階段確認既有
     //   ArticleResponse status 欄位型別。如為 String 則 view sub-service 簽名改為
-    //   `recordView(UUID, String)` 並改用 String 比對。
+    //   `recordView(UUID, String, String clientIp)` 並改用 String 比對。
 
     // ─── Counter 4 method（純 1-line delegate）───
     @Override public void incrementCommentCount(Long articleId) { commandSubService.incrementCommentCount(articleId); }
@@ -539,7 +534,7 @@ ArticleServiceImpl (薄 facade，~150-200 行)
         │
         各 sub-service 對應 inject + 共用 helper:
         ├── ArticleEntityFinder (Command/Query 共用)
-        └── ArticleResponseMapper (Query 用)
+        └── ArticleResponseMapper (Command/Query 共用)
 ```
 
 **對外 caller 完全無變化**（24 method interface 不變）。
