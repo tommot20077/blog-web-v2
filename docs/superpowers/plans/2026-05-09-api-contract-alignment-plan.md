@@ -8,6 +8,15 @@
 
 **Tech Stack:** Spring Boot, Flyway, PostgreSQL, OpenAPI JSON, Vue frontend repository, `curl`, `jq`, `comm`, Maven.
 
+**Required environment variables:** keep credentials out of this file and export them locally before running the database repair steps.
+
+```bash
+export BLOG_V2_DB_URL='postgresql://<user>:<password>@<host>:<port>/<database>'
+export BLOG_V2_FLYWAY_URL='jdbc:postgresql://<host>:<port>/<database>'
+export BLOG_V2_DB_USER='<user>'
+export BLOG_V2_DB_PASSWORD='<password>'
+```
+
 ---
 
 ## File Structure
@@ -67,7 +76,7 @@ Expected: no backend remains listening on port `9010`.
 - [ ] **Step 1: Query current V13 Flyway history**
 
 ```bash
-psql "postgresql://luca:tommot40@10.0.0.214:30120/blog_v2_db" \
+psql "$BLOG_V2_DB_URL" \
   -c "SELECT installed_rank, version, description, type, script, checksum, success, installed_on FROM flyway_schema_history WHERE version = '13';" \
   2>&1 | tee logs/api-contract-align-flyway-history-before.tsv
 ```
@@ -77,7 +86,7 @@ Expected: output shows one successful row for version `13` with checksum `-27362
 - [ ] **Step 2: Verify V13 migration is already applied**
 
 ```bash
-psql "postgresql://luca:tommot40@10.0.0.214:30120/blog_v2_db" \
+psql "$BLOG_V2_DB_URL" \
   -c "SELECT to_regclass('public.comment_likes') AS comment_likes_table, EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='comments' AND column_name='content_html') AS comments_has_content_html;" \
   2>&1 | tee logs/api-contract-align-v13-schema-check.tsv
 ```
@@ -88,9 +97,9 @@ Expected: `comment_likes_table` is `comment_likes` and `comments_has_content_htm
 
 ```bash
 mvn -pl blog-start -am flyway:repair \
-  -Dflyway.url=jdbc:postgresql://10.0.0.214:30120/blog_v2_db \
-  -Dflyway.user=luca \
-  -Dflyway.password=tommot40 \
+  -Dflyway.url="$BLOG_V2_FLYWAY_URL" \
+  -Dflyway.user="$BLOG_V2_DB_USER" \
+  -Dflyway.password="$BLOG_V2_DB_PASSWORD" \
   -Dflyway.locations=classpath:db/migration \
   2>&1 | tee logs/api-contract-align-flyway-repair.log
 ```
@@ -100,7 +109,7 @@ Expected: command exits `0` and output includes Flyway repair success text. If M
 - [ ] **Step 4: Query V13 Flyway history after repair**
 
 ```bash
-psql "postgresql://luca:tommot40@10.0.0.214:30120/blog_v2_db" \
+psql "$BLOG_V2_DB_URL" \
   -c "SELECT installed_rank, version, description, type, script, checksum, success, installed_on FROM flyway_schema_history WHERE version = '13';" \
   2>&1 | tee logs/api-contract-align-flyway-history-after.tsv
 ```
@@ -194,9 +203,11 @@ Expected: JSON remains valid and consistently formatted.
 - [ ] **Step 4: Run the contract check again**
 
 ```bash
+set -o pipefail
 jq -r '.paths | keys[]' /mnt/d/end/workspace/vue/blog-web-v2-front-end/api-reference/openapi.json \
   | rg '^/api/admin/|pending/count' \
   2>&1 | tee logs/api-contract-align-frontend-stale-green.log
+test "${PIPESTATUS[1]}" -eq 1
 ```
 
 Expected: `rg` exits `1` with no matched stale paths. The empty log file is acceptable evidence.
