@@ -353,4 +353,3 @@ Report:
 - Backend commit SHA.
 - Frontend commit SHA.
 - Any remaining untracked files, especially `response.log`.
-
