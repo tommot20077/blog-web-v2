@@ -7,7 +7,8 @@
 - Controller cross-check: `logs/api-contract-controller-mappings.raw.txt`
 - Backend profile: `dev`
 - Runtime base URL: `http://localhost:9010`
-- Runtime capture note: `spring.flyway.enabled=false` was used because normal dev startup hit a Flyway V13 checksum mismatch; see `logs/api-contract-backend-dev.log`.
+- Original audit capture note: `logs/api-contract-backend-dev.log` used `spring.flyway.enabled=false` because normal dev startup initially hit a Flyway V13 checksum mismatch.
+- Alignment follow-up: `logs/api-contract-align-backend-dev.log` replaced that caveat with Flyway-enabled runtime evidence after V13 repair; the follow-up startup applied V14-V17 and captured the same 81 OpenAPI operations from `/v3/api-docs`.
 - Test-only mappings from `src/test/java` are preserved in raw evidence but excluded from the production controller cross-check table.
 
 ## Runtime OpenAPI Endpoint Matrix
@@ -188,4 +189,4 @@
 |---|---|---|---|
 | No production controller/runtime OpenAPI mismatch found | 81 production controller mappings matched 81 runtime OpenAPI operations; `controller-only=0`, `runtime-openapi-only=0`. | matched | No contract action required for Task 2. |
 | Raw evidence includes test-only security mappings | `logs/api-contract-controller-mappings.raw.txt` includes `blog-infrastructure/src/test/java/dowob/xyz/blog/infrastructure/config/SecurityConfigTest.java`; these are excluded from production cross-check. | matched | Keep raw evidence intact; do not treat test controller mappings as production endpoints. |
-| Runtime capture required Flyway bypass | `logs/api-contract-backend-dev.log` records dev runtime capture with `spring.flyway.enabled=false` because normal dev startup hit Flyway V13 checksum mismatch. | needs-investigation | Track Flyway checksum mismatch outside Task 2; endpoint evidence is still from runtime OpenAPI under dev profile. |
+| Original runtime capture required Flyway bypass | `logs/api-contract-backend-dev.log` records the initial audit capture with `spring.flyway.enabled=false`; follow-up evidence in `logs/api-contract-align-backend-dev.log` confirms Flyway-enabled dev startup after V13 repair and V14-V17 migration. | matched | Use the alignment evidence as the current runtime capture source; keep the original note only as historical audit context. |
