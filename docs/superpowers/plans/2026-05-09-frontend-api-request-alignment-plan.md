@@ -783,7 +783,9 @@ Do not change endpoint paths or test assertions.
 - [ ] **Step 3: Verify no E2E hard-coded URL remains**
 
 ```bash
+set -o pipefail
 rg -n "http://localhost:9010" e2e 2>&1 | tee logs/frontend-api-request-alignment-e2e-url-green.log
+test "${PIPESTATUS[0]}" -eq 1
 ```
 
 Expected: no output and `rg` exits `1`.
@@ -822,10 +824,12 @@ In both docs:
 - [ ] **Step 3: Verify stale docs are gone**
 
 ```bash
+set -o pipefail
 rg -n "/api/admin|pending/count" diff.md runbook-integration.md 2>&1 | tee logs/frontend-api-request-alignment-docs-green.log
+test "${PIPESTATUS[0]}" -eq 1
 ```
 
-Expected: no output, or only explicitly historical wording containing `removed` or `舊`. Prefer no output.
+Expected: no output and `rg` exits `1`.
 
 ## Task 7: Full Targeted Verification
 
@@ -850,18 +854,22 @@ Expected: PASS.
 - [ ] **Step 2: Verify no stale current API references remain in target areas**
 
 ```bash
+set -o pipefail
 rg -n "/api/admin|pending/count" diff.md runbook-integration.md src e2e 2>&1 | tee logs/frontend-api-request-alignment-stale-all.log
+test "${PIPESTATUS[0]}" -eq 1
 ```
 
-Expected: no output, except historical removed references if explicitly justified.
+Expected: no output and `rg` exits `1`.
 
 - [ ] **Step 3: Verify no E2E hard-coded backend URL remains**
 
 ```bash
+set -o pipefail
 rg -n "http://localhost:9010" e2e 2>&1 | tee logs/frontend-api-request-alignment-e2e-url-final.log
+test "${PIPESTATUS[0]}" -eq 1
 ```
 
-Expected: no output.
+Expected: no output and `rg` exits `1`.
 
 - [ ] **Step 4: Check frontend git status**
 
@@ -903,7 +911,22 @@ git add \
   src/api/real/seriesService.test.ts \
   diff.md \
   runbook-integration.md \
-  e2e
+  e2e/global-setup.ts \
+  e2e/integration/admin-review.spec.ts \
+  e2e/integration/article-like.spec.ts \
+  e2e/integration/article-slug-api.spec.ts \
+  e2e/integration/auth-token-refresh.spec.ts \
+  e2e/integration/author-file-upload.spec.ts \
+  e2e/integration/author-writes-article.spec.ts \
+  e2e/integration/comment-crud.spec.ts \
+  e2e/integration/comment-list.spec.ts \
+  e2e/integration/editor-edit-existing.spec.ts \
+  e2e/integration/end-to-end-sanity.spec.ts \
+  e2e/integration/my-articles.spec.ts \
+  e2e/integration/search-advanced.spec.ts \
+  e2e/integration/settings-delete-account.spec.ts \
+  e2e/integration/settings.spec.ts \
+  e2e/integration/tag-suggest.spec.ts
 git commit -m "feat(api): 補齊前端 real API 請求封裝"
 ```
 
