@@ -324,6 +324,44 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
+    /**
+     * 驗證：正確的信箱驗證碼應回傳 200 成功回應。
+     */
+    @Test
+    @DisplayName("POST /verify-email-code → 正確驗證碼 → 應回傳 200 成功回應")
+    void verifyEmailCode_validCode_shouldReturn200() throws Exception {
+        doNothing().when(authService).verifyEmailCode(TEST_EMAIL, "123456");
+
+        mockMvc.perform(post("/api/v1/auth/verify-email-code")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "email": "%s",
+                                  "code": "123456"
+                                }
+                                """.formatted(TEST_EMAIL)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    /**
+     * 驗證：驗證碼格式不正確時應回傳驗證錯誤。
+     */
+    @Test
+    @DisplayName("POST /verify-email-code → 非 6 位數驗證碼 → 應回傳驗證錯誤")
+    void verifyEmailCode_invalidCodeFormat_shouldReturnValidationError() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/verify-email-code")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "email": "%s",
+                                  "code": "abc"
+                                }
+                                """.formatted(TEST_EMAIL)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
     // =========================================================================
     // POST /api/v1/auth/forgot-password 測試
     // =========================================================================

@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -97,6 +98,7 @@ public class AuthService {
 
         /** DB 操作（save user + save verificationToken）在同一個 transaction 內 */
         String tokenValue = UUID.randomUUID().toString();
+        String verificationCode = generateVerificationCode();
         User savedUser = transactionTemplate.execute(status -> {
             User saved = userRepository.save(user);
 
@@ -112,12 +114,13 @@ public class AuthService {
         });
 
         /** DB 已 commit，best-effort 發 MQ（失敗不影響註冊結果） */
+        saveEmailVerificationCode(savedUser.getEmail(), verificationCode);
         try {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
                     UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
                     new UserRegisteredEvent(savedUser.getId(), savedUser.getEmail(),
-                            savedUser.getNickname(), tokenValue));
+                            savedUser.getNickname(), tokenValue, verificationCode));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
@@ -226,6 +229,58 @@ public class AuthService {
         userRepository.save(user);
 
         verificationTokenRepository.delete(verificationToken);
+        redisTemplate.delete(RedisKeyConstant.getEmailVerifyCodeKey(user.getEmail()));
+    }
+
+    /**
+     * 使用 6 位數驗證碼驗證電子信箱
+     *
+     * <p>內建防暴力破解機制：失敗次數達 {@link RedisKeyConstant#EMAIL_VERIFY_CODE_MAX_ATTEMPTS}
+     * 後拒絕後續請求，直至驗證碼過期或重新發送。
+     * DB 在 {@link TransactionTemplate} 內提交後才清除 Redis 資料，避免 DB rollback 導致驗證碼遺失。</p>
+     *
+     * @param email 電子信箱
+     * @param code  6 位數驗證碼
+     */
+    public void verifyEmailCode(String email, String code) {
+        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(email);
+        String failCountStr = redisTemplate.opsForValue().get(failKey);
+        if (failCountStr != null && Integer.parseInt(failCountStr) >= RedisKeyConstant.EMAIL_VERIFY_CODE_MAX_ATTEMPTS) {
+            throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
+        }
+
+        String codeKey = RedisKeyConstant.getEmailVerifyCodeKey(email);
+        String storedCode = redisTemplate.opsForValue().get(codeKey);
+        if (storedCode == null || !storedCode.equals(code)) {
+            Long count = redisTemplate.opsForValue().increment(failKey);
+            if (count != null && count == 1L) {
+                redisTemplate.expire(failKey, RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES, TimeUnit.MINUTES);
+            }
+            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+        }
+
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException(UserErrorCode.TOKEN_INVALID));
+
+        // 此處所有 non-PENDING 狀態統一回傳 TOKEN_INVALID，避免洩漏帳號狀態資訊（意圖設計）
+        if (user.getStatus() != UserStatus.PENDING_VERIFICATION) {
+            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+        }
+
+        /** DB 在 transaction 內提交；提交後才清 Redis，避免 DB rollback 導致驗證碼遺失 */
+        transactionTemplate.executeWithoutResult(status -> {
+            user.setEmailVerified(true);
+            user.setStatus(UserStatus.ACTIVE);
+            userRepository.save(user);
+            verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
+        });
+
+        try {
+            redisTemplate.delete(codeKey);
+            redisTemplate.delete(failKey);
+        } catch (Exception e) {
+            log.warn("Redis 清理驗證碼失敗（best-effort）: {}", e.getMessage(), e);
+        }
     }
 
     /**
@@ -322,6 +377,7 @@ public class AuthService {
 
             /** DB 操作（delete + save）在 transaction 內 */
             String tokenValue = UUID.randomUUID().toString();
+            String verificationCode = generateVerificationCode();
             transactionTemplate.executeWithoutResult(status -> {
                 verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
 
@@ -335,11 +391,19 @@ public class AuthService {
             });
 
             /** DB 已 commit，best-effort 發 MQ（失敗不影響重發結果） */
+            saveEmailVerificationCode(user.getEmail(), verificationCode);
+            // 新碼發出，重置失敗計數讓使用者可從新碼開始驗證
+            try {
+                redisTemplate.delete(RedisKeyConstant.getEmailVerifyCodeFailKey(user.getEmail()));
+            } catch (Exception e) {
+                log.warn("Redis 清除驗證碼失敗計數失敗（best-effort）: {}", e.getMessage(), e);
+            }
             try {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
                         UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                        new UserRegisteredEvent(user.getId(), user.getEmail(), user.getNickname(), tokenValue));
+                        new UserRegisteredEvent(user.getId(), user.getEmail(), user.getNickname(), tokenValue,
+                                verificationCode));
             } catch (Exception e) {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
@@ -386,5 +450,24 @@ public class AuthService {
      */
     public static String incrementVersion(String currentVersion) {
         return TokenVersionUtils.incrementVersion(currentVersion);
+    }
+
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+    private String generateVerificationCode() {
+        return String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
+    }
+
+    private void saveEmailVerificationCode(String email, String code) {
+        try {
+            redisTemplate.opsForValue().set(
+                    RedisKeyConstant.getEmailVerifyCodeKey(email),
+                    code,
+                    RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES,
+                    TimeUnit.MINUTES
+            );
+        } catch (Exception e) {
+            log.warn("Redis 寫入驗證碼失敗（best-effort）: {}", e.getMessage(), e);
+        }
     }
 }

@@ -140,6 +140,24 @@ public class RedisKeyConstant {
     public static final String RESEND_VERIFY_DAY_PREFIX = "rate:resend-verify:day:";
 
     /**
+     * 信箱驗證碼 Key 前綴 (String)
+     * Key: auth:email-verify:code:{email}
+     */
+    public static final String EMAIL_VERIFY_CODE_PREFIX = "auth:email-verify:code:";
+
+    /** 信箱驗證碼 TTL（分鐘） */
+    public static final long EMAIL_VERIFY_CODE_TTL_MINUTES = 10L;
+
+    /**
+     * 信箱驗證碼失敗計數 Key 前綴 (String)
+     * Key: auth:email-verify:fail:{email}
+     */
+    public static final String EMAIL_VERIFY_CODE_FAIL_PREFIX = "auth:email-verify:fail:";
+
+    /** 信箱驗證碼最大允許失敗次數，超過此值將拒絕進一步驗證（防暴力破解） */
+    public static final int EMAIL_VERIFY_CODE_MAX_ATTEMPTS = 5;
+
+    /**
      * 生成重發驗證信每分鐘限速 Redis Key
      *
      * @param email 用戶信箱
@@ -157,6 +175,26 @@ public class RedisKeyConstant {
      */
     public static String getResendVerifyDayKey(String email) {
         return RESEND_VERIFY_DAY_PREFIX + email;
+    }
+
+    /**
+     * 生成信箱驗證碼 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getEmailVerifyCodeKey(String email) {
+        return EMAIL_VERIFY_CODE_PREFIX + email;
+    }
+
+    /**
+     * 生成信箱驗證碼失敗計數 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getEmailVerifyCodeFailKey(String email) {
+        return EMAIL_VERIFY_CODE_FAIL_PREFIX + email;
     }
 
     /** ===================== Tag ===================== */

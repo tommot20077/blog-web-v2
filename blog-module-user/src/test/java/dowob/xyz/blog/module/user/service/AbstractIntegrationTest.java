@@ -6,6 +6,7 @@ import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -70,6 +71,18 @@ public abstract class AbstractIntegrationTest {
      */
     @MockitoBean
     protected VerificationTokenRepository verificationTokenRepository;
+
+    /**
+     * Mock JavaMailSender
+     *
+     * <p>
+     * UserMailService 依賴 JavaMailSender 發送郵件。
+     * 整合測試不需要真實 SMTP 連線，以 MockBean 替代，
+     * 同時避免 Spring Boot Mail Auto-Configuration 因未設定 host 而啟動失敗。
+     * </p>
+     */
+    @MockitoBean
+    protected JavaMailSender mailSender;
 
     /**
      * PostgreSQL 測試容器（所有子測試類別共用同一實例以提升效率）
