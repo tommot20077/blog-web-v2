@@ -9,6 +9,7 @@ import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.LoginRequest;
 import dowob.xyz.blog.module.user.model.dto.request.RegisterRequest;
 import dowob.xyz.blog.module.user.model.dto.request.ResetPasswordRequest;
+import dowob.xyz.blog.module.user.model.dto.request.VerifyEmailCodeRequest;
 import dowob.xyz.blog.module.user.model.dto.response.AuthResponse;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
 import dowob.xyz.blog.module.user.service.AuthService;
@@ -182,6 +183,19 @@ public class AuthController {
     @GetMapping("/verify-email")
     public ApiResponse<Void> verifyEmail(@RequestParam String token) {
         authService.verifyEmail(token);
+        return ApiResponse.success();
+    }
+
+    /**
+     * 使用驗證碼驗證電子信箱
+     *
+     * @param request 包含電子信箱與 6 位數驗證碼
+     * @return 成功回應
+     */
+    @Operation(summary = "使用驗證碼驗證電子信箱", description = "透過驗證信中的 6 位數驗證碼啟用帳號")
+    @PostMapping("/verify-email-code")
+    public ApiResponse<Void> verifyEmailCode(@Valid @RequestBody VerifyEmailCodeRequest request) {
+        authService.verifyEmailCode(request.getEmail(), request.getCode());
         return ApiResponse.success();
     }
 

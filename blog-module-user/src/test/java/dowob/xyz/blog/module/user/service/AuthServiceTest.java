@@ -9,6 +9,7 @@ import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
+import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -30,6 +31,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -112,6 +114,7 @@ class AuthServiceTest {
     @SuppressWarnings("unchecked")
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         /** TransactionTemplate mock：直接執行回調 */
         when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             org.springframework.transaction.support.TransactionCallback<?> callback = inv.getArgument(0);
@@ -207,7 +210,15 @@ class AuthServiceTest {
 
         authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
 
-        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
+        ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().verificationCode()).matches("\\d{6}");
+        verify(valueOperations).set(
+                eq(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL)),
+                eq(eventCaptor.getValue().verificationCode()),
+                eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
+                eq(TimeUnit.MINUTES)
+        );
     }
 
     /**
@@ -480,6 +491,45 @@ class AuthServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
+    }
+
+    /**
+     * 驗證：使用正確 6 位驗證碼應啟用 PENDING_VERIFICATION 帳號，並清除舊 URL token 與 Redis code。
+     */
+    @Test
+    @DisplayName("verifyEmailCode → 正確驗證碼 → 應啟用帳號並清除驗證資料")
+    void verifyEmailCode_withValidCode_shouldActivateUserAndClearVerificationState() {
+        User mockUser = buildActiveUser();
+        mockUser.setStatus(UserStatus.PENDING_VERIFICATION);
+        mockUser.setEmailVerified(false);
+        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+
+        authService.verifyEmailCode(TEST_EMAIL, "123456");
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(captor.getValue().isEmailVerified()).isTrue();
+        verify(verificationTokenRepository).deleteByUserIdAndType(mockUser.getId(), "EMAIL_VERIFICATION");
+        verify(redisTemplate).delete(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL));
+    }
+
+    /**
+     * 驗證：驗證碼不存在或不相符時，應拋出 TOKEN_INVALID 且不可啟用帳號。
+     */
+    @Test
+    @DisplayName("verifyEmailCode → 驗證碼不符 → 應拋出 TOKEN_INVALID")
+    void verifyEmailCode_withInvalidCode_shouldThrowTokenInvalid() {
+        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
+
+        verify(userRepository, never()).save(any());
+        verify(verificationTokenRepository, never()).deleteByUserIdAndType(anyLong(), anyString());
     }
 
     /* =========================================================================
@@ -781,7 +831,15 @@ class AuthServiceTest {
         authService.resendVerification(TEST_EMAIL);
 
         verify(verificationTokenRepository).save(any(VerificationToken.class));
-        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
+        ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().verificationCode()).matches("\\d{6}");
+        verify(valueOperations).set(
+                eq(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL)),
+                eq(eventCaptor.getValue().verificationCode()),
+                eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
+                eq(TimeUnit.MINUTES)
+        );
     }
 
     /**

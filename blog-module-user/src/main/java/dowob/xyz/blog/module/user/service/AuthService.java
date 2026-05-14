@@ -26,6 +26,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -97,6 +98,7 @@ public class AuthService {
 
         /** DB 操作（save user + save verificationToken）在同一個 transaction 內 */
         String tokenValue = UUID.randomUUID().toString();
+        String verificationCode = generateVerificationCode();
         User savedUser = transactionTemplate.execute(status -> {
             User saved = userRepository.save(user);
 
@@ -112,12 +114,13 @@ public class AuthService {
         });
 
         /** DB 已 commit，best-effort 發 MQ（失敗不影響註冊結果） */
+        saveEmailVerificationCode(savedUser.getEmail(), verificationCode);
         try {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
                     UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
                     new UserRegisteredEvent(savedUser.getId(), savedUser.getEmail(),
-                            savedUser.getNickname(), tokenValue));
+                            savedUser.getNickname(), tokenValue, verificationCode));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
@@ -226,6 +229,36 @@ public class AuthService {
         userRepository.save(user);
 
         verificationTokenRepository.delete(verificationToken);
+        redisTemplate.delete(RedisKeyConstant.getEmailVerifyCodeKey(user.getEmail()));
+    }
+
+    /**
+     * 使用 6 位數驗證碼驗證電子信箱
+     *
+     * @param email 電子信箱
+     * @param code  6 位數驗證碼
+     */
+    @Transactional
+    public void verifyEmailCode(String email, String code) {
+        String codeKey = RedisKeyConstant.getEmailVerifyCodeKey(email);
+        String storedCode = redisTemplate.opsForValue().get(codeKey);
+        if (storedCode == null || !storedCode.equals(code)) {
+            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+        }
+
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException(UserErrorCode.TOKEN_INVALID));
+
+        if (user.getStatus() != UserStatus.PENDING_VERIFICATION) {
+            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+        }
+
+        user.setEmailVerified(true);
+        user.setStatus(UserStatus.ACTIVE);
+        userRepository.save(user);
+
+        verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
+        redisTemplate.delete(codeKey);
     }
 
     /**
@@ -322,6 +355,7 @@ public class AuthService {
 
             /** DB 操作（delete + save）在 transaction 內 */
             String tokenValue = UUID.randomUUID().toString();
+            String verificationCode = generateVerificationCode();
             transactionTemplate.executeWithoutResult(status -> {
                 verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
 
@@ -335,11 +369,13 @@ public class AuthService {
             });
 
             /** DB 已 commit，best-effort 發 MQ（失敗不影響重發結果） */
+            saveEmailVerificationCode(user.getEmail(), verificationCode);
             try {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
                         UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                        new UserRegisteredEvent(user.getId(), user.getEmail(), user.getNickname(), tokenValue));
+                        new UserRegisteredEvent(user.getId(), user.getEmail(), user.getNickname(), tokenValue,
+                                verificationCode));
             } catch (Exception e) {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
@@ -386,5 +422,18 @@ public class AuthService {
      */
     public static String incrementVersion(String currentVersion) {
         return TokenVersionUtils.incrementVersion(currentVersion);
+    }
+
+    private String generateVerificationCode() {
+        return String.format("%06d", ThreadLocalRandom.current().nextInt(1_000_000));
+    }
+
+    private void saveEmailVerificationCode(String email, String code) {
+        redisTemplate.opsForValue().set(
+                RedisKeyConstant.getEmailVerifyCodeKey(email),
+                code,
+                RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES,
+                TimeUnit.MINUTES
+        );
     }
 }

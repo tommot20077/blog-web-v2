@@ -9,8 +9,10 @@ package dowob.xyz.blog.module.user.model.event;
  * @param email             用戶電子信箱
  * @param nickname          用戶暱稱
  * @param verificationToken 電子信箱驗證 Token
+ * @param verificationCode  電子信箱 6 位數驗證碼
  * @author Yuan
  * @version 1.0
  */
-public record UserRegisteredEvent(Long userId, String email, String nickname, String verificationToken) {
+public record UserRegisteredEvent(Long userId, String email, String nickname, String verificationToken,
+                                  String verificationCode) {
 }

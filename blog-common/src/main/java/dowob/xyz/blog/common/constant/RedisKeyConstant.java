@@ -140,6 +140,15 @@ public class RedisKeyConstant {
     public static final String RESEND_VERIFY_DAY_PREFIX = "rate:resend-verify:day:";
 
     /**
+     * 信箱驗證碼 Key 前綴 (String)
+     * Key: auth:email-verify:code:{email}
+     */
+    public static final String EMAIL_VERIFY_CODE_PREFIX = "auth:email-verify:code:";
+
+    /** 信箱驗證碼 TTL（分鐘） */
+    public static final long EMAIL_VERIFY_CODE_TTL_MINUTES = 10L;
+
+    /**
      * 生成重發驗證信每分鐘限速 Redis Key
      *
      * @param email 用戶信箱
@@ -157,6 +166,16 @@ public class RedisKeyConstant {
      */
     public static String getResendVerifyDayKey(String email) {
         return RESEND_VERIFY_DAY_PREFIX + email;
+    }
+
+    /**
+     * 生成信箱驗證碼 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getEmailVerifyCodeKey(String email) {
+        return EMAIL_VERIFY_CODE_PREFIX + email;
     }
 
     /** ===================== Tag ===================== */
