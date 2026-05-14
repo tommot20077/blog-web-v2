@@ -494,7 +494,7 @@ class AuthServiceTest {
     }
 
     /**
-     * 驗證：使用正確 6 位驗證碼應啟用 PENDING_VERIFICATION 帳號，並清除舊 URL token 與 Redis code。
+     * 驗證：使用正確 6 位驗證碼應啟用 PENDING_VERIFICATION 帳號，並清除舊 URL token、Redis code 與失敗計數。
      */
     @Test
     @DisplayName("verifyEmailCode → 正確驗證碼 → 應啟用帳號並清除驗證資料")
@@ -502,6 +502,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         mockUser.setStatus(UserStatus.PENDING_VERIFICATION);
         mockUser.setEmailVerified(false);
+        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
+        when(valueOperations.get(failKey)).thenReturn(null);
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
 
@@ -513,6 +515,7 @@ class AuthServiceTest {
         assertThat(captor.getValue().isEmailVerified()).isTrue();
         verify(verificationTokenRepository).deleteByUserIdAndType(mockUser.getId(), "EMAIL_VERIFICATION");
         verify(redisTemplate).delete(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL));
+        verify(redisTemplate).delete(failKey);
     }
 
     /**
@@ -522,6 +525,7 @@ class AuthServiceTest {
     @DisplayName("verifyEmailCode → 驗證碼不符 → 應拋出 TOKEN_INVALID")
     void verifyEmailCode_withInvalidCode_shouldThrowTokenInvalid() {
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
+        when(valueOperations.increment(anyString())).thenReturn(1L);
 
         assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
                 .isInstanceOf(BusinessException.class)
@@ -530,6 +534,96 @@ class AuthServiceTest {
 
         verify(userRepository, never()).save(any());
         verify(verificationTokenRepository, never()).deleteByUserIdAndType(anyLong(), anyString());
+    }
+
+    /**
+     * 驗證：失敗次數達上限（5 次）後，應拋出 RATE_LIMIT_EXCEEDED 且不再檢查驗證碼。
+     */
+    @Test
+    @DisplayName("verifyEmailCode → 失敗次數達上限 → 應拋出 RATE_LIMIT_EXCEEDED")
+    void verifyEmailCode_lockedAfterMaxAttempts_shouldThrowRateLimitExceeded() {
+        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
+        when(valueOperations.get(failKey)).thenReturn("5");
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "000000"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+
+        verify(userRepository, never()).findByEmail(any());
+    }
+
+    /**
+     * 驗證：驗證碼錯誤時應遞增失敗計數器。
+     */
+    @Test
+    @DisplayName("verifyEmailCode → 驗證碼錯誤 → 應遞增失敗計數器")
+    void verifyEmailCode_wrongCode_shouldIncrementFailCounter() {
+        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
+        when(valueOperations.get(failKey)).thenReturn(null);
+        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
+        when(valueOperations.increment(failKey)).thenReturn(2L);
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+                .isInstanceOf(BusinessException.class);
+
+        verify(valueOperations).increment(failKey);
+    }
+
+    /**
+     * 驗證：首次驗證碼錯誤（count == 1）應設定失敗計數器 TTL。
+     */
+    @Test
+    @DisplayName("verifyEmailCode → 首次驗證碼錯誤 → 應設定失敗計數器 TTL")
+    void verifyEmailCode_firstWrongCode_shouldSetFailKeyTtl() {
+        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
+        when(valueOperations.get(failKey)).thenReturn(null);
+        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
+        when(valueOperations.increment(failKey)).thenReturn(1L);
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+                .isInstanceOf(BusinessException.class);
+
+        verify(redisTemplate).expire(eq(failKey), eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES), eq(TimeUnit.MINUTES));
+    }
+
+    /**
+     * 驗證：驗證碼正確但用戶不存在時，應拋出 TOKEN_INVALID。
+     */
+    @Test
+    @DisplayName("verifyEmailCode → 驗證碼正確但用戶不存在 → 應拋出 TOKEN_INVALID")
+    void verifyEmailCode_codeExistsButUserNotFound_shouldThrowTokenInvalid() {
+        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
+        when(valueOperations.get(failKey)).thenReturn(null);
+        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
+
+        verify(userRepository, never()).save(any());
+    }
+
+    /**
+     * 驗證：驗證碼正確但用戶狀態非 PENDING_VERIFICATION，應拋出 TOKEN_INVALID（安全設計，避免洩漏帳號狀態）。
+     */
+    @Test
+    @DisplayName("verifyEmailCode → 用戶狀態非 PENDING_VERIFICATION → 應拋出 TOKEN_INVALID")
+    void verifyEmailCode_userNotPending_shouldThrowTokenInvalid() {
+        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
+        when(valueOperations.get(failKey)).thenReturn(null);
+        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
+        User mockUser = buildActiveUser(); // status = ACTIVE
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
+
+        verify(userRepository, never()).save(any());
     }
 
     /* =========================================================================

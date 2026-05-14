@@ -2,8 +2,10 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
+import jakarta.mail.MessagingException;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
+import java.io.UnsupportedEncodingException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.MailPreparationException;
@@ -82,21 +84,17 @@ public class UserMailService {
     }
 
     private void sendSecurityMail(String to, String subject, String body) {
+        MimeMessage message = mailSender.createMimeMessage();
         try {
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(
-                    message,
-                    false,
-                    StandardCharsets.UTF_8.name()
-            );
+            MimeMessageHelper helper = new MimeMessageHelper(message, false, StandardCharsets.UTF_8.name());
             helper.setFrom(new InternetAddress(securityFromAddress, securityFromName, StandardCharsets.UTF_8.name()));
             helper.setTo(to);
             helper.setSubject(subject);
             helper.setText(body, false);
-            mailSender.send(message);
-        } catch (Exception e) {
+        } catch (MessagingException | UnsupportedEncodingException e) {
             throw new MailPreparationException("Failed to prepare security email", e);
         }
+        mailSender.send(message);
     }
 
     private String buildUrl(String path, String token) {
