@@ -21,9 +21,63 @@ test('PowerShell audit checks backend readiness instead of aggregate health', ()
   assert.doesNotMatch(ps1, /\$BackendBase\/actuator\/health"\)/);
 });
 
+test('PowerShell audit starts backend when readiness is down and stops only its own process', () => {
+  assert.match(ps1, /Start-BackendIfNeeded/);
+  assert.match(ps1, /Start-Process[\s\S]+spring-boot:run/);
+  assert.match(ps1, /\$script:BackendStartedByScript\s*=\s*\$true/);
+  assert.match(ps1, /finally\s*\{[\s\S]*Stop-StartedBackend[\s\S]*\}/);
+});
+
+test('PowerShell backend cleanup stops the Maven and Spring Boot child process tree', () => {
+  assert.match(ps1, /Stop-ProcessTree/);
+  assert.match(ps1, /Win32_Process/);
+  assert.match(ps1, /ParentProcessId/);
+  assert.match(ps1, /Stop-ProcessTree\s+\$script:BackendProcess\.Id/);
+});
+
+test('PowerShell audit enforces generator warning ratio before diffing', () => {
+  assert.match(ps1, /\$MaxGeneratorWarningRatio/);
+  assert.match(ps1, /Assert-GeneratorWarningRatio/);
+  assert.match(ps1, /frontend-generator-warnings\.json/);
+  assert.match(ps1, /warning ratio[\s\S]+exceeds/);
+});
+
+test('PowerShell audit falls back to npm oasdiff-js when Docker oasdiff fails', () => {
+  assert.match(ps1, /Invoke-Oasdiff/);
+  assert.match(ps1, /-FilePath 'docker'/);
+  assert.match(ps1, /'run'[\s\S]+'tufin\/oasdiff'/);
+  assert.match(ps1, /npx[\s\S]+@oasdiff-js\/oasdiff-js/);
+});
+
+test('PowerShell audit writes oasdiff JSON as UTF-8 for the Node report builder', () => {
+  assert.match(ps1, /Invoke-NativeJsonCommand/);
+  assert.match(ps1, /System\.Text\.UTF8Encoding/);
+  assert.doesNotMatch(ps1, /diff \$DockerLeft \$DockerRight -f json > \$OutputFile/);
+  assert.doesNotMatch(ps1, /diff \$HostLeft \$HostRight -f json > \$OutputFile/);
+});
+
+test('Shell audit has the same lifecycle, warning-ratio, and oasdiff fallback gates', () => {
+  assert.match(sh, /start_backend_if_needed/);
+  assert.match(sh, /spring-boot:run/);
+  assert.match(sh, /trap cleanup_backend EXIT/);
+  assert.match(sh, /check_generator_warning_ratio/);
+  assert.match(sh, /run_oasdiff/);
+  assert.match(sh, /@oasdiff-js\/oasdiff-js/);
+});
+
 test('bash audit checks backend readiness instead of aggregate health', () => {
   assert.match(sh, /\$BACKEND_BASE\/actuator\/health\/readiness/);
   assert.doesNotMatch(sh, /\$BACKEND_BASE\/actuator\/health"/);
+});
+
+test('bash backend readiness uses bounded curl timeouts', () => {
+  assert.match(sh, /curl\s+--connect-timeout\s+\d+\s+--max-time\s+\d+\s+-fsS/);
+});
+
+test('bash backend cleanup terminates the started process group or child tree', () => {
+  assert.match(sh, /setsid\s+\.\/mvnw/);
+  assert.match(sh, /kill -TERM -- "-\$BACKEND_PID"/);
+  assert.match(sh, /terminate_process_tree "\$BACKEND_PID"/);
 });
 
 test('audit runners pass their own script identity to the report builder', () => {

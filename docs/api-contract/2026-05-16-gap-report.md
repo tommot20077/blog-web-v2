@@ -30,7 +30,7 @@ Drift severity: `high` = breaking; `medium` = silent contract mismatch; `low` = 
 | GET | /api/v1/articles | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/articles | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles | parameter-type-change | parameter:query:size | low | type integer → number |
-| POST | /api/v1/articles | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: categoryIds, tagNames, summary, coverImageUrl. Backend allows them optional (safe). |
+| POST | /api/v1/articles | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: summary, coverImageUrl, categoryIds, tagNames. Backend allows them optional (safe). |
 | POST | /api/v1/articles | requestBody-backend-only-field | requestBody:application/json | low | Backend defines optional fields frontend skips: status |
 | GET | /api/v1/articles/me | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/me | parameter-type-change | parameter:query:page | low | type integer → number |
@@ -43,7 +43,7 @@ Drift severity: `high` = breaking; `medium` = silent contract mismatch; `low` = 
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:sort | low | Frontend marks query param "sort" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/{articleUuid}/versions | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/articles/{articleUuid}/versions | parameter-type-change | parameter:query:size | low | type integer → number |
-| PUT | /api/v1/articles/{uuid} | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: categoryIds, tagNames, title, summary, content, coverImageUrl. Backend allows them optional (safe). |
+| PUT | /api/v1/articles/{uuid} | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: tagNames, title, summary, content, coverImageUrl, categoryIds. Backend allows them optional (safe). |
 | PUT | /api/v1/articles/{uuid} | requestBody-backend-only-field | requestBody:application/json | low | Backend defines optional fields frontend skips: status |
 | POST | /api/v1/articles/{uuid}/reject | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: reason. Backend allows them optional (safe). |
 | POST | /api/v1/auth/logout | parameter-not-emitted | parameter:cookie:refreshToken | low | Backend declares cookie param "refreshToken"; frontend does not pass it explicitly (browsers handle cookies automatically). |
