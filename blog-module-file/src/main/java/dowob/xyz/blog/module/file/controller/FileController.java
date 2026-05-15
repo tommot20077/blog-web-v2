@@ -8,9 +8,14 @@ import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
+import dowob.xyz.blog.module.file.model.dto.FileUploadRequest;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.service.FileService;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -63,9 +68,16 @@ public class FileController {
      */
     @PostMapping("/api/v1/files/upload")
     @PreAuthorize("hasAuthority('FILE_UPLOAD')")
+    @RequestBody(
+            required = true,
+            content = @Content(
+                    mediaType = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE,
+                    schema = @Schema(implementation = FileUploadRequest.class)
+            )
+    )
     public ApiResponse<FileUploadResponse> uploadFile(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam("usageType") UsageType usageType,
+            @Parameter(hidden = true) @RequestParam("file") MultipartFile file,
+            @Parameter(hidden = true) @RequestParam("usageType") UsageType usageType,
             @AuthenticationPrincipal Long userId,
             Authentication authentication) {
         UUID uploaderId = resolveUserUuid(userId);

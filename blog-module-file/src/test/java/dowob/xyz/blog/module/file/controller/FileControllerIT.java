@@ -446,4 +446,57 @@ class FileControllerIT {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.usedBytes").value(0));
     }
+
+    @Test
+    @DisplayName("GET /v3/api-docs - POST /api/v1/files/upload 應把 usageType 宣告為 multipart form field 而非 query parameter")
+    void openApi_fileUpload_declaresUsageTypeAsMultipartFormField() throws Exception {
+        String json = mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        ObjectMapper m = new ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode root = m.readTree(json);
+        com.fasterxml.jackson.databind.JsonNode uploadPost = root.at("/paths/~1api~1v1~1files~1upload/post");
+        org.junit.jupiter.api.Assertions.assertFalse(
+                uploadPost.isMissingNode(),
+                "POST /api/v1/files/upload 必須存在於 OpenAPI 文件中"
+        );
+
+        /*
+         * usageType 不應該出現在 parameters 陣列（query 等位置）。
+         */
+        com.fasterxml.jackson.databind.JsonNode params = uploadPost.path("parameters");
+        if (params.isArray()) {
+            for (com.fasterxml.jackson.databind.JsonNode p : params) {
+                org.junit.jupiter.api.Assertions.assertNotEquals(
+                        "usageType", p.path("name").asText(),
+                        "usageType 不應該被宣告為 OpenAPI parameter（query/header/cookie/path），應放在 requestBody 內"
+                );
+            }
+        }
+
+        /*
+         * usageType 應該出現在 multipart/form-data requestBody schema properties。
+         * schema 可能是 inline 或 $ref 指向 components.schemas，兩者都接受。
+         */
+        com.fasterxml.jackson.databind.JsonNode multipartSchema =
+                uploadPost.at("/requestBody/content/multipart~1form-data/schema");
+        org.junit.jupiter.api.Assertions.assertFalse(
+                multipartSchema.isMissingNode(),
+                "POST /api/v1/files/upload 必須有 multipart/form-data requestBody schema"
+        );
+
+        com.fasterxml.jackson.databind.JsonNode usageTypeProp;
+        String ref = multipartSchema.path("$ref").asText("");
+        if (!ref.isEmpty()) {
+            String name = ref.replace("#/components/schemas/", "");
+            usageTypeProp = root.at("/components/schemas/" + name + "/properties/usageType");
+        } else {
+            usageTypeProp = multipartSchema.path("properties").path("usageType");
+        }
+        org.junit.jupiter.api.Assertions.assertFalse(
+                usageTypeProp.isMissingNode(),
+                "usageType 必須出現在 multipart/form-data requestBody schema 的 properties"
+        );
+    }
 }
