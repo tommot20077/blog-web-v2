@@ -172,7 +172,7 @@ run_oasdiff \
 
 echo "Phase 3: build markdown gap report"
 REPORT_FILE="docs/api-contract/${AUDIT_DATE}-gap-report.md"
-node docs/api-contract/scripts/build-report.js "$LOGS_DIR" "$REPORT_FILE"
+AUDIT_SCRIPT=run-audit.sh node docs/api-contract/scripts/build-report.js "$LOGS_DIR" "$REPORT_FILE"
 
 echo ""
 echo "Audit complete. Report: $REPORT_FILE"

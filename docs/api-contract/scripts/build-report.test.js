@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { classifyOperationDiff, isNoiseField, buildReport, readJsonFile } = require('./build-report');
+const { classifyOperationDiff, isNoiseField, buildReport, readJsonFile, specOps } = require('./build-report');
 
 // --- Noise filter ---
 
@@ -51,6 +51,38 @@ test('CLI success output goes to stdout so PowerShell audit script does not trea
   assert.ok(fs.existsSync(out));
 });
 
+test('CLI records the invoking audit script name when provided by the runner', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-report-script-version-'));
+  for (const name of [
+    'backend-openapi.normalised.json',
+    'frontend-openapi.json',
+    'frontend-mock-openapi.json',
+    'oasdiff-real.json',
+    'oasdiff-mock.json',
+    'anti-pattern-inventory.json',
+    'frontend-generator-warnings.json',
+    'unwrapped-responses.json',
+  ]) {
+    const value = name.endsWith('openapi.normalised.json') || name === 'frontend-openapi.json' || name === 'frontend-mock-openapi.json'
+      ? { openapi: '3.1.0', paths: {} }
+      : name.endsWith('.json') && (name.includes('inventory') || name.includes('warnings') || name.includes('responses'))
+        ? []
+        : {};
+    fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+  }
+  const out = path.join(dir, 'report.md');
+
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'build-report.js'), dir, out], {
+    encoding: 'utf8',
+    env: { ...process.env, AUDIT_SCRIPT: 'run-audit.sh' },
+  });
+
+  assert.strictEqual(result.status, 0, result.stderr);
+  const md = fs.readFileSync(out, 'utf8');
+  assert.ok(md.includes('- Audit script version: run-audit.sh'));
+  assert.ok(!md.includes('- Audit script version: run-audit.ps1'));
+});
+
 test('isNoiseField: ignores info/tags/operationID/extensions/license/version/description', () => {
   for (const f of ['info', 'tags', 'operationID', 'extensions', 'license', 'version', 'description']) {
     assert.strictEqual(isNoiseField(f), true, `${f} should be noise`);
@@ -61,6 +93,20 @@ test('isNoiseField: real schema/parameter changes are NOT noise', () => {
   for (const f of ['parameters', 'requestBody', 'responses']) {
     assert.strictEqual(isNoiseField(f), false, `${f} should NOT be noise`);
   }
+});
+
+test('specOps: only HTTP methods under a Path Item are counted as operations', () => {
+  const ops = specOps({
+    paths: {
+      '/api/v1/articles': {
+        parameters: [{ name: 'lang', in: 'query' }],
+        servers: [{ url: 'https://api.example.test' }],
+        get: { responses: { 200: { description: 'ok' } } },
+      },
+    },
+  });
+
+  assert.deepStrictEqual(ops, ['GET /api/v1/articles']);
 });
 
 // --- Operation diff classifier ---
@@ -342,6 +388,26 @@ test('buildReport: backend-only path matching a previously-deferred feature land
   // The path contains "bookmark" and the frontend now has it → goes to Resolved
   const resolvedSection = md.split('## Resolved Since 2026-05-09')[1] || '';
   assert.ok(resolvedSection.includes('bookmark'), 'bookmark should appear in Resolved section');
+});
+
+test('buildReport: partial mock coverage gaps are listed instead of treated as zero emitted operations', () => {
+  const md = buildReport({
+    oasdiffReal: {},
+    oasdiffMock: { paths: { deleted: ['/api/v1/articles/{uuid}/bookmark'], added: [] } },
+    antiPattern: [],
+    warnings: [],
+    unwrapped: [],
+    backendOps: [],
+    frontendOps: [
+      'GET /api/v1/articles/{uuid}/bookmark',
+      'GET /api/v1/articles/{uuid}/highlights',
+    ],
+    frontendMockOps: ['GET /api/v1/articles/{uuid}/highlights'],
+    previouslyDeferred: [],
+  });
+
+  assert.ok(md.includes('Paths exposed by real services but missing from mock (mock coverage gap): 1'));
+  assert.ok(!md.includes('Mock generator emitted 0 operations'));
 });
 
 test('buildReport: deterministic — same inputs produce identical output', () => {

@@ -48,7 +48,7 @@ function collectRefs(node, acc) {
 }
 
 function isNullLikeSchema(schema) {
-  if (!schema || typeof schema !== 'object') return true;
+  if (!schema || typeof schema !== 'object') return false;
   if (schema.type === 'null') return true;
   return Array.isArray(schema.type) && schema.type.length === 1 && schema.type[0] === 'null';
 }
@@ -90,13 +90,16 @@ function normalise(inputSpec) {
             } else if (dataSchema) {
               mediaObj.schema = JSON.parse(JSON.stringify(dataSchema));
             } else {
-              unwrappedResponses.push({
-                path: pathStr,
-                method,
-                status,
-                mime,
-                reason: `ApiResponse target missing properties.data: ${envName}`,
-              });
+              mediaObj.schema = { type: 'null' };
+              if (!envName.toLowerCase().includes('void')) {
+                unwrappedResponses.push({
+                  path: pathStr,
+                  method,
+                  status,
+                  mime,
+                  reason: `ApiResponse target missing properties.data: ${envName}`,
+                });
+              }
             }
           } else {
             unwrappedResponses.push({

@@ -1,6 +1,6 @@
 // @ts-check
 //
-// Static safety checks for run-audit.ps1.
+// Static safety checks for run-audit runners.
 // Run: node --test docs/api-contract/scripts/run-audit.test.js
 
 const test = require('node:test');
@@ -55,4 +55,14 @@ test('Shell audit has the same lifecycle, warning-ratio, and oasdiff fallback ga
   assert.match(sh, /check_generator_warning_ratio/);
   assert.match(sh, /run_oasdiff/);
   assert.match(sh, /@oasdiff-js\/oasdiff-js/);
+});
+
+test('bash audit checks backend readiness instead of aggregate health', () => {
+  assert.match(sh, /\$BACKEND_BASE\/actuator\/health\/readiness/);
+  assert.doesNotMatch(sh, /\$BACKEND_BASE\/actuator\/health"/);
+});
+
+test('audit runners pass their own script identity to the report builder', () => {
+  assert.match(ps1, /\$env:AUDIT_SCRIPT\s*=\s*'run-audit\.ps1'/);
+  assert.match(sh, /AUDIT_SCRIPT=run-audit\.sh\s+node docs\/api-contract\/scripts\/build-report\.js/);
 });

@@ -21,6 +21,7 @@ $AuditDate     = if ($env:AUDIT_DATE) { $env:AUDIT_DATE } else { (Get-Date -Form
 $LogsDir       = "logs/api-contract-$AuditDate"
 $RepoRoot      = (Get-Item -Path $PSScriptRoot).Parent.Parent.Parent.FullName
 $MaxGeneratorWarningRatio = if ($env:MAX_GENERATOR_WARNING_RATIO) { [double]$env:MAX_GENERATOR_WARNING_RATIO } else { 0.30 }
+$env:AUDIT_SCRIPT = 'run-audit.ps1'
 
 $script:BackendStartedByScript = $false
 $script:BackendProcess = $null
