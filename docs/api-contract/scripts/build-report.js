@@ -144,14 +144,27 @@ function classifyOperationDiff(opDiff, options) {
           if (change.schema && change.schema.type) {
             const tAdded = (change.schema.type.added || []).sort();
             const tDeleted = (change.schema.type.deleted || []).sort();
+            const beParam = findBackendParam(loc, name);
             const isIntNumber =
               JSON.stringify(tAdded) === '["number"]' && JSON.stringify(tDeleted) === '["integer"]' ||
               JSON.stringify(tAdded) === '["integer"]' && JSON.stringify(tDeleted) === '["number"]';
+            const isSpringPageableSort =
+              loc === 'query' &&
+              name === 'sort' &&
+              beParam &&
+              beParam.schema &&
+              beParam.schema.type === 'array' &&
+              beParam.schema.items &&
+              beParam.schema.items.type === 'string' &&
+              ((tDeleted.includes('array') && tAdded.includes('string')) ||
+                (tDeleted.includes('string') && tAdded.includes('array')));
             driftDetails.push({
               kind: 'parameter-type-change',
               location: `parameter:${loc}:${name}`,
-              severity: isIntNumber ? 'low' : 'medium',
-              summary: `type ${tDeleted.join(',')} → ${tAdded.join(',')}`,
+              severity: isIntNumber || isSpringPageableSort ? 'low' : 'medium',
+              summary: isSpringPageableSort
+                ? 'Spring Pageable sort accepts repeated sort params; frontend sends a single sort string.'
+                : `type ${tDeleted.join(',')} → ${tAdded.join(',')}`,
             });
           }
         }
@@ -272,6 +285,11 @@ function findResolvedSince0509(backendOps, frontendOps, previouslyDeferred) {
   return out;
 }
 
+function readJsonFile(filePath) {
+  const raw = fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+  return JSON.parse(raw);
+}
+
 function md_table(headers, rows) {
   if (!rows.length) return '_None._\n';
   const headerLine = '| ' + headers.join(' | ') + ' |';
@@ -292,6 +310,8 @@ function buildReport(inputs) {
     previouslyDeferred = ['bookmark', 'highlight', 'progress', 'preferences/version', 'versions', 'series'],
     backendSnapshot = '',
     frontendSnapshot = '',
+    artifactDir = '',
+    auditDate = '',
     scriptVersion = '',
     backendSpec = null,
   } = inputs;
@@ -300,7 +320,9 @@ function buildReport(inputs) {
   const push = (s) => lines.push(s);
 
   // Summary
-  push('# API Contract Gap Report — 2026-05-15');
+  const reportDate = auditDate || (scriptVersion && /^\d{4}-\d{2}-\d{2}$/.test(scriptVersion) ? scriptVersion : 'unspecified');
+  const effectiveArtifactDir = artifactDir || (backendSnapshot ? path.dirname(backendSnapshot).replace(/\\/g, '/') : '');
+  push(`# API Contract Gap Report — ${reportDate}`);
   push('');
   push('## Summary');
   push('');
@@ -441,7 +463,9 @@ function buildReport(inputs) {
   // Evidence
   push('## Evidence & Reproducibility');
   push('');
-  push('- Intermediate artefacts: `logs/api-contract-2026-05-15/` (git-ignored).');
+  if (effectiveArtifactDir) {
+    push(`- Intermediate artefacts: \`${effectiveArtifactDir}/\` (git-ignored).`);
+  }
   push('- Re-run: `./docs/api-contract/scripts/run-audit.ps1` (or `.sh`).');
   push('- Backend startup: `./mvnw -pl blog-start spring-boot:run -Dspring-boot.run.profiles=dev`.');
   push('');
@@ -449,7 +473,7 @@ function buildReport(inputs) {
   return lines.join('\n');
 }
 
-module.exports = { buildReport, classifyOperationDiff, isNoiseField, specOps, isContentTypeSwapNoise, bucketBackendOnly, bucketFrontendOnly, findResolvedSince0509 };
+module.exports = { buildReport, classifyOperationDiff, isNoiseField, specOps, isContentTypeSwapNoise, bucketBackendOnly, bucketFrontendOnly, findResolvedSince0509, readJsonFile };
 
 // CLI
 if (require.main === module) {
@@ -461,13 +485,16 @@ if (require.main === module) {
   const j = (name) => {
     const p = path.join(inputDir, name);
     if (!fs.existsSync(p)) return null;
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    return readJsonFile(p);
   };
 
   const backend = j('backend-openapi.normalised.json') || { paths: {} };
   const frontend = j('frontend-openapi.json') || { paths: {} };
   const backendOps = specOps(backend);
   const frontendOps = specOps(frontend);
+  const normalizedInputDir = inputDir.replace(/\\/g, '/');
+  const auditDateMatch = normalizedInputDir.match(/api-contract-(\d{4}-\d{2}-\d{2})$/);
+  const auditDate = auditDateMatch ? auditDateMatch[1] : '';
 
   const md = buildReport({
     oasdiffReal: j('oasdiff-real.json') || {},
@@ -478,11 +505,13 @@ if (require.main === module) {
     backendOps,
     frontendOps,
     backendSpec: backend,
-    backendSnapshot: 'logs/api-contract-2026-05-15/backend-openapi.normalised.json',
-    frontendSnapshot: 'logs/api-contract-2026-05-15/frontend-openapi.json',
-    scriptVersion: '2026-05-15',
+    backendSnapshot: `${normalizedInputDir}/backend-openapi.normalised.json`,
+    frontendSnapshot: `${normalizedInputDir}/frontend-openapi.json`,
+    artifactDir: normalizedInputDir,
+    auditDate,
+    scriptVersion: 'run-audit.ps1',
   });
 
   fs.writeFileSync(outFile, md);
-  console.error(`Wrote ${outFile} (${md.length} bytes)`);
+  console.log(`Wrote ${outFile} (${md.length} bytes)`);
 }

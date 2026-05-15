@@ -128,5 +128,5 @@ if (require.main === module) {
   const { spec, unwrappedResponses } = normalise(rawSpec);
   fs.writeFileSync(outFile, JSON.stringify(spec, null, 2));
   if (logFile) fs.writeFileSync(logFile, JSON.stringify(unwrappedResponses, null, 2));
-  console.error(`Wrote ${outFile}; unwrapped responses: ${unwrappedResponses.length}`);
+  console.log(`Wrote ${outFile}; unwrapped responses: ${unwrappedResponses.length}`);
 }

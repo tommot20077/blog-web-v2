@@ -26,8 +26,8 @@ Set-Location $RepoRoot
 # --- Phase 0: capture backend OpenAPI ---
 Write-Host "▶ Phase 0: capture backend /v3/api-docs from $BackendBase" -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
-$health = (Invoke-RestMethod "$BackendBase/actuator/health").status
-if ($health -ne 'UP') { throw "Backend health is '$health', expected 'UP'" }
+$health = (Invoke-RestMethod "$BackendBase/actuator/health/readiness").status
+if ($health -ne 'UP') { throw "Backend readiness is '$health', expected 'UP'" }
 Invoke-RestMethod "$BackendBase/v3/api-docs" -OutFile "$LogsDir/backend-openapi.raw.json"
 Write-Host "  ✓ saved $LogsDir/backend-openapi.raw.json"
 
@@ -43,13 +43,13 @@ Write-Host "▶ Phase 1: generate frontend OpenAPI from $FrontendRepo" -Foregrou
 $absLogs = (Resolve-Path $LogsDir).Path -replace '\\', '/'
 Push-Location $FrontendRepo
 try {
-  npm run audit:openapi -- `
+  npx tsx scripts/generate-frontend-openapi.ts `
     --source src/api/real `
     --out "$absLogs/frontend-openapi.json" `
     --warnings "$absLogs/frontend-generator-warnings.json" `
     --anti-pattern-out "$absLogs/anti-pattern-inventory.json" `
     --align-with "$absLogs/backend-openapi.normalised.json"
-  npm run audit:openapi -- `
+  npx tsx scripts/generate-frontend-openapi.ts `
     --source src/api/mock `
     --out "$absLogs/frontend-mock-openapi.json" `
     --warnings "$absLogs/frontend-mock-generator-warnings.json"

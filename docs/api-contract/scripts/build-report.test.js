@@ -5,9 +5,51 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { classifyOperationDiff, isNoiseField, buildReport } = require('./build-report');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { classifyOperationDiff, isNoiseField, buildReport, readJsonFile } = require('./build-report');
 
 // --- Noise filter ---
+
+test('readJsonFile: accepts PowerShell redirected JSON with UTF-8 BOM', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-report-json-'));
+  const file = path.join(dir, 'oasdiff.json');
+  fs.writeFileSync(file, '\uFEFF{"paths":{"added":["/x"]}}', 'utf8');
+
+  assert.deepStrictEqual(readJsonFile(file), { paths: { added: ['/x'] } });
+});
+
+test('CLI success output goes to stdout so PowerShell audit script does not treat it as an error', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-report-cli-'));
+  for (const name of [
+    'backend-openapi.normalised.json',
+    'frontend-openapi.json',
+    'oasdiff-real.json',
+    'oasdiff-mock.json',
+    'anti-pattern-inventory.json',
+    'frontend-generator-warnings.json',
+    'unwrapped-responses.json',
+  ]) {
+    const value = name.endsWith('openapi.normalised.json') || name === 'frontend-openapi.json'
+      ? { openapi: '3.1.0', paths: {} }
+      : name.endsWith('.json') && (name.includes('inventory') || name.includes('warnings') || name.includes('responses'))
+        ? []
+        : {};
+    fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+  }
+  const out = path.join(dir, 'report.md');
+
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'build-report.js'), dir, out], {
+    encoding: 'utf8',
+  });
+
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Wrote .*report\.md/);
+  assert.strictEqual(result.stderr, '');
+  assert.ok(fs.existsSync(out));
+});
 
 test('isNoiseField: ignores info/tags/operationID/extensions/license/version/description', () => {
   for (const f of ['info', 'tags', 'operationID', 'extensions', 'license', 'version', 'description']) {
@@ -60,6 +102,32 @@ test('classifyOperationDiff: integer/int32 vs number is reported as low-severity
   const out = classifyOperationDiff(opDiff);
   // We expect this to be reported but marked low-severity.
   assert.ok(out.driftDetails.some((d) => d.severity === 'low'), 'int/number drift exists as low severity');
+});
+
+test('classifyOperationDiff: Spring Pageable sort array vs single string is reported as low-severity', () => {
+  const opDiff = {
+    parameters: {
+      modified: {
+        query: {
+          sort: { schema: { type: { added: ['string'], deleted: ['array'] } } },
+        },
+      },
+    },
+  };
+  const backendOpSpec = {
+    parameters: [{
+      name: 'sort',
+      in: 'query',
+      required: false,
+      schema: { type: 'array', items: { type: 'string' } },
+    }],
+  };
+
+  const out = classifyOperationDiff(opDiff, { backendOpSpec });
+  const d = out.driftDetails.find((x) => x.kind === 'parameter-type-change');
+  assert.ok(d);
+  assert.strictEqual(d.severity, 'low');
+  assert.match(d.summary, /Spring Pageable sort/);
 });
 
 test('classifyOperationDiff: required flip false→true means frontend stricter than backend → low severity', () => {
@@ -235,6 +303,29 @@ test('buildReport: produces markdown with all section headers', () => {
   assert.ok(md.includes('## Anti-patterns'));
   assert.ok(md.includes('## Generator Warnings'));
   assert.ok(md.includes('## Resolved Since 2026-05-09'));
+});
+
+test('buildReport: uses supplied audit date and artifact paths instead of hardcoded snapshot labels', () => {
+  const md = buildReport({
+    oasdiffReal: { paths: {} },
+    oasdiffMock: { paths: {} },
+    antiPattern: [],
+    warnings: [],
+    unwrapped: [],
+    backendOps: [],
+    frontendOps: [],
+    previouslyDeferred: [],
+    auditDate: '2026-05-16',
+    backendSnapshot: 'logs/api-contract-2026-05-16/backend-openapi.normalised.json',
+    frontendSnapshot: 'logs/api-contract-2026-05-16/frontend-openapi.json',
+    scriptVersion: 'run-audit.ps1',
+  });
+
+  assert.ok(md.includes('# API Contract Gap Report — 2026-05-16'));
+  assert.ok(md.includes('logs/api-contract-2026-05-16/backend-openapi.normalised.json'));
+  assert.ok(md.includes('logs/api-contract-2026-05-16/`'));
+  assert.ok(md.includes('- Audit script version: run-audit.ps1'));
+  assert.ok(!md.includes('logs/api-contract-2026-05-15/backend-openapi.normalised.json'));
 });
 
 test('buildReport: backend-only path matching a previously-deferred feature lands in Resolved section', () => {

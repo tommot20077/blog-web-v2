@@ -12,6 +12,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { normalise } = require('./normalise-backend');
 
 function makeSpec(extra = {}) {
@@ -210,4 +214,24 @@ test('6. Inline (non-$ref) ApiResponse-shaped schema is also unwrapped via name 
     { type: 'object', properties: { foo: { type: 'string' } } },
   );
   assert.strictEqual(unwrappedResponses.length, 1, 'inline response is logged as unwrapped');
+});
+
+test('7. CLI success output goes to stdout so PowerShell audit script does not treat it as an error', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'normalise-backend-cli-'));
+  const input = path.join(dir, 'input.json');
+  const output = path.join(dir, 'output.json');
+  const unwrapped = path.join(dir, 'unwrapped.json');
+  fs.writeFileSync(input, JSON.stringify(makeSpec(), null, 2));
+
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, 'normalise-backend.js'), input, output, unwrapped],
+    { encoding: 'utf8' },
+  );
+
+  assert.strictEqual(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Wrote .*output\.json; unwrapped responses: 0/);
+  assert.strictEqual(result.stderr, '');
+  assert.ok(fs.existsSync(output));
+  assert.ok(fs.existsSync(unwrapped));
 });
