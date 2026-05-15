@@ -76,8 +76,12 @@ function normalise(inputSpec) {
           if (envName) {
             const target = schemas[envName];
             if (target && target.properties && Object.prototype.hasOwnProperty.call(target.properties, 'data')) {
-              mediaObj.schema = JSON.parse(JSON.stringify(target.properties.data));
+              const dataSchema = target.properties.data;
+              mediaObj.schema = dataSchema && typeof dataSchema === 'object'
+                ? JSON.parse(JSON.stringify(dataSchema))
+                : { type: 'null' };
             } else {
+              mediaObj.schema = { type: 'null' };
               unwrappedResponses.push({
                 path: pathStr,
                 method,

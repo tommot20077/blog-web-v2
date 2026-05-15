@@ -216,7 +216,43 @@ test('6. Inline (non-$ref) ApiResponse-shaped schema is also unwrapped via name 
   assert.strictEqual(unwrappedResponses.length, 1, 'inline response is logged as unwrapped');
 });
 
-test('7. CLI success output goes to stdout so PowerShell audit script does not treat it as an error', () => {
+test('7. ApiResponse missing properties.data unwraps to null schema and records the malformed envelope', () => {
+  const spec = makeSpec({
+    paths: {
+      '/broken': {
+        get: {
+          responses: {
+            '200': {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiResponseBroken' } } },
+            },
+          },
+        },
+      },
+    },
+    components: {
+      schemas: {
+        ApiResponseBroken: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            message: { type: 'string' },
+          },
+        },
+      },
+    },
+  });
+
+  const { spec: out, unwrappedResponses } = normalise(spec);
+
+  assert.deepStrictEqual(
+    out.paths['/broken'].get.responses['200'].content['application/json'].schema,
+    { type: 'null' },
+  );
+  assert.strictEqual(unwrappedResponses.length, 1);
+  assert.match(unwrappedResponses[0].reason, /missing properties\.data/);
+});
+
+test('8. CLI success output goes to stdout so PowerShell audit script does not treat it as an error', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'normalise-backend-cli-'));
   const input = path.join(dir, 'input.json');
   const output = path.join(dir, 'output.json');

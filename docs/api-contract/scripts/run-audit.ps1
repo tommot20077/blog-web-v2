@@ -19,6 +19,7 @@ $FrontendRepo  = if ($env:FRONTEND_REPO) { $env:FRONTEND_REPO } else { 'D:/end/w
 $AuditDate     = if ($env:AUDIT_DATE) { $env:AUDIT_DATE } else { (Get-Date -Format 'yyyy-MM-dd') }
 $LogsDir       = "logs/api-contract-$AuditDate"
 $RepoRoot      = (Get-Item -Path $PSScriptRoot).Parent.Parent.Parent.FullName
+$env:AUDIT_SCRIPT = 'run-audit.ps1'
 
 Write-Host "▶ Working from: $RepoRoot" -ForegroundColor Cyan
 Set-Location $RepoRoot

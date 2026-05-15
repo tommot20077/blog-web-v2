@@ -20,6 +20,7 @@ const path = require('node:path');
 const NOISE_FIELDS = new Set([
   'info', 'tags', 'operationID', 'extensions', 'license', 'version', 'description',
 ]);
+const HTTP_METHODS = new Set(['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace']);
 
 function isNoiseField(name) {
   return NOISE_FIELDS.has(name);
@@ -33,7 +34,10 @@ function specOps(spec) {
   for (const [p, methods] of Object.entries(spec.paths || {})) {
     if (!methods || typeof methods !== 'object') continue;
     for (const m of Object.keys(methods)) {
-      if (typeof methods[m] === 'object' && methods[m] !== null) set.add(`${m.toUpperCase()} ${p}`);
+      const method = m.toLowerCase();
+      if (HTTP_METHODS.has(method) && typeof methods[m] === 'object' && methods[m] !== null) {
+        set.add(`${method.toUpperCase()} ${p}`);
+      }
     }
   }
   return [...set].sort();
@@ -307,6 +311,7 @@ function buildReport(inputs) {
     unwrapped = [],
     backendOps = [],
     frontendOps = [],
+    frontendMockOps = null,
     previouslyDeferred = ['bookmark', 'highlight', 'progress', 'preferences/version', 'versions', 'series'],
     backendSnapshot = '',
     frontendSnapshot = '',
@@ -401,9 +406,10 @@ function buildReport(inputs) {
   push('');
   const mockMissing = (oasdiffMock.paths && oasdiffMock.paths.deleted) || [];
   const mockStale = (oasdiffMock.paths && oasdiffMock.paths.added) || [];
+  const mockGeneratorEmittedNoOps = Array.isArray(frontendMockOps) && frontendMockOps.length === 0;
   if (mockMissing.length === 0 && mockStale.length === 0) {
     push('_No mock drift detected._');
-  } else if (mockMissing.length === Object.keys((oasdiffMock.paths && oasdiffMock.paths.deleted) || []).length && mockStale.length === 0) {
+  } else if (mockGeneratorEmittedNoOps && mockStale.length === 0) {
     // Special case: mock layer scanned empty (every real path missing from mock).
     // This means mock services don't go through apiClient — by design — and per-endpoint coverage diff is not meaningful here.
     push(`_Mock generator emitted 0 operations because \`src/api/mock/\` services do not call \`apiClient\` (by design). Per-endpoint mock-vs-real drift is therefore not meaningful for this layer. ${mockMissing.length} real paths have no mock counterpart at the apiClient layer._`);
@@ -490,8 +496,10 @@ if (require.main === module) {
 
   const backend = j('backend-openapi.normalised.json') || { paths: {} };
   const frontend = j('frontend-openapi.json') || { paths: {} };
+  const frontendMock = j('frontend-mock-openapi.json') || { paths: {} };
   const backendOps = specOps(backend);
   const frontendOps = specOps(frontend);
+  const frontendMockOps = specOps(frontendMock);
   const normalizedInputDir = inputDir.replace(/\\/g, '/');
   const auditDateMatch = normalizedInputDir.match(/api-contract-(\d{4}-\d{2}-\d{2})$/);
   const auditDate = auditDateMatch ? auditDateMatch[1] : '';
@@ -504,12 +512,13 @@ if (require.main === module) {
     unwrapped: j('unwrapped-responses.json') || [],
     backendOps,
     frontendOps,
+    frontendMockOps,
     backendSpec: backend,
     backendSnapshot: `${normalizedInputDir}/backend-openapi.normalised.json`,
     frontendSnapshot: `${normalizedInputDir}/frontend-openapi.json`,
     artifactDir: normalizedInputDir,
     auditDate,
-    scriptVersion: 'run-audit.ps1',
+    scriptVersion: process.env.AUDIT_SCRIPT || 'build-report.js',
   });
 
   fs.writeFileSync(outFile, md);

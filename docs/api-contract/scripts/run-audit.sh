@@ -17,8 +17,8 @@ echo "▶ Working from: $REPO_ROOT"
 
 echo "▶ Phase 0: capture backend /v3/api-docs from $BACKEND_BASE"
 mkdir -p "$LOGS_DIR"
-status=$(curl -fsS "$BACKEND_BASE/actuator/health" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).status)')
-if [ "$status" != "UP" ]; then echo "Backend health is '$status', expected 'UP'"; exit 1; fi
+status=$(curl -fsS "$BACKEND_BASE/actuator/health/readiness" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0,"utf8")).status)')
+if [ "$status" != "UP" ]; then echo "Backend readiness is '$status', expected 'UP'"; exit 1; fi
 curl -fsS "$BACKEND_BASE/v3/api-docs" > "$LOGS_DIR/backend-openapi.raw.json"
 echo "  ✓ saved $LOGS_DIR/backend-openapi.raw.json"
 
@@ -55,7 +55,7 @@ docker run --rm -v "$ABS_LOGS:/work" tufin/oasdiff diff \
 
 echo "▶ Phase 3: build markdown gap report"
 REPORT_FILE="docs/api-contract/${AUDIT_DATE}-gap-report.md"
-node docs/api-contract/scripts/build-report.js "$LOGS_DIR" "$REPORT_FILE"
+AUDIT_SCRIPT=run-audit.sh node docs/api-contract/scripts/build-report.js "$LOGS_DIR" "$REPORT_FILE"
 
 echo ""
 echo "✓ Audit complete. Report: $REPORT_FILE"

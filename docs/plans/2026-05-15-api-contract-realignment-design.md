@@ -1,7 +1,7 @@
 # API Contract Re-Alignment Design — 2026-05-15
 
-> Brainstorming output. Implementation plan to be authored by the `writing-plans` skill into
-> `docs/superpowers/plans/2026-05-15-api-contract-realignment-plan.md`.
+> Brainstorming output. Implementation plan:
+> `docs/plans/2026-05-15-api-contract-realignment-implementation-plan.md`.
 
 ## Background
 

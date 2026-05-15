@@ -168,7 +168,7 @@ Intermediate artefacts live under `B/logs/api-contract-2026-05-15/` (git-ignored
 
 ### Task 9 — B / Phase 2 diff orchestration
 
-**目標**: 寫 `docs/api-contract/scripts/run-audit.{sh,ps1}` 跑 Phase 0–3。整合 `oasdiff` (Docker `tufin/oasdiff`)；備援 fallback 用 npm `openapi-comparator`。
+**目標**: 寫 `docs/api-contract/scripts/run-audit.{sh,ps1}` 跑 Phase 0–3。整合 `oasdiff` (Docker `tufin/oasdiff`)；目前 audit runner 需要 Docker 可用。
 
 **步驟**:
 1. 主腳本驅動：
@@ -176,7 +176,7 @@ Intermediate artefacts live under `B/logs/api-contract-2026-05-15/` (git-ignored
    - Phase 0：呼叫 backend startup helper（可重用 Task 1 的指令）。
    - Phase 1：在前端 repo 跑 `npm run audit:openapi -- --align-with $BACKEND_NORMALISED`。
    - Phase 2-A：normalise backend → `backend-openapi.normalised.json`（直接用 Task 2 的 script）。
-   - Phase 2-B：`docker run --rm -v ...:/work tufin/oasdiff diff /work/backend-norm.json /work/frontend.json -f json > oasdiff-real.json`。Docker 不可用 → fallback npm。
+   - Phase 2-B：`docker run --rm -v ...:/work tufin/oasdiff diff /work/backend-norm.json /work/frontend.json -f json > oasdiff-real.json`。Docker 不可用時 fail-fast。
    - Phase 2-C：再跑一次 `frontend.json` vs `frontend-mock.json` → `oasdiff-mock.json`。
    - Phase 3：呼叫 Task 10 的 build-report。
 2. Fail-fast 守則：
