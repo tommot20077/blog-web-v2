@@ -56,11 +56,27 @@ function isContentTypeSwapNoise(modifiedContent) {
 
 /**
  * 對單一 operation 的 diff 分類出 driftDetails: [{kind, location, severity, summary}].
- * Noise（命名/extensions/content-type swap）被過濾掉。
+ *
+ * oasdiff 是用 backend (left/base) 與 frontend (right/revision) 比對：
+ * - `parameters.added`  = frontend 多出 backend 沒有的 → frontend 送了 backend 不接受的（高風險）
+ * - `parameters.deleted` = backend 有 frontend 沒對應的（i.e. 前端沒在 OpenAPI 表達該 param）
+ * - `required.added`     = frontend OpenAPI 標 required、backend 沒（前端更嚴格、安全）
+ * - `required.deleted`   = backend 標 required、frontend 沒（前端可能漏送必填、高風險）
+ * - `properties.added`   = frontend 期望但 backend 沒（高風險：response 會 undefined）
+ * - `properties.deleted` = backend 有但 frontend 沒對應（response 多出來、前端忽略；request 前端不送，可能 OK）
+ *
+ * options.backendOpSpec 可選——若提供，可從 `parameters[]` 找出 backend 對應 param 的
+ * required flag，用來把 query/header param 的 'parameter-not-emitted' 升為 high。
  */
-function classifyOperationDiff(opDiff) {
+function classifyOperationDiff(opDiff, options) {
   const driftDetails = [];
   if (!opDiff || typeof opDiff !== 'object') return { driftDetails };
+  const backendOpSpec = options && options.backendOpSpec;
+
+  function findBackendParam(loc, name) {
+    if (!backendOpSpec || !Array.isArray(backendOpSpec.parameters)) return null;
+    return backendOpSpec.parameters.find((pp) => pp.in === loc && pp.name === name) || null;
+  }
 
   // Parameters
   if (opDiff.parameters) {
@@ -69,10 +85,10 @@ function classifyOperationDiff(opDiff) {
       for (const [loc, list] of Object.entries(p.added)) {
         for (const name of list || []) {
           driftDetails.push({
-            kind: 'parameter-added',
+            kind: 'parameter-frontend-only',
             location: `parameter:${loc}:${name}`,
-            severity: 'medium',
-            summary: `Backend adds ${loc} param "${name}" not present in frontend.`,
+            severity: 'high',
+            summary: `Frontend declares ${loc} param "${name}" that backend does not expose.`,
           });
         }
       }
@@ -80,11 +96,23 @@ function classifyOperationDiff(opDiff) {
     if (p.deleted && typeof p.deleted === 'object') {
       for (const [loc, list] of Object.entries(p.deleted)) {
         for (const name of list || []) {
+          let severity = 'medium';
+          let summary = `Backend exposes ${loc} param "${name}" but frontend OpenAPI does not declare it.`;
+          if (loc === 'cookie') {
+            severity = 'low';
+            summary = `Backend declares ${loc} param "${name}"; frontend does not pass it explicitly (browsers handle ${loc}s automatically).`;
+          } else {
+            const beParam = findBackendParam(loc, name);
+            if (beParam && beParam.required === true) {
+              severity = 'high';
+              summary = `Backend REQUIRES ${loc} param "${name}" but frontend does not pass it.`;
+            }
+          }
           driftDetails.push({
-            kind: 'parameter-deleted',
+            kind: 'parameter-not-emitted',
             location: `parameter:${loc}:${name}`,
-            severity: 'high',
-            summary: `Frontend passes ${loc} param "${name}" that backend no longer accepts.`,
+            severity,
+            summary,
           });
         }
       }
@@ -93,11 +121,24 @@ function classifyOperationDiff(opDiff) {
       for (const [loc, params] of Object.entries(p.modified)) {
         for (const [name, change] of Object.entries(params || {})) {
           if (change.required) {
+            const from = change.required.from;
+            const to = change.required.to;
+            let severity, summary;
+            if (from === false && to === true) {
+              severity = 'low';
+              summary = `Frontend marks ${loc} param "${name}" required; backend allows it optional (frontend is stricter, safe).`;
+            } else if (from === true && to === false) {
+              severity = 'high';
+              summary = `Backend requires ${loc} param "${name}" but frontend marks it optional (frontend may omit a required value).`;
+            } else {
+              severity = 'low';
+              summary = `required flag changed: backend=${from}, frontend=${to}`;
+            }
             driftDetails.push({
               kind: 'parameter-required-change',
               location: `parameter:${loc}:${name}`,
-              severity: 'high',
-              summary: `required flipped from ${change.required.from} to ${change.required.to}`,
+              severity,
+              summary,
             });
           }
           if (change.schema && change.schema.type) {
@@ -124,36 +165,40 @@ function classifyOperationDiff(opDiff) {
       const s = mediaDiff.schema;
       if (!s) continue;
       if (s.required && Array.isArray(s.required.added) && s.required.added.length) {
+        // required.added = required on right (frontend) but not left (backend) → frontend stricter.
         driftDetails.push({
-          kind: 'requestBody-required-added',
+          kind: 'requestBody-required-frontend-stricter',
           location: `requestBody:${mime}`,
-          severity: 'high',
-          summary: `new required fields: ${s.required.added.join(', ')}`,
+          severity: 'low',
+          summary: `Frontend marks required: ${s.required.added.join(', ')}. Backend allows them optional (safe).`,
         });
       }
       if (s.required && Array.isArray(s.required.deleted) && s.required.deleted.length) {
+        // required.deleted = required on left (backend) but not right (frontend) → frontend may omit a required field.
         driftDetails.push({
-          kind: 'requestBody-required-removed',
+          kind: 'requestBody-required-frontend-looser',
           location: `requestBody:${mime}`,
-          severity: 'medium',
-          summary: `required removed: ${s.required.deleted.join(', ')}`,
+          severity: 'high',
+          summary: `Backend requires: ${s.required.deleted.join(', ')}. Frontend does not enforce them.`,
         });
       }
       if (s.properties) {
         if (Array.isArray(s.properties.added) && s.properties.added.length) {
+          // properties.added = property on right (frontend) but not left (backend) → frontend sends extra field.
           driftDetails.push({
-            kind: 'requestBody-property-added',
+            kind: 'requestBody-frontend-extra-field',
             location: `requestBody:${mime}`,
             severity: 'medium',
-            summary: `new properties: ${s.properties.added.join(', ')}`,
+            summary: `Frontend sends extra fields backend does not declare: ${s.properties.added.join(', ')}`,
           });
         }
         if (Array.isArray(s.properties.deleted) && s.properties.deleted.length) {
+          // properties.deleted = property on left (backend) but not right (frontend) → backend has field, frontend skips.
           driftDetails.push({
-            kind: 'requestBody-property-deleted',
+            kind: 'requestBody-backend-only-field',
             location: `requestBody:${mime}`,
-            severity: 'medium',
-            summary: `removed properties: ${s.properties.deleted.join(', ')}`,
+            severity: 'low',
+            summary: `Backend defines optional fields frontend skips: ${s.properties.deleted.join(', ')}`,
           });
         }
       }
@@ -172,19 +217,21 @@ function classifyOperationDiff(opDiff) {
             if (!s) continue;
             if (s.properties) {
               if (Array.isArray(s.properties.added) && s.properties.added.length) {
+                // properties.added = property on right (frontend) but not left (backend) → frontend expects but backend doesn't return → undefined.
                 driftDetails.push({
-                  kind: 'response-property-added',
+                  kind: 'response-frontend-expects-missing',
                   location: `response:${code}:${mime}`,
-                  severity: 'medium',
-                  summary: `backend added properties: ${s.properties.added.join(', ')}`,
+                  severity: 'high',
+                  summary: `Frontend expects response fields backend does not return: ${s.properties.added.join(', ')}`,
                 });
               }
               if (Array.isArray(s.properties.deleted) && s.properties.deleted.length) {
+                // properties.deleted = property on left (backend) but not right (frontend) → backend returns extras, frontend ignores.
                 driftDetails.push({
-                  kind: 'response-property-deleted',
+                  kind: 'response-backend-only-field',
                   location: `response:${code}:${mime}`,
-                  severity: 'high',
-                  summary: `backend removed properties: ${s.properties.deleted.join(', ')}`,
+                  severity: 'low',
+                  summary: `Backend returns fields frontend ignores: ${s.properties.deleted.join(', ')}`,
                 });
               }
             }
@@ -246,6 +293,7 @@ function buildReport(inputs) {
     backendSnapshot = '',
     frontendSnapshot = '',
     scriptVersion = '',
+    backendSpec = null,
   } = inputs;
 
   const lines = [];
@@ -285,7 +333,9 @@ function buildReport(inputs) {
       const ops = oasdiffReal.paths.modified[p].operations && oasdiffReal.paths.modified[p].operations.modified;
       if (!ops) continue;
       for (const method of Object.keys(ops).sort()) {
-        const { driftDetails } = classifyOperationDiff(ops[method]);
+        const backendOpSpec =
+          backendSpec && backendSpec.paths && backendSpec.paths[p] && backendSpec.paths[p][method.toLowerCase()];
+        const { driftDetails } = classifyOperationDiff(ops[method], { backendOpSpec });
         for (const d of driftDetails) {
           driftRows.push([method, p, d.kind, d.location, d.severity, d.summary]);
         }
@@ -427,6 +477,7 @@ if (require.main === module) {
     unwrapped: j('unwrapped-responses.json') || [],
     backendOps,
     frontendOps,
+    backendSpec: backend,
     backendSnapshot: 'logs/api-contract-2026-05-15/backend-openapi.normalised.json',
     frontendSnapshot: 'logs/api-contract-2026-05-15/frontend-openapi.json',
     scriptVersion: '2026-05-15',

@@ -22,56 +22,56 @@ Drift severity: `high` = breaking; `medium` = silent contract mismatch; `low` = 
 
 | Method | Path | Kind | Location | Severity | Summary |
 |---|---|---|---|---|---|
-| GET | /api/v1/admin/articles/pending | parameter-required-change | parameter:query:page | high | required flipped from false to true |
+| GET | /api/v1/admin/articles/pending | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/admin/articles/pending | parameter-type-change | parameter:query:page | low | type integer → number |
-| GET | /api/v1/admin/articles/pending | parameter-required-change | parameter:query:size | high | required flipped from false to true |
+| GET | /api/v1/admin/articles/pending | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/admin/articles/pending | parameter-type-change | parameter:query:size | low | type integer → number |
-| GET | /api/v1/articles | parameter-required-change | parameter:query:page | high | required flipped from false to true |
+| GET | /api/v1/articles | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles | parameter-type-change | parameter:query:page | medium | type integer → string |
-| GET | /api/v1/articles | parameter-required-change | parameter:query:size | high | required flipped from false to true |
+| GET | /api/v1/articles | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles | parameter-type-change | parameter:query:size | medium | type integer → string |
-| POST | /api/v1/articles | requestBody-required-added | requestBody:application/json | high | new required fields: summary, coverImageUrl, categoryIds, tagNames |
-| POST | /api/v1/articles | requestBody-property-deleted | requestBody:application/json | medium | removed properties: status |
-| GET | /api/v1/articles/me | parameter-required-change | parameter:query:page | high | required flipped from false to true |
+| POST | /api/v1/articles | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: summary, coverImageUrl, categoryIds, tagNames. Backend allows them optional (safe). |
+| POST | /api/v1/articles | requestBody-backend-only-field | requestBody:application/json | low | Backend defines optional fields frontend skips: status |
+| GET | /api/v1/articles/me | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/me | parameter-type-change | parameter:query:page | low | type integer → number |
-| GET | /api/v1/articles/me | parameter-required-change | parameter:query:size | high | required flipped from false to true |
+| GET | /api/v1/articles/me | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/me | parameter-type-change | parameter:query:size | low | type integer → number |
 | GET | /api/v1/articles/me | parameter-type-change | parameter:query:status | medium | type string →  |
-| GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:page | high | required flipped from false to true |
+| GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-type-change | parameter:query:page | low | type integer → number |
-| GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:size | high | required flipped from false to true |
+| GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-type-change | parameter:query:size | low | type integer → number |
-| GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:sort | high | required flipped from false to true |
+| GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:sort | low | Frontend marks query param "sort" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-type-change | parameter:query:sort | medium | type string →  |
 | GET | /api/v1/articles/{articleUuid}/versions | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/articles/{articleUuid}/versions | parameter-type-change | parameter:query:size | low | type integer → number |
 | GET | /api/v1/articles/{articleUuid}/versions | parameter-type-change | parameter:query:type | medium | type string →  |
-| PUT | /api/v1/articles/{uuid} | requestBody-required-added | requestBody:application/json | high | new required fields: title, summary, content, coverImageUrl, categoryIds, tagNames |
-| PUT | /api/v1/articles/{uuid} | requestBody-property-deleted | requestBody:application/json | medium | removed properties: status |
-| POST | /api/v1/articles/{uuid}/reject | requestBody-required-added | requestBody:application/json | high | new required fields: reason |
-| POST | /api/v1/auth/logout | parameter-deleted | parameter:cookie:refreshToken | high | Frontend passes cookie param "refreshToken" that backend no longer accepts. |
-| POST | /api/v1/auth/refresh | parameter-deleted | parameter:cookie:refreshToken | high | Frontend passes cookie param "refreshToken" that backend no longer accepts. |
-| POST | /api/v1/files/upload | parameter-deleted | parameter:query:usageType | high | Frontend passes query param "usageType" that backend no longer accepts. |
-| GET | /api/v1/recommend/related/{articleUuid} | parameter-deleted | parameter:query:limit | high | Frontend passes query param "limit" that backend no longer accepts. |
-| GET | /api/v1/recommend/trending | parameter-required-change | parameter:query:limit | high | required flipped from false to true |
+| PUT | /api/v1/articles/{uuid} | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: title, summary, content, coverImageUrl, categoryIds, tagNames. Backend allows them optional (safe). |
+| PUT | /api/v1/articles/{uuid} | requestBody-backend-only-field | requestBody:application/json | low | Backend defines optional fields frontend skips: status |
+| POST | /api/v1/articles/{uuid}/reject | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: reason. Backend allows them optional (safe). |
+| POST | /api/v1/auth/logout | parameter-not-emitted | parameter:cookie:refreshToken | low | Backend declares cookie param "refreshToken"; frontend does not pass it explicitly (browsers handle cookies automatically). |
+| POST | /api/v1/auth/refresh | parameter-not-emitted | parameter:cookie:refreshToken | low | Backend declares cookie param "refreshToken"; frontend does not pass it explicitly (browsers handle cookies automatically). |
+| POST | /api/v1/files/upload | parameter-not-emitted | parameter:query:usageType | high | Backend REQUIRES query param "usageType" but frontend does not pass it. |
+| GET | /api/v1/recommend/related/{articleUuid} | parameter-not-emitted | parameter:query:limit | medium | Backend exposes query param "limit" but frontend OpenAPI does not declare it. |
+| GET | /api/v1/recommend/trending | parameter-required-change | parameter:query:limit | low | Frontend marks query param "limit" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/recommend/trending | parameter-type-change | parameter:query:limit | low | type integer → number |
-| GET | /api/v1/recommend/trending | parameter-required-change | parameter:query:period | high | required flipped from false to true |
+| GET | /api/v1/recommend/trending | parameter-required-change | parameter:query:period | low | Frontend marks query param "period" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/search | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/search | parameter-type-change | parameter:query:size | low | type integer → number |
 | GET | /api/v1/search | parameter-type-change | parameter:query:sort | medium | type string →  |
-| GET | /api/v1/search/suggest | parameter-required-change | parameter:query:q | high | required flipped from false to true |
+| GET | /api/v1/search/suggest | parameter-required-change | parameter:query:q | low | Frontend marks query param "q" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/series | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/series | parameter-type-change | parameter:query:size | low | type integer → number |
-| GET | /api/v1/tags/hot | parameter-required-change | parameter:query:limit | high | required flipped from false to true |
+| GET | /api/v1/tags/hot | parameter-required-change | parameter:query:limit | low | Frontend marks query param "limit" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/tags/hot | parameter-type-change | parameter:query:limit | low | type integer → number |
-| GET | /api/v1/tags/suggest | parameter-deleted | parameter:query:limit | high | Frontend passes query param "limit" that backend no longer accepts. |
-| GET | /api/v1/users/me/bookmarks | parameter-required-change | parameter:query:page | high | required flipped from false to true |
+| GET | /api/v1/tags/suggest | parameter-not-emitted | parameter:query:limit | medium | Backend exposes query param "limit" but frontend OpenAPI does not declare it. |
+| GET | /api/v1/users/me/bookmarks | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/users/me/bookmarks | parameter-type-change | parameter:query:page | low | type integer → number |
-| GET | /api/v1/users/me/bookmarks | parameter-required-change | parameter:query:size | high | required flipped from false to true |
+| GET | /api/v1/users/me/bookmarks | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/users/me/bookmarks | parameter-type-change | parameter:query:size | low | type integer → number |
-| GET | /api/v1/users/me/files | parameter-deleted | parameter:query:page | high | Frontend passes query param "page" that backend no longer accepts. |
-| GET | /api/v1/users/me/files | parameter-deleted | parameter:query:size | high | Frontend passes query param "size" that backend no longer accepts. |
-| GET | /api/v1/users/me/files | parameter-deleted | parameter:query:sort | high | Frontend passes query param "sort" that backend no longer accepts. |
+| GET | /api/v1/users/me/files | parameter-not-emitted | parameter:query:page | medium | Backend exposes query param "page" but frontend OpenAPI does not declare it. |
+| GET | /api/v1/users/me/files | parameter-not-emitted | parameter:query:size | medium | Backend exposes query param "size" but frontend OpenAPI does not declare it. |
+| GET | /api/v1/users/me/files | parameter-not-emitted | parameter:query:sort | medium | Backend exposes query param "sort" but frontend OpenAPI does not declare it. |
 
 
 ## Backend-only Endpoints
