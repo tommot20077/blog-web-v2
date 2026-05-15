@@ -54,3 +54,7 @@ No unresolved current required fixes remain for the previously reported admin pr
 |---|---|---|---|---|
 | 文件需更新 | Backend controller scan and runtime OpenAPI agreed in the original audit. | `docs/api-contract/backend-endpoints.md` recorded production controller mappings matched runtime OpenAPI operations, with no controller-only or OpenAPI-only production endpoints. | matched | No backend controller/OpenAPI path correction required from this audit. |
 | 文件需更新 | Frontend real service calls matched runtime backend endpoints in the original audit. | `docs/api-contract/frontend-usage.md` recorded production real service calls with `matched` runtime status. | matched | Keep future service changes aligned with regenerated OpenAPI. |
+
+---
+
+> **Newer audit available**: see [`docs/api-contract/2026-05-15-gap-report.md`](2026-05-15-gap-report.md) for the 2026-05-15 endpoint + schema diff (built with the auto-pipeline in `docs/api-contract/scripts/`).
