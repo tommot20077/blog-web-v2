@@ -462,7 +462,9 @@ class FileControllerIT {
                 "POST /api/v1/files/upload 必須存在於 OpenAPI 文件中"
         );
 
-        // 1. usageType 不應該出現在 parameters 陣列（query 等位置）
+        /*
+         * usageType 不應該出現在 parameters 陣列（query 等位置）。
+         */
         com.fasterxml.jackson.databind.JsonNode params = uploadPost.path("parameters");
         if (params.isArray()) {
             for (com.fasterxml.jackson.databind.JsonNode p : params) {
@@ -473,8 +475,10 @@ class FileControllerIT {
             }
         }
 
-        // 2. usageType 應該出現在 multipart/form-data requestBody schema properties。
-        //    schema 可能是 inline 或 $ref 指向 components.schemas — 兩者都接受。
+        /*
+         * usageType 應該出現在 multipart/form-data requestBody schema properties。
+         * schema 可能是 inline 或 $ref 指向 components.schemas，兩者都接受。
+         */
         com.fasterxml.jackson.databind.JsonNode multipartSchema =
                 uploadPost.at("/requestBody/content/multipart~1form-data/schema");
         org.junit.jupiter.api.Assertions.assertFalse(
