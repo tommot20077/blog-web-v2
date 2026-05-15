@@ -47,6 +47,12 @@ function collectRefs(node, acc) {
   }
 }
 
+function isNullLikeSchema(schema) {
+  if (!schema || typeof schema !== 'object') return true;
+  if (schema.type === 'null') return true;
+  return Array.isArray(schema.type) && schema.type.length === 1 && schema.type[0] === 'null';
+}
+
 /**
  * 主流程：對每個 response.content.*.schema 做信封拆封；移除未被引用的 ApiResponse*。
  * 不會 mutate 輸入 spec。
@@ -75,8 +81,14 @@ function normalise(inputSpec) {
           }
           if (envName) {
             const target = schemas[envName];
-            if (target && target.properties && Object.prototype.hasOwnProperty.call(target.properties, 'data')) {
-              mediaObj.schema = JSON.parse(JSON.stringify(target.properties.data));
+            const dataSchema =
+              target && target.properties && Object.prototype.hasOwnProperty.call(target.properties, 'data')
+                ? target.properties.data
+                : null;
+            if (envName.toLowerCase().includes('void') || isNullLikeSchema(dataSchema)) {
+              mediaObj.schema = { type: 'null' };
+            } else if (dataSchema) {
+              mediaObj.schema = JSON.parse(JSON.stringify(dataSchema));
             } else {
               unwrappedResponses.push({
                 path: pathStr,

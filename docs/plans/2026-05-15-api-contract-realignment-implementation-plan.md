@@ -168,7 +168,7 @@ Intermediate artefacts live under `B/logs/api-contract-2026-05-15/` (git-ignored
 
 ### Task 9 — B / Phase 2 diff orchestration
 
-**目標**: 寫 `docs/api-contract/scripts/run-audit.{sh,ps1}` 跑 Phase 0–3。整合 `oasdiff` (Docker `tufin/oasdiff`)；備援 fallback 用 npm `openapi-comparator`。
+**目標**: 寫 `docs/api-contract/scripts/run-audit.{sh,ps1}` 跑 Phase 0–3。整合 `oasdiff` (Docker `tufin/oasdiff`)；備援 fallback 用 npm `@oasdiff-js/oasdiff-js`。
 
 **步驟**:
 1. 主腳本驅動：
@@ -176,7 +176,7 @@ Intermediate artefacts live under `B/logs/api-contract-2026-05-15/` (git-ignored
    - Phase 0：呼叫 backend startup helper（可重用 Task 1 的指令）。
    - Phase 1：在前端 repo 跑 `npm run audit:openapi -- --align-with $BACKEND_NORMALISED`。
    - Phase 2-A：normalise backend → `backend-openapi.normalised.json`（直接用 Task 2 的 script）。
-   - Phase 2-B：`docker run --rm -v ...:/work tufin/oasdiff diff /work/backend-norm.json /work/frontend.json -f json > oasdiff-real.json`。Docker 不可用 → fallback npm。
+   - Phase 2-B：`docker run --rm -v ...:/work tufin/oasdiff diff /work/backend-norm.json /work/frontend.json -f json > oasdiff-real.json`。Docker 不可用 → fallback npm `@oasdiff-js/oasdiff-js`。
    - Phase 2-C：再跑一次 `frontend.json` vs `frontend-mock.json` → `oasdiff-mock.json`。
    - Phase 3：呼叫 Task 10 的 build-report。
 2. Fail-fast 守則：
@@ -253,6 +253,50 @@ Intermediate artefacts live under `B/logs/api-contract-2026-05-15/` (git-ignored
 
 ---
 
+## Supplement — Frontend UI / React Prototype Follow-up Backlog
+
+> 本段是 2026-05-16 補充的產品 / UI backlog，只記錄「契約對齊後要補的前端功能」。
+> 不改變上方 Task 1-12 的執行範圍；除非 Yuan 另外指派，當前分支仍以 API contract audit / report 為主。
+
+### P0 — Backend API + frontend service 已存在，但 Vue UI 尚未完整接上
+
+| 項目 | 現有契約 / service | Vue 缺口 | 後續驗收重點 |
+|---|---|---|---|
+| 收藏 / 我的收藏 | `src/api/real/bookmarkService.ts`; `POST/DELETE /api/v1/articles/{articleUuid}/bookmark`; `GET /api/v1/users/me/bookmarks` | `ArticleDetail` action rail 的 Bookmark 仍是 disabled placeholder；router 沒有 `/bookmarks` 或 reading list 頁 | 啟用文章收藏 toggle；未登入導 login；新增「我的收藏」列表頁，支援空狀態、分頁、取消收藏後即時更新 |
+| 閱讀進度同步 / 最近閱讀 | `src/api/real/readingProgressService.ts`; `GET/PUT /api/v1/articles/{articleUuid}/progress` | `useReadingProgress.ts` 目前只算 local scroll percentage，沒有讀寫 backend；沒有 recently read / last read 入口 | 文章載入時 hydrate backend progress；scroll 更新需 throttle/debounce；若 backend 有列表能力，再補「最近閱讀」頁或首頁區塊 |
+| 劃線筆記 | `src/api/real/highlightService.ts`; article highlight CRUD | Vue 沒有文字選取 toolbar、highlight list、note edit/delete UI | ArticleDetail 支援選取文字建立 highlight；登入狀態與權限處理；文章內可顯示、編輯、刪除既有 highlight |
+| 文章版本管理 | `src/api/real/articleVersionService.ts`; article versions / restore / promote / manual snapshot | Editor / My Articles 沒有版本歷史 panel；detail 頁也沒有版本偏好入口 | Editor 補 versions tab；可建立手動版本、查看版本 diff/metadata、restore/promote；操作前要 confirm |
+| 系列文章 | `src/api/real/seriesService.ts`; series CRUD + add/remove article | router 沒有 `/series` / `/series/:slug`；ArticleDetail 沒系列上下文；Editor 沒 assign series | 新增系列列表 / 詳情頁；文章頁顯示系列前後篇；作者或管理者可建立系列並把文章加入 / 移出 |
+| Admin 分類 / 標籤 / 搜尋維護 | `src/api/real/adminService.ts`; category CRUD、tag update/delete、search reindex | `/admin/review` 只做審核；沒有 taxonomy / search maintenance 頁 | Admin 補 maintenance tabs；分類 / 標籤操作有 optimistic 或 reload 策略；search reindex 要二次確認與結果 toast |
+
+### P1 — 既有 Vue 畫面已存在，但仍有 local-only 或 placeholder
+
+| 項目 | 現況 | 後續驗收重點 |
+|---|---|---|
+| Settings profile / social links / notifications | `SettingsView.vue` 與 `useSettings.ts` 多處仍依賴 localStorage；profile API 對 avatar / notifications / social links 的支援需用最新 backend contract 再確認 | 先由 audit report 確認 request / response 欄位，再把 local-only 設定改成真實 PATCH；無 backend 欄位者保留為明確 deferred |
+| Search 體驗 | `SearchView.vue` 已有基本搜尋路由，但 suggest / history / sort / pagination 是否完整需對照 audit report | 對齊 backend search contract；補 query persistence、排序 / 分頁 UI、錯誤與 empty state |
+| Article action rail | `ActionBar.vue` 的 bookmark / share / markdown view 仍有 placeholder 行為 | Bookmark 歸 P0；share / markdown / print 需先定 UX，再拆成獨立 slice，避免混進 contract audit |
+
+### React prototype 尚未遷移到 Vue 的候選頁面 / 元件
+
+以下只作為功能候選清單，不代表全部都應立刻進產品範圍。真正執行前要再切獨立 spec，並以 backend contract 是否存在來排序。
+
+| Prototype source | 候選功能 | 建議處理 |
+|---|---|---|
+| `blog-v2-design/site-pages/batch2.jsx` | `ReadingListPage`, `HighlightPage`, `LastReadPage`, `PrintPage`, `ThemeVariantsPage`, `I18nPage` | ReadingList / Highlight / LastRead 可銜接 P0；Print / Theme / I18n 先列 deferred |
+| `blog-v2-design/site-pages/batch3.jsx` | `StatsPage`, `DraftsPage`, `ScheduledPage`, `MediaPage`, `SlashCommandPage`, `EmailDigestPage`, `AuthorPage` | 先檢查 backend 是否已有 drafts / scheduled / media / newsletter contract；AuthorPage 與現有 `/author/:handle` 比對後補缺口 |
+| `blog-v2-design/v3/command-palette.jsx` | `CommandPalette`, `HotkeysHelp`, `useHotkeys` | 屬前端 UX 基建，等主要 CRUD / reader workflow 穩定後再做 |
+| `blog-v2-design/v3/article-extras.jsx` | `useAutoTOC`, `ArticleMeta`, `Footnote`, `CodeBlock`, `LightboxProvider`, `readingTime` | 可拆進 ArticleDetail polish slice；其中 TOC / code block / lightbox 不需等待 backend |
+| `blog-v2-design/v3/ai-seo.jsx` | `StructuredData`, `SEO`, `MarkdownView`, `AIReadableBlock`, `OGImageGenerator` | SEO / markdown view 可前端先做；OG image / AI-readable block 需先確認產品目的與產物儲存位置 |
+
+### 建議第一個獨立實作 slice
+
+1. 先等 Task 11 的 `2026-05-15-gap-report.md` 證實 bookmark contract 無 drift。
+2. 從「收藏 / 我的收藏」開始：API 已有、UI 缺口小、能快速驗證登入 / 未登入 / 空狀態 / 分頁。
+3. 接著做「閱讀進度同步」與「劃線筆記」，因為它們共用 ArticleDetail reader workflow，適合同一輪產品體驗設計，但實作時仍應拆 PR。
+
+---
+
 ## Risk Register（執行時要主動觀察）
 
 | 觸發條件 | 動作 |
@@ -260,7 +304,7 @@ Intermediate artefacts live under `B/logs/api-contract-2026-05-15/` (git-ignored
 | Task 1 backend 啟動失敗 | 停下，回報 Flyway / DB 狀態給 Yuan，等指示再續 |
 | Task 2/4-7/10 任一 TDD Red 沒先寫就直接寫實作 | 違反 CLAUDE.md，回滾並重做 |
 | Task 8 warning ratio > 30% | 停下，把 warnings 列給 Yuan 看，討論是補前端 type、調 generator 規則、或暫時降標 |
-| Task 9 Docker 拉不到 oasdiff image | 切 npm fallback，記錄在 report 的 evidence section |
+| Task 9 Docker 拉不到 oasdiff image | 切 npm `@oasdiff-js/oasdiff-js` fallback，記錄在 report 的 evidence section |
 | Task 11 抽檢誤差 > 1 | 回 Task 10 修報告分桶規則，重跑 |
 
 ## Estimated Total: 3–5 hours

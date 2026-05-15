@@ -171,7 +171,7 @@ snapshot) with a one-line pointer appended.
 |---|---|---|
 | Backend dev startup fails (Flyway / DB state) | No Phase 0 output | Reuse the Flyway repair commands from `2026-05-09-api-contract-alignment-plan.md` if needed |
 | Some backend response is NOT wrapped in `ApiResponse` (file streams, 302) | Envelope normaliser skips it, schema diff falsely reports drift | Normaliser emits `unwrapped-responses.json` for manual review |
-| `oasdiff` Docker image unavailable (network) | Phase 2 fails | Fallback to `openapi-comparator` (npm). Generator + report builder unchanged. |
+| `oasdiff` Docker image unavailable (network) | Phase 2 fails | Fallback to `@oasdiff-js/oasdiff-js` (npm). Generator + report builder unchanged. |
 | Frontend service uses a complex template literal (`${a}${b}`) | Path unresolvable | Flag `unresolved-path` warning, exclude from diff, surface in report |
 | TS generic return type unresolvable | Response schema imprecise | Flag `unresolvable-schema`, fall back to `{}` schema, manual spot-check |
 | Frontend service is a multi-call wrapper (calls other service, not `apiClient`) | Generator records nothing | Skip + warning, flag for manual review |

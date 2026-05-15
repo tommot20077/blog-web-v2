@@ -3,10 +3,10 @@
 ## Summary
 
 - Backend operations: 82
-- Frontend operations: 75
+- Frontend operations: 82
 - Backend snapshot: `logs/api-contract-2026-05-15/backend-openapi.normalised.json`
 - Frontend snapshot: `logs/api-contract-2026-05-15/frontend-openapi.json`
-- Audit script version: 2026-05-15
+- Audit script version: run-audit.ps1
 
 ## Required Fixes
 
@@ -27,66 +27,55 @@ Drift severity: `high` = breaking; `medium` = silent contract mismatch; `low` = 
 | GET | /api/v1/admin/articles/pending | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/admin/articles/pending | parameter-type-change | parameter:query:size | low | type integer → number |
 | GET | /api/v1/articles | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
-| GET | /api/v1/articles | parameter-type-change | parameter:query:page | medium | type integer → string |
+| GET | /api/v1/articles | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/articles | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
-| GET | /api/v1/articles | parameter-type-change | parameter:query:size | medium | type integer → string |
+| GET | /api/v1/articles | parameter-type-change | parameter:query:size | low | type integer → number |
 | POST | /api/v1/articles | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: summary, coverImageUrl, categoryIds, tagNames. Backend allows them optional (safe). |
 | POST | /api/v1/articles | requestBody-backend-only-field | requestBody:application/json | low | Backend defines optional fields frontend skips: status |
 | GET | /api/v1/articles/me | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/me | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/articles/me | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/me | parameter-type-change | parameter:query:size | low | type integer → number |
-| GET | /api/v1/articles/me | parameter-type-change | parameter:query:status | medium | type string →  |
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-type-change | parameter:query:size | low | type integer → number |
 | GET | /api/v1/articles/{articleUuid}/comments | parameter-required-change | parameter:query:sort | low | Frontend marks query param "sort" required; backend allows it optional (frontend is stricter, safe). |
-| GET | /api/v1/articles/{articleUuid}/comments | parameter-type-change | parameter:query:sort | medium | type string →  |
 | GET | /api/v1/articles/{articleUuid}/versions | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/articles/{articleUuid}/versions | parameter-type-change | parameter:query:size | low | type integer → number |
-| GET | /api/v1/articles/{articleUuid}/versions | parameter-type-change | parameter:query:type | medium | type string →  |
-| PUT | /api/v1/articles/{uuid} | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: title, summary, content, coverImageUrl, categoryIds, tagNames. Backend allows them optional (safe). |
+| PUT | /api/v1/articles/{uuid} | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: categoryIds, tagNames, title, summary, content, coverImageUrl. Backend allows them optional (safe). |
 | PUT | /api/v1/articles/{uuid} | requestBody-backend-only-field | requestBody:application/json | low | Backend defines optional fields frontend skips: status |
 | POST | /api/v1/articles/{uuid}/reject | requestBody-required-frontend-stricter | requestBody:application/json | low | Frontend marks required: reason. Backend allows them optional (safe). |
 | POST | /api/v1/auth/logout | parameter-not-emitted | parameter:cookie:refreshToken | low | Backend declares cookie param "refreshToken"; frontend does not pass it explicitly (browsers handle cookies automatically). |
 | POST | /api/v1/auth/refresh | parameter-not-emitted | parameter:cookie:refreshToken | low | Backend declares cookie param "refreshToken"; frontend does not pass it explicitly (browsers handle cookies automatically). |
-| POST | /api/v1/files/upload | parameter-not-emitted | parameter:query:usageType | high | Backend REQUIRES query param "usageType" but frontend does not pass it. |
-| GET | /api/v1/recommend/related/{articleUuid} | parameter-not-emitted | parameter:query:limit | medium | Backend exposes query param "limit" but frontend OpenAPI does not declare it. |
+| GET | /api/v1/recommend/related/{articleUuid} | parameter-required-change | parameter:query:limit | low | Frontend marks query param "limit" required; backend allows it optional (frontend is stricter, safe). |
+| GET | /api/v1/recommend/related/{articleUuid} | parameter-type-change | parameter:query:limit | low | type integer → number |
 | GET | /api/v1/recommend/trending | parameter-required-change | parameter:query:limit | low | Frontend marks query param "limit" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/recommend/trending | parameter-type-change | parameter:query:limit | low | type integer → number |
 | GET | /api/v1/recommend/trending | parameter-required-change | parameter:query:period | low | Frontend marks query param "period" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/search | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/search | parameter-type-change | parameter:query:size | low | type integer → number |
-| GET | /api/v1/search | parameter-type-change | parameter:query:sort | medium | type string →  |
 | GET | /api/v1/search/suggest | parameter-required-change | parameter:query:q | low | Frontend marks query param "q" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/series | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/series | parameter-type-change | parameter:query:size | low | type integer → number |
 | GET | /api/v1/tags/hot | parameter-required-change | parameter:query:limit | low | Frontend marks query param "limit" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/tags/hot | parameter-type-change | parameter:query:limit | low | type integer → number |
-| GET | /api/v1/tags/suggest | parameter-not-emitted | parameter:query:limit | medium | Backend exposes query param "limit" but frontend OpenAPI does not declare it. |
+| GET | /api/v1/tags/suggest | parameter-required-change | parameter:query:limit | low | Frontend marks query param "limit" required; backend allows it optional (frontend is stricter, safe). |
+| GET | /api/v1/tags/suggest | parameter-type-change | parameter:query:limit | low | type integer → number |
 | GET | /api/v1/users/me/bookmarks | parameter-required-change | parameter:query:page | low | Frontend marks query param "page" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/users/me/bookmarks | parameter-type-change | parameter:query:page | low | type integer → number |
 | GET | /api/v1/users/me/bookmarks | parameter-required-change | parameter:query:size | low | Frontend marks query param "size" required; backend allows it optional (frontend is stricter, safe). |
 | GET | /api/v1/users/me/bookmarks | parameter-type-change | parameter:query:size | low | type integer → number |
-| GET | /api/v1/users/me/files | parameter-not-emitted | parameter:query:page | medium | Backend exposes query param "page" but frontend OpenAPI does not declare it. |
-| GET | /api/v1/users/me/files | parameter-not-emitted | parameter:query:size | medium | Backend exposes query param "size" but frontend OpenAPI does not declare it. |
-| GET | /api/v1/users/me/files | parameter-not-emitted | parameter:query:sort | medium | Backend exposes query param "sort" but frontend OpenAPI does not declare it. |
+| GET | /api/v1/users/me/files | parameter-type-change | parameter:query:page | low | type integer → number |
+| GET | /api/v1/users/me/files | parameter-type-change | parameter:query:size | low | type integer → number |
+| GET | /api/v1/users/me/files | parameter-type-change | parameter:query:sort | low | Spring Pageable sort accepts repeated sort params; frontend sends a single sort string. |
 
 
 ## Backend-only Endpoints
 
 Backend exposes these, frontend never calls. Either deferred features or admin tooling.
 
-| Method | Path |
-|---|---|
-| DELETE | /api/v1/admin/categories/{uuid} |
-| DELETE | /api/v1/admin/tags/{id} |
-| POST | /api/v1/admin/categories |
-| POST | /api/v1/admin/search/reindex |
-| POST | /api/v1/auth/verify-email-code |
-| PUT | /api/v1/admin/categories/{uuid} |
-| PUT | /api/v1/admin/tags/{id} |
+_None._
 
 
 ## Frontend-only Endpoints
@@ -109,15 +98,13 @@ Direct apiClient/axios calls outside `src/api/`. Production code should go throu
 
 ## Mock-vs-Real Drift
 
-_Mock generator emitted 0 operations because `src/api/mock/` services do not call `apiClient` (by design). Per-endpoint mock-vs-real drift is therefore not meaningful for this layer. 55 real paths have no mock counterpart at the apiClient layer._
+_Mock generator emitted 0 operations because `src/api/mock/` services do not call `apiClient` (by design). Per-endpoint mock-vs-real drift is therefore not meaningful for this layer. 60 real paths have no mock counterpart at the apiClient layer._
 
 ## Generator Warnings
 
 Non-blocking — generator could not fully resolve these but recorded them.
 
-| Code | Count | Sample (first 3) |
-|---|---|---|
-| ambiguous-request | 1 | D:/end/workspace/vue/blog-web-v2-front-end/src/api/real/userService.ts:14:userService.deleteAccount |
+_None._
 
 
 ## Unwrapped Backend Responses

@@ -5,7 +5,7 @@
 //
 // Tests cover:
 //   1. ApiResponse<X> -> response schema becomes X
-//   2. ApiResponseVoid -> response schema becomes the data field as-is
+//   2. ApiResponseVoid -> response schema becomes null
 //   3. Non-envelope response -> kept, logged into unwrappedResponses
 //   4. Multi-layer ref ApiResponse<PageResultX> -> outer envelope stripped, inner PageResultX preserved
 //   5. Unreferenced ApiResponse* entries removed from components.schemas
@@ -64,7 +64,7 @@ test('1. ApiResponse<X>: response schema becomes properties.data', () => {
   assert.strictEqual(unwrappedResponses.length, 0);
 });
 
-test('2. ApiResponseVoid: response schema becomes the data field as-is (object)', () => {
+test('2. ApiResponseVoid: response schema becomes null', () => {
   const spec = makeSpec({
     paths: {
       '/v': {
@@ -93,8 +93,41 @@ test('2. ApiResponseVoid: response schema becomes the data field as-is (object)'
   const { spec: out } = normalise(spec);
   assert.deepStrictEqual(
     out.paths['/v'].delete.responses['200'].content['application/json'].schema,
-    { type: 'object' },
+    { type: 'null' },
   );
+});
+
+test('2b. ApiResponse without properties.data becomes null instead of unwrapped drift', () => {
+  const spec = makeSpec({
+    paths: {
+      '/void-like': {
+        post: {
+          responses: {
+            '200': {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/ApiResponseVoid' } } },
+            },
+          },
+        },
+      },
+    },
+    components: {
+      schemas: {
+        ApiResponseVoid: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+          },
+        },
+      },
+    },
+  });
+
+  const { spec: out, unwrappedResponses } = normalise(spec);
+  assert.deepStrictEqual(
+    out.paths['/void-like'].post.responses['200'].content['application/json'].schema,
+    { type: 'null' },
+  );
+  assert.strictEqual(unwrappedResponses.length, 0);
 });
 
 test('3. Non-envelope response is preserved and recorded in unwrappedResponses', () => {
