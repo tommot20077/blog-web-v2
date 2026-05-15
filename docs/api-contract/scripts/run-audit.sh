@@ -15,12 +15,13 @@ MAX_GENERATOR_WARNING_RATIO="${MAX_GENERATOR_WARNING_RATIO:-0.30}"
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 BACKEND_PID=""
 BACKEND_STARTED_BY_SCRIPT=0
+BACKEND_PROCESS_GROUP=0
 
 cd "$REPO_ROOT"
 echo "Working from: $REPO_ROOT"
 
 backend_readiness_is_up() {
-  curl -fsS "$BACKEND_BASE/actuator/health/readiness" 2>/dev/null \
+  curl --connect-timeout 5 --max-time 10 -fsS "$BACKEND_BASE/actuator/health/readiness" 2>/dev/null \
     | node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(0,"utf8")); process.exit(x.status === "UP" ? 0 : 1)'
 }
 
@@ -31,8 +32,14 @@ start_backend_if_needed() {
   fi
 
   echo "  Backend not ready; starting dev profile in background"
-  ./mvnw -pl blog-start spring-boot:run -Dspring-boot.run.profiles=dev \
-    > "$LOGS_DIR/backend-start.log" 2>&1 &
+  if command -v setsid >/dev/null 2>&1; then
+    setsid ./mvnw -pl blog-start spring-boot:run -Dspring-boot.run.profiles=dev \
+      > "$LOGS_DIR/backend-start.log" 2>&1 &
+    BACKEND_PROCESS_GROUP=1
+  else
+    ./mvnw -pl blog-start spring-boot:run -Dspring-boot.run.profiles=dev \
+      > "$LOGS_DIR/backend-start.log" 2>&1 &
+  fi
   BACKEND_PID="$!"
   BACKEND_STARTED_BY_SCRIPT=1
 
@@ -48,10 +55,26 @@ start_backend_if_needed() {
   exit 1
 }
 
+terminate_process_tree() {
+  local pid="$1"
+  if command -v pgrep >/dev/null 2>&1; then
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+      terminate_process_tree "$child"
+    done
+  fi
+  kill "$pid" 2>/dev/null || true
+}
+
 cleanup_backend() {
-  if [ "$BACKEND_STARTED_BY_SCRIPT" = "1" ] && [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
-    echo "  Stopping backend process $BACKEND_PID"
-    kill "$BACKEND_PID" 2>/dev/null || true
+  if [ "$BACKEND_STARTED_BY_SCRIPT" = "1" ] && [ -n "$BACKEND_PID" ]; then
+    echo "  Stopping backend process group/tree $BACKEND_PID"
+    if [ "$BACKEND_PROCESS_GROUP" = "1" ]; then
+      kill -TERM -- "-$BACKEND_PID" 2>/dev/null || true
+      sleep 2
+      kill -KILL -- "-$BACKEND_PID" 2>/dev/null || true
+    else
+      terminate_process_tree "$BACKEND_PID"
+    fi
   fi
 }
 trap cleanup_backend EXIT
@@ -124,7 +147,7 @@ run_oasdiff() {
 echo "Phase 0: capture backend /v3/api-docs from $BACKEND_BASE"
 mkdir -p "$LOGS_DIR"
 start_backend_if_needed
-curl -fsS "$BACKEND_BASE/v3/api-docs" > "$LOGS_DIR/backend-openapi.raw.json"
+curl --connect-timeout 5 --max-time 60 -fsS "$BACKEND_BASE/v3/api-docs" > "$LOGS_DIR/backend-openapi.raw.json"
 backend_operation_count="$(openapi_operation_count "$LOGS_DIR/backend-openapi.raw.json")"
 if [ "$backend_operation_count" -lt 50 ]; then
   echo "backend OpenAPI operation count $backend_operation_count is below sanity threshold 50" >&2

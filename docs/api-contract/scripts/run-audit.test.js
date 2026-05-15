@@ -44,8 +44,16 @@ test('PowerShell audit enforces generator warning ratio before diffing', () => {
 
 test('PowerShell audit falls back to npm oasdiff-js when Docker oasdiff fails', () => {
   assert.match(ps1, /Invoke-Oasdiff/);
-  assert.match(ps1, /docker\s+run[\s\S]+tufin\/oasdiff/);
+  assert.match(ps1, /-FilePath 'docker'/);
+  assert.match(ps1, /'run'[\s\S]+'tufin\/oasdiff'/);
   assert.match(ps1, /npx[\s\S]+@oasdiff-js\/oasdiff-js/);
+});
+
+test('PowerShell audit writes oasdiff JSON as UTF-8 for the Node report builder', () => {
+  assert.match(ps1, /Invoke-NativeJsonCommand/);
+  assert.match(ps1, /System\.Text\.UTF8Encoding/);
+  assert.doesNotMatch(ps1, /diff \$DockerLeft \$DockerRight -f json > \$OutputFile/);
+  assert.doesNotMatch(ps1, /diff \$HostLeft \$HostRight -f json > \$OutputFile/);
 });
 
 test('Shell audit has the same lifecycle, warning-ratio, and oasdiff fallback gates', () => {
@@ -60,6 +68,16 @@ test('Shell audit has the same lifecycle, warning-ratio, and oasdiff fallback ga
 test('bash audit checks backend readiness instead of aggregate health', () => {
   assert.match(sh, /\$BACKEND_BASE\/actuator\/health\/readiness/);
   assert.doesNotMatch(sh, /\$BACKEND_BASE\/actuator\/health"/);
+});
+
+test('bash backend readiness uses bounded curl timeouts', () => {
+  assert.match(sh, /curl\s+--connect-timeout\s+\d+\s+--max-time\s+\d+\s+-fsS/);
+});
+
+test('bash backend cleanup terminates the started process group or child tree', () => {
+  assert.match(sh, /setsid\s+\.\/mvnw/);
+  assert.match(sh, /kill -TERM -- "-\$BACKEND_PID"/);
+  assert.match(sh, /terminate_process_tree "\$BACKEND_PID"/);
 });
 
 test('audit runners pass their own script identity to the report builder', () => {

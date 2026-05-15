@@ -130,6 +130,30 @@ function Assert-GeneratorWarningRatio {
   }
 }
 
+function Invoke-NativeJsonCommand {
+  param(
+    [string]$FilePath,
+    [string[]]$ArgumentList,
+    [string]$OutputFile
+  )
+
+  $output = $null
+  try {
+    $output = & $FilePath @ArgumentList
+    $exitCode = $LASTEXITCODE
+  }
+  catch {
+    Write-Warning "$FilePath failed to start: $($_.Exception.Message)"
+    $exitCode = 127
+  }
+
+  $outputText = if ($null -eq $output) { '' } else { [string]::Join([Environment]::NewLine, @($output)) }
+  $outputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputFile)
+  $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+  [System.IO.File]::WriteAllText($outputPath, $outputText, $utf8NoBom)
+  return $exitCode
+}
+
 function Invoke-Oasdiff {
   param(
     [string]$DockerLeft,
@@ -139,15 +163,19 @@ function Invoke-Oasdiff {
     [string]$OutputFile
   )
 
-  & docker run --rm -v "${dockerLogs}:/work" tufin/oasdiff diff $DockerLeft $DockerRight -f json > $OutputFile
-  $dockerExit = $LASTEXITCODE
+  $dockerExit = Invoke-NativeJsonCommand `
+    -FilePath 'docker' `
+    -ArgumentList @('run', '--rm', '-v', "${dockerLogs}:/work", 'tufin/oasdiff', 'diff', $DockerLeft, $DockerRight, '-f', 'json') `
+    -OutputFile $OutputFile
   if ($dockerExit -eq 0 -or $dockerExit -eq 1) {
     return
   }
 
   Write-Warning "Docker oasdiff failed with exit code $dockerExit; falling back to npm @oasdiff-js/oasdiff-js"
-  & npx --yes '@oasdiff-js/oasdiff-js' diff $HostLeft $HostRight -f json > $OutputFile
-  $fallbackExit = $LASTEXITCODE
+  $fallbackExit = Invoke-NativeJsonCommand `
+    -FilePath 'npx' `
+    -ArgumentList @('--yes', '@oasdiff-js/oasdiff-js', 'diff', $HostLeft, $HostRight, '-f', 'json') `
+    -OutputFile $OutputFile
   if ($fallbackExit -ne 0 -and $fallbackExit -ne 1) {
     throw "oasdiff fallback failed with exit code $fallbackExit"
   }
