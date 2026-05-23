@@ -74,4 +74,32 @@ describe('contract red checks', () => {
 
     expect(missing).toEqual([])
   })
+
+  it('P0 journey endpoints are all present in both contracts', () => {
+    const backend = operationMap(readJson(BACKEND))
+    const frontend = operationMap(readJson(FRONTEND))
+    const required = [
+      'POST /api/v1/auth/register',
+      'GET /api/v1/auth/verify-email',
+      'POST /api/v1/auth/login',
+      'POST /api/v1/auth/refresh',
+      'POST /api/v1/auth/logout',
+      'POST /api/v1/articles',
+      'PUT /api/v1/articles/{uuid}',
+      'POST /api/v1/articles/{uuid}/submit',
+      'POST /api/v1/articles/{uuid}/publish',
+      'POST /api/v1/articles/{uuid}/reject',
+      'GET /api/v1/admin/articles/pending',
+      'GET /api/v1/articles',
+      'GET /api/v1/articles/{uuid}',
+      'GET /api/v1/search',
+      'POST /api/v1/articles/{articleUuid}/like',
+      'POST /api/v1/articles/{articleUuid}/bookmark',
+      'GET /api/v1/users/me/bookmarks',
+      'POST /api/v1/articles/{articleUuid}/comments',
+    ]
+
+    const missing = required.filter((key) => !backend.has(key) || !frontend.has(key))
+    expect(missing).toEqual([])
+  })
 })
