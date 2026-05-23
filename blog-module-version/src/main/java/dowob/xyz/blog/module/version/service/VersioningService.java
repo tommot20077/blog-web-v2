@@ -17,6 +17,7 @@ import dowob.xyz.blog.module.version.model.dto.response.VersionSummaryResponse;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -58,7 +59,14 @@ public class VersioningService {
         AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorId());
 
         ArticleVersion v = snapshotFromContent(article, TYPE_AUTO, null);
-        versionRepo.save(v);
+        try {
+            versionRepo.save(v);
+        } catch (DataIntegrityViolationException ex) {
+            if (isMissingArticleForeignKey(ex)) {
+                return;
+            }
+            throw ex;
+        }
 
         versionMapper.retainAuto(articleId, cfg.retain());
     }
@@ -78,6 +86,11 @@ public class VersioningService {
 
         ArticleVersion v = snapshotFromContent(article, TYPE_MANUAL, note);
         return versionRepo.save(v);
+    }
+
+    private boolean isMissingArticleForeignKey(DataIntegrityViolationException ex) {
+        String message = ex.getMessage();
+        return message != null && message.contains("article_versions_article_id_fkey");
     }
 
     /**
