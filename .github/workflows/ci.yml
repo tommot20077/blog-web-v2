@@ -75,6 +75,7 @@ jobs:
 
       - name: 上傳 E2E 測試報告
         if: always()
+        continue-on-error: true
         uses: dorny/test-reporter@v1
         with:
           name: E2E Tests
