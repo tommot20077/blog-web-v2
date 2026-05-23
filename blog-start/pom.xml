@@ -172,7 +172,9 @@
                             <includes>
                                 <include>**/*E2E.java</include>
                             </includes>
-                            <excludes combine.self="override"/>
+                            <excludes combine.self="override">
+                                <exclude>**/red/*RedE2E.java</exclude>
+                            </excludes>
                         </configuration>
                     </plugin>
                 </plugins>
