@@ -249,7 +249,7 @@ class AuthControllerTest {
      */
     @Test
     @DisplayName("POST /refresh → 缺少 refreshToken Cookie → 應回傳 401 未認證錯誤")
-    void refresh_missingCookie_shouldReturnTokenInvalid() throws Exception {
+    void refresh_missingCookie_shouldReturnUnauthenticated() throws Exception {
         mockMvc.perform(post("/api/v1/auth/refresh"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("A0005"));
@@ -260,7 +260,7 @@ class AuthControllerTest {
      */
     @Test
     @DisplayName("POST /refresh → Token 驗證失敗 → 應回傳 401 未認證錯誤")
-    void refresh_invalidToken_shouldReturnTokenInvalid() throws Exception {
+    void refresh_invalidToken_shouldReturnUnauthenticated() throws Exception {
         when(jwtService.validateRefreshToken("invalid.token")).thenReturn(false);
 
         mockMvc.perform(post("/api/v1/auth/refresh")
@@ -618,7 +618,7 @@ class AuthControllerTest {
      */
     @Test
     @DisplayName("POST /refresh → Token 不在 Redis ZSet 中（已撤銷）→ 應回傳 401 未認證錯誤")
-    void refresh_tokenNotInRedis_shouldReturnTokenInvalid() throws Exception {
+    void refresh_tokenNotInRedis_shouldReturnUnauthenticated() throws Exception {
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);

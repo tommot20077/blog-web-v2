@@ -13,12 +13,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DevProfileSecretsConfigTest {
 
     @Test
-    @DisplayName("application yaml should import repo root dotenv file")
-    void applicationYamlShouldImportRepoRootDotenvFile() throws IOException {
+    @DisplayName("base application yaml should not import dotenv file")
+    void baseApplicationYamlShouldNotImportDotenvFile() throws IOException {
         String applicationYaml = new ClassPathResource("application.yaml")
                 .getContentAsString(StandardCharsets.UTF_8);
 
         assertThat(applicationYaml)
+                .doesNotContain("optional:file:.env[.properties]")
+                .doesNotContain("optional:file:../.env[.properties]");
+    }
+
+    @Test
+    @DisplayName("dev profile should import repo root dotenv file")
+    void devProfileShouldImportRepoRootDotenvFile() throws IOException {
+        String devYaml = new ClassPathResource("application-dev.yaml")
+                .getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(devYaml)
                 .contains("optional:file:.env[.properties]")
                 .contains("optional:file:../.env[.properties]");
     }
