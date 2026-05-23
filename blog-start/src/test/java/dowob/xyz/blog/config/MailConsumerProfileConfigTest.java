@@ -1,13 +1,16 @@
 package dowob.xyz.blog.config;
 
+import dowob.xyz.blog.module.user.consumer.EmailVerificationConsumer;
+import dowob.xyz.blog.module.user.consumer.PasswordResetConsumer;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ClassPathResource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.lang.reflect.Method;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -15,45 +18,45 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MailConsumerProfileConfigTest {
 
     @Test
-    @DisplayName("email verification listener should honor the mail consumer toggle")
-    void emailVerificationListenerShouldHonorToggle() throws IOException {
-        String source = Files.readString(Path.of(
-                "..",
-                "blog-module-user",
-                "src",
-                "main",
-                "java",
-                "dowob",
-                "xyz",
-                "blog",
-                "module",
-                "user",
-                "consumer",
-                "EmailVerificationConsumer.java"
-        ));
+    @DisplayName("email verification listener annotations should honor the mail consumer toggle")
+    void emailVerificationListenerAnnotationsShouldHonorToggle() throws NoSuchMethodException {
+        ConditionalOnProperty conditional = EmailVerificationConsumer.class.getAnnotation(ConditionalOnProperty.class);
+        Method listenerMethod = EmailVerificationConsumer.class.getMethod(
+                "handleUserRegistered",
+                dowob.xyz.blog.module.user.model.event.UserRegisteredEvent.class,
+                com.rabbitmq.client.Channel.class,
+                long.class
+        );
+        RabbitListener listener = listenerMethod.getAnnotation(RabbitListener.class);
 
-        assertThat(source).contains("autoStartup = \"${app.mail.consumer-enabled:true}\"");
+        assertThat(conditional).isNotNull();
+        assertThat(conditional.name()).containsExactly("app.mail.consumer-enabled");
+        assertThat(conditional.havingValue()).isEqualTo("true");
+        assertThat(conditional.matchIfMissing()).isTrue();
+
+        assertThat(listener).isNotNull();
+        assertThat(listener.autoStartup()).isEqualTo("${app.mail.consumer-enabled:true}");
     }
 
     @Test
-    @DisplayName("password reset listener should honor the mail consumer toggle")
-    void passwordResetListenerShouldHonorToggle() throws IOException {
-        String source = Files.readString(Path.of(
-                "..",
-                "blog-module-user",
-                "src",
-                "main",
-                "java",
-                "dowob",
-                "xyz",
-                "blog",
-                "module",
-                "user",
-                "consumer",
-                "PasswordResetConsumer.java"
-        ));
+    @DisplayName("password reset listener annotations should honor the mail consumer toggle")
+    void passwordResetListenerAnnotationsShouldHonorToggle() throws NoSuchMethodException {
+        ConditionalOnProperty conditional = PasswordResetConsumer.class.getAnnotation(ConditionalOnProperty.class);
+        Method listenerMethod = PasswordResetConsumer.class.getMethod(
+                "handlePasswordResetRequested",
+                dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent.class,
+                com.rabbitmq.client.Channel.class,
+                long.class
+        );
+        RabbitListener listener = listenerMethod.getAnnotation(RabbitListener.class);
 
-        assertThat(source).contains("autoStartup = \"${app.mail.consumer-enabled:true}\"");
+        assertThat(conditional).isNotNull();
+        assertThat(conditional.name()).containsExactly("app.mail.consumer-enabled");
+        assertThat(conditional.havingValue()).isEqualTo("true");
+        assertThat(conditional.matchIfMissing()).isTrue();
+
+        assertThat(listener).isNotNull();
+        assertThat(listener.autoStartup()).isEqualTo("${app.mail.consumer-enabled:true}");
     }
 
     @Test
