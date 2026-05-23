@@ -15,7 +15,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayName("Mail consumer runtime config")
-class MailConsumerRuntimeConfigTest extends AbstractE2ETest {
+class MailConsumerRuntimeConfigE2E extends AbstractE2ETest {
 
     @Autowired
     private Environment environment;

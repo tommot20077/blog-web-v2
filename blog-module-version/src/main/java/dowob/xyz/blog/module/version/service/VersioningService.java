@@ -34,6 +34,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class VersioningService {
 
+    private static final String POSTGRES_FOREIGN_KEY_VIOLATION = "23503";
+    private static final String ARTICLE_VERSION_ARTICLE_ID_FK = "article_versions_article_id_fkey";
+
     public static final String TYPE_AUTO = "AUTO";
     public static final String TYPE_MANUAL = "MANUAL";
     public static final String TYPE_PUBLISHED = "PUBLISHED";
@@ -89,8 +92,44 @@ public class VersioningService {
     }
 
     private boolean isMissingArticleForeignKey(DataIntegrityViolationException ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (hasClassNamed(cause, "org.postgresql.util.PSQLException")) {
+                Object serverError = invokeNoArg(cause, "getServerErrorMessage");
+                String sqlState = asString(invokeNoArg(serverError, "getSQLState"));
+                String constraint = asString(invokeNoArg(serverError, "getConstraint"));
+                if (POSTGRES_FOREIGN_KEY_VIOLATION.equals(sqlState)
+                    && ARTICLE_VERSION_ARTICLE_ID_FK.equals(constraint)) {
+                    return true;
+                }
+            }
+        }
+
         String message = ex.getMessage();
-        return message != null && message.contains("article_versions_article_id_fkey");
+        return message != null && message.contains(ARTICLE_VERSION_ARTICLE_ID_FK);
+    }
+
+    private boolean hasClassNamed(Object target, String className) {
+        for (Class<?> type = target.getClass(); type != null; type = type.getSuperclass()) {
+            if (className.equals(type.getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Object invokeNoArg(Object target, String methodName) {
+        if (target == null) {
+            return null;
+        }
+        try {
+            return target.getClass().getMethod(methodName).invoke(target);
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    private String asString(Object value) {
+        return value == null ? null : value.toString();
     }
 
     /**

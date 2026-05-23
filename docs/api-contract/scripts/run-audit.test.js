@@ -123,3 +123,10 @@ test('bash red audit runner reuses run-audit.sh and executes the frontend Vitest
   assert.match(redSh, /tee "\$CONTRACT_LOG"/);
   assert.doesNotMatch(redSh, /npx(\.cmd)?\s+/);
 });
+
+test('red audit runners default FRONTEND_REPO to a sibling repo instead of a developer-specific absolute path', () => {
+  assert.doesNotMatch(redSh, /\/home\/tom\/dev\/blog-web-v2-front-end/);
+  assert.match(redSh, /blog-web-v2-front-end/);
+  assert.doesNotMatch(redPs1, /D:\\end\\workspace\\vue\\blog-web-v2-front-end/);
+  assert.match(redPs1, /blog-web-v2-front-end/);
+});

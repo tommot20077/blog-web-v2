@@ -8,7 +8,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 LOG_DIR="$ROOT/logs/api-contract-red"
-FRONTEND_REPO="${FRONTEND_REPO:-/home/tom/dev/blog-web-v2-front-end}"
+DEFAULT_FRONTEND_REPO="$(cd "$ROOT/.." && pwd)/blog-web-v2-front-end"
+FRONTEND_REPO="${FRONTEND_REPO:-$DEFAULT_FRONTEND_REPO}"
 VITEST_CLI="$FRONTEND_REPO/node_modules/vitest/vitest.mjs"
 ORIGINAL_AUDIT_DATE="${AUDIT_DATE-}"
 RED_AUDIT_DATE="red-$(date +%Y%m%d%H%M%S)"
