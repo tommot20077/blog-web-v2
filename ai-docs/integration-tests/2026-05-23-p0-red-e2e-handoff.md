@@ -31,6 +31,7 @@
 
 - Maven profile：`red-e2e`
 - 測試位置：`blog-start/src/test/java/dowob/xyz/blog/e2e/red/*RedE2E.java`
+- POSIX runner：`./scripts/run-red-e2e.sh`
 - 既有 `-Pe2e` profile 已排除 `red/*RedE2E.java`，避免一般 E2E 誤跑紅燈測試。
 
 前端 full-stack red Playwright：
@@ -44,6 +45,7 @@
 
 - Harness：`docs/api-contract/scripts/contract-red.test.js`
 - Runner：`docs/api-contract/scripts/run-red-audit.ps1`
+- POSIX runner：`./docs/api-contract/scripts/run-red-audit.sh`
 - CI 策略：`docs/api-contract/red-ci-notes.md`
 
 Phase 2 真資料庫手測文件：
@@ -76,6 +78,12 @@ Phase 2 真資料庫手測文件：
 ## 跑後端紅燈 E2E
 
 在後端 repo 執行：
+
+```bash
+./scripts/run-red-e2e.sh
+```
+
+Windows 等價：
 
 ```powershell
 New-Item -ItemType Directory -Force logs | Out-Null
@@ -119,6 +127,12 @@ exit $LASTEXITCODE
 ## 跑契約紅燈 Audit
 
 在後端 repo 執行：
+
+```bash
+./docs/api-contract/scripts/run-red-audit.sh
+```
+
+Windows 等價：
 
 ```powershell
 New-Item -ItemType Directory -Force logs | Out-Null

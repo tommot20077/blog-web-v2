@@ -39,7 +39,10 @@ public class PasswordResetConsumer {
      * @param channel     RabbitMQ Channel（用於 Manual Ack）
      * @param deliveryTag 訊息投遞標籤
      */
-    @RabbitListener(queues = UserRabbitMqConfig.QUEUE_PASSWORD_RESET)
+    @RabbitListener(
+            queues = UserRabbitMqConfig.QUEUE_PASSWORD_RESET,
+            autoStartup = "${app.mail.consumer-enabled:true}"
+    )
     public void handlePasswordResetRequested(UserPasswordResetRequestedEvent event,
                                               Channel channel,
                                               @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {

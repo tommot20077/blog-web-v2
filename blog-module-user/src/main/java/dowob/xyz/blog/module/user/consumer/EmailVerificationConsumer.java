@@ -40,7 +40,10 @@ public class EmailVerificationConsumer {
      * @param channel     RabbitMQ Channel（用於 Manual Ack）
      * @param deliveryTag 訊息投遞標籤
      */
-    @RabbitListener(queues = UserRabbitMqConfig.QUEUE_EMAIL_VERIFICATION)
+    @RabbitListener(
+            queues = UserRabbitMqConfig.QUEUE_EMAIL_VERIFICATION,
+            autoStartup = "${app.mail.consumer-enabled:true}"
+    )
     public void handleUserRegistered(UserRegisteredEvent event,
                                      Channel channel,
                                      @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
