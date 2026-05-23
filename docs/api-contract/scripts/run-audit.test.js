@@ -77,6 +77,13 @@ test('bash backend readiness uses bounded curl timeouts', () => {
   assert.match(sh, /curl\s+--connect-timeout\s+\d+\s+--max-time\s+\d+\s+-fsS/);
 });
 
+test('bash backend readiness handles empty or invalid readiness payloads without JSON parse stack traces', () => {
+  assert.match(sh, /try\s*\{/);
+  assert.match(sh, /if\s*\(!raw\)/);
+  assert.match(sh, /JSON\.parse\(raw\)/);
+  assert.doesNotMatch(sh, /JSON\.parse\(fs\.readFileSync\(0,"utf8"\)\)/);
+});
+
 test('bash backend cleanup terminates the started process group or child tree', () => {
   assert.match(sh, /setsid\s+\.\/mvnw/);
   assert.match(sh, /kill -TERM -- "-\$BACKEND_PID"/);
