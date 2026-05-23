@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.support.AmqpHeaders;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
@@ -26,6 +27,7 @@ import java.io.IOException;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "app.mail.consumer-enabled", havingValue = "true", matchIfMissing = true)
 public class EmailVerificationConsumer {
 
     /** 用戶郵件服務 */
@@ -40,7 +42,10 @@ public class EmailVerificationConsumer {
      * @param channel     RabbitMQ Channel（用於 Manual Ack）
      * @param deliveryTag 訊息投遞標籤
      */
-    @RabbitListener(queues = UserRabbitMqConfig.QUEUE_EMAIL_VERIFICATION)
+    @RabbitListener(
+            queues = UserRabbitMqConfig.QUEUE_EMAIL_VERIFICATION,
+            autoStartup = "${app.mail.consumer-enabled:true}"
+    )
     public void handleUserRegistered(UserRegisteredEvent event,
                                      Channel channel,
                                      @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {

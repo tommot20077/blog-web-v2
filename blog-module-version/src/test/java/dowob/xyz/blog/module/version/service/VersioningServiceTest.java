@@ -18,6 +18,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.postgresql.util.PSQLException;
+import org.postgresql.util.PSQLState;
+import org.postgresql.util.ServerErrorMessage;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.List;
 import java.util.Optional;
@@ -110,6 +114,50 @@ class VersioningServiceTest {
         service.recordAutoSnapshot(articleId);
 
         verify(versionRepo, never()).save(any());
+        verify(versionMapper, never()).retainAuto(any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void recordAutoSnapshot_articleDeletedBeforeSave_swallowsForeignKeyViolation() {
+        when(articleFacade.findContentById(articleId))
+            .thenReturn(Optional.of(contentData(articleId, authorId, "Test", "Hello world")));
+        when(preferenceResolver.resolveForUser(authorId))
+            .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
+        when(versionRepo.save(any()))
+            .thenThrow(new DataIntegrityViolationException(
+                "insert or update on table \"article_versions\" violates foreign key constraint " +
+                    "\"article_versions_article_id_fkey\""));
+
+        service.recordAutoSnapshot(articleId);
+
+        verify(versionRepo).save(any());
+        verify(versionMapper, never()).retainAuto(any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void recordAutoSnapshot_articleDeletedBeforeSave_swallowsStructuredForeignKeyViolation() {
+        when(articleFacade.findContentById(articleId))
+            .thenReturn(Optional.of(contentData(articleId, authorId, "Test", "Hello world")));
+        when(preferenceResolver.resolveForUser(authorId))
+            .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
+
+        ServerErrorMessage serverErrorMessage = org.mockito.Mockito.mock(ServerErrorMessage.class);
+        when(serverErrorMessage.getSQLState()).thenReturn(PSQLState.FOREIGN_KEY_VIOLATION.getState());
+        when(serverErrorMessage.getConstraint()).thenReturn("article_versions_article_id_fkey");
+
+        PSQLException sqlException = new PSQLException("wrapper", PSQLState.FOREIGN_KEY_VIOLATION) {
+            @Override
+            public ServerErrorMessage getServerErrorMessage() {
+                return serverErrorMessage;
+            }
+        };
+
+        when(versionRepo.save(any()))
+            .thenThrow(new DataIntegrityViolationException("wrapper", sqlException));
+
+        service.recordAutoSnapshot(articleId);
+
+        verify(versionRepo).save(any());
         verify(versionMapper, never()).retainAuto(any(), org.mockito.ArgumentMatchers.anyInt());
     }
 

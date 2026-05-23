@@ -200,6 +200,19 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().getMessage()).isEqualTo("Invalid request parameter");
     }
 
+    @Test
+    @DisplayName("ResponseStatusException(401) 應回傳統一未認證 envelope")
+    void whenResponseStatusException401_returnsUnauthenticatedEnvelope() {
+        ResponseStatusException ex = new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Please login");
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleResponseStatusException(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode()).isEqualTo("A0005");
+        assertThat(response.getBody().getMessage()).isEqualTo("請先登入");
+    }
+
     /**
      * 驗證 handleResponseStatusException 當 reason 為 null 時，code 仍正確，message 為 null
      */

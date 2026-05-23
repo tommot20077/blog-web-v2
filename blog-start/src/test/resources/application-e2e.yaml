@@ -33,3 +33,7 @@ blog:
       - image/png
       - image/webp
       - image/gif
+
+app:
+  mail:
+    consumer-enabled: false
