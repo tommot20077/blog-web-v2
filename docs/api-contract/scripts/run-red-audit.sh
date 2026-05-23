@@ -24,9 +24,10 @@ trap cleanup EXIT
 
 mkdir -p "$LOG_DIR"
 export AUDIT_DATE="$RED_AUDIT_DATE"
+export FRONTEND_REPO
 
 cd "$ROOT"
-./docs/api-contract/scripts/run-audit.sh
+bash ./docs/api-contract/scripts/run-audit.sh
 
 LATEST_LOG_DIR="$(find "$ROOT/logs" -maxdepth 1 -type d -name 'api-contract-*' | sort | tail -n 1)"
 if [ -z "$LATEST_LOG_DIR" ]; then
