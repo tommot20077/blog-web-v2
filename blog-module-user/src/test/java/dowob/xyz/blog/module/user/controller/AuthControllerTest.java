@@ -245,28 +245,28 @@ class AuthControllerTest {
     // =========================================================================
 
     /**
-     * 驗證：缺少 refreshToken Cookie 時應回傳 TOKEN_INVALID 錯誤碼。
+     * 驗證：缺少 refreshToken Cookie 時應回傳 401 未認證錯誤。
      */
     @Test
-    @DisplayName("POST /refresh → 缺少 refreshToken Cookie → 應回傳 TOKEN_INVALID 錯誤碼")
+    @DisplayName("POST /refresh → 缺少 refreshToken Cookie → 應回傳 401 未認證錯誤")
     void refresh_missingCookie_shouldReturnTokenInvalid() throws Exception {
         mockMvc.perform(post("/api/v1/auth/refresh"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("A0005"));
     }
 
     /**
-     * 驗證：refreshToken 驗證失敗時應回傳 TOKEN_INVALID 錯誤碼。
+     * 驗證：refreshToken 驗證失敗時應回傳 401 未認證錯誤。
      */
     @Test
-    @DisplayName("POST /refresh → Token 驗證失敗 → 應回傳 TOKEN_INVALID 錯誤碼")
+    @DisplayName("POST /refresh → Token 驗證失敗 → 應回傳 401 未認證錯誤")
     void refresh_invalidToken_shouldReturnTokenInvalid() throws Exception {
-        when(jwtService.validateToken("invalid.token")).thenReturn(false);
+        when(jwtService.validateRefreshToken("invalid.token")).thenReturn(false);
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "invalid.token")))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("A0005"));
     }
 
     // =========================================================================
@@ -614,10 +614,10 @@ class AuthControllerTest {
     // =========================================================================
 
     /**
-     * 驗證：Refresh Token 存在但不在 Redis ZSet 中（已撤銷）應回傳 TOKEN_INVALID 錯誤碼。
+     * 驗證：Refresh Token 存在但不在 Redis ZSet 中（已撤銷）應回傳 401 未認證錯誤。
      */
     @Test
-    @DisplayName("POST /refresh → Token 不在 Redis ZSet 中（已撤銷）→ 應回傳 TOKEN_INVALID 錯誤碼")
+    @DisplayName("POST /refresh → Token 不在 Redis ZSet 中（已撤銷）→ 應回傳 401 未認證錯誤")
     void refresh_tokenNotInRedis_shouldReturnTokenInvalid() throws Exception {
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
@@ -628,8 +628,8 @@ class AuthControllerTest {
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("A0005"));
     }
 
     /**

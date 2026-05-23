@@ -6,35 +6,35 @@ spring:
   # Database (TimescaleDB)
   # 共享基礎設施 Dev: 30120 | Prod: 30220 | Demo Docker: 5432
   datasource:
-    url: ${LOCAL_DB_URL:jdbc:postgresql://10.0.0.214:30120/blog_v2_db}
-    username: ${LOCAL_DB_USERNAME:luca}
-    password: ${LOCAL_DB_PASSWORD:tommot40}
+    url: ${LOCAL_DB_URL}
+    username: ${LOCAL_DB_USERNAME}
+    password: ${LOCAL_DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
 
   # Redis
   # 共享基礎設施 Dev: 30121 | Prod: 30221 | Demo Docker: 6379
   data:
     redis:
-      host: ${LOCAL_REDIS_HOST:10.0.0.214}
-      port: ${LOCAL_REDIS_PORT:30121}
-      password: ${LOCAL_REDIS_PASSWORD:tommot40}
+      host: ${LOCAL_REDIS_HOST}
+      port: ${LOCAL_REDIS_PORT}
+      password: ${LOCAL_REDIS_PASSWORD}
       database: 0
 
   # RabbitMQ
   # 共享基礎設施 Dev: 30127 (AMQP), 30128 (Management) | Prod: 30227/30228 | Demo Docker: 5672/15672
   rabbitmq:
-    host: ${LOCAL_MQ_HOST:10.0.0.214}
-    port: ${LOCAL_MQ_PORT:30127}
-    username: ${LOCAL_MQ_USERNAME:luca}
-    password: ${LOCAL_MQ_PASSWORD:tommot40}
+    host: ${LOCAL_MQ_HOST}
+    port: ${LOCAL_MQ_PORT}
+    username: ${LOCAL_MQ_USERNAME}
+    password: ${LOCAL_MQ_PASSWORD}
     virtual-host: blog
 
   # Elasticsearch
   # 共享基礎設施 Dev: 30124 | Prod: 30224 | Demo Docker: 9200
   elasticsearch:
-    uris: ${LOCAL_ES_URIS:http://10.0.0.214:30124}
-    username: ${LOCAL_ES_USERNAME:elastic}
-    password: ${LOCAL_ES_PASSWORD:tommot40}
+    uris: ${LOCAL_ES_URIS}
+    username: ${LOCAL_ES_USERNAME}
+    password: ${LOCAL_ES_PASSWORD}
 
   # 開發用設定
   jpa:
@@ -46,10 +46,10 @@ spring:
 # MinIO Config
 # 共享基礎設施 Dev: 30130 (API), 30131 (Console) | Prod: 30230/30231 | Demo Docker: 9000/9001
 minio:
-  endpoint: ${LOCAL_MINIO_ENDPOINT:http://10.0.0.214:30130}
-  access-key: ${LOCAL_MINIO_ACCESS_KEY:luca}
-  secret-key: ${LOCAL_MINIO_SECRET_KEY:tommot40}
-  bucket-name: ${LOCAL_MINIO_BUCKET:blog-files}
+  endpoint: ${LOCAL_MINIO_ENDPOINT}
+  access-key: ${LOCAL_MINIO_ACCESS_KEY}
+  secret-key: ${LOCAL_MINIO_SECRET_KEY}
+  bucket-name: ${LOCAL_MINIO_BUCKET}
 
 # JWT Config
 jwt:
