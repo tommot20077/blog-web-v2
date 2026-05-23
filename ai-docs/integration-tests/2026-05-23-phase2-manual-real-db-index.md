@@ -20,6 +20,7 @@ the real running frontend/backend and real dev database.
 
 ## Checklists
 
+- Handoff runbook: `2026-05-23-p0-red-e2e-handoff.md`
 - Auth lifecycle: `2026-05-23-phase2-auth-checklist.md`
 - Author/Admin review: `2026-05-23-phase2-author-review-checklist.md`
 - Reader interaction: `2026-05-23-phase2-reader-interaction-checklist.md`
