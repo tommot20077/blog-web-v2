@@ -21,10 +21,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * 認證控制器
@@ -108,18 +110,18 @@ public class AuthController {
             @CookieValue(name = "refreshToken", required = false) String refreshToken) {
 
         if (refreshToken == null) {
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+            throw unauthenticatedRefresh();
         }
 
         if (!jwtService.validateRefreshToken(refreshToken)) {
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+            throw unauthenticatedRefresh();
         }
 
         Long userId = Long.parseLong(jwtService.getUserIdFromToken(refreshToken));
 
         Double score = redisTemplate.opsForZSet().score(RedisKeyConstant.getUserRefreshKey(userId), refreshToken);
         if (score == null) {
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+            throw unauthenticatedRefresh();
         }
 
         String version = (String) redisTemplate.opsForHash()
@@ -141,6 +143,10 @@ public class AuthController {
         );
 
         return ApiResponse.success(new AuthResponse(newAccessToken));
+    }
+
+    private ResponseStatusException unauthenticatedRefresh() {
+        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "請先登入");
     }
 
     /**
