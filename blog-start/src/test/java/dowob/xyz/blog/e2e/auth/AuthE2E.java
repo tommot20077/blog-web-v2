@@ -238,7 +238,7 @@ class AuthE2E extends AbstractE2ETest {
         // Assert — 使用已失效的 refreshToken 嘗試刷新，應失敗
         mockMvc.perform(post(BASE_URL + "/refresh")
                         .cookie(refreshCookie))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnauthorized())
                 .andExpect(E2EAssertions.apiError("A0104"));
     }
 
