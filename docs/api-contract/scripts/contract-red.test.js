@@ -23,10 +23,17 @@ function operationMap(doc) {
   return result
 }
 
-function responseEnvelope(operation) {
+function responseSchema(operation) {
   const response = operation.responses?.['200'] ?? operation.responses?.['201']
-  const json = response?.content?.['application/json']?.schema
-  return JSON.stringify(json ?? {})
+  const content = response?.content ?? {}
+  if (content['application/json']?.schema) return content['application/json'].schema
+  const firstSchema = Object.values(content).find((entry) => entry?.schema)?.schema
+  return firstSchema ?? null
+}
+
+function looksLikeApiResponseEnvelope(schema) {
+  const json = JSON.stringify(schema ?? {})
+  return json.includes('"code"') && json.includes('"message"') && json.includes('"data"')
 }
 
 describe('contract red checks', () => {
@@ -37,7 +44,7 @@ describe('contract red checks', () => {
     expect([...frontend.keys()].sort()).toEqual([...backend.keys()].sort())
   })
 
-  it('shared successful responses keep a data envelope', () => {
+  it('shared successful responses are unwrapped payload schemas', () => {
     const backend = operationMap(readJson(BACKEND))
     const frontend = operationMap(readJson(FRONTEND))
     const mismatches = []
@@ -45,9 +52,16 @@ describe('contract red checks', () => {
     for (const [key, backendOperation] of backend) {
       const frontendOperation = frontend.get(key)
       if (!frontendOperation) continue
-      const backendEnvelope = responseEnvelope(backendOperation)
-      const frontendEnvelope = responseEnvelope(frontendOperation)
-      if (!backendEnvelope.includes('data') || !frontendEnvelope.includes('data')) {
+      const backendSchema = responseSchema(backendOperation)
+      const frontendSchema = responseSchema(frontendOperation)
+      if (!backendSchema && !frontendSchema) {
+        continue
+      }
+      if (!backendSchema || !frontendSchema) {
+        mismatches.push(`${key} (json-response-mismatch)`)
+        continue
+      }
+      if (looksLikeApiResponseEnvelope(backendSchema) || looksLikeApiResponseEnvelope(frontendSchema)) {
         mismatches.push(key)
       }
     }

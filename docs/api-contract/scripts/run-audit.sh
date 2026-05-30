@@ -22,7 +22,7 @@ echo "Working from: $REPO_ROOT"
 
 backend_readiness_is_up() {
   curl --connect-timeout 5 --max-time 10 -fsS "$BACKEND_BASE/actuator/health/readiness" 2>/dev/null \
-    | node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(0,"utf8")); process.exit(x.status === "UP" ? 0 : 1)'
+    | node -e 'const fs=require("fs"); try { const raw=fs.readFileSync(0,"utf8").trim(); if (!raw) process.exit(1); const x=JSON.parse(raw); process.exit(x.status === "UP" ? 0 : 1); } catch { process.exit(1); }'
 }
 
 start_backend_if_needed() {
