@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.user.controller;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
@@ -21,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -108,18 +110,18 @@ public class AuthController {
             @CookieValue(name = "refreshToken", required = false) String refreshToken) {
 
         if (refreshToken == null) {
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+            throw tokenUnauthorized();
         }
 
         if (!jwtService.validateRefreshToken(refreshToken)) {
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+            throw tokenUnauthorized();
         }
 
         Long userId = Long.parseLong(jwtService.getUserIdFromToken(refreshToken));
 
         Double score = redisTemplate.opsForZSet().score(RedisKeyConstant.getUserRefreshKey(userId), refreshToken);
         if (score == null) {
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
+            throw tokenUnauthorized();
         }
 
         String version = (String) redisTemplate.opsForHash()
@@ -141,6 +143,10 @@ public class AuthController {
         );
 
         return ApiResponse.success(new AuthResponse(newAccessToken));
+    }
+
+    private HttpStatusBusinessException tokenUnauthorized() {
+        return new HttpStatusBusinessException(UserErrorCode.TOKEN_INVALID, HttpStatus.UNAUTHORIZED);
     }
 
     /**

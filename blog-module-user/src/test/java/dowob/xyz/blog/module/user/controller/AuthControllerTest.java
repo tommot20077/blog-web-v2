@@ -251,7 +251,7 @@ class AuthControllerTest {
     @DisplayName("POST /refresh → 缺少 refreshToken Cookie → 應回傳 TOKEN_INVALID 錯誤碼")
     void refresh_missingCookie_shouldReturnTokenInvalid() throws Exception {
         mockMvc.perform(post("/api/v1/auth/refresh"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
@@ -265,7 +265,7 @@ class AuthControllerTest {
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "invalid.token")))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
@@ -628,7 +628,7 @@ class AuthControllerTest {
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
     }
 
