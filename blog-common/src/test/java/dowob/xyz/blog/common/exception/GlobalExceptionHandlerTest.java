@@ -80,6 +80,21 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().getMessage()).isEqualTo(CommonErrorCode.REQUEST_PARAM_MISSING.getMessage());
     }
 
+    @Test
+    @DisplayName("HttpStatusBusinessException 應保留指定 HTTP status 並包含錯誤碼")
+    void whenHttpStatusBusinessException_returnsConfiguredStatusWithErrorCode() {
+        HttpStatusBusinessException ex = new HttpStatusBusinessException(
+                CommonErrorCode.REQUEST_PARAM_MISSING,
+                HttpStatus.UNAUTHORIZED);
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleBusinessException(ex, request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode()).isEqualTo(CommonErrorCode.REQUEST_PARAM_MISSING.getCode());
+        assertThat(response.getBody().getMessage()).isEqualTo(CommonErrorCode.REQUEST_PARAM_MISSING.getMessage());
+    }
+
     /**
      * 驗證 SystemException 由 handleSystemException 處理，回傳 HTTP 500 及正確錯誤碼
      */

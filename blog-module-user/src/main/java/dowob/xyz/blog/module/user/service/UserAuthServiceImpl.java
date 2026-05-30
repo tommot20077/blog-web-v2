@@ -50,7 +50,7 @@ public class UserAuthServiceImpl implements UserAuthService {
     @Override
     public UserAuthService.SimpleUserDetail getUserDetail(Long userId) {
         return userRepository.findById(userId)
-                .map(u -> new UserAuthService.SimpleUserDetail(u.getId(), u.getEmail(), u.getRole().name(), u.getStatus().isAvailable()))
+                .map(u -> new UserAuthService.SimpleUserDetail(u.getId(), u.getEmail(), u.getRole().name(), u.getStatus()))
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
     }
 }

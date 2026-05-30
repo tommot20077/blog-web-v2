@@ -1,6 +1,7 @@
 package dowob.xyz.blog.infrastructure.security;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 
 import java.util.concurrent.TimeUnit;
@@ -73,11 +74,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         return;
                     }
 
-                    /**
-                     * 根據 enabled 簡單判斷狀態（這裡為了簡化，若 enabled=true 視為 ACTIVE）
-                     * TODO: 之後 UserDetail 應直接回傳 UserStatus Enum
-                     */
-                    currentStatus = userDetail.enabled() ? "ACTIVE" : "SUSPENDED";
+                    UserStatus userStatus = userDetail.status();
+                    currentStatus = userStatus.name();
 
                     redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_VERSION, currentVersion);
                     redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_STATUS, currentStatus);

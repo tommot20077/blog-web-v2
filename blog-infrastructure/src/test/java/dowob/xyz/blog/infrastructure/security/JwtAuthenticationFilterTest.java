@@ -2,6 +2,7 @@ package dowob.xyz.blog.infrastructure.security;
 
 import dowob.xyz.blog.common.api.enums.Permission;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
@@ -234,7 +235,7 @@ class JwtAuthenticationFilterTest {
         HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
         UserAuthService.SimpleUserDetail disabledUser =
-                new UserAuthService.SimpleUserDetail(USER_ID, "user@test.com", "USER", false);
+                new UserAuthService.SimpleUserDetail(USER_ID, "user@test.com", "USER", UserStatus.BANNED);
 
         when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
         when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
@@ -253,6 +254,37 @@ class JwtAuthenticationFilterTest {
         /** disabled user -> status="SUSPENDED" -> no auth set, but chain still called */
         verify(chain).doFilter(request, response);
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    @DisplayName("Redis Miss 且 DB 狀態為 PENDING_VERIFICATION 時，應直接快取原始 UserStatus 並通過認證")
+    @SuppressWarnings("unchecked")
+    void redisMiss_pendingVerification_shouldCacheStatusEnumAndAuthenticate() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        UserAuthService.SimpleUserDetail pendingUser =
+                new UserAuthService.SimpleUserDetail(USER_ID, "user@test.com", "USER", UserStatus.PENDING_VERIFICATION);
+
+        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
+        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
+        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
+        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
+        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
+        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
+        when(userAuthService.getUserDetail(USER_ID)).thenReturn(pendingUser);
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(hashOps).put(RedisKeyConstant.getUserAuthKey(USER_ID),
+                RedisKeyConstant.FIELD_STATUS, UserStatus.PENDING_VERIFICATION.name());
+        verify(chain).doFilter(request, response);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
     }
 
     @Test

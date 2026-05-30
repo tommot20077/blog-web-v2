@@ -318,8 +318,12 @@ class ArticleCommandSubService {
     public ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
-        validateStatusTransition(article.getStatus(), ArticleStatus.PENDING_REVIEW, operatorRole);
+        ArticleStatus currentStatus = article.getStatus();
+        if (currentStatus != ArticleStatus.DRAFT && currentStatus != ArticleStatus.REJECTED) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
+        }
         article.setStatus(ArticleStatus.PENDING_REVIEW);
+        article.setRejectReason(null);
         Article updated = articleRepository.save(article);
         return articleResponseMapper.toResponse(updated);
     }
