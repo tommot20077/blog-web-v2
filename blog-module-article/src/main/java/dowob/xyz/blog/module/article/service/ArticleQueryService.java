@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import lombok.RequiredArgsConstructor;
@@ -106,6 +107,19 @@ public class ArticleQueryService {
         PageResult<ArticleSummaryResponse> result = articleService.getPendingArticles(page, size);
         enrich(result.getRecords());
         return result;
+    }
+
+    /**
+     * 取得全部已發布文章的歸檔精簡投影（供前端年度歸檔頁使用）。
+     *
+     * <p>唯讀查詢、無分頁：直接委派 {@link ArticleService#getArchive()}。
+     * 歸檔投影僅含 uuid / title / slug / publishedAt / tags，無使用者個人化狀態（liked/bookmarked/progress），
+     * 故不經 enrich 處理，原樣回傳。結果依 publishedAt 由新到舊排序，無已發布文章時回傳空清單。</p>
+     *
+     * @return 歸檔文章投影列表（依 publishedAt 由新到舊排序，無資料回傳空清單）
+     */
+    public List<ArticleArchiveResponse> getArchive() {
+        return articleService.getArchive();
     }
 
     // ─── 單篇查詢（帶 liked 填充）───

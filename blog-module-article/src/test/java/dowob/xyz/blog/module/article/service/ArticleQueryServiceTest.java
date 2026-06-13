@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import org.junit.jupiter.api.AfterEach;
@@ -385,6 +386,74 @@ class ArticleQueryServiceTest {
             assertThat(result.getRecords().get(0).getLiked()).isFalse();
             assertThat(result.getRecords().get(0).getBookmarked()).isFalse();
             assertThat(result.getRecords().get(0).getLastReadProgress()).isNull();
+        }
+    }
+
+    // ─── getArchive（Task 2 新增）───
+
+    @Nested
+    @DisplayName("getArchive — 年度歸檔精簡投影")
+    class GetArchiveTests {
+
+        /**
+         * 建立測試用 ArticleArchiveResponse
+         *
+         * @param title       文章標題
+         * @param slug        URL slug
+         * @param publishedAt 發布時間
+         * @return 歸檔投影
+         */
+        private ArticleArchiveResponse buildArchive(String title, String slug, LocalDateTime publishedAt) {
+            return ArticleArchiveResponse.builder()
+                    .uuid(UUID.randomUUID())
+                    .title(title)
+                    .slug(slug)
+                    .publishedAt(publishedAt)
+                    .tags(List.of("Java", "Spring"))
+                    .build();
+        }
+
+        @Test
+        @DisplayName("正常：回傳全部已發布投影，依 publishedAt 由新到舊排序")
+        void getArchive_returnsAllPublishedProjectionOrderedByPublishedAtDesc() {
+            ArticleArchiveResponse newer =
+                    buildArchive("新文章", "newer", LocalDateTime.of(2026, 6, 1, 10, 0));
+            ArticleArchiveResponse older =
+                    buildArchive("舊文章", "older", LocalDateTime.of(2025, 1, 1, 10, 0));
+            when(articleService.getArchive()).thenReturn(List.of(newer, older));
+
+            List<ArticleArchiveResponse> result = articleQueryService.getArchive();
+
+            assertThat(result).hasSize(2);
+            assertThat(result).extracting(ArticleArchiveResponse::getTitle)
+                    .containsExactly("新文章", "舊文章");
+            assertThat(result.get(0).getPublishedAt()).isAfter(result.get(1).getPublishedAt());
+            assertThat(result.get(0).getUuid()).isNotNull();
+            assertThat(result.get(0).getSlug()).isEqualTo("newer");
+            assertThat(result.get(0).getTags()).containsExactly("Java", "Spring");
+        }
+
+        @Test
+        @DisplayName("邊界：無已發布文章時回傳空清單")
+        void getArchive_whenNoPublished_returnsEmptyList() {
+            when(articleService.getArchive()).thenReturn(List.of());
+
+            List<ArticleArchiveResponse> result = articleQueryService.getArchive();
+
+            assertThat(result).isEmpty();
+        }
+
+        @Test
+        @DisplayName("正常：直接委派 ArticleService.getArchive() 原樣回傳（不做 liked enrich）")
+        void getArchive_passesThroughServiceResult() {
+            ArticleArchiveResponse one =
+                    buildArchive("唯一文章", "only", LocalDateTime.of(2026, 3, 3, 8, 0));
+            List<ArticleArchiveResponse> expected = List.of(one);
+            when(articleService.getArchive()).thenReturn(expected);
+
+            List<ArticleArchiveResponse> result = articleQueryService.getArchive();
+
+            assertThat(result).isSameAs(expected);
         }
     }
 

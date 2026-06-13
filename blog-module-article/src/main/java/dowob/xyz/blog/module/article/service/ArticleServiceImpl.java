@@ -6,6 +6,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
@@ -92,6 +93,12 @@ public class ArticleServiceImpl implements ArticleService {
     @Override
     public PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size) {
         return querySubService.getPendingArticles(page, size);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ArticleArchiveResponse> getArchive() {
+        return querySubService.getArchive();
     }
 
     @Override

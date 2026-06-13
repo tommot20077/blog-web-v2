@@ -7,6 +7,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
@@ -91,6 +92,27 @@ class ArticleQuerySubService {
         long total = articleMapper.countPendingReview();
         List<ArticleSummaryResponse> list = toSummaryResponses(articles);
         return PageResult.of(page, size, total, list);
+    }
+
+    @Transactional(readOnly = true)
+    List<ArticleArchiveResponse> getArchive() {
+        List<Article> articles = articleMapper.findAllPublished();
+        if (articles.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
+        Map<UUID, List<TagSummaryResponse>> tagMap = responseMapper.batchToTagResponsesMap(uuids);
+        return articles.stream()
+                .map(article -> ArticleArchiveResponse.builder()
+                        .uuid(article.getUuid())
+                        .title(article.getTitle())
+                        .slug(article.getSlug())
+                        .publishedAt(article.getPublishedAt())
+                        .tags(tagMap.getOrDefault(article.getUuid(), List.of()).stream()
+                                .map(TagSummaryResponse::getName)
+                                .collect(Collectors.toList()))
+                        .build())
+                .collect(Collectors.toList());
     }
 
     Long findIdByUuid(UUID uuid) {

@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
@@ -141,6 +142,18 @@ public interface ArticleService {
      * @return 分頁文章摘要列表
      */
     PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size);
+
+    /**
+     * 取得全部已發布文章的歸檔精簡投影（供前端年度歸檔頁使用）。
+     *
+     * <p>
+     * 唯讀查詢、無分頁：回傳所有 PUBLISHED 文章的最小欄位（uuid / title / slug / publishedAt / tags），
+     * 依 publishedAt 由新到舊排序；草稿、待審、封存等非已發布狀態不納入。無已發布文章時回傳空清單。
+     * </p>
+     *
+     * @return 歸檔文章投影列表（依 publishedAt 由新到舊排序，無資料回傳空清單）
+     */
+    List<ArticleArchiveResponse> getArchive();
 
     /**
      * 提交文章審核（DRAFT → PENDING_REVIEW）
