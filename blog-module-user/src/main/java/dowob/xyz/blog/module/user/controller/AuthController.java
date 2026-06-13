@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.user.controller;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
@@ -28,6 +27,7 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * 認證控制器
@@ -115,18 +115,18 @@ public class AuthController {
             @CookieValue(name = "refreshToken", required = false) String refreshToken) {
 
         if (refreshToken == null) {
-            throw tokenUnauthorized();
+            throw unauthenticatedRefresh();
         }
 
         if (!jwtService.validateRefreshToken(refreshToken)) {
-            throw tokenUnauthorized();
+            throw unauthenticatedRefresh();
         }
 
         Long userId = Long.parseLong(jwtService.getUserIdFromToken(refreshToken));
 
         Double score = redisTemplate.opsForZSet().score(RedisKeyConstant.getUserRefreshKey(userId), refreshToken);
         if (score == null) {
-            throw tokenUnauthorized();
+            throw unauthenticatedRefresh();
         }
 
         String version = (String) redisTemplate.opsForHash()
@@ -150,8 +150,8 @@ public class AuthController {
         return ApiResponse.success(new AuthResponse(newAccessToken));
     }
 
-    private HttpStatusBusinessException tokenUnauthorized() {
-        return new HttpStatusBusinessException(UserErrorCode.TOKEN_INVALID, HttpStatus.UNAUTHORIZED);
+    private ResponseStatusException unauthenticatedRefresh() {
+        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "請先登入");
     }
 
     /**

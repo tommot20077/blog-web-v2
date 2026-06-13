@@ -3,7 +3,8 @@ $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..\..\..")
 $logDir = Join-Path $root "logs\api-contract-red"
 New-Item -ItemType Directory -Force $logDir | Out-Null
-$frontendRepo = if ($env:FRONTEND_REPO) { $env:FRONTEND_REPO } else { "D:\end\workspace\vue\blog-web-v2-front-end" }
+$defaultFrontendRepo = Join-Path (Split-Path $root -Parent) "blog-web-v2-front-end"
+$frontendRepo = if ($env:FRONTEND_REPO) { $env:FRONTEND_REPO } else { $defaultFrontendRepo }
 $vitestCli = Join-Path $frontendRepo "node_modules\vitest\vitest.mjs"
 $originalAuditDate = $env:AUDIT_DATE
 $redAuditDate = "red-$(Get-Date -Format 'yyyyMMddHHmmss')"

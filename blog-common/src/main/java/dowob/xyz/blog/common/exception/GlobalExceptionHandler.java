@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -136,6 +137,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ApiResponse<Void>> handleResponseStatusException(ResponseStatusException e) {
         log.warn("ResponseStatusException: {} {}", e.getStatusCode(), e.getReason());
+        if (e.getStatusCode().value() == HttpStatus.UNAUTHORIZED.value()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.failed(CommonErrorCode.UNAUTHENTICATED));
+        }
+        if (e.getStatusCode().value() == HttpStatus.FORBIDDEN.value()) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(ApiResponse.failed(CommonErrorCode.FORBIDDEN));
+        }
         return ResponseEntity
                 .status(e.getStatusCode())
                 .body(ApiResponse.failed(String.valueOf(e.getStatusCode().value()), e.getReason()));
