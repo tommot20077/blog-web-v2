@@ -41,7 +41,7 @@ class FileE2E extends AbstractE2ETest {
     void uploadFile_asAuthor_success() throws Exception {
         // Arrange
         String authorToken = authHelper.createUserWithRole(
-                "file-author@test.com", "password123", "fileauthor", "FileAuthor", Role.AUTHOR);
+                "file-author@test.com", "Password123!", "fileauthor", "FileAuthor", Role.AUTHOR);
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "test.jpg", "image/jpeg",
@@ -66,7 +66,7 @@ class FileE2E extends AbstractE2ETest {
     void getFileMetadata_afterUpload_success() throws Exception {
         // Arrange — 上傳檔案
         String authorToken = authHelper.createUserWithRole(
-                "file-meta@test.com", "password123", "filemeta", "FileMeta", Role.AUTHOR);
+                "file-meta@test.com", "Password123!", "filemeta", "FileMeta", Role.AUTHOR);
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "test.jpg", "image/jpeg",
@@ -99,7 +99,7 @@ class FileE2E extends AbstractE2ETest {
     void deleteFile_asOwner_success() throws Exception {
         // Arrange — 上傳檔案
         String authorToken = authHelper.createUserWithRole(
-                "file-del@test.com", "password123", "filedel", "FileDel", Role.AUTHOR);
+                "file-del@test.com", "Password123!", "filedel", "FileDel", Role.AUTHOR);
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "test.jpg", "image/jpeg",
@@ -134,7 +134,7 @@ class FileE2E extends AbstractE2ETest {
     void getUserFiles_success() throws Exception {
         // Arrange — 上傳兩個檔案
         String authorToken = authHelper.createUserWithRole(
-                "file-list@test.com", "password123", "filelist", "FileList", Role.AUTHOR);
+                "file-list@test.com", "Password123!", "filelist", "FileList", Role.AUTHOR);
 
         for (int i = 0; i < 2; i++) {
             MockMultipartFile file = new MockMultipartFile(
@@ -163,7 +163,7 @@ class FileE2E extends AbstractE2ETest {
     void getUserQuota_success() throws Exception {
         // Arrange
         String authorToken = authHelper.createUserWithRole(
-                "file-quota@test.com", "password123", "filequota", "FileQuota", Role.AUTHOR);
+                "file-quota@test.com", "Password123!", "filequota", "FileQuota", Role.AUTHOR);
 
         // Act & Assert
         mockMvc.perform(get("/api/v1/users/me/quota")
@@ -181,7 +181,7 @@ class FileE2E extends AbstractE2ETest {
     void uploadFile_asUser_forbidden() throws Exception {
         // Arrange — USER 角色無 FILE_UPLOAD 權限
         String userToken = authHelper.createUserWithRole(
-                "file-user@test.com", "password123", "fileuser", "FileUser", Role.USER);
+                "file-user@test.com", "Password123!", "fileuser", "FileUser", Role.USER);
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "test.jpg", "image/jpeg",

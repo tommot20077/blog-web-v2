@@ -91,7 +91,7 @@ class TagE2E extends AbstractE2ETest {
     void suggestTags_withPrefix_returnsMatches() throws Exception {
         // Arrange — 透過文章建立標籤
         String authorToken = authHelper.createUserWithRole(
-                "tag-suggest@test.com", "password123", "tagsuggest", "TagSuggest", Role.AUTHOR);
+                "tag-suggest@test.com", "Password123!", "tagsuggest", "TagSuggest", Role.AUTHOR);
         createArticleWithTagsAndPublish(authorToken, List.of("Spring Boot", "Spring Cloud"));
 
         // Act & Assert
@@ -109,7 +109,7 @@ class TagE2E extends AbstractE2ETest {
     void getHotTags_success() throws Exception {
         // Arrange — 透過文章建立標籤
         String authorToken = authHelper.createUserWithRole(
-                "tag-hot@test.com", "password123", "taghot", "TagHot", Role.AUTHOR);
+                "tag-hot@test.com", "Password123!", "taghot", "TagHot", Role.AUTHOR);
         createArticleWithTagsAndPublish(authorToken, List.of("Java", "Kotlin"));
 
         // Act & Assert
@@ -125,7 +125,7 @@ class TagE2E extends AbstractE2ETest {
     void getTagBySlug_success() throws Exception {
         // Arrange — 透過文章建立標籤
         String authorToken = authHelper.createUserWithRole(
-                "tag-slug@test.com", "password123", "tagslug", "TagSlug", Role.AUTHOR);
+                "tag-slug@test.com", "Password123!", "tagslug", "TagSlug", Role.AUTHOR);
         createArticleWithTagsAndPublish(authorToken, List.of("Docker"));
 
         // 從 DB 取得標籤 slug
@@ -145,12 +145,12 @@ class TagE2E extends AbstractE2ETest {
     void followTag_asUser_success() throws Exception {
         // Arrange — 建立標籤
         String authorToken = authHelper.createUserWithRole(
-                "tag-follow-author@test.com", "password123", "tagfollowauthor", "TagFollowAuthor", Role.AUTHOR);
+                "tag-follow-author@test.com", "Password123!", "tagfollowauthor", "TagFollowAuthor", Role.AUTHOR);
         createArticleWithTagsAndPublish(authorToken, List.of("React"));
 
         // 建立一般使用者
         String userToken = authHelper.createUserWithRole(
-                "tag-follow-user@test.com", "password123", "tagfollowuser", "TagFollowUser", Role.USER);
+                "tag-follow-user@test.com", "Password123!", "tagfollowuser", "TagFollowUser", Role.USER);
 
         // 從 DB 取得標籤 ID
         UUID tagId = jdbcTemplate.queryForObject(
@@ -168,12 +168,12 @@ class TagE2E extends AbstractE2ETest {
     void unfollowTag_asUser_success() throws Exception {
         // Arrange — 建立標籤
         String authorToken = authHelper.createUserWithRole(
-                "tag-unfollow-author@test.com", "password123", "tagunfollowauthor", "TagUnfollowAuthor", Role.AUTHOR);
+                "tag-unfollow-author@test.com", "Password123!", "tagunfollowauthor", "TagUnfollowAuthor", Role.AUTHOR);
         createArticleWithTagsAndPublish(authorToken, List.of("Vue"));
 
         // 建立使用者並追蹤
         String userToken = authHelper.createUserWithRole(
-                "tag-unfollow-user@test.com", "password123", "tagunfollowuser", "TagUnfollowUser", Role.USER);
+                "tag-unfollow-user@test.com", "Password123!", "tagunfollowuser", "TagUnfollowUser", Role.USER);
 
         UUID tagId = jdbcTemplate.queryForObject(
                 "SELECT id FROM tags WHERE name = ?", UUID.class, "vue");
@@ -195,7 +195,7 @@ class TagE2E extends AbstractE2ETest {
     void adminUpdateTag_success() throws Exception {
         // Arrange — 用 ADMIN 建立標籤（透過文章）
         String adminToken = authHelper.createUserWithRole(
-                "tag-admin-update@test.com", "password123", "tagadminupdate", "TagAdminUpdate", Role.ADMIN);
+                "tag-admin-update@test.com", "Password123!", "tagadminupdate", "TagAdminUpdate", Role.ADMIN);
         createArticleWithTagsAndPublish(adminToken, List.of("Kubernetes"));
 
         UUID tagId = jdbcTemplate.queryForObject(
@@ -222,7 +222,7 @@ class TagE2E extends AbstractE2ETest {
     void adminDeleteTag_success() throws Exception {
         // Arrange — 用 ADMIN 建立標籤
         String adminToken = authHelper.createUserWithRole(
-                "tag-admin-del@test.com", "password123", "tagadmindel", "TagAdminDel", Role.ADMIN);
+                "tag-admin-del@test.com", "Password123!", "tagadmindel", "TagAdminDel", Role.ADMIN);
         createArticleWithTagsAndPublish(adminToken, List.of("Terraform"));
 
         UUID tagId = jdbcTemplate.queryForObject(
@@ -252,7 +252,7 @@ class TagE2E extends AbstractE2ETest {
     void adminUpdateTag_asUser_forbidden() throws Exception {
         // Arrange — 用 AUTHOR 建立標籤
         String authorToken = authHelper.createUserWithRole(
-                "tag-forbidden-author@test.com", "password123", "tagforbiddenauthor", "TagForbiddenAuthor", Role.AUTHOR);
+                "tag-forbidden-author@test.com", "Password123!", "tagforbiddenauthor", "TagForbiddenAuthor", Role.AUTHOR);
         createArticleWithTagsAndPublish(authorToken, List.of("Ansible"));
 
         UUID tagId = jdbcTemplate.queryForObject(
@@ -260,7 +260,7 @@ class TagE2E extends AbstractE2ETest {
 
         // 建立一般使用者
         String userToken = authHelper.createUserWithRole(
-                "tag-forbidden-user@test.com", "password123", "tagforbiddenuser", "TagForbiddenUser", Role.USER);
+                "tag-forbidden-user@test.com", "Password123!", "tagforbiddenuser", "TagForbiddenUser", Role.USER);
 
         Map<String, Object> updateRequest = new LinkedHashMap<>();
         updateRequest.put("description", "Should not be allowed");

@@ -45,7 +45,7 @@ class AuthE2E extends AbstractE2ETest {
     void register_success() throws Exception {
         // Arrange
         String body = objectMapper.writeValueAsString(
-                DataBuilder.register("auth-reg@test.com", "password123", "authreguser", "AuthRegUser"));
+                DataBuilder.register("auth-reg@test.com", "Password123!", "authreguser", "AuthRegUser"));
 
         // Act
         mockMvc.perform(post(BASE_URL + "/register")
@@ -69,7 +69,7 @@ class AuthE2E extends AbstractE2ETest {
     void register_duplicateEmail_returnsError() throws Exception {
         // Arrange — 先註冊一次
         String body = objectMapper.writeValueAsString(
-                DataBuilder.register("dup@test.com", "password123", "dupuser1", "DupUser1"));
+                DataBuilder.register("dup@test.com", "Password123!", "dupuser1", "DupUser1"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
@@ -77,7 +77,7 @@ class AuthE2E extends AbstractE2ETest {
 
         // Act — 以相同信箱再次註冊
         String duplicateBody = objectMapper.writeValueAsString(
-                DataBuilder.register("dup@test.com", "password123", "dupuser2", "DupUser2"));
+                DataBuilder.register("dup@test.com", "Password123!", "dupuser2", "DupUser2"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(duplicateBody))
@@ -90,7 +90,7 @@ class AuthE2E extends AbstractE2ETest {
     void login_afterActivation_returnsTokens() throws Exception {
         // Arrange — 註冊並透過 DB 激活
         String registerBody = objectMapper.writeValueAsString(
-                DataBuilder.register("login@test.com", "password123", "loginuser", "LoginUser"));
+                DataBuilder.register("login@test.com", "Password123!", "loginuser", "LoginUser"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(registerBody))
@@ -102,7 +102,7 @@ class AuthE2E extends AbstractE2ETest {
 
         // Act
         String loginBody = objectMapper.writeValueAsString(
-                DataBuilder.login("login@test.com", "password123"));
+                DataBuilder.login("login@test.com", "Password123!"));
         MvcResult result = mockMvc.perform(post(BASE_URL + "/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(loginBody))
@@ -122,7 +122,7 @@ class AuthE2E extends AbstractE2ETest {
     void login_wrongPassword_returnsError() throws Exception {
         // Arrange — 註冊並激活
         String registerBody = objectMapper.writeValueAsString(
-                DataBuilder.register("wrongpw@test.com", "password123", "wrongpwuser", "WrongPwUser"));
+                DataBuilder.register("wrongpw@test.com", "Password123!", "wrongpwuser", "WrongPwUser"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(registerBody))
@@ -147,7 +147,7 @@ class AuthE2E extends AbstractE2ETest {
     void login_unverifiedEmail_returnsError() throws Exception {
         // Arrange — 僅註冊，不激活
         String registerBody = objectMapper.writeValueAsString(
-                DataBuilder.register("unverified@test.com", "password123", "unverifieduser", "UnverifiedUser"));
+                DataBuilder.register("unverified@test.com", "Password123!", "unverifieduser", "UnverifiedUser"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(registerBody))
@@ -155,7 +155,7 @@ class AuthE2E extends AbstractE2ETest {
 
         // Act — 未驗證直接登入
         String loginBody = objectMapper.writeValueAsString(
-                DataBuilder.login("unverified@test.com", "password123"));
+                DataBuilder.login("unverified@test.com", "Password123!"));
         mockMvc.perform(post(BASE_URL + "/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(loginBody))
@@ -168,7 +168,7 @@ class AuthE2E extends AbstractE2ETest {
     void refresh_withValidCookie_returnsNewAccessToken() throws Exception {
         // Arrange — 註冊、激活、登入取得 refreshToken Cookie
         String registerBody = objectMapper.writeValueAsString(
-                DataBuilder.register("refresh@test.com", "password123", "refreshuser", "RefreshUser"));
+                DataBuilder.register("refresh@test.com", "Password123!", "refreshuser", "RefreshUser"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(registerBody))
@@ -179,7 +179,7 @@ class AuthE2E extends AbstractE2ETest {
                 "refresh@test.com");
 
         String loginBody = objectMapper.writeValueAsString(
-                DataBuilder.login("refresh@test.com", "password123"));
+                DataBuilder.login("refresh@test.com", "Password123!"));
         MvcResult loginResult = mockMvc.perform(post(BASE_URL + "/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(loginBody))
@@ -202,7 +202,7 @@ class AuthE2E extends AbstractE2ETest {
     void logout_invalidatesRefreshToken() throws Exception {
         // Arrange — 註冊、激活、登入
         String registerBody = objectMapper.writeValueAsString(
-                DataBuilder.register("logout@test.com", "password123", "logoutuser", "LogoutUser"));
+                DataBuilder.register("logout@test.com", "Password123!", "logoutuser", "LogoutUser"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(registerBody))
@@ -213,7 +213,7 @@ class AuthE2E extends AbstractE2ETest {
                 "logout@test.com");
 
         String loginBody = objectMapper.writeValueAsString(
-                DataBuilder.login("logout@test.com", "password123"));
+                DataBuilder.login("logout@test.com", "Password123!"));
         MvcResult loginResult = mockMvc.perform(post(BASE_URL + "/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(loginBody))
@@ -247,7 +247,7 @@ class AuthE2E extends AbstractE2ETest {
     void verifyEmail_withValidToken_activatesAccount() throws Exception {
         // Arrange — 註冊（會在 verification_tokens 建立記錄）
         String registerBody = objectMapper.writeValueAsString(
-                DataBuilder.register("verify@test.com", "password123", "verifyuser", "VerifyUser"));
+                DataBuilder.register("verify@test.com", "Password123!", "verifyuser", "VerifyUser"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(registerBody))
@@ -278,7 +278,7 @@ class AuthE2E extends AbstractE2ETest {
 
         // 驗證啟用後可正常登入
         String loginBody = objectMapper.writeValueAsString(
-                DataBuilder.login("verify@test.com", "password123"));
+                DataBuilder.login("verify@test.com", "Password123!"));
         mockMvc.perform(post(BASE_URL + "/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(loginBody))
