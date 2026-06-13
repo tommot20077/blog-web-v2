@@ -131,4 +131,58 @@ class RedisKeyConstantTest {
         assertThat(RedisKeyConstant.getResendVerifyDayKey("user@blog.com"))
                 .isEqualTo("rate:resend-verify:day:user@blog.com");
     }
+
+    /* =========================================================================
+       IP 層級登入/註冊限流（Task 12）
+       ========================================================================= */
+
+    @Test
+    @DisplayName("LOGIN_IP_PREFIX 應為 auth:login:ip:")
+    void loginIpPrefix_hasExpectedValue() {
+        assertThat(RedisKeyConstant.LOGIN_IP_PREFIX).isEqualTo("auth:login:ip:");
+    }
+
+    @Test
+    @DisplayName("getLoginIpKey 應回傳 auth:login:ip:{ip}")
+    void getLoginIpKey_returnsLoginIpRateLimitKey() {
+        assertThat(RedisKeyConstant.getLoginIpKey("203.0.113.5"))
+                .isEqualTo("auth:login:ip:203.0.113.5");
+    }
+
+    @Test
+    @DisplayName("REGISTER_IP_PREFIX 應為 auth:register:ip:")
+    void registerIpPrefix_hasExpectedValue() {
+        assertThat(RedisKeyConstant.REGISTER_IP_PREFIX).isEqualTo("auth:register:ip:");
+    }
+
+    @Test
+    @DisplayName("getRegisterIpKey 應回傳 auth:register:ip:{ip}")
+    void getRegisterIpKey_returnsRegisterIpRateLimitKey() {
+        assertThat(RedisKeyConstant.getRegisterIpKey("203.0.113.5"))
+                .isEqualTo("auth:register:ip:203.0.113.5");
+    }
+
+    @Test
+    @DisplayName("LOGIN_IP_MAX 應為 20（NAT 友善的較寬上限）")
+    void loginIpMax_hasExpectedValue() {
+        assertThat(RedisKeyConstant.LOGIN_IP_MAX).isEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("LOGIN_IP_TTL_MINUTES 應為 15")
+    void loginIpTtlMinutes_hasExpectedValue() {
+        assertThat(RedisKeyConstant.LOGIN_IP_TTL_MINUTES).isEqualTo(15L);
+    }
+
+    @Test
+    @DisplayName("REGISTER_IP_MAX 應為 10")
+    void registerIpMax_hasExpectedValue() {
+        assertThat(RedisKeyConstant.REGISTER_IP_MAX).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("REGISTER_IP_TTL_MINUTES 應為 60（每小時窗口）")
+    void registerIpTtlMinutes_hasExpectedValue() {
+        assertThat(RedisKeyConstant.REGISTER_IP_TTL_MINUTES).isEqualTo(60L);
+    }
 }

@@ -1302,6 +1302,215 @@ class AuthServiceTest {
     }
 
     /* =========================================================================
+       IP 層級限流測試（Task 13）
+       ========================================================================= */
+
+    /** 測試用 client IP */
+    private static final String TEST_IP = "203.0.113.10";
+
+    /**
+     * 驗證：login 帶 client IP 且 IP 計數未達上限時，應正常登入（IP 限流與帳號鎖定互不干擾）。
+     */
+    @Test
+    @DisplayName("login(ip) → IP 計數未達上限 → 應正常回傳 LoginResult")
+    void login_whenIpRateLimitNotExceeded_shouldSucceed() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        // IP 計數 increment 回傳低於上限
+        when(valueOperations.increment(RedisKeyConstant.getLoginIpKey(TEST_IP))).thenReturn(3L);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+
+        LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP);
+
+        assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
+        verify(valueOperations).increment(RedisKeyConstant.getLoginIpKey(TEST_IP));
+    }
+
+    /**
+     * 驗證：login 的 IP 計數超過上限（> LOGIN_IP_MAX）時，應拋出 RATE_LIMIT_EXCEEDED，
+     * 且不再進行用戶查詢與密碼驗證。
+     */
+    @Test
+    @DisplayName("login(ip) → IP 計數超過上限 → 應拋出 RATE_LIMIT_EXCEEDED 且不查用戶")
+    void login_whenIpRateLimitExceeded_shouldThrowRateLimitExceeded() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(RedisKeyConstant.getLoginIpKey(TEST_IP)))
+                .thenReturn((long) (RedisKeyConstant.LOGIN_IP_MAX + 1));
+
+        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+
+        verify(userRepository, never()).findByEmail(anyString());
+        verify(userRepository, never()).findByUsername(anyString());
+    }
+
+    /**
+     * 驗證：login 的 IP 計數恰好等於上限（== LOGIN_IP_MAX）時，仍應通過（邊界：未超過）。
+     */
+    @Test
+    @DisplayName("login(ip) → IP 計數恰好等於上限 → 仍應通過，不拋出 RATE_LIMIT_EXCEEDED")
+    void login_whenIpCountExactlyAtMax_shouldProceed() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        when(valueOperations.increment(RedisKeyConstant.getLoginIpKey(TEST_IP)))
+                .thenReturn((long) RedisKeyConstant.LOGIN_IP_MAX);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+
+        LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP);
+
+        assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
+    }
+
+    /**
+     * 驗證：login 首次 IP 計數（increment == 1）應設定 IP 限流 key 的 TTL。
+     */
+    @Test
+    @DisplayName("login(ip) → 首次 IP 計數（count == 1） → 應設定 IP 限流 TTL")
+    void login_firstIpHit_shouldSetIpKeyTtl() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        when(valueOperations.increment(RedisKeyConstant.getLoginIpKey(TEST_IP))).thenReturn(1L);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP);
+
+        verify(redisTemplate).expire(eq(RedisKeyConstant.getLoginIpKey(TEST_IP)),
+                eq(RedisKeyConstant.LOGIN_IP_TTL_MINUTES), eq(TimeUnit.MINUTES));
+    }
+
+    /**
+     * 驗證：login 帶 null IP（無法解析 client IP）時，應跳過 IP 限流，沿用既有 2-arg 行為。
+     */
+    @Test
+    @DisplayName("login(null ip) → 應跳過 IP 限流，正常登入")
+    void login_withNullIp_shouldSkipIpRateLimit() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+
+        LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD, null);
+
+        assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
+        verify(valueOperations, never()).increment(startsWith(RedisKeyConstant.LOGIN_IP_PREFIX));
+    }
+
+    /**
+     * 驗證：register 帶 client IP 且 IP 計數未達上限時，應正常註冊。
+     */
+    @Test
+    @DisplayName("register(ip) → IP 計數未達上限 → 應正常儲存用戶")
+    void register_whenIpRateLimitNotExceeded_shouldSaveUser() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(RedisKeyConstant.getRegisterIpKey(TEST_IP))).thenReturn(2L);
+        when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(false);
+        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        User savedUser = buildActiveUser();
+        when(userRepository.save(any(User.class))).thenReturn(savedUser);
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME, TEST_IP);
+
+        verify(userRepository).save(any(User.class));
+        verify(valueOperations).increment(RedisKeyConstant.getRegisterIpKey(TEST_IP));
+    }
+
+    /**
+     * 驗證：register 的 IP 計數超過上限（> REGISTER_IP_MAX）時，應拋出 RATE_LIMIT_EXCEEDED，
+     * 且不再進行唯一性檢查與儲存。
+     */
+    @Test
+    @DisplayName("register(ip) → IP 計數超過上限 → 應拋出 RATE_LIMIT_EXCEEDED 且不儲存")
+    void register_whenIpRateLimitExceeded_shouldThrowRateLimitExceeded() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(RedisKeyConstant.getRegisterIpKey(TEST_IP)))
+                .thenReturn((long) (RedisKeyConstant.REGISTER_IP_MAX + 1));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME, TEST_IP))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+
+        verify(userRepository, never()).existsByEmail(anyString());
+        verify(userRepository, never()).save(any());
+    }
+
+    /**
+     * 驗證：register 首次 IP 計數（increment == 1）應設定 IP 限流 key 的 TTL。
+     */
+    @Test
+    @DisplayName("register(ip) → 首次 IP 計數（count == 1） → 應設定 IP 限流 TTL")
+    void register_firstIpHit_shouldSetIpKeyTtl() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(RedisKeyConstant.getRegisterIpKey(TEST_IP))).thenReturn(1L);
+        when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(false);
+        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        User savedUser = buildActiveUser();
+        when(userRepository.save(any(User.class))).thenReturn(savedUser);
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME, TEST_IP);
+
+        verify(redisTemplate).expire(eq(RedisKeyConstant.getRegisterIpKey(TEST_IP)),
+                eq(RedisKeyConstant.REGISTER_IP_TTL_MINUTES), eq(TimeUnit.MINUTES));
+    }
+
+    /**
+     * 驗證：register 帶 null IP（無法解析 client IP）時，應跳過 IP 限流，沿用既有 4-arg 行為。
+     */
+    @Test
+    @DisplayName("register(null ip) → 應跳過 IP 限流，正常註冊")
+    void register_withNullIp_shouldSkipIpRateLimit() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(false);
+        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        User savedUser = buildActiveUser();
+        when(userRepository.save(any(User.class))).thenReturn(savedUser);
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME, null);
+
+        verify(userRepository).save(any(User.class));
+        verify(valueOperations, never()).increment(startsWith(RedisKeyConstant.REGISTER_IP_PREFIX));
+    }
+
+    /* =========================================================================
        incrementVersion 測試
        ========================================================================= */
 

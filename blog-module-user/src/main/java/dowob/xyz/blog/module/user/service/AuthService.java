@@ -76,6 +76,29 @@ public class AuthService {
      * @param nickname 暱稱
      */
     public void register(String email, String password, String username, String nickname) {
+        register(email, password, username, nickname, null);
+    }
+
+    /**
+     * 用戶註冊（含 client IP 層級限流）
+     *
+     * <p>在既有註冊流程外，先以 client IP 計數限流（{@link RedisKeyConstant#REGISTER_IP_MAX}
+     * 次 / {@link RedisKeyConstant#REGISTER_IP_TTL_MINUTES} 分鐘窗口），超過上限拋出
+     * {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。此限流與信箱/用戶名唯一性檢查獨立，
+     * 用於抑制單一 IP 大量建立假帳號。{@code clientIp} 為 null 時跳過 IP 限流。</p>
+     *
+     * @param email    電子信箱
+     * @param password 明文密碼
+     * @param username 用戶名（唯一登入識別符）
+     * @param nickname 暱稱
+     * @param clientIp client IP（可為 null，表示無法解析，跳過 IP 限流）
+     */
+    public void register(String email, String password, String username, String nickname, String clientIp) {
+        checkIpRateLimit(
+                clientIp == null ? null : RedisKeyConstant.getRegisterIpKey(clientIp),
+                RedisKeyConstant.REGISTER_IP_MAX,
+                RedisKeyConstant.REGISTER_IP_TTL_MINUTES);
+
         if (userRepository.existsByEmail(email)) {
             throw new BusinessException(UserErrorCode.EMAIL_DUPLICATED);
         }
@@ -138,6 +161,29 @@ public class AuthService {
      * @return 包含 accessToken 與 refreshToken 的 {@link LoginResult}
      */
     public LoginResult login(String identifier, String password) {
+        return login(identifier, password, null);
+    }
+
+    /**
+     * 用戶登入（雙 Token 架構，含 client IP 層級限流）
+     *
+     * <p>在既有 user.id 失敗鎖定之外，新增以 client IP 計數的限流：單一 IP 在
+     * {@link RedisKeyConstant#LOGIN_IP_TTL_MINUTES} 分鐘窗口內登入嘗試超過
+     * {@link RedisKeyConstant#LOGIN_IP_MAX} 次即拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。
+     * IP 限流在查詢用戶之前執行（防帳號枚舉），與 user.id 鎖定互不干擾。
+     * {@code clientIp} 為 null 時跳過 IP 限流。</p>
+     *
+     * @param identifier 登入識別符（電子信箱或用戶名）
+     * @param password   明文密碼
+     * @param clientIp   client IP（可為 null，表示無法解析，跳過 IP 限流）
+     * @return 包含 accessToken 與 refreshToken 的 {@link LoginResult}
+     */
+    public LoginResult login(String identifier, String password, String clientIp) {
+        checkIpRateLimit(
+                clientIp == null ? null : RedisKeyConstant.getLoginIpKey(clientIp),
+                RedisKeyConstant.LOGIN_IP_MAX,
+                RedisKeyConstant.LOGIN_IP_TTL_MINUTES);
+
         User user = userRepository.findByEmail(identifier)
                 .or(() -> userRepository.findByUsername(identifier))
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_PASSWORD_ERROR));
@@ -450,6 +496,30 @@ public class AuthService {
      */
     public static String incrementVersion(String currentVersion) {
         return TokenVersionUtils.incrementVersion(currentVersion);
+    }
+
+    /**
+     * IP 層級限流計數與檢查
+     *
+     * <p>沿用既有「每分鐘/每日」限流寫法：以 {@code INCR} 遞增計數，首次（count == 1）
+     * 設定窗口 TTL，計數超過 {@code max} 即拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。
+     * {@code key} 為 null 時（無法解析 client IP）直接跳過，不做任何 Redis 操作。</p>
+     *
+     * @param key        限流 Redis Key；為 null 表示跳過限流
+     * @param max        窗口內允許的最大次數（count > max 即拒絕）
+     * @param ttlMinutes 限流窗口（分鐘）
+     */
+    private void checkIpRateLimit(String key, int max, long ttlMinutes) {
+        if (key == null) {
+            return;
+        }
+        Long count = redisTemplate.opsForValue().increment(key);
+        if (count != null && count == 1L) {
+            redisTemplate.expire(key, ttlMinutes, TimeUnit.MINUTES);
+        }
+        if (count != null && count > max) {
+            throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
+        }
     }
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
