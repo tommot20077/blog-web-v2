@@ -74,6 +74,26 @@ public class TagController {
     }
 
     /**
+     * 取得全部標籤列表（公開）
+     *
+     * <p>
+     * 回傳系統中所有標籤及其文章數（usageCount），依文章數由多到少排序，
+     * 供前端「標籤索引頁」的標籤雲使用。無筆數上限、無分頁。
+     * </p>
+     *
+     * <p>
+     * 此 mapping 為 literal path {@code /all}，於 Spring MVC 路由中優先於
+     * {@code /{slug}} path variable，故 {@code /all} 不會被誤判為某個標籤的 Slug。
+     * </p>
+     *
+     * @return 全部標籤列表，依文章數遞減排序；無標籤時回傳空列表
+     */
+    @GetMapping("/all")
+    public ApiResponse<List<Tag>> getAllTags() {
+        return ApiResponse.success(tagService.getAllTags());
+    }
+
+    /**
      * 依 Slug 取得標籤詳情（公開）
      *
      * <p>已認證使用者會在 response.followed 看到自己對該標籤的追蹤狀態；
