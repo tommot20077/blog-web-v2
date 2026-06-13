@@ -172,7 +172,7 @@ class UserControllerTest {
     void changePassword_authenticatedUser_shouldReturn200() throws Exception {
         ChangePasswordRequest request = new ChangePasswordRequest();
         request.setOldPassword("oldPass123");
-        request.setNewPassword("newPass456");
+        request.setNewPassword("NewPass456!");
 
         doNothing().when(userService).changePassword(anyLong(), anyString(), anyString());
 
@@ -192,7 +192,7 @@ class UserControllerTest {
     void changePassword_unauthenticated_shouldReturn403() throws Exception {
         ChangePasswordRequest request = new ChangePasswordRequest();
         request.setOldPassword("oldPass123");
-        request.setNewPassword("newPass456");
+        request.setNewPassword("NewPass456!");
 
         mockMvc.perform(post("/api/v1/users/me/change-password")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -208,7 +208,7 @@ class UserControllerTest {
     void changePassword_wrongOldPassword_shouldReturnUserPasswordError() throws Exception {
         ChangePasswordRequest request = new ChangePasswordRequest();
         request.setOldPassword("wrongOld");
-        request.setNewPassword("newPass456");
+        request.setNewPassword("NewPass456!");
 
         doThrow(new BusinessException(UserErrorCode.USER_PASSWORD_ERROR))
                 .when(userService).changePassword(anyLong(), anyString(), anyString());

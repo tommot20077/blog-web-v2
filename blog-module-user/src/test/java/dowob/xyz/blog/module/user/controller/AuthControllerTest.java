@@ -83,8 +83,8 @@ class AuthControllerTest {
     /** 測試用電子信箱 */
     private static final String TEST_EMAIL = "test@example.com";
 
-    /** 測試用密碼 */
-    private static final String TEST_PASSWORD = "password123";
+    /** 測試用密碼（符合密碼複雜度規則：小寫+大寫+數字+特殊字元） */
+    private static final String TEST_PASSWORD = "Password123!";
 
     /** 測試用用戶名 */
     private static final String TEST_USERNAME = "testuser";
@@ -435,7 +435,7 @@ class AuthControllerTest {
     void resetPassword_validRequest_shouldReturn200() throws Exception {
         ResetPasswordRequest request = new ResetPasswordRequest();
         request.setToken("valid-reset-token");
-        request.setNewPassword("newPassword123");
+        request.setNewPassword("NewPassword123!");
 
         doNothing().when(authService).resetPassword(anyString(), anyString());
 
@@ -454,7 +454,7 @@ class AuthControllerTest {
     void resetPassword_invalidToken_shouldReturnTokenInvalid() throws Exception {
         ResetPasswordRequest request = new ResetPasswordRequest();
         request.setToken("bad-token");
-        request.setNewPassword("newPassword123");
+        request.setNewPassword("NewPassword123!");
 
         doThrow(new BusinessException(UserErrorCode.TOKEN_INVALID))
                 .when(authService).resetPassword(anyString(), anyString());
@@ -792,7 +792,7 @@ class AuthControllerTest {
     @DisplayName("POST /reset-password → 缺少 token → 應回傳驗證錯誤")
     void resetPassword_missingToken_shouldReturnValidationError() throws Exception {
         ResetPasswordRequest request = new ResetPasswordRequest();
-        request.setNewPassword("newPassword123");
+        request.setNewPassword("NewPassword123!");
 
         mockMvc.perform(post("/api/v1/auth/reset-password")
                         .contentType(MediaType.APPLICATION_JSON)
