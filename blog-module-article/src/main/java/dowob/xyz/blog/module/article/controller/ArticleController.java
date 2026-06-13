@@ -8,6 +8,7 @@ import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -79,6 +81,22 @@ public class ArticleController {
             return ApiResponse.success(articleQueryService.getPublishedArticlesByCategorySlug(categorySlug, page, size));
         }
         return ApiResponse.success(articleQueryService.getPublishedArticles(page, size));
+    }
+
+    /**
+     * 取得全部已發布文章的歸檔精簡投影（公開）
+     *
+     * <p>
+     * 供前端「年度歸檔」頁面使用，回傳全部已發布文章的精簡投影
+     * （uuid / title / slug / publishedAt / tags），依 publishedAt 由新到舊排序，
+     * 無已發布文章時回傳空清單。此端點為公開，與 {@link #getPublishedArticles} 同等不需登入。
+     * </p>
+     *
+     * @return 歸檔文章投影列表（依 publishedAt 由新到舊排序）
+     */
+    @GetMapping("/archive")
+    public ApiResponse<List<ArticleArchiveResponse>> getArchive() {
+        return ApiResponse.success(articleQueryService.getArchive());
     }
 
     /**
