@@ -9,6 +9,7 @@ import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.DeleteAccountRequest;
+import dowob.xyz.blog.module.user.model.dto.request.NotificationPreferencesRequest;
 import dowob.xyz.blog.module.user.model.dto.request.UpdateProfileRequest;
 import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.service.UserService;
@@ -30,8 +31,10 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -98,7 +101,7 @@ class UserControllerTest {
         request.setNickname("newNickname");
         request.setBio("新的個人簡介");
 
-        doNothing().when(userService).updateProfile(anyLong(), anyString(), nullable(String.class), nullable(String.class), nullable(String.class));
+        doNothing().when(userService).updateProfile(anyLong(), anyString(), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
 
         mockMvc.perform(patch("/api/v1/users/me/profile")
                         .with(authentication(USER_AUTH))
@@ -150,7 +153,7 @@ class UserControllerTest {
         request.setNickname("takenNickname");
 
         doThrow(new BusinessException(UserErrorCode.NICKNAME_DUPLICATED))
-                .when(userService).updateProfile(anyLong(), anyString(), nullable(String.class), nullable(String.class), nullable(String.class));
+                .when(userService).updateProfile(anyLong(), anyString(), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
 
         mockMvc.perform(patch("/api/v1/users/me/profile")
                         .with(authentication(USER_AUTH))
@@ -158,6 +161,81 @@ class UserControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
+    }
+
+    /**
+     * 驗證：profile 請求帶 avatarUrl 與 location 時應傳遞至 service 持久化。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → 含 avatarUrl 與 location → 應傳遞至 service")
+    void updateProfile_withAvatarUrlAndLocation_shouldPassToService() throws Exception {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setAvatarUrl("https://cdn.example.com/avatar.png");
+        request.setLocation("Taipei");
+
+        doNothing().when(userService).updateProfile(anyLong(), anyString(), nullable(String.class),
+                nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
+
+        mockMvc.perform(patch("/api/v1/users/me/profile")
+                        .with(authentication(USER_AUTH))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+
+        verify(userService).updateProfile(eq(1L), eq("newNickname"), nullable(String.class),
+                nullable(String.class), nullable(String.class),
+                eq("https://cdn.example.com/avatar.png"), eq("Taipei"));
+    }
+
+    // =========================================================================
+    // PATCH /api/v1/users/me/notifications 測試
+    // =========================================================================
+
+    /**
+     * 驗證：已登入用戶提交合法通知偏好應成功更新並回傳 200。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/notifications → 已登入，合法請求 → 應回傳 200 並更新偏好")
+    void updateNotifications_authenticatedUser_shouldReturn200() throws Exception {
+        NotificationPreferencesRequest request = new NotificationPreferencesRequest();
+        request.setComment(false);
+        request.setLike(true);
+        request.setReview(false);
+        request.setFollow(true);
+        request.setNewsletter(false);
+
+        doNothing().when(userService).updateNotificationPreferences(
+                anyLong(), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean());
+
+        mockMvc.perform(patch("/api/v1/users/me/notifications")
+                        .with(authentication(USER_AUTH))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+
+        verify(userService).updateNotificationPreferences(1L, false, true, false, true, false);
+    }
+
+    /**
+     * 驗證：未登入存取通知偏好端點應回傳 401。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/notifications → 未登入 → 應回傳 401")
+    void updateNotifications_unauthenticated_shouldReturn401() throws Exception {
+        NotificationPreferencesRequest request = new NotificationPreferencesRequest();
+        request.setComment(true);
+        request.setLike(true);
+        request.setReview(true);
+        request.setFollow(true);
+        request.setNewsletter(true);
+
+        mockMvc.perform(patch("/api/v1/users/me/notifications")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isUnauthorized());
     }
 
     // =========================================================================
@@ -351,9 +429,15 @@ class UserControllerTest {
                 "https://example.com/avatar.png",
                 null,
                 null,
+                "Taipei",
                 Role.USER,
                 true,
-                LocalDateTime.of(2024, 1, 1, 0, 0)
+                LocalDateTime.of(2024, 1, 1, 0, 0),
+                true,
+                false,
+                true,
+                false,
+                true
         );
         when(userService.getUserProfile(1L)).thenReturn(profile);
 
@@ -366,6 +450,10 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.data.nickname").value("testNickname"))
                 .andExpect(jsonPath("$.data.role").value("USER"))
                 .andExpect(jsonPath("$.data.avatarUrl").value("https://example.com/avatar.png"))
+                .andExpect(jsonPath("$.data.location").value("Taipei"))
+                .andExpect(jsonPath("$.data.notificationComment").value(true))
+                .andExpect(jsonPath("$.data.notificationLike").value(false))
+                .andExpect(jsonPath("$.data.notificationNewsletter").value(true))
                 .andExpect(jsonPath("$.data.emailVerified").value(true));
     }
 

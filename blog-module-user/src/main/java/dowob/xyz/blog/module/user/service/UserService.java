@@ -58,24 +58,34 @@ public class UserService {
                 user.getAvatarUrl(),
                 user.getWebsite(),
                 user.getSocialLinks(),
+                user.getLocation(),
                 user.getRole(),
                 user.isEmailVerified(),
-                user.getCreatedAt());
+                user.getCreatedAt(),
+                user.isNotificationComment(),
+                user.isNotificationLike(),
+                user.isNotificationReview(),
+                user.isNotificationFollow(),
+                user.isNotificationNewsletter());
     }
 
     /**
      * 更新個人資料
      *
-     * <p>更新暱稱、個人簡介、個人網站與社群連結；若新暱稱已被其他用戶使用，拋出 BusinessException。</p>
+     * <p>更新暱稱、個人簡介、個人網站、社群連結、頭貼與所在地；
+     * 若新暱稱已被其他用戶使用，拋出 BusinessException。</p>
      *
      * @param userId      用戶 ID
      * @param nickname    新的暱稱
      * @param bio         新的個人簡介（可為 null）
      * @param website     個人網站 URL（可為 null）
      * @param socialLinks 社群連結 JSON 字串（可為 null）
+     * @param avatarUrl   頭貼 URL（可為 null）
+     * @param location    所在地（可為 null）
      */
     @Transactional
-    public void updateProfile(Long userId, String nickname, String bio, String website, String socialLinks) {
+    public void updateProfile(Long userId, String nickname, String bio, String website, String socialLinks,
+                              String avatarUrl, String location) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
@@ -87,6 +97,34 @@ public class UserService {
         user.setBio(bio);
         user.setWebsite(website);
         user.setSocialLinks(socialLinks);
+        user.setAvatarUrl(avatarUrl);
+        user.setLocation(location);
+        userRepository.save(user);
+    }
+
+    /**
+     * 更新通知偏好
+     *
+     * <p>更新 5 個通知偏好開關（留言、按讚、審核、追蹤、電子報）。</p>
+     *
+     * @param userId     用戶 ID
+     * @param comment    留言通知偏好
+     * @param like       按讚通知偏好
+     * @param review     審核結果通知偏好
+     * @param follow     追蹤通知偏好
+     * @param newsletter 電子報訂閱偏好
+     */
+    @Transactional
+    public void updateNotificationPreferences(Long userId, boolean comment, boolean like,
+                                              boolean review, boolean follow, boolean newsletter) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
+
+        user.setNotificationComment(comment);
+        user.setNotificationLike(like);
+        user.setNotificationReview(review);
+        user.setNotificationFollow(follow);
+        user.setNotificationNewsletter(newsletter);
         userRepository.save(user);
     }
 

@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V16 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V18 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V17**
+> 最後更新版本：**V18**
 
 ---
 
@@ -30,6 +30,12 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 | bio | TEXT | | |
 | website | VARCHAR(255) | | V4 新增 |
 | social_links | TEXT | | V4 新增 JSONB；V10 改為 TEXT（Spring Data JDBC 相容） |
+| location | VARCHAR(100) | | V18 新增；所在地（自由文字，nullable） |
+| notification_comment | BOOLEAN | NOT NULL DEFAULT TRUE | V18 新增；留言通知偏好 |
+| notification_like | BOOLEAN | NOT NULL DEFAULT TRUE | V18 新增；按讚通知偏好 |
+| notification_review | BOOLEAN | NOT NULL DEFAULT TRUE | V18 新增；審核結果通知偏好 |
+| notification_follow | BOOLEAN | NOT NULL DEFAULT TRUE | V18 新增；追蹤通知偏好 |
+| notification_newsletter | BOOLEAN | NOT NULL DEFAULT TRUE | V18 新增；電子報訂閱偏好 |
 | role | VARCHAR(20) | NOT NULL DEFAULT 'USER' | USER / AUTHOR / ADMIN |
 | status | VARCHAR(20) | NOT NULL | PENDING / ACTIVE / DELETED |
 | email_verified | BOOLEAN | NOT NULL DEFAULT FALSE | |
@@ -562,6 +568,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V15** | 新建 `series` 表（含 article_count 反正規化欄位，`idx_series_author`）；`articles` 加 `series_id`（FK ON DELETE SET NULL）+ `series_position`（partial index `idx_articles_series_position`）；`article_likes` 改名 `user_article_likes`（含 RENAME CONSTRAINT） |
 | **V16** | 新建 `article_versions` 表（type CHECK: AUTO/MANUAL/PUBLISHED；tags UUID[]；article_id FK ON DELETE CASCADE；2 個索引）；新建 `user_preferences` 表（K-V 通用；UNIQUE(user_id, pref_key)；user_id FK ON DELETE CASCADE） |
 | **V17** | 新建 `processed_events` 表（MQ event 冪等記錄）|
+| **V18** | `users` 新增 `location VARCHAR(100)`（nullable）+ 5 個通知偏好 `notification_comment/like/review/follow/newsletter BOOLEAN NOT NULL DEFAULT TRUE`（設定頁面後端持久化） |
 
 ---
 

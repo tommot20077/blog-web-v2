@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.user.controller;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.DeleteAccountRequest;
+import dowob.xyz.blog.module.user.model.dto.request.NotificationPreferencesRequest;
 import dowob.xyz.blog.module.user.model.dto.request.UpdateProfileRequest;
 import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.service.UserService;
@@ -52,12 +53,31 @@ public class UserController {
      * @param request 包含新暱稱與個人簡介的請求
      * @return 成功回應
      */
-    @Operation(summary = "更新個人資料", description = "更新當前登入用戶的暱稱與個人簡介")
+    @Operation(summary = "更新個人資料", description = "更新當前登入用戶的暱稱、個人簡介、網站、社群連結、頭貼與所在地")
     @PreAuthorize("isAuthenticated()")
     @PatchMapping("/me/profile")
     public ApiResponse<Void> updateProfile(@AuthenticationPrincipal Long userId,
                                             @Valid @RequestBody UpdateProfileRequest request) {
-        userService.updateProfile(userId, request.getNickname(), request.getBio(), request.getWebsite(), request.getSocialLinks());
+        userService.updateProfile(userId, request.getNickname(), request.getBio(), request.getWebsite(),
+                request.getSocialLinks(), request.getAvatarUrl(), request.getLocation());
+        return ApiResponse.success();
+    }
+
+    /**
+     * 更新通知偏好
+     *
+     * @param userId  當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param request 包含 5 個通知偏好開關的請求
+     * @return 成功回應
+     */
+    @Operation(summary = "更新通知偏好", description = "更新當前登入用戶的留言、按讚、審核、追蹤與電子報通知偏好")
+    @PreAuthorize("isAuthenticated()")
+    @PatchMapping("/me/notifications")
+    public ApiResponse<Void> updateNotifications(@AuthenticationPrincipal Long userId,
+                                                 @Valid @RequestBody NotificationPreferencesRequest request) {
+        userService.updateNotificationPreferences(userId,
+                request.getComment(), request.getLike(), request.getReview(),
+                request.getFollow(), request.getNewsletter());
         return ApiResponse.success();
     }
 
