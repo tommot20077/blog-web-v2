@@ -1,7 +1,9 @@
 package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.exception.SystemException;
 import dowob.xyz.blog.module.file.config.FileProperties;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.apache.tika.Tika;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
@@ -212,10 +215,10 @@ class FileServiceTest {
                     .hasMessageContaining(FileErrorCode.FILE_ACCESS_DENIED.getMessage());
         }
 
-        /** 驗證 MinIO 刪除失敗時拋出異常（不再吞掉），讓 @Transactional 可回滾 DB */
+        /** 驗證 MinIO 刪除失敗時拋出 SystemException（→HTTP 500），讓 @Transactional 可回滾 DB */
         @Test
-        @DisplayName("deleteFile_whenMinioFails_throwsException")
-        void deleteFile_whenMinioFails_throwsException() throws Exception {
+        @DisplayName("deleteFile_whenMinioFails_throwsSystemException")
+        void deleteFile_whenMinioFails_throwsSystemException() throws Exception {
             UUID ownerId = UUID.randomUUID();
             UUID fileId = UUID.randomUUID();
             FileMetadata metadata = new FileMetadata();
@@ -227,8 +230,8 @@ class FileServiceTest {
             doThrow(new RuntimeException("MinIO error")).when(minioClient).removeObject(any(RemoveObjectArgs.class));
 
             assertThatThrownBy(() -> fileService.deleteFile(fileId, ownerId, false))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("MinIO 刪除失敗");
+                    .isInstanceOf(SystemException.class)
+                    .hasMessageContaining(CommonErrorCode.STORAGE_ERROR.getMessage());
         }
 
         /** 驗證刪除有縮圖的檔案時同時刪除縮圖 */
@@ -420,16 +423,16 @@ class FileServiceTest {
     class UploadFileGetBytesExceptionTests {
 
         @Test
-        @DisplayName("uploadFile_whenGetBytesFails_throwsRuntimeException")
-        void uploadFile_whenGetBytesFails_throwsRuntimeException() throws Exception {
+        @DisplayName("uploadFile_whenGetBytesFails_throwsSystemException")
+        void uploadFile_whenGetBytesFails_throwsSystemException() throws Exception {
             MultipartFile brokenFile = org.mockito.Mockito.mock(MultipartFile.class);
             when(brokenFile.getBytes()).thenThrow(new IOException("disk read error"));
             when(brokenFile.getOriginalFilename()).thenReturn("test.jpg");
 
             assertThatThrownBy(() ->
                     fileService.uploadFile(brokenFile, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("無法讀取檔案內容");
+                    .isInstanceOf(SystemException.class)
+                    .hasMessageContaining(CommonErrorCode.FILE_IO_ERROR.getMessage());
         }
     }
 
@@ -471,14 +474,37 @@ class FileServiceTest {
         }
     }
 
+    /** uploadFile：Tika MIME 偵測拋出 IOException → SystemException(FILE_IO_ERROR) */
+    @Nested
+    @DisplayName("uploadFile MIME 偵測失敗測試")
+    class UploadFileMimeDetectionFailTests {
+
+        @Test
+        @DisplayName("uploadFile_whenMimeDetectionFails_throwsSystemException")
+        void uploadFile_whenMimeDetectionFails_throwsSystemException() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            /** 注入會拋 IOException 的 Tika mock，觸發 detectMimeType 的 catch 分支 */
+            Tika brokenTika = org.mockito.Mockito.mock(Tika.class);
+            when(brokenTika.detect(any(InputStream.class), any(String.class)))
+                    .thenThrow(new IOException("tika detect error"));
+            ReflectionTestUtils.setField(fileService, "tika", brokenTika);
+
+            assertThatThrownBy(() ->
+                    fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
+                    .isInstanceOf(SystemException.class)
+                    .hasMessageContaining(CommonErrorCode.FILE_IO_ERROR.getMessage());
+        }
+    }
+
     /** uploadFile：MinIO putObject 拋出 Exception */
     @Nested
     @DisplayName("uploadFile MinIO putObject 失敗測試")
     class UploadFileMinioFailTests {
 
         @Test
-        @DisplayName("uploadFile_whenMinioPutFails_throwsRuntimeException")
-        void uploadFile_whenMinioPutFails_throwsRuntimeException() throws Exception {
+        @DisplayName("uploadFile_whenMinioPutFails_throwsSystemException")
+        void uploadFile_whenMinioPutFails_throwsSystemException() throws Exception {
             byte[] jpegBytes = minimalJpegBytes();
             MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
@@ -487,8 +513,8 @@ class FileServiceTest {
 
             assertThatThrownBy(() ->
                     fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessageContaining("MinIO 上傳失敗");
+                    .isInstanceOf(SystemException.class)
+                    .hasMessageContaining(CommonErrorCode.STORAGE_ERROR.getMessage());
         }
     }
 

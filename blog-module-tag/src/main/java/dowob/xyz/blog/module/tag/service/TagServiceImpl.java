@@ -107,6 +107,11 @@ public class TagServiceImpl implements TagService {
     }
 
     @Override
+    public List<Tag> getAllTags() {
+        return tagRepository.findAllByOrderByUsageCountDesc();
+    }
+
+    @Override
     public TagDetailResponse getTagDetail(String slug) {
         return getTagDetail(slug, null);
     }

@@ -57,7 +57,17 @@ public enum CommonErrorCode implements IErrorCode {
     /**
      * 資料庫服務異常
      */
-    DATABASE_ERROR("B0100", "資料庫服務異常");
+    DATABASE_ERROR("B0100", "資料庫服務異常"),
+
+    /**
+     * 物件儲存服務異常（如 MinIO 上傳/刪除失敗）
+     */
+    STORAGE_ERROR("B0200", "儲存服務異常，請稍後再試"),
+
+    /**
+     * 檔案 I/O 異常（如讀取檔案內容或 MIME 偵測失敗）
+     */
+    FILE_IO_ERROR("B0201", "檔案處理異常，請稍後再試");
 
     /**
      * 錯誤碼

@@ -1,3 +1,6 @@
+# dev profile 設定（已納入版控，且不含任何真實憑證）
+# 真實的共享基礎設施位址與密碼請用環境變數覆寫（${LOCAL_*} 系列），
+# 或放在 gitignored 的 application-local.yaml / repo 根目錄 .env，切勿把真實憑證寫回本檔。
 spring:
   config:
     import: optional:file:.env[.properties],optional:file:../.env[.properties]

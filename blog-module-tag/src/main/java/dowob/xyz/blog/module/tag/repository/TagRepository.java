@@ -46,6 +46,15 @@ public interface TagRepository extends CrudRepository<Tag, UUID> {
     List<Tag> findTop20ByOrderByUsageCountDesc();
 
     /**
+     * 查詢全部標籤，依使用次數由多到少排序（無筆數上限）
+     *
+     * <p>供前端「標籤索引頁」標籤雲使用，回傳所有標籤及其文章數（usageCount）。</p>
+     *
+     * @return 依使用次數遞減排序的完整標籤列表
+     */
+    List<Tag> findAllByOrderByUsageCountDesc();
+
+    /**
      * 依名稱批量查詢標籤
      *
      * @param names 名稱陣列

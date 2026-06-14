@@ -920,6 +920,62 @@ class ArticleControllerIT {
     }
 
     @Test
+    @DisplayName("GET /api/v1/articles/archive - 公開取得歸檔（200、只含 PUBLISHED、依 publishedAt desc）")
+    void getArchive_returns200WithPublishedOnly() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        /** 建立並發布第一篇（較早發布） */
+        String firstUuid = createArticle("歸檔文章 A", "內容 A");
+        mockMvc.perform(post("/api/v1/articles/" + firstUuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 建立並發布第二篇（較晚發布，應排在最前面） */
+        String secondUuid = createArticle("歸檔文章 B", "內容 B");
+        mockMvc.perform(post("/api/v1/articles/" + secondUuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 建立一篇草稿（未發布，不應出現在歸檔中） */
+        createArticle("草稿不應出現", "草稿內容");
+
+        /** 匿名（無認證）存取歸檔端點 → 公開、200、信封、只含已發布且依 publishedAt desc */
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data").isArray())
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[0].title").value("歸檔文章 B"))
+                .andExpect(jsonPath("$.data[1].title").value("歸檔文章 A"))
+                .andExpect(jsonPath("$.data[0].uuid").value(secondUuid))
+                .andExpect(jsonPath("$.data[0].slug").exists())
+                .andExpect(jsonPath("$.data[0].publishedAt").exists());
+    }
+
+    /**
+     * 建立一篇草稿文章並回傳其 UUID（測試輔助方法）
+     *
+     * @param title   文章標題
+     * @param content 文章 Markdown 內容
+     * @return 新建文章的公開 UUID 字串
+     * @throws Exception MockMvc 執行例外
+     */
+    private String createArticle(String title, String content) throws Exception {
+        CreateArticleRequest req = new CreateArticleRequest();
+        req.setTitle(title);
+        req.setContent(content);
+        String response = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(response).path("data").path("uuid").asText();
+    }
+
+    @Test
     @DisplayName("POST /api/v1/articles - title 超過 120 字 → 回傳 code=400")
     void createArticle_titleTooLong_shouldReturn400() throws Exception {
         String longTitle = "a".repeat(121);

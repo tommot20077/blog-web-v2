@@ -217,6 +217,30 @@ class TagControllerIT {
     }
 
     @Test
+    @DisplayName("GET /api/v1/tags/all - 取得全部標籤（公開、未認證），回傳 200、含全部標籤、依 usageCount 遞減，且 /all 不被當成 slug")
+    void getAllTags_returns200WithAllTags() throws Exception {
+        // 以非排序順序插入，驗證回傳確實依 usageCount 遞減重排
+        insertTestTag("Spring", "spring", 80);
+        insertTestTag("Java", "java", 100);
+        insertTestTag("Docker", "docker", 60);
+
+        mockMvc.perform(get("/api/v1/tags/all"))
+                .andExpect(status().isOk())
+                // /all 必須被 literal mapping 命中，而非被 /{slug} 捕捉後丟出 A0301
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data").isArray())
+                // 回傳全部標籤
+                .andExpect(jsonPath("$.data.length()").value(3))
+                // 依 usageCount 由多到少排序
+                .andExpect(jsonPath("$.data[0].slug").value("java"))
+                .andExpect(jsonPath("$.data[0].usageCount").value(100))
+                .andExpect(jsonPath("$.data[1].slug").value("spring"))
+                .andExpect(jsonPath("$.data[1].usageCount").value(80))
+                .andExpect(jsonPath("$.data[2].slug").value("docker"))
+                .andExpect(jsonPath("$.data[2].usageCount").value(60));
+    }
+
+    @Test
     @DisplayName("GET /api/v1/tags/java - 依 Slug 取得標籤詳情（以 USER 認證），回傳 200 且 $.data.slug == 'java'")
     void getTagDetail_withExistingSlug_returns200() throws Exception {
         insertTestTag("Java", "java", 10);

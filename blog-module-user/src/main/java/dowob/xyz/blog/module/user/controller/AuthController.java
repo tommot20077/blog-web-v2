@@ -15,6 +15,7 @@ import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
 import dowob.xyz.blog.module.user.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -64,8 +65,9 @@ public class AuthController {
      */
     @Operation(summary = "用戶註冊", description = "使用信箱註冊新帳號，完成後需驗證電子信箱才可登入")
     @PostMapping("/register")
-    public ApiResponse<Void> register(@Valid @RequestBody RegisterRequest request) {
-        authService.register(request.getEmail(), request.getPassword(), request.getUsername(), request.getNickname());
+    public ApiResponse<Void> register(@Valid @RequestBody RegisterRequest request, HttpServletRequest httpRequest) {
+        authService.register(request.getEmail(), request.getPassword(), request.getUsername(), request.getNickname(),
+                resolveClientIp(httpRequest));
         return ApiResponse.success();
     }
 
@@ -81,8 +83,11 @@ public class AuthController {
      */
     @Operation(summary = "用戶登入", description = "使用信箱或暱稱登入，取得 Access Token（Refresh Token 在 Cookie）")
     @PostMapping("/login")
-    public ApiResponse<AuthResponse> login(@Valid @RequestBody LoginRequest request, HttpServletResponse response) {
-        LoginResult loginResult = authService.login(request.getIdentifier(), request.getPassword());
+    public ApiResponse<AuthResponse> login(@Valid @RequestBody LoginRequest request,
+                                           HttpServletRequest httpRequest,
+                                           HttpServletResponse response) {
+        LoginResult loginResult = authService.login(request.getIdentifier(), request.getPassword(),
+                resolveClientIp(httpRequest));
 
         ResponseCookie refreshCookie = ResponseCookie.from("refreshToken", loginResult.refreshToken())
                 .httpOnly(true)
@@ -147,6 +152,24 @@ public class AuthController {
 
     private ResponseStatusException unauthenticatedRefresh() {
         return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "請先登入");
+    }
+
+    /**
+     * 解析 client IP（供 IP 層級限流使用）
+     *
+     * <p>prod 環境前後端同域（{@code https://90030.xyz}）並走反向代理，故優先信任
+     * {@code X-Forwarded-For} 標頭並取其第一個 IP（最接近真實 client 的位址）；
+     * 若無此標頭則退回 {@link HttpServletRequest#getRemoteAddr()}。</p>
+     *
+     * @param request HTTP 請求
+     * @return client IP 字串；無法解析時可能為 null
+     */
+    private String resolveClientIp(HttpServletRequest request) {
+        String forwardedFor = request.getHeader("X-Forwarded-For");
+        if (forwardedFor != null && !forwardedFor.isBlank()) {
+            return forwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     /**

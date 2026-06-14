@@ -197,6 +197,60 @@ public class RedisKeyConstant {
         return EMAIL_VERIFY_CODE_FAIL_PREFIX + email;
     }
 
+    /** ===================== IP 層級登入/註冊限流 ===================== */
+
+    /**
+     * 登入 IP 層級限流 Key 前綴 (String)
+     * Key: auth:login:ip:{ip}
+     * <p>以 client IP 計數登入嘗試，與 {@link #LOGIN_FAIL_PREFIX}（user.id 帳號鎖定）並存，
+     * 用於防範跨帳號的分散撞庫與帳號枚舉。</p>
+     */
+    public static final String LOGIN_IP_PREFIX = "auth:login:ip:";
+
+    /**
+     * 註冊 IP 層級限流 Key 前綴 (String)
+     * Key: auth:register:ip:{ip}
+     */
+    public static final String REGISTER_IP_PREFIX = "auth:register:ip:";
+
+    /**
+     * 單一 IP 在限流窗口內允許的最大登入嘗試次數。
+     * <p>設定較寬（20）以避免 NAT / 反向代理下多個正常用戶共用對外 IP 時被誤鎖。</p>
+     */
+    public static final int LOGIN_IP_MAX = 20;
+
+    /** 登入 IP 限流窗口（分鐘） */
+    public static final long LOGIN_IP_TTL_MINUTES = 15L;
+
+    /**
+     * 單一 IP 在限流窗口內允許的最大註冊次數。
+     * <p>註冊為低頻操作，採較嚴格上限（10）抑制大量假帳號建立。</p>
+     */
+    public static final int REGISTER_IP_MAX = 10;
+
+    /** 註冊 IP 限流窗口（分鐘），等同每小時 */
+    public static final long REGISTER_IP_TTL_MINUTES = 60L;
+
+    /**
+     * 生成登入 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getLoginIpKey(String ip) {
+        return LOGIN_IP_PREFIX + ip;
+    }
+
+    /**
+     * 生成註冊 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getRegisterIpKey(String ip) {
+        return REGISTER_IP_PREFIX + ip;
+    }
+
     /** ===================== Tag ===================== */
 
     /**

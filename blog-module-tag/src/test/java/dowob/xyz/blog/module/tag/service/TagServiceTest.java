@@ -354,6 +354,50 @@ class TagServiceTest {
         assertThat(result).isEmpty();
     }
 
+    /** ─── getAllTags ───────────────────────────────────────────────────────────── */
+
+    @Test
+    @DisplayName("getAllTags: 回傳全部標籤並帶各自文章數（usageCount），依文章數由多到少排序")
+    void getAllTags_returnsAllTagsWithArticleCount() {
+        Tag java = new Tag();
+        java.setId(UUID.randomUUID());
+        java.setName("java");
+        java.setSlug("java");
+        java.setUsageCount(10);
+
+        Tag spring = new Tag();
+        spring.setId(UUID.randomUUID());
+        spring.setName("spring");
+        spring.setSlug("spring");
+        spring.setUsageCount(5);
+
+        Tag rust = new Tag();
+        rust.setId(UUID.randomUUID());
+        rust.setName("rust");
+        rust.setSlug("rust");
+        rust.setUsageCount(1);
+
+        when(tagRepository.findAllByOrderByUsageCountDesc()).thenReturn(List.of(java, spring, rust));
+
+        List<Tag> result = tagService.getAllTags();
+
+        assertThat(result).hasSize(3);
+        assertThat(result).extracting(Tag::getName).containsExactly("java", "spring", "rust");
+        assertThat(result).extracting(Tag::getUsageCount).containsExactly(10, 5, 1);
+        verify(tagRepository).findAllByOrderByUsageCountDesc();
+    }
+
+    @Test
+    @DisplayName("getAllTags: 無標籤時回傳空列表（非 null）")
+    void getAllTags_noTags_returnsEmptyList() {
+        when(tagRepository.findAllByOrderByUsageCountDesc()).thenReturn(List.of());
+
+        List<Tag> result = tagService.getAllTags();
+
+        assertThat(result).isNotNull().isEmpty();
+        verify(tagRepository).findAllByOrderByUsageCountDesc();
+    }
+
     /** ─── getTagDetail ──────────────────────────────────────────────────────────── */
 
     @Test

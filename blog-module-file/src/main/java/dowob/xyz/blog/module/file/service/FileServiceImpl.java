@@ -1,9 +1,11 @@
 package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.exception.SystemException;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -65,6 +67,9 @@ public class FileServiceImpl implements FileService {
     /** Spring 宣告式事務模板（用於縮小 uploadFile 的事務範圍） */
     private final TransactionTemplate transactionTemplate;
 
+    /** Apache Tika MIME 類型偵測器（執行緒安全，可重用單一實例） */
+    private final Tika tika = new Tika();
+
     /** MinIO 儲存桶名稱 */
     @Value("${minio.bucket-name}")
     private String bucketName;
@@ -89,7 +94,8 @@ public class FileServiceImpl implements FileService {
         try {
             fileBytes = file.getBytes();
         } catch (IOException e) {
-            throw new RuntimeException("無法讀取檔案內容", e);
+            log.error("讀取上傳檔案內容失敗", e);
+            throw new SystemException(CommonErrorCode.FILE_IO_ERROR);
         }
 
         String detectedMimeType = detectMimeType(fileBytes, file.getOriginalFilename());
@@ -119,7 +125,8 @@ public class FileServiceImpl implements FileService {
                             .contentType(detectedMimeType)
                             .build());
         } catch (Exception e) {
-            throw new RuntimeException("MinIO 上傳失敗", e);
+            log.error("MinIO 上傳失敗: {}", storagePath, e);
+            throw new SystemException(CommonErrorCode.STORAGE_ERROR);
         }
         Integer width = null;
         Integer height = null;
@@ -204,7 +211,7 @@ public class FileServiceImpl implements FileService {
             }
         } catch (Exception e) {
             log.error("MinIO 刪除失敗: {}", metadata.getStoragePath(), e);
-            throw new RuntimeException("MinIO 刪除失敗", e);
+            throw new SystemException(CommonErrorCode.STORAGE_ERROR);
         }
     }
 
@@ -256,10 +263,10 @@ public class FileServiceImpl implements FileService {
      */
     private String detectMimeType(byte[] fileBytes, String filename) {
         try {
-            Tika tika = new Tika();
             return tika.detect(new ByteArrayInputStream(fileBytes), filename);
         } catch (IOException e) {
-            throw new RuntimeException("MIME 類型偵測失敗", e);
+            log.error("MIME 類型偵測失敗: {}", filename, e);
+            throw new SystemException(CommonErrorCode.FILE_IO_ERROR);
         }
     }
 

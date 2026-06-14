@@ -203,6 +203,58 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
         assertThat(redisTemplate.hasKey(refreshKey)).isFalse();
     }
 
+    /**
+     * 驗證：register() 後，5 個通知偏好欄位應預設為 true（NOT NULL DEFAULT TRUE）。
+     * 這同時驗證 V18 migration 與 Java model 預設初始化避免送 NULL 違反約束。
+     */
+    @Test
+    @DisplayName("register → 通知偏好欄位應預設為 true 並成功持久化（不違反 NOT NULL）")
+    void register_shouldDefaultNotificationPreferencesToTrue() {
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        User saved = userRepository.findByEmail(TEST_EMAIL).orElseThrow();
+
+        assertThat(saved.isNotificationComment()).isTrue();
+        assertThat(saved.isNotificationLike()).isTrue();
+        assertThat(saved.isNotificationReview()).isTrue();
+        assertThat(saved.isNotificationFollow()).isTrue();
+        assertThat(saved.isNotificationNewsletter()).isTrue();
+    }
+
+    /**
+     * 驗證：updateProfile() 後，avatarUrl 與 location 應真實持久化至 PostgreSQL（V18 新欄位）。
+     */
+    @Test
+    @DisplayName("updateProfile → avatarUrl 與 location 應持久化至資料庫")
+    void updateProfile_shouldPersistAvatarUrlAndLocation() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+
+        userService.updateProfile(user.getId(), TEST_NICKNAME, "簡介", null, null,
+                "https://cdn.example.com/avatar.png", "Taipei");
+
+        User updated = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(updated.getAvatarUrl()).isEqualTo("https://cdn.example.com/avatar.png");
+        assertThat(updated.getLocation()).isEqualTo("Taipei");
+    }
+
+    /**
+     * 驗證：updateNotificationPreferences() 後，5 個布林欄位應真實持久化至 PostgreSQL。
+     */
+    @Test
+    @DisplayName("updateNotificationPreferences → 5 個通知偏好應持久化至資料庫")
+    void updateNotificationPreferences_shouldPersistFlags() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+
+        userService.updateNotificationPreferences(user.getId(), false, true, false, true, false);
+
+        User updated = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(updated.isNotificationComment()).isFalse();
+        assertThat(updated.isNotificationLike()).isTrue();
+        assertThat(updated.isNotificationReview()).isFalse();
+        assertThat(updated.isNotificationFollow()).isTrue();
+        assertThat(updated.isNotificationNewsletter()).isFalse();
+    }
+
     /* =========================================================================
        測試輔助方法
        ========================================================================= */

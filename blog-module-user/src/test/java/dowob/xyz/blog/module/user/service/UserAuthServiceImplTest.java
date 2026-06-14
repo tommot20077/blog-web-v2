@@ -83,7 +83,7 @@ class UserAuthServiceImplTest {
        ========================================================================= */
 
     /**
-     * 驗證：用戶存在時應正確組裝 SimpleUserDetail（id、email、role、isAvailable）。
+     * 驗證：用戶存在時應正確組裝 SimpleUserDetail（id、email、role、status）。
      */
     @Test
     @DisplayName("getUserDetail → 用戶存在 → 應正確組裝 SimpleUserDetail 所有欄位")
@@ -96,49 +96,49 @@ class UserAuthServiceImplTest {
         assertThat(detail.id()).isEqualTo(TEST_USER_ID);
         assertThat(detail.email()).isEqualTo(TEST_EMAIL);
         assertThat(detail.role()).isEqualTo(Role.USER.name());
-        assertThat(detail.enabled()).isTrue();
+        assertThat(detail.status()).isEqualTo(UserStatus.ACTIVE);
     }
 
     /**
-     * 驗證：ACTIVE 用戶的 isAvailable 應為 true。
+     * 驗證：ACTIVE 用戶應保留原始狀態。
      */
     @Test
-    @DisplayName("getUserDetail → ACTIVE 用戶 → isAvailable 應為 true")
-    void getUserDetail_activeUser_shouldBeEnabled() throws Exception {
+    @DisplayName("getUserDetail → ACTIVE 用戶 → status 應為 ACTIVE")
+    void getUserDetail_activeUser_shouldReturnActiveStatus() throws Exception {
         User mockUser = buildUser(UserStatus.ACTIVE, "v1");
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
 
         UserAuthService.SimpleUserDetail detail = userAuthServiceImpl.getUserDetail(TEST_USER_ID);
 
-        assertThat(detail.enabled()).isTrue();
+        assertThat(detail.status()).isEqualTo(UserStatus.ACTIVE);
     }
 
     /**
-     * 驗證：DELETED 用戶的 isAvailable 應為 false（已刪除帳號不可使用）。
+     * 驗證：DELETED 用戶應保留原始狀態。
      */
     @Test
-    @DisplayName("getUserDetail → DELETED 用戶 → isAvailable 應為 false")
-    void getUserDetail_deletedUser_shouldBeDisabled() throws Exception {
+    @DisplayName("getUserDetail → DELETED 用戶 → status 應為 DELETED")
+    void getUserDetail_deletedUser_shouldReturnDeletedStatus() throws Exception {
         User mockUser = buildUser(UserStatus.DELETED, "v1");
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
 
         UserAuthService.SimpleUserDetail detail = userAuthServiceImpl.getUserDetail(TEST_USER_ID);
 
-        assertThat(detail.enabled()).isFalse();
+        assertThat(detail.status()).isEqualTo(UserStatus.DELETED);
     }
 
     /**
-     * 驗證：BANNED 用戶的 isAvailable 應為 false（封禁帳號不可使用）。
+     * 驗證：BANNED 用戶應保留原始狀態。
      */
     @Test
-    @DisplayName("getUserDetail → BANNED 用戶 → isAvailable 應為 false")
-    void getUserDetail_suspendedUser_shouldBeDisabled() throws Exception {
+    @DisplayName("getUserDetail → BANNED 用戶 → status 應為 BANNED")
+    void getUserDetail_suspendedUser_shouldReturnBannedStatus() throws Exception {
         User mockUser = buildUser(UserStatus.BANNED, "v1");
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
 
         UserAuthService.SimpleUserDetail detail = userAuthServiceImpl.getUserDetail(TEST_USER_ID);
 
-        assertThat(detail.enabled()).isFalse();
+        assertThat(detail.status()).isEqualTo(UserStatus.BANNED);
     }
 
     /**

@@ -42,4 +42,18 @@ public class UpdateProfileRequest {
      */
     @Schema(description = "社群連結（JSON 格式）", example = "{\"twitter\":\"@user\"}")
     private String socialLinks;
+
+    /**
+     * 頭貼 URL（最多 512 字元，可為空）
+     */
+    @Schema(description = "頭貼 URL", example = "https://cdn.example.com/avatar.png")
+    @Size(max = 512, message = "頭貼 URL 不能超過 512 字元")
+    private String avatarUrl;
+
+    /**
+     * 所在地（最多 100 字元，可為空）
+     */
+    @Schema(description = "所在地", example = "Taipei")
+    @Size(max = 100, message = "所在地不能超過 100 字元")
+    private String location;
 }

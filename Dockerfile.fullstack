@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+# =============================================================================
+# Dockerfile.fullstack — 本地全端整併驗證用「自包式」多階段映像
+#
+# 與既有 ./Dockerfile（prod 用：COPY 預建 jar）互不影響：
+#   - 既有 Dockerfile 仍是 prod 流程（需先在本機 mvn package 出 jar）。
+#   - 本檔自行在容器內 build，供 `docker compose ... up --build` 一鍵起。
+#
+# 由 D:\end\workspace\infrastructure\docker\docker-compose.fullstack.yml 以
+#   build.dockerfile: Dockerfile.fullstack
+# 指定使用；build context 為後端 repo 根目錄。
+#
+# 注意：本 repo 無 .dockerignore，且 target/ 內可能有 123MB 預建 jar 與 .git。
+#       為避免把它們塞進 build stage，這裡採「選擇性 COPY」（只複製 pom 與 src），
+#       而非 `COPY . .`。
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stage 1: build — Maven + JDK 21 在容器內完成 mvn package
+# ---------------------------------------------------------------------------
+FROM maven:3-eclipse-temurin-21 AS build
+
+WORKDIR /workspace
+
+# 1) 先只複製所有 module 的 pom.xml + Maven wrapper，最大化依賴下載層快取。
+#    （任何 .java 變動不會使依賴層失效。）
+COPY pom.xml ./
+COPY .mvn ./.mvn
+COPY mvnw ./
+COPY blog-common/pom.xml          blog-common/pom.xml
+COPY blog-db-migration/pom.xml    blog-db-migration/pom.xml
+COPY blog-infrastructure/pom.xml  blog-infrastructure/pom.xml
+COPY blog-module-user/pom.xml     blog-module-user/pom.xml
+COPY blog-module-article/pom.xml  blog-module-article/pom.xml
+COPY blog-module-file/pom.xml     blog-module-file/pom.xml
+COPY blog-module-tag/pom.xml      blog-module-tag/pom.xml
+COPY blog-module-search/pom.xml   blog-module-search/pom.xml
+COPY blog-module-recommend/pom.xml blog-module-recommend/pom.xml
+COPY blog-module-comment/pom.xml  blog-module-comment/pom.xml
+COPY blog-module-reading/pom.xml  blog-module-reading/pom.xml
+COPY blog-module-series/pom.xml   blog-module-series/pom.xml
+COPY blog-module-version/pom.xml  blog-module-version/pom.xml
+COPY blog-start/pom.xml           blog-start/pom.xml
+
+# 預抓依賴（離線快取）。失敗不致命（go-offline 對多模組偶有解析雜訊），
+# 真正缺的依賴會在後續 package 階段補抓。
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -q -B dependency:go-offline -DskipTests || true
+
+# 2) 複製原始碼後 package（跳過測試，本流程目的是「能跑」不是跑測試）。
+COPY blog-common         blog-common
+COPY blog-db-migration   blog-db-migration
+COPY blog-infrastructure blog-infrastructure
+COPY blog-module-user    blog-module-user
+COPY blog-module-article blog-module-article
+COPY blog-module-file    blog-module-file
+COPY blog-module-tag     blog-module-tag
+COPY blog-module-search  blog-module-search
+COPY blog-module-recommend blog-module-recommend
+COPY blog-module-comment blog-module-comment
+COPY blog-module-reading blog-module-reading
+COPY blog-module-series  blog-module-series
+COPY blog-module-version blog-module-version
+COPY blog-start          blog-start
+
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -B -DskipTests clean package
+
+# ---------------------------------------------------------------------------
+# Stage 2: runtime — 純 JRE 執行 boot jar
+# ---------------------------------------------------------------------------
+FROM eclipse-temurin:21-jre AS runtime
+
+WORKDIR /app
+
+# 從 build stage 取出 blog-start 的 repackaged boot jar。
+COPY --from=build /workspace/blog-start/target/blog-start-1.0.jar app.jar
+
+# demo profile 無 server.port → Spring 預設 8080；compose 以 SERVER_PORT=9010 覆寫，
+# 對齊 prod Dockerfile 的 EXPOSE 9010 與前端 baseURL。
+EXPOSE 9010
+
+ENTRYPOINT ["java", "-jar", "app.jar"]

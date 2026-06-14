@@ -21,6 +21,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -59,7 +60,7 @@ class AuthControllerCookieConfigTest {
         request.setIdentifier("test@example.com");
         request.setPassword("Test1234");
 
-        when(authService.login(anyString(), anyString()))
+        when(authService.login(anyString(), anyString(), nullable(String.class)))
                 .thenReturn(new LoginResult("mock.access.token", "mock.refresh.token"));
 
         mockMvc.perform(post("/api/v1/auth/login")

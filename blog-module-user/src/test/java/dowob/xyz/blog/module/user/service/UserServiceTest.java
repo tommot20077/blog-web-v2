@@ -85,7 +85,7 @@ class UserServiceTest {
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
         when(userRepository.existsByNickname("newNickname")).thenReturn(false);
 
-        userService.updateProfile(TEST_USER_ID, "newNickname", "新的個人簡介", null, null);
+        userService.updateProfile(TEST_USER_ID, "newNickname", "新的個人簡介", null, null, null, null);
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
@@ -102,12 +102,71 @@ class UserServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
 
-        userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, "簡介", "https://myblog.com", "{\"twitter\":\"@user\"}");
+        userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, "簡介", "https://myblog.com",
+                "{\"twitter\":\"@user\"}", "https://cdn.example.com/a.png", "Taipei");
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
         assertThat(captor.getValue().getWebsite()).isEqualTo("https://myblog.com");
         assertThat(captor.getValue().getSocialLinks()).isEqualTo("{\"twitter\":\"@user\"}");
+    }
+
+    /**
+     * 驗證：updateProfile 應正確設定 avatarUrl 與 location 欄位。
+     */
+    @Test
+    @DisplayName("updateProfile → 含 avatarUrl 與 location → 應正確儲存欄位")
+    void updateProfile_withAvatarUrlAndLocation_shouldPersist() {
+        User mockUser = buildActiveUser();
+        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+
+        userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, "簡介", null, null,
+                "https://cdn.example.com/avatar.png", "Kaohsiung");
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        assertThat(captor.getValue().getAvatarUrl()).isEqualTo("https://cdn.example.com/avatar.png");
+        assertThat(captor.getValue().getLocation()).isEqualTo("Kaohsiung");
+    }
+
+    /* =========================================================================
+       updateNotificationPreferences 測試
+       ========================================================================= */
+
+    /**
+     * 驗證：updateNotificationPreferences 應更新 5 個通知偏好布林欄位。
+     */
+    @Test
+    @DisplayName("updateNotificationPreferences → 應更新 5 個通知偏好欄位")
+    void updateNotificationPreferences_shouldUpdateAllFlags() {
+        User mockUser = buildActiveUser();
+        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+
+        userService.updateNotificationPreferences(TEST_USER_ID, false, true, false, true, false);
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        User saved = captor.getValue();
+        assertThat(saved.isNotificationComment()).isFalse();
+        assertThat(saved.isNotificationLike()).isTrue();
+        assertThat(saved.isNotificationReview()).isFalse();
+        assertThat(saved.isNotificationFollow()).isTrue();
+        assertThat(saved.isNotificationNewsletter()).isFalse();
+    }
+
+    /**
+     * 驗證：updateNotificationPreferences 在用戶不存在時應拋出 BusinessException。
+     */
+    @Test
+    @DisplayName("updateNotificationPreferences → 用戶不存在 → 應拋出 BusinessException")
+    void updateNotificationPreferences_userNotFound_shouldThrowBusinessException() {
+        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.updateNotificationPreferences(
+                TEST_USER_ID, true, true, true, true, true))
+                .isInstanceOf(BusinessException.class);
+
+        verify(userRepository, never()).save(any());
     }
 
     /**
@@ -120,7 +179,7 @@ class UserServiceTest {
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
         when(userRepository.existsByNickname("takenNickname")).thenReturn(true);
 
-        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "takenNickname", null, null, null))
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "takenNickname", null, null, null, null, null))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
@@ -134,7 +193,7 @@ class UserServiceTest {
     void updateProfile_userNotFound_shouldThrowUserNotFound() {
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "newNickname", null, null, null))
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "newNickname", null, null, null, null, null))
                 .isInstanceOf(BusinessException.class);
     }
 
@@ -305,6 +364,9 @@ class UserServiceTest {
         User mockUser = buildActiveUser();
         mockUser.setUuid(testUuid);
         mockUser.setAvatarUrl("https://example.com/avatar.png");
+        mockUser.setLocation("Taipei");
+        mockUser.setNotificationComment(false);
+        mockUser.setNotificationNewsletter(false);
         mockUser.setEmailVerified(true);
         mockUser.setCreatedAt(createdAt);
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
@@ -315,9 +377,15 @@ class UserServiceTest {
         assertThat(result.email()).isEqualTo("test@example.com");
         assertThat(result.nickname()).isEqualTo(TEST_NICKNAME);
         assertThat(result.avatarUrl()).isEqualTo("https://example.com/avatar.png");
+        assertThat(result.location()).isEqualTo("Taipei");
         assertThat(result.role()).isEqualTo(Role.USER);
         assertThat(result.emailVerified()).isTrue();
         assertThat(result.createdAt()).isEqualTo(createdAt);
+        assertThat(result.notificationComment()).isFalse();
+        assertThat(result.notificationLike()).isTrue();
+        assertThat(result.notificationReview()).isTrue();
+        assertThat(result.notificationFollow()).isTrue();
+        assertThat(result.notificationNewsletter()).isFalse();
     }
 
     /**

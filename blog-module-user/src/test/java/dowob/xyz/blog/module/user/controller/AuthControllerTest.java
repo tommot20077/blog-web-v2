@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -82,8 +83,8 @@ class AuthControllerTest {
     /** 測試用電子信箱 */
     private static final String TEST_EMAIL = "test@example.com";
 
-    /** 測試用密碼 */
-    private static final String TEST_PASSWORD = "password123";
+    /** 測試用密碼（符合密碼複雜度規則：小寫+大寫+數字+特殊字元） */
+    private static final String TEST_PASSWORD = "Password123!";
 
     /** 測試用用戶名 */
     private static final String TEST_USERNAME = "testuser";
@@ -107,7 +108,7 @@ class AuthControllerTest {
         request.setUsername(TEST_USERNAME);
         request.setNickname(TEST_NICKNAME);
 
-        doNothing().when(authService).register(anyString(), anyString(), anyString(), anyString());
+        doNothing().when(authService).register(anyString(), anyString(), anyString(), anyString(), nullable(String.class));
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -165,7 +166,7 @@ class AuthControllerTest {
         request.setNickname(TEST_NICKNAME);
 
         doThrow(new BusinessException(UserErrorCode.EMAIL_DUPLICATED))
-                .when(authService).register(anyString(), anyString(), anyString(), anyString());
+                .when(authService).register(anyString(), anyString(), anyString(), anyString(), nullable(String.class));
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -188,7 +189,7 @@ class AuthControllerTest {
         request.setIdentifier(TEST_EMAIL);
         request.setPassword(TEST_PASSWORD);
 
-        when(authService.login(anyString(), anyString()))
+        when(authService.login(anyString(), anyString(), nullable(String.class)))
                 .thenReturn(new LoginResult("mock.access.token", "mock.refresh.token"));
 
         mockMvc.perform(post("/api/v1/auth/login")
@@ -210,7 +211,7 @@ class AuthControllerTest {
         request.setIdentifier(TEST_EMAIL);
         request.setPassword(TEST_PASSWORD);
 
-        when(authService.login(anyString(), anyString()))
+        when(authService.login(anyString(), anyString(), nullable(String.class)))
                 .thenThrow(new BusinessException(UserErrorCode.ACCOUNT_LOCKED));
 
         mockMvc.perform(post("/api/v1/auth/login")
@@ -230,7 +231,7 @@ class AuthControllerTest {
         request.setIdentifier(TEST_EMAIL);
         request.setPassword("wrongPassword");
 
-        when(authService.login(anyString(), anyString()))
+        when(authService.login(anyString(), anyString(), nullable(String.class)))
                 .thenThrow(new BusinessException(UserErrorCode.USER_PASSWORD_ERROR));
 
         mockMvc.perform(post("/api/v1/auth/login")
@@ -434,7 +435,7 @@ class AuthControllerTest {
     void resetPassword_validRequest_shouldReturn200() throws Exception {
         ResetPasswordRequest request = new ResetPasswordRequest();
         request.setToken("valid-reset-token");
-        request.setNewPassword("newPassword123");
+        request.setNewPassword("NewPassword123!");
 
         doNothing().when(authService).resetPassword(anyString(), anyString());
 
@@ -453,7 +454,7 @@ class AuthControllerTest {
     void resetPassword_invalidToken_shouldReturnTokenInvalid() throws Exception {
         ResetPasswordRequest request = new ResetPasswordRequest();
         request.setToken("bad-token");
-        request.setNewPassword("newPassword123");
+        request.setNewPassword("NewPassword123!");
 
         doThrow(new BusinessException(UserErrorCode.TOKEN_INVALID))
                 .when(authService).resetPassword(anyString(), anyString());
@@ -518,7 +519,7 @@ class AuthControllerTest {
         request.setNickname(TEST_NICKNAME);
 
         doThrow(new BusinessException(UserErrorCode.NICKNAME_DUPLICATED))
-                .when(authService).register(anyString(), anyString(), anyString(), anyString());
+                .when(authService).register(anyString(), anyString(), anyString(), anyString(), nullable(String.class));
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -540,7 +541,7 @@ class AuthControllerTest {
         request.setNickname(TEST_NICKNAME);
 
         doThrow(new BusinessException(UserErrorCode.USERNAME_DUPLICATED))
-                .when(authService).register(anyString(), anyString(), anyString(), anyString());
+                .when(authService).register(anyString(), anyString(), anyString(), anyString(), nullable(String.class));
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -579,7 +580,7 @@ class AuthControllerTest {
         request.setIdentifier("unknown@example.com");
         request.setPassword(TEST_PASSWORD);
 
-        when(authService.login(anyString(), anyString()))
+        when(authService.login(anyString(), anyString(), nullable(String.class)))
                 .thenThrow(new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
         mockMvc.perform(post("/api/v1/auth/login")
@@ -599,7 +600,7 @@ class AuthControllerTest {
         request.setIdentifier(TEST_EMAIL);
         request.setPassword(TEST_PASSWORD);
 
-        when(authService.login(anyString(), anyString()))
+        when(authService.login(anyString(), anyString(), nullable(String.class)))
                 .thenThrow(new BusinessException(UserErrorCode.EMAIL_NOT_VERIFIED));
 
         mockMvc.perform(post("/api/v1/auth/login")
@@ -791,7 +792,7 @@ class AuthControllerTest {
     @DisplayName("POST /reset-password → 缺少 token → 應回傳驗證錯誤")
     void resetPassword_missingToken_shouldReturnValidationError() throws Exception {
         ResetPasswordRequest request = new ResetPasswordRequest();
-        request.setNewPassword("newPassword123");
+        request.setNewPassword("NewPassword123!");
 
         mockMvc.perform(post("/api/v1/auth/reset-password")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -849,5 +850,119 @@ class AuthControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    // =========================================================================
+    // Client IP 解析與 IP 層級限流（Task 14）
+    // =========================================================================
+
+    /**
+     * 驗證：login 帶 X-Forwarded-For 時，應取第一個 IP 傳入 authService.login。
+     */
+    @Test
+    @DisplayName("POST /login → 帶 X-Forwarded-For → 應將第一個 IP 傳入 authService.login")
+    void login_withXForwardedFor_shouldPassFirstIpToService() throws Exception {
+        LoginRequest request = new LoginRequest();
+        request.setIdentifier(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+
+        when(authService.login(anyString(), anyString(), anyString()))
+                .thenReturn(new LoginResult("mock.access.token", "mock.refresh.token"));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .header("X-Forwarded-For", "203.0.113.7, 70.41.3.18, 150.172.238.178")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+
+        verify(authService).login(eq(TEST_EMAIL), eq(TEST_PASSWORD), eq("203.0.113.7"));
+    }
+
+    /**
+     * 驗證：login 無 X-Forwarded-For 時，應退回 request.getRemoteAddr() 傳入 service。
+     */
+    @Test
+    @DisplayName("POST /login → 無 X-Forwarded-For → 應將 RemoteAddr 傳入 authService.login")
+    void login_withoutXForwardedFor_shouldPassRemoteAddrToService() throws Exception {
+        LoginRequest request = new LoginRequest();
+        request.setIdentifier(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+
+        when(authService.login(anyString(), anyString(), anyString()))
+                .thenReturn(new LoginResult("mock.access.token", "mock.refresh.token"));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(req -> { req.setRemoteAddr("198.51.100.23"); return req; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+
+        verify(authService).login(eq(TEST_EMAIL), eq(TEST_PASSWORD), eq("198.51.100.23"));
+    }
+
+    /**
+     * 驗證：login IP 限流超標時 service 拋出 RATE_LIMIT_EXCEEDED，應映射為對應錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /login → IP 限流超標 → 應回傳 RATE_LIMIT_EXCEEDED 錯誤碼")
+    void login_ipRateLimitExceeded_shouldReturnRateLimitError() throws Exception {
+        LoginRequest request = new LoginRequest();
+        request.setIdentifier(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+
+        when(authService.login(anyString(), anyString(), anyString()))
+                .thenThrow(new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED));
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+    }
+
+    /**
+     * 驗證：register 帶 X-Forwarded-For 時，應取第一個 IP 傳入 authService.register。
+     */
+    @Test
+    @DisplayName("POST /register → 帶 X-Forwarded-For → 應將第一個 IP 傳入 authService.register")
+    void register_withXForwardedFor_shouldPassFirstIpToService() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
+        request.setNickname(TEST_NICKNAME);
+
+        doNothing().when(authService).register(anyString(), anyString(), anyString(), anyString(), anyString());
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .header("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+
+        verify(authService).register(eq(TEST_EMAIL), eq(TEST_PASSWORD), eq(TEST_USERNAME),
+                eq(TEST_NICKNAME), eq("203.0.113.9"));
+    }
+
+    /**
+     * 驗證：register IP 限流超標時 service 拋出 RATE_LIMIT_EXCEEDED，應映射為對應錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /register → IP 限流超標 → 應回傳 RATE_LIMIT_EXCEEDED 錯誤碼")
+    void register_ipRateLimitExceeded_shouldReturnRateLimitError() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
+        request.setNickname(TEST_NICKNAME);
+
+        doThrow(new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED))
+                .when(authService).register(anyString(), anyString(), anyString(), anyString(), anyString());
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
     }
 }

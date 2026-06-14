@@ -1,5 +1,6 @@
 package dowob.xyz.blog.infrastructure.security;
 
+import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 
 /**
@@ -33,6 +34,6 @@ public interface UserAuthService {
     /**
      * 簡易用戶詳情 DTO
      */
-    record SimpleUserDetail(Long id, String email, String role, boolean enabled) {
+    record SimpleUserDetail(Long id, String email, String role, UserStatus status) {
     }
 }

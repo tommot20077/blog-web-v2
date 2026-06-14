@@ -946,6 +946,23 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
+        @DisplayName("正常：REJECTED → PENDING_REVIEW 成功並清除 rejectReason")
+        void submitForReview_rejectedToPendingReview_successAndClearsRejectReason() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            article.setRejectReason("請補充實作細節與審核依據");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = commandSubService.submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
+            assertThat(response.getRejectReason()).isNull();
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isNull();
+        }
+
+        @Test
         @DisplayName("異常：PUBLISHED → PENDING_REVIEW（非法轉換）→ ARTICLE_STATUS_TRANSITION_INVALID")
         void submitForReview_publishedToPendingReview_invalidTransition() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);

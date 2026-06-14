@@ -42,7 +42,7 @@ class UserE2E extends AbstractE2ETest {
     void updateProfile_success() throws Exception {
         // Arrange — 註冊並登入
         String token = authHelper.registerAndLogin(
-                "profile@test.com", "password123", "profileuser", "ProfileUser");
+                "profile@test.com", "Password123!", "profileuser", "ProfileUser");
 
         Map<String, Object> updateBody = new LinkedHashMap<>();
         updateBody.put("nickname", "NewNickname");
@@ -63,11 +63,11 @@ class UserE2E extends AbstractE2ETest {
     void changePassword_success() throws Exception {
         // Arrange — 註冊並登入
         String token = authHelper.registerAndLogin(
-                "changepw@test.com", "oldPassword1", "changepwuser", "ChangePwUser");
+                "changepw@test.com", "OldPassw0rd!", "changepwuser", "ChangePwUser");
 
         Map<String, Object> changePwBody = new LinkedHashMap<>();
-        changePwBody.put("oldPassword", "oldPassword1");
-        changePwBody.put("newPassword", "newPassword1");
+        changePwBody.put("oldPassword", "OldPassw0rd!");
+        changePwBody.put("newPassword", "NewPassw0rd!");
 
         // Act — 修改密碼
         mockMvc.perform(post(BASE_URL + "/me/change-password")
@@ -80,7 +80,7 @@ class UserE2E extends AbstractE2ETest {
         // Assert — 舊密碼登入失敗
         Map<String, Object> oldPwLogin = new LinkedHashMap<>();
         oldPwLogin.put("identifier", "changepw@test.com");
-        oldPwLogin.put("password", "oldPassword1");
+        oldPwLogin.put("password", "OldPassw0rd!");
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(oldPwLogin)))
@@ -90,7 +90,7 @@ class UserE2E extends AbstractE2ETest {
         // Assert — 新密碼登入成功
         Map<String, Object> newPwLogin = new LinkedHashMap<>();
         newPwLogin.put("identifier", "changepw@test.com");
-        newPwLogin.put("password", "newPassword1");
+        newPwLogin.put("password", "NewPassw0rd!");
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(newPwLogin)))
@@ -103,13 +103,13 @@ class UserE2E extends AbstractE2ETest {
     void deleteAccount_success() throws Exception {
         // Arrange — 註冊並登入
         String token = authHelper.registerAndLogin(
-                "deleteacc@test.com", "password123", "deleteaccuser", "DeleteAccUser");
+                "deleteacc@test.com", "Password123!", "deleteaccuser", "DeleteAccUser");
 
         // Act — 刪除帳號（密碼透過 request body 傳遞）
         mockMvc.perform(delete(BASE_URL + "/me")
                         .with(AuthHelper.bearerToken(token))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(java.util.Map.of("password", "password123"))))
+                        .content(objectMapper.writeValueAsString(java.util.Map.of("password", "Password123!"))))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 
