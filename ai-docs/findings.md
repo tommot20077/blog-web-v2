@@ -8,7 +8,7 @@
 
 ## 交叉主題（跨稽核共振——修一處解多筆）
 
-- **T1 審核狀態機可繞過**：AUTH-01（restore 還原 status 繞審核）＝ DATA-03（restore 靜默降級無下架連鎖）＝ AUTH-02（DRAFT→PUBLISHED 作者自助發布）。三者同源：status 轉換未收斂到單一守衛的狀態機。**依賴 Q1 業務決策**。
+- **T1 status 轉換一致性**（Q1 定案後重新定性）：AUTH-01＝DATA-03——restore 靜默改 status 時無對應的 ES/series/count 連鎖。自助發布本身合法（AUTH-02 WONTFIX），問題純為 status 轉換未收斂到單一守衛且未觸發副作用。
 - **T2 `try save catch DIVE` 冪等反模式**：RACE-01/03/04/08/15、DATA-01 部分。Spring Data JDBC 的 save 例外會使外層交易 rollback-only，catch 吞不掉 → 500。正解統一為 `INSERT ... ON CONFLICT`（codebase 已有正確範本：`UserTagFollowRepository.follow`、`IdempotencyService`）。
 - **T3 反正規化計數器漂移**：DATA-01（tag usage 只增不減+重複累加）、DATA-06（comment_count 雙生路徑分歧）、RACE-07/09、DATA-10（series count）。`tags.usage_count` 最嚴重（膨脹導致 tag 永久無法刪）。
 - **T4 刪除/降級無連鎖**：DATA-02（刪帳內容殘留）、DATA-03/04（ES 幽靈文件 reindex 修不掉）、DATA-07（MinIO 圖片洩漏配額）、DATA-13/14。**依賴 Q2 業務決策**。
@@ -16,12 +16,13 @@
 
 ---
 
-## 待業務判斷（NEEDS-DECISION）
+## 業務判斷已定案（2026-07-10）
 
-- **Q1 作者發文是否強制經 admin 審核？**
-  `createArticle` 註解寫「防止用戶繞過審核流程直接發布」，但實際 `DRAFT→PUBLISHED` 對 AUTHOR 無限制、restore 可還原 PUBLISHED status。若審核為強制 → AUTH-01/AUTH-02/DATA-03 皆為漏洞須修；若作者可自助發布 → 降為 Info，僅需修 restore 的 ES/series 連鎖。
-- **Q2 刪除帳號的語意？** 匿名化（保留內容、作者顯示為「已刪除使用者」）還是連鎖下架（文章/留言一併隱藏）？決定 DATA-02 的修法形狀。
-- **Q3 未驗證信箱（PENDING_VERIFICATION）帳號可否寫入（留言/按讚）？** 現況可，等於信箱驗證不防濫用（AUTH-06）。
+- **Q1 作者發文無需強制審核**（作者可自助發布）。影響：
+  - AUTH-02 → **WONTFIX**（`DRAFT→PUBLISHED` 自助發布為刻意設計；但 `UpdateArticleRequest.status` 的 mass-assignment 仍應限制為合法轉換，見 AUTH-02 註）。
+  - AUTH-01 / DATA-03 → **仍須修**，但重新定性：不是「審核繞過」，而是 restore 靜默把 PUBLISHED 降級時**無 ES 刪除 / series 不清 / count 不減**的一致性破口。
+- **Q2 刪除帳號採「匿名化」**（我方建議，Yuan 可推翻）：洗 `users` 列 PII（nickname→「已刪除使用者」、avatar/bio/website/social/location→null、email→墓碑）使既有 JOIN 自動匿名；保留已發布文章、刪除草稿/PENDING；清孤兒檔案（併 DATA-07）；發 `UserDeletedEvent` 供 search reindex。DATA-02 修法據此。
+- **Q3 未驗證信箱帳號不可寫入**。AUTH-06 → **確認為 bug 須修**：PENDING_VERIFICATION 不應取得寫入類 authorities/permission。
 
 ---
 
@@ -29,12 +30,12 @@
 
 | ID | 嚴重度 | 標題 | 證據 | 狀態 |
 |----|--------|------|------|------|
-| AUTH-01 | High | version restore 還原快照 status，繞過審核/下架狀態機 | `VersioningService.java:258`、`ArticleFacadeImpl.java:391-405` | NEEDS-DECISION(Q1) |
-| AUTH-02 | Medium | `DRAFT→PUBLISHED` 對 AUTHOR 無限制 + `UpdateArticleRequest.status` 可控（mass-assignment） | `ArticleCommandSubService.java:49-54,363-368`、`UpdateArticleRequest.java:43` | NEEDS-DECISION(Q1) |
+| AUTH-01 | Medium | version restore 靜默還原快照 status（重新定性為一致性破口，見 DATA-03；非審核繞過） | `VersioningService.java:258`、`ArticleFacadeImpl.java:391-405` | OPEN |
+| AUTH-02 | Low | `UpdateArticleRequest.status` mass-assignment（自助發布為刻意設計，但仍應限制為合法轉換值） | `ArticleCommandSubService.java:49-54,363-368`、`UpdateArticleRequest.java:43` | WONTFIX（部分）|
 | AUTH-03 | Medium | 公開 `GET /series/{slug}` 洩漏非 PUBLISHED 文章（status 改回 DRAFT 後 series_id 不清） | `SeriesService.java:216`、`ArticleMapper.java:282-283` | OPEN |
 | AUTH-04 | Medium | comment 寫入/按讚/刪除僅 `isAuthenticated()`，未接回 COMMENT_WRITE/DELETE permission | `CommentController.java:63,73,84`、`CommentLikeController.java:35,43` | OPEN |
 | AUTH-05 | Low | 草稿文章可被互動（like/bookmark/highlight/comment）+ 200/404 存在性 oracle | `ArticleMapper.java:273`（findIdByUuid 不濾 status） | OPEN |
-| AUTH-06 | Low | PENDING_VERIFICATION 帳號擁有完整寫入權（spam 面） | `JwtAuthenticationFilter.java:92` | NEEDS-DECISION(Q3) |
+| AUTH-06 | Medium | PENDING_VERIFICATION 帳號取得完整寫入權（Q3 定案：不應可寫入） | `JwtAuthenticationFilter.java:92` | OPEN（確認須修）|
 | AUTH-07 | Low | 公開 `GET /files/{id}` 回傳含 `storagePath`（MinIO 內部路徑）+ uploaderId | `FileController.java:95-98`、`FileServiceImpl.java:239-243` | OPEN |
 | AUTH-08 | Low | BookmarkController 缺 article null 檢查 → 500 而非 404 | `BookmarkController.java:40-41,50-51` | OPEN |
 | AUTH-09 | Info | highlight/comment 對「不存在」vs「屬他人」回不同錯誤碼（列舉 oracle） | `HighlightService.java:64-68,77-81` | OPEN |
@@ -72,8 +73,8 @@
 | ID | 嚴重度 | 標題 | 證據 | 狀態 |
 |----|--------|------|------|------|
 | DATA-01 | High | `tags.usage_count` 只增不減 + 同文章每次編輯/發布重複累加 → 膨脹致 tag 永久無法刪 | `TagUsageConsumer.java:66-74`、`ArticleCommandSubService.java:107,199,274`、`TagServiceImpl.java:207` | OPEN |
-| DATA-02 | High | deleteAccount 只改 status，DELETED 使用者內容在所有公開讀取路徑殘留（無 SQL 過濾 u.status） | `UserService.java:171-185`、`ArticleMapper.java:41`、`CommentMapper.java:38` | NEEDS-DECISION(Q2) |
-| DATA-03 | High | restore 將 PUBLISHED 靜默降 DRAFT（唯一反發布路徑）→ 無 ES 刪除、series 不清、count 不減 | `VersioningService.java:252-262`、`ArticleFacadeImpl.java:391-405` | NEEDS-DECISION(Q1) |
+| DATA-02 | High | deleteAccount 只改 status，DELETED 使用者內容在所有公開讀取路徑殘留 | `UserService.java:171-185`、`ArticleMapper.java:41`、`CommentMapper.java:38` | OPEN（Q2 定案：匿名化）|
+| DATA-03 | High | restore 將 PUBLISHED 靜默降 DRAFT → 無 ES 刪除、series 不清、count 不減（含 AUTH-01） | `VersioningService.java:252-262`、`ArticleFacadeImpl.java:391-405` | OPEN |
 | DATA-04 | Medium-High | ES 刪除依賴 best-effort MQ，且 `reindexAll` 只 saveAll 不刪殘留 → 幽靈文件 reindex 也修不掉 | `ArticleEventPublisher.java:149-169`、`SearchServiceImpl.java:200-208` | OPEN |
 | DATA-05 | Medium | ES 文件 viewCount/likeCount 硬編 0（增量索引），`sort=hot` 失效、DTO 回傳假計數 | `ArticleSearchListener.java:141-142`、`SearchServiceImpl.java:115-117,251-252` | OPEN |
 | DATA-06 | Medium | comment_count（每刪-1）與留言區 totalAll（top-level 墓碑保留）規則分歧，永不收斂 | `CommentService.java:187-188`、`CommentMapper.java:81-83` | OPEN |
