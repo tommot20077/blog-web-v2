@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.user.service;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
-import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
@@ -15,8 +14,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.HashOperations;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.LocalDateTime;
@@ -50,13 +47,9 @@ class UserServiceTest {
     @Mock
     private PasswordEncoder passwordEncoder;
 
-    /** Mock：Redis 操作模板 */
+    /** Mock：Session 撤銷服務 */
     @Mock
-    private StringRedisTemplate redisTemplate;
-
-    /** Mock：Redis Hash 操作 */
-    @Mock
-    private HashOperations<String, Object, Object> hashOperations;
+    private SessionRevoker sessionRevoker;
 
     /** 受測物件 */
     @InjectMocks
@@ -207,7 +200,6 @@ class UserServiceTest {
     @Test
     @DisplayName("changePassword → 正確舊密碼 → 應更新密碼雜湊")
     void changePassword_withCorrectOldPassword_shouldUpdatePasswordHash() {
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         User mockUser = buildActiveUser();
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
@@ -242,7 +234,6 @@ class UserServiceTest {
     @Test
     @DisplayName("changePassword → 應遞增 tokenVersion")
     void changePassword_shouldIncrementTokenVersion() {
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         User mockUser = buildActiveUser();
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
@@ -268,12 +259,11 @@ class UserServiceTest {
     }
 
     /**
-     * 驗證：changePassword 應同步更新 Redis Auth Hash 中的版本號，確保 JWT 版本一致。
+     * 驗證：changePassword 應撤銷該用戶所有 session，使既有 Token 立即失效。
      */
     @Test
-    @DisplayName("changePassword → 應同步更新 Redis user:auth:{id} 中的版本號")
-    void changePassword_shouldSyncVersionInRedis() {
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+    @DisplayName("changePassword → 應撤銷該用戶所有 session")
+    void changePassword_shouldRevokeAllSessions() {
         User mockUser = buildActiveUser();
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
@@ -281,7 +271,7 @@ class UserServiceTest {
 
         userService.changePassword(TEST_USER_ID, TEST_PASSWORD, "newPassword");
 
-        verify(hashOperations).put(anyString(), eq(RedisKeyConstant.FIELD_VERSION), eq("v2"));
+        verify(sessionRevoker).revokeAllSessions(TEST_USER_ID);
     }
 
     /* =========================================================================
@@ -334,19 +324,19 @@ class UserServiceTest {
     }
 
     /**
-     * 驗證：deleteAccount 應清除 Redis 中 user:auth:{id} 與 refresh:token:{id} 兩個快取鍵，
+     * 驗證：deleteAccount 應撤銷該用戶所有 session（清除 auth hash 與 refresh ZSet），
      * 確保所有 Token 立即失效。
      */
     @Test
-    @DisplayName("deleteAccount → 應清除 Redis 中的 user:auth:{id} 與 refresh:token:{id} 快取")
-    void deleteAccount_shouldClearBothRedisKeys() {
+    @DisplayName("deleteAccount → 應撤銷該用戶所有 session")
+    void deleteAccount_shouldRevokeAllSessions() {
         User mockUser = buildActiveUser();
         when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
 
         userService.deleteAccount(TEST_USER_ID, TEST_PASSWORD);
 
-        verify(redisTemplate, times(2)).delete(anyString());
+        verify(sessionRevoker).revokeAllSessions(TEST_USER_ID);
     }
 
     /* =========================================================================

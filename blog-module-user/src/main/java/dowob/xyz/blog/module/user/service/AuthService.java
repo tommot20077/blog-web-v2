@@ -64,6 +64,9 @@ public class AuthService {
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
 
+    /** Session 撤銷服務（重設密碼後撤銷所有既有 session，使被盜 Token 立即失效） */
+    private final SessionRevoker sessionRevoker;
+
     /**
      * 用戶註冊
      *
@@ -459,8 +462,12 @@ public class AuthService {
     /**
      * 重設密碼
      *
-     * <p>驗證密碼重設 Token 有效後，更新密碼雜湊並遞增 tokenVersion 使舊 Token 失效，
-     * 最後刪除已使用的重設 Token。</p>
+     * <p>驗證密碼重設 Token 有效後，更新密碼雜湊並遞增 tokenVersion，隨即撤銷該用戶
+     * 所有既有 session（清除 Redis auth hash 與 refresh ZSet），使被盜的 Access Token
+     * 與 Refresh Token 立即失效——這是帳號救援的核心安全保證。最後刪除已使用的重設 Token。</p>
+     *
+     * <p>注意：僅遞增 DB tokenVersion 不足以立即失效，因 {@code JwtAuthenticationFilter}
+     * 命中 Redis 快取時讀到的仍是舊版本；故必須主動清除 Redis 快取。</p>
      *
      * @param token       密碼重設 Token 字串
      * @param newPassword 新的明文密碼
@@ -481,6 +488,8 @@ public class AuthService {
         user.setPasswordHash(passwordEncoder.encode(newPassword));
         user.setTokenVersion(incrementVersion(user.getTokenVersion()));
         userRepository.save(user);
+
+        sessionRevoker.revokeAllSessions(user.getId());
 
         verificationTokenRepository.delete(resetToken);
     }

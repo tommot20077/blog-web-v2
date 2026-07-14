@@ -167,21 +167,27 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
        ========================================================================= */
 
     /**
-     * 驗證：changePassword() 後，Redis {@code user:auth:{id}} 中的版本號應同步更新。
+     * 驗證：changePassword() 後，應撤銷該用戶所有 session——DB tokenVersion 升為 v2，
+     * 且 Redis {@code user:auth:{id}} 與 refresh ZSet 均清空，使既有 access token
+     * 與被盜的 refresh token 立即失效。
      */
     @Test
-    @DisplayName("changePassword → 整合測試：Redis user:auth:{id} 版本應由 v1 更新為 v2")
-    void changePassword_shouldSyncVersionInRedis() {
+    @DisplayName("changePassword → 整合測試：應撤銷所有 session（DB 版本升 v2、清 auth 與 refresh）")
+    void changePassword_shouldRevokeAllSessions() {
         User user = buildAndSaveUser(UserStatus.ACTIVE);
         String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
 
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, UserStatus.ACTIVE.name());
+        redisTemplate.opsForZSet().add(refreshKey, "stolen-refresh-token", System.currentTimeMillis());
 
         userService.changePassword(user.getId(), TEST_PASSWORD, "newPassword456");
 
-        String version = (String) redisTemplate.opsForHash().get(authKey, RedisKeyConstant.FIELD_VERSION);
-        assertThat(version).isEqualTo("v2");
+        User updated = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(updated.getTokenVersion()).isEqualTo("v2");
+        assertThat(redisTemplate.hasKey(authKey)).isFalse();
+        assertThat(redisTemplate.hasKey(refreshKey)).isFalse();
     }
 
     /**
@@ -198,6 +204,38 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
         redisTemplate.opsForValue().set(refreshKey, "some-refresh-token");
 
         userService.deleteAccount(user.getId(), TEST_PASSWORD);
+
+        assertThat(redisTemplate.hasKey(authKey)).isFalse();
+        assertThat(redisTemplate.hasKey(refreshKey)).isFalse();
+    }
+
+    /**
+     * 驗證：resetPassword()（忘記密碼救援）後，應撤銷該用戶所有 session——
+     * Redis {@code user:auth:{id}} 與 refresh ZSet 均清空，使被盜的 access/refresh token
+     * 立即失效。這是帳號救援的核心安全保證：重設密碼必須讓攻擊者現有 session 全數失效。
+     */
+    @Test
+    @DisplayName("resetPassword → 整合測試：應撤銷所有 session（清 auth 與 refresh）")
+    void resetPassword_shouldRevokeAllSessions() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
+
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, UserStatus.ACTIVE.name());
+        redisTemplate.opsForZSet().add(refreshKey, "stolen-refresh-token", System.currentTimeMillis());
+
+        String tokenValue = "integration-reset-token";
+        VerificationToken resetToken = new VerificationToken();
+        resetToken.setId(88L);
+        resetToken.setUserId(user.getId());
+        resetToken.setToken(tokenValue);
+        resetToken.setType("PASSWORD_RESET");
+        resetToken.setExpiresAt(LocalDateTime.now().plusHours(1));
+        when(verificationTokenRepository.findByTokenAndType(tokenValue, "PASSWORD_RESET"))
+                .thenReturn(Optional.of(resetToken));
+
+        authService.resetPassword(tokenValue, "newPassword456");
 
         assertThat(redisTemplate.hasKey(authKey)).isFalse();
         assertThat(redisTemplate.hasKey(refreshKey)).isFalse();

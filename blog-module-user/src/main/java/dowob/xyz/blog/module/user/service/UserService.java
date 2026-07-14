@@ -2,16 +2,13 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.UserStatus;
 
-import java.util.concurrent.TimeUnit;
 import dowob.xyz.blog.module.user.util.TokenVersionUtils;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
-import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,8 +32,8 @@ public class UserService {
     /** 密碼加密器 */
     private final PasswordEncoder passwordEncoder;
 
-    /** Redis 操作模板，用於清除快取 */
-    private final StringRedisTemplate redisTemplate;
+    /** Session 撤銷服務，用於改密碼／刪帳號後撤銷所有既有 session */
+    private final SessionRevoker sessionRevoker;
 
     /**
      * 取得使用者個人資料
@@ -131,8 +128,8 @@ public class UserService {
     /**
      * 修改密碼
      *
-     * <p>驗證舊密碼正確後更新密碼雜湊，並遞增 tokenVersion 使所有現有 Token 失效。
-     * 同步更新 Redis Auth Hash 中的版本號。</p>
+     * <p>驗證舊密碼正確後更新密碼雜湊並遞增 tokenVersion，隨即撤銷該用戶所有既有 session
+     * （清除 Redis auth hash 與 refresh ZSet），使既有 Access Token 與 Refresh Token 立即失效。</p>
      *
      * @param userId      用戶 ID
      * @param oldPassword 當前舊密碼（明文）
@@ -152,9 +149,7 @@ public class UserService {
         user.setTokenVersion(newVersion);
         userRepository.save(user);
 
-        String redisKey = RedisKeyConstant.getUserAuthKey(userId);
-        redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_VERSION, newVersion);
-        redisTemplate.expire(redisKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
+        sessionRevoker.revokeAllSessions(userId);
     }
 
     /**
@@ -178,7 +173,6 @@ public class UserService {
         user.setStatus(UserStatus.DELETED);
         userRepository.save(user);
 
-        redisTemplate.delete(RedisKeyConstant.getUserAuthKey(userId));
-        redisTemplate.delete(RedisKeyConstant.getUserRefreshKey(userId));
+        sessionRevoker.revokeAllSessions(userId);
     }
 }

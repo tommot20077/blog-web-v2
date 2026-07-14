@@ -89,6 +89,10 @@ class AuthServiceTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
+    /** Mock：Session 撤銷服務 */
+    @Mock
+    private SessionRevoker sessionRevoker;
+
     /** 受測物件，由 Mockito 自動注入所有 @Mock */
     @InjectMocks
     private AuthService authService;
@@ -725,10 +729,10 @@ class AuthServiceTest {
        ========================================================================= */
 
     /**
-     * 驗證：resetPassword 使用有效 Token 應更新密碼並遞增 tokenVersion。
+     * 驗證：resetPassword 使用有效 Token 應更新密碼、遞增 tokenVersion 並撤銷所有 session。
      */
     @Test
-    @DisplayName("resetPassword → 有效 Token → 應更新密碼並遞增 tokenVersion")
+    @DisplayName("resetPassword → 有效 Token → 應更新密碼、遞增 tokenVersion 並撤銷所有 session")
     void resetPassword_withValidToken_shouldUpdatePassword() {
         String tokenStr = "valid-reset-token";
         VerificationToken resetToken = buildResetToken(tokenStr, LocalDateTime.now().plusMinutes(10));
@@ -744,6 +748,7 @@ class AuthServiceTest {
         ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(userCaptor.capture());
         assertThat(userCaptor.getValue().getTokenVersion()).isEqualTo("v2");
+        verify(sessionRevoker).revokeAllSessions(mockUser.getId());
         verify(verificationTokenRepository).delete(resetToken);
     }
 
