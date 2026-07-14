@@ -123,6 +123,23 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     }
 
     /**
+     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{id}} 應包含 {@code role} 欄位，
+     * 且值為該用戶的實際角色。此欄位供 {@code /refresh} 沿用，避免刷新時角色被降級為 USER。
+     */
+    @Test
+    @DisplayName("login → 應將 role 寫入 Redis Hash（供 refresh 沿用，避免角色降級）")
+    void login_shouldSetRoleInRedis() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE, Role.AUTHOR);
+        String redisKey = RedisKeyConstant.getUserAuthKey(user.getId());
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        Map<Object, Object> entries = redisTemplate.opsForHash().entries(redisKey);
+        assertThat(entries).containsKey(RedisKeyConstant.FIELD_ROLE);
+        assertThat(entries.get(RedisKeyConstant.FIELD_ROLE)).isEqualTo(Role.AUTHOR.name());
+    }
+
+    /**
      * 驗證：呼叫 verifyEmail() 後，用戶狀態應更新為 ACTIVE、emailVerified=true，
      * 且 verificationTokenRepository.delete() 應被呼叫（整合驗證 Token 刪除行為）。
      */
@@ -304,13 +321,24 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
      * @return 已儲存並帶有 ID 的 User 實體
      */
     private User buildAndSaveUser(UserStatus status) {
+        return buildAndSaveUser(status, Role.USER);
+    }
+
+    /**
+     * 直接存入資料庫建立指定狀態與角色的測試用戶。
+     *
+     * @param status 用戶狀態
+     * @param role   用戶角色
+     * @return 已儲存並帶有 ID 的 User 實體
+     */
+    private User buildAndSaveUser(UserStatus status, Role role) {
         User user = new User();
         user.setUuid(UUID.randomUUID());
         user.setEmail(TEST_EMAIL);
         user.setUsername(TEST_USERNAME);
         user.setNickname(TEST_NICKNAME);
         user.setPasswordHash(passwordEncoder.encode(TEST_PASSWORD));
-        user.setRole(Role.USER);
+        user.setRole(role);
         user.setStatus(status);
         user.setTokenVersion("v1");
         return userRepository.save(user);

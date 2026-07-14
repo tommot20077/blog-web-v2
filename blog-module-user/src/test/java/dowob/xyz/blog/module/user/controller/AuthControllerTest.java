@@ -688,11 +688,12 @@ class AuthControllerTest {
     }
 
     /**
-     * 驗證：Token 有效但 Redis 中 role 與 version 皆為 null 時應使用預設值（"USER"、"v1"）並正常回傳。
+     * 驗證：Token 有效但 Redis auth hash 缺 role 欄位時，refresh 應從 DB 補回用戶實際角色，
+     * 而非降級為預設 "USER"。此為 refresh 角色降級 bug 的迴歸測試。
      */
     @Test
-    @DisplayName("POST /refresh → role/version 皆為 null → 應使用預設值並回傳新 Access Token")
-    void refresh_nullRoleAndVersion_shouldUseDefaultsAndReturnNewAccessToken() throws Exception {
+    @DisplayName("POST /refresh → Redis 缺 role 欄位 → 應從 DB 補角色而非降級為 USER")
+    void refresh_roleMissingInRedis_shouldFallBackToDbRole() throws Exception {
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         @SuppressWarnings("unchecked")
@@ -703,17 +704,20 @@ class AuthControllerTest {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.get(anyString(), eq("version"))).thenReturn(null);
+        when(hashOps.get(anyString(), eq("version"))).thenReturn("v1");
         when(hashOps.get(anyString(), eq("status"))).thenReturn("ACTIVE");
         when(hashOps.get(anyString(), eq("role"))).thenReturn(null);
-        when(jwtService.generateAccessToken(eq(1L), eq("USER"), eq("v1")))
-                .thenReturn("new.access.token.defaults");
+        when(authService.resolveUserRole(1L)).thenReturn("AUTHOR");
+        when(jwtService.generateAccessToken(eq(1L), eq("AUTHOR"), eq("v1")))
+                .thenReturn("new.access.token.author");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
-                .andExpect(jsonPath("$.data.accessToken").value("new.access.token.defaults"));
+                .andExpect(jsonPath("$.data.accessToken").value("new.access.token.author"));
+
+        verify(jwtService).generateAccessToken(1L, "AUTHOR", "v1");
     }
 
     // =========================================================================

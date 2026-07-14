@@ -276,7 +276,7 @@ class AuthServiceTest {
 
         assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
         assertThat(result.refreshToken()).isEqualTo(MOCK_REFRESH_TOKEN);
-        verify(hashOperations, times(2)).put(anyString(), anyString(), anyString());
+        verify(hashOperations, times(3)).put(anyString(), anyString(), anyString());
         verify(zSetOps).add(anyString(), eq(MOCK_REFRESH_TOKEN), anyDouble());
     }
 
@@ -750,6 +750,31 @@ class AuthServiceTest {
         assertThat(userCaptor.getValue().getTokenVersion()).isEqualTo("v2");
         verify(sessionRevoker).revokeAllSessions(mockUser.getId());
         verify(verificationTokenRepository).delete(resetToken);
+    }
+
+    /**
+     * 驗證：resolveUserRole 應回傳 DB 中該用戶的實際角色名稱（供 refresh 於快取缺 role 時回退）。
+     */
+    @Test
+    @DisplayName("resolveUserRole → 應回傳 DB 中該用戶的角色名稱")
+    void resolveUserRole_shouldReturnRoleFromDb() {
+        User mockUser = buildActiveUser();
+        mockUser.setRole(Role.AUTHOR);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(mockUser));
+
+        assertThat(authService.resolveUserRole(1L)).isEqualTo("AUTHOR");
+    }
+
+    /**
+     * 驗證：resolveUserRole 在用戶不存在時應拋出 BusinessException。
+     */
+    @Test
+    @DisplayName("resolveUserRole → 用戶不存在 → 應拋出 BusinessException")
+    void resolveUserRole_userNotFound_shouldThrowBusinessException() {
+        when(userRepository.findById(1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.resolveUserRole(1L))
+                .isInstanceOf(BusinessException.class);
     }
 
     /**

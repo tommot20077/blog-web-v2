@@ -143,7 +143,7 @@ public class AuthController {
 
         String newAccessToken = jwtService.generateAccessToken(
                 userId,
-                roleStr != null ? roleStr : "USER",
+                roleStr != null ? roleStr : authService.resolveUserRole(userId),
                 version != null ? version : "v1"
         );
 

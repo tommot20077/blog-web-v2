@@ -221,6 +221,7 @@ public class AuthService {
         String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, user.getTokenVersion());
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, user.getStatus().name());
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ROLE, user.getRole().name());
         redisTemplate.expire(authKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
 
         String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
@@ -492,6 +493,22 @@ public class AuthService {
         sessionRevoker.revokeAllSessions(user.getId());
 
         verificationTokenRepository.delete(resetToken);
+    }
+
+    /**
+     * 查詢用戶當前角色
+     *
+     * <p>供 {@code /refresh} 於 Redis auth hash 缺少 role 欄位時回退至 DB 取得用戶實際角色，
+     * 避免刷新 Access Token 時角色被降級為 USER。</p>
+     *
+     * @param userId 用戶 ID
+     * @return 角色名稱（如 {@code "AUTHOR"}）
+     */
+    @Transactional(readOnly = true)
+    public String resolveUserRole(Long userId) {
+        return userRepository.findById(userId)
+                .map(user -> user.getRole().name())
+                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
     }
 
     /**
