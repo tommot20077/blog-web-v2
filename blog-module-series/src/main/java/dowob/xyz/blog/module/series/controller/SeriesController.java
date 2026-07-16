@@ -60,8 +60,28 @@ public class SeriesController {
         return ApiResponse.success(seriesService.listPublic(page, size));
     }
 
+    /**
+     * 取得 Series 詳情。
+     *
+     * <p>
+     * <b>匿名可存取</b>——本端點依 {@code security.md} 原則 7 的「選填認證公開端點」豁免，
+     * 故不標註 {@code @PreAuthorize}。三項豁免條件均成立：
+     * </p>
+     * <ol>
+     *   <li>{@code SecurityConfig} 明確 {@code permitAll} {@code GET /api/v1/series/**}（對得上 Public Endpoints 表）；</li>
+     *   <li>{@code currentUserId} 允許為 null，僅用於選填的閱讀進度（myProgress）個人化；</li>
+     *   <li>本 JavaDoc 即為所需的豁免標註。</li>
+     * </ol>
+     * <p>
+     * 文章可見性不倚賴此處的認證狀態：{@code getSeriesDetail} 對任何呼叫者一律只回 PUBLISHED 文章。
+     * </p>
+     *
+     * @param slug          Series URL slug
+     * @param currentUserId 當前使用者 ID（未登入為 null，僅供 myProgress 個人化）
+     * @return Series 詳情（含文章列表與我的進度）
+     */
     @GetMapping("/{slug}")
-    @Operation(summary = "Series 詳情（含我的進度）")
+    @Operation(summary = "Series 詳情（匿名可存取，登入時含我的進度）")
     public ApiResponse<SeriesDetailResponse> get(
             @PathVariable String slug,
             @AuthenticationPrincipal Long currentUserId) {

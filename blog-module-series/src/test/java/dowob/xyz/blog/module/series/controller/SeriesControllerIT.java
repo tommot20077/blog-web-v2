@@ -422,4 +422,35 @@ class SeriesControllerIT {
                 .andExpect(jsonPath("$.data.myProgress.readCount").value(0))
                 .andExpect(jsonPath("$.data.myProgress.totalCount").value(0));
     }
+
+    @Test
+    @DisplayName("GET /series/{slug} - 匿名可存取，回 200 且無 myProgress")
+    void getSlug_anonymous_returns200WithoutMyProgress() throws Exception {
+        Series series = new Series();
+        series.setUuid(UUID.randomUUID());
+        series.setTitle("Anonymous Series");
+        series.setSlug("anonymous-series");
+        series.setAuthorId(USER1_ID);
+        series.setArticleCount(0);
+        series.setCreatedAt(LocalDateTime.now());
+        series.setUpdatedAt(LocalDateTime.now());
+        seriesRepo.save(series);
+
+        // 未帶任何認證：本端點依 security.md 原則 7 豁免為公開端點，
+        // 且 GET /api/v1/series/** 於 SecurityConfig 明確 permitAll。
+        mockMvc.perform(get("/api/v1/series/{slug}", "anonymous-series"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.slug").value("anonymous-series"))
+                // currentUserId 為 null 時不計算個人化進度
+                .andExpect(jsonPath("$.data.myProgress").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /series - 匿名可存取列表，回 200")
+    void list_anonymous_returns200() throws Exception {
+        mockMvc.perform(get("/api/v1/series"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
 }
