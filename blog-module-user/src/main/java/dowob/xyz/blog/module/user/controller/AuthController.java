@@ -10,6 +10,7 @@ import dowob.xyz.blog.module.user.model.dto.request.LoginRequest;
 import dowob.xyz.blog.module.user.model.dto.request.RegisterRequest;
 import dowob.xyz.blog.module.user.model.dto.request.ResetPasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.VerifyEmailCodeRequest;
+import dowob.xyz.blog.module.user.model.dto.request.VerifyEmailRequest;
 import dowob.xyz.blog.module.user.model.dto.response.AuthResponse;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
 import dowob.xyz.blog.module.user.service.AuthService;
@@ -205,13 +206,19 @@ public class AuthController {
     /**
      * 驗證電子信箱
      *
-     * @param token 驗證 Token 字串（來自驗證信連結）
+     * <p>
+     * 採 POST + request body：token 屬憑證，不得經由 query string 傳遞
+     * （security.md 原則 8，否則會進入 access log 與瀏覽器歷史）。
+     * 驗證信中的連結指向前端頁面而非本端點，故此形狀變更不影響已寄出的信件。
+     * </p>
+     *
+     * @param request 包含驗證 Token（來自驗證信連結）
      * @return 成功回應
      */
     @Operation(summary = "驗證電子信箱", description = "透過驗證信中的 Token 啟用帳號")
-    @GetMapping("/verify-email")
-    public ApiResponse<Void> verifyEmail(@RequestParam String token) {
-        authService.verifyEmail(token);
+    @PostMapping("/verify-email")
+    public ApiResponse<Void> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
+        authService.verifyEmail(request.getToken());
         return ApiResponse.success();
     }
 
