@@ -22,6 +22,9 @@ import org.postgresql.util.PSQLException;
 import org.postgresql.util.PSQLState;
 import org.postgresql.util.ServerErrorMessage;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.Optional;
@@ -46,6 +49,7 @@ class VersioningServiceTest {
     @Mock private PreferenceResolver preferenceResolver;
     @Mock private ArticleMarkdownRenderer markdownRenderer;
     @Mock private TagFacade tagFacade;
+    @Mock private TransactionTemplate transactionTemplate;
 
     @InjectMocks private VersioningService service;
 
@@ -61,6 +65,12 @@ class VersioningServiceTest {
         // - 個別 test 需要特定 tags 時可以 override（例如 recordManualSnapshot_copiesCurrentArticleTags）
         lenient().when(tagFacade.findTagIdsByArticleUuid(any(UUID.class)))
             .thenReturn(java.util.List.of());
+
+        /** 讓 mock 的 TransactionTemplate 直接執行 callback，使 restore 的 stash 段照常運行 */
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(org.mockito.Mockito.mock(TransactionStatus.class));
+        });
     }
 
     /** 建立帶有固定 uuid 的 ArticleContentData stub（snapshot 流程用）。 */
