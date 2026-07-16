@@ -92,7 +92,7 @@ public class VersionController {
     @PostMapping("/manual")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "建立手動快照")
-    public ApiResponse<ArticleVersion> createManual(
+    public ApiResponse<VersionDetailResponse> createManual(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal Long currentUserId,
             @Valid @RequestBody(required = false) CreateManualSnapshotRequest req) {
@@ -100,7 +100,7 @@ public class VersionController {
         Long articleId = versioningService.findArticleIdByUuidOrThrow(articleUuid, currentUserId, isAdmin);
         String note = req != null ? req.getNote() : null;
         ArticleVersion v = versioningService.recordManualSnapshot(articleId, note);
-        return ApiResponse.success(v);
+        return ApiResponse.success(versioningService.toDetailResponse(v));
     }
 
     /**
@@ -127,14 +127,14 @@ public class VersionController {
     @PostMapping("/{versionUuid}/promote")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "AUTO 升級為 MANUAL")
-    public ApiResponse<ArticleVersion> promote(
+    public ApiResponse<VersionDetailResponse> promote(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
             @AuthenticationPrincipal Long currentUserId) {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         ArticleVersion v = versioningService.promote(versionUuid, currentUserId, isAdmin);
-        return ApiResponse.success(v);
+        return ApiResponse.success(versioningService.toDetailResponse(v));
     }
 
     /**

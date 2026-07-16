@@ -171,7 +171,10 @@ class VersionControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.total").value(2))
-                .andExpect(jsonPath("$.data.records").isArray());
+                .andExpect(jsonPath("$.data.records").isArray())
+                // architecture.md：對外只出 UUID，內部 Long ID 不得現身
+                .andExpect(jsonPath("$.data.records[0].uuid").exists())
+                .andExpect(jsonPath("$.data.records[0].authorId").doesNotExist());
     }
 
     @Test
@@ -200,7 +203,10 @@ class VersionControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.uuid").value(v.getUuid().toString()))
-                .andExpect(jsonPath("$.data.content").value("Version content body."));
+                .andExpect(jsonPath("$.data.content").value("Version content body."))
+                // architecture.md：對外只出 UUID，內部 Long ID 不得現身
+                .andExpect(jsonPath("$.data.authorId").doesNotExist())
+                .andExpect(jsonPath("$.data.categoryId").doesNotExist());
     }
 
     @Test
@@ -231,7 +237,13 @@ class VersionControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.type").value("MANUAL"))
-                .andExpect(jsonPath("$.data.note").value("手動存檔 v1"));
+                .andExpect(jsonPath("$.data.note").value("手動存檔 v1"))
+                // 此端點原本直接回 ArticleVersion entity，內部 Long ID 全數外洩
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.id").doesNotExist())
+                .andExpect(jsonPath("$.data.articleId").doesNotExist())
+                .andExpect(jsonPath("$.data.authorId").doesNotExist())
+                .andExpect(jsonPath("$.data.categoryId").doesNotExist());
 
         // 確認版本已寫入 DB
         long count = 0;
@@ -280,7 +292,13 @@ class VersionControllerIT {
                         .with(asUser(USER1_ID, Role.AUTHOR)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
-                .andExpect(jsonPath("$.data.type").value("MANUAL"));
+                .andExpect(jsonPath("$.data.type").value("MANUAL"))
+                // 此端點原本直接回 ArticleVersion entity，內部 Long ID 全數外洩
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.id").doesNotExist())
+                .andExpect(jsonPath("$.data.articleId").doesNotExist())
+                .andExpect(jsonPath("$.data.authorId").doesNotExist())
+                .andExpect(jsonPath("$.data.categoryId").doesNotExist());
     }
 
     @Test

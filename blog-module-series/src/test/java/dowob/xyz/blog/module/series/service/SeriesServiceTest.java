@@ -46,6 +46,24 @@ class SeriesServiceTest {
     private final UUID articleUuid = UUID.randomUUID();
     private final Long articleId = 200L;
 
+    /**
+     * stub create/update 寫入後的 re-fetch。
+     *
+     * <p>createSeries / updateSeries 回傳 SeriesSummaryResponse（對外只出 UUID，
+     * 不再回 entity），故寫入後會以 slug re-fetch 取得 author 欄位。本 helper 讓
+     * 該 re-fetch 回傳一筆對得上的 row；驗證寫入內容的斷言仍以 repo.save 的
+     * ArgumentCaptor 為準，不受影響。</p>
+     */
+    private void stubRefetchBySlug(String slug) {
+        SeriesWithAuthor row = new SeriesWithAuthor();
+        row.setId(seriesId);
+        row.setUuid(seriesUuid);
+        row.setSlug(slug);
+        row.setAuthorUuid(UUID.randomUUID());
+        row.setAuthorNickname("user");
+        lenient().when(mapper.findBySlugWithAuthor(slug)).thenReturn(row);
+    }
+
     private final Long userId = 1L;
     private final Long seriesId = 100L;
     private final UUID seriesUuid = UUID.randomUUID();
@@ -58,6 +76,7 @@ class SeriesServiceTest {
             s.setId(seriesId);
             return s;
         });
+        stubRefetchBySlug("vue-101");
 
         CreateSeriesRequest req = new CreateSeriesRequest();
         req.setTitle("Vue 101");
@@ -100,6 +119,7 @@ class SeriesServiceTest {
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
         when(repo.existsBySlug("new-slug")).thenReturn(false);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        stubRefetchBySlug("new-slug");
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("new");
@@ -135,8 +155,10 @@ class SeriesServiceTest {
         Series existing = new Series();
         existing.setId(seriesId); existing.setUuid(seriesUuid);
         existing.setAuthorId(999L);
+        existing.setSlug("admin-series");
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        stubRefetchBySlug("admin-series");
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("admin override");

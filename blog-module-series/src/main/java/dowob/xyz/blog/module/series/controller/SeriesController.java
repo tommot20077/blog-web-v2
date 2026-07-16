@@ -71,7 +71,7 @@ public class SeriesController {
     @PostMapping
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "建立 Series")
-    public ApiResponse<Series> create(
+    public ApiResponse<SeriesSummaryResponse> create(
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody CreateSeriesRequest req) {
         return ApiResponse.success(seriesService.createSeries(userId, req));
@@ -80,7 +80,7 @@ public class SeriesController {
     @PutMapping("/{uuid}")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "更新 Series")
-    public ApiResponse<Series> update(
+    public ApiResponse<SeriesSummaryResponse> update(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal Long userId,
             @Valid @RequestBody UpdateSeriesRequest req) {
