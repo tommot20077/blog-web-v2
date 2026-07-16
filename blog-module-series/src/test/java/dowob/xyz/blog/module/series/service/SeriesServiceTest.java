@@ -343,5 +343,48 @@ class SeriesServiceTest {
         assertThat(resp.getArticles().get(0).getUuid()).isEqualTo(uuidA);
     }
 
+    // ── D: getSeriesDetail 只對外公開 PUBLISHED ─────────────────────────────
+
+    @Test
+    void getSeriesDetail_mixedStatuses_exposesPublishedOnly() {
+        SeriesWithAuthor row = new SeriesWithAuthor();
+        row.setId(seriesId); row.setUuid(seriesUuid);
+        row.setTitle("Vue 101"); row.setSlug("vue-101");
+        row.setArticleCount(5);
+        row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
+        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
+
+        UUID publishedUuid = UUID.randomUUID();
+        UUID draftUuid = UUID.randomUUID();
+        List<ArticleData> articles = List.of(
+                new ArticleData(1L, publishedUuid, userId, ArticleStatus.PUBLISHED.name(), seriesId, 1),
+                new ArticleData(2L, draftUuid, userId, ArticleStatus.DRAFT.name(), seriesId, 2),
+                new ArticleData(3L, UUID.randomUUID(), userId, ArticleStatus.REJECTED.name(), seriesId, 3),
+                new ArticleData(4L, UUID.randomUUID(), userId, ArticleStatus.ARCHIVED.name(), seriesId, 4),
+                new ArticleData(5L, UUID.randomUUID(), userId, ArticleStatus.PENDING_REVIEW.name(), seriesId, 5)
+        );
+        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
+
+        var publishedSummary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
+                .uuid(publishedUuid).title("A").seriesPosition(1).build();
+        when(articleQueryService.getArticleSummariesByIds(any())).thenReturn(List.of(publishedSummary));
+
+        // 唯一的 PUBLISHED 文章已讀完，故公開視角下沒有下一篇未讀
+        lenient().when(readingFacade.batchGetProgress(eq(userId), any()))
+                .thenReturn(Map.of(1L, new BigDecimal("0.98")));
+
+        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userId);
+
+        // 非 PUBLISHED 不得進入 enrich 查詢，否則 title/slug/summary/content 會流到匿名訪客
+        verify(articleQueryService).getArticleSummariesByIds(List.of(1L));
+        assertThat(resp.getArticles()).hasSize(1);
+        assertThat(resp.getArticles().get(0).getUuid()).isEqualTo(publishedUuid);
+
+        // 分母只算公開文章；nextUnread 若回 draftUuid 等於把未公開文章的 UUID 洩漏出去
+        assertThat(resp.getMyProgress().getReadCount()).isEqualTo(1);
+        assertThat(resp.getMyProgress().getTotalCount()).isEqualTo(1);
+        assertThat(resp.getMyProgress().getNextUnreadArticleUuid()).isNull();
+    }
+
 }
 

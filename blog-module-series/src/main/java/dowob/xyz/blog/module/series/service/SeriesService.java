@@ -202,6 +202,13 @@ public class SeriesService {
      * progress >= 0.95 視為已讀完。
      * </p>
      *
+     * <p>
+     * 本端點匿名可存取，故只公開 PUBLISHED 文章：ArticleFacade 的 SP-B read 依契約不限狀態
+     * （見 ArticleFacade javadoc「caller 自行依 status 判斷」），過濾責任在此。DRAFT / REJECTED /
+     * ARCHIVED / PENDING_REVIEW 皆非公開可見，故採白名單而非排除 DRAFT。過濾後的列表同時餵給
+     * toDetailResponse 與 myProgress，確保文章列表與進度分母口徑一致。
+     * </p>
+     *
      * @param slug          Series URL slug
      * @param currentUserId 當前使用者 ID（未登入為 null）
      * @return Series 詳情 response
@@ -213,7 +220,9 @@ public class SeriesService {
             throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
         }
 
-        List<ArticleData> articles = articleFacade.findBySeriesIdOrderByPosition(row.getId());
+        List<ArticleData> articles = articleFacade.findBySeriesIdOrderByPosition(row.getId()).stream()
+                .filter(a -> ArticleStatus.PUBLISHED.name().equals(a.status()))
+                .toList();
 
         SeriesDetailResponse resp = toDetailResponse(row, articles);
 
