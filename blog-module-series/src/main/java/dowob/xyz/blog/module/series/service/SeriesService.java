@@ -203,10 +203,11 @@ public class SeriesService {
      * </p>
      *
      * <p>
-     * 本端點匿名可存取，故只公開 PUBLISHED 文章：ArticleFacade 的 SP-B read 依契約不限狀態
-     * （見 ArticleFacade javadoc「caller 自行依 status 判斷」），過濾責任在此。DRAFT / REJECTED /
-     * ARCHIVED / PENDING_REVIEW 皆非公開可見，故採白名單而非排除 DRAFT。過濾後的列表同時餵給
-     * toDetailResponse 與 myProgress，確保文章列表與進度分母口徑一致。
+     * 本端點為對外讀取用途，<b>不論匿名或任何登入者一律只暴露 PUBLISHED 文章</b>（含系列作者本人
+     * ——作者要看自己的草稿走管理端點，此處不做作者分支）。ArticleFacade 的 SP-B read 依契約
+     * 不限狀態（見 ArticleFacade javadoc「caller 自行依 status 判斷」），過濾責任在此。
+     * DRAFT / REJECTED / ARCHIVED / PENDING_REVIEW 皆非公開可見，故採白名單而非排除 DRAFT。
+     * 過濾後的列表同時餵給 toDetailResponse 與 myProgress，確保文章列表與進度分母口徑一致。
      * </p>
      *
      * @param slug          Series URL slug
