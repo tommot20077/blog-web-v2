@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.article.consumer;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.service.ViewCountService;
@@ -30,8 +31,14 @@ import java.io.IOException;
 @RequiredArgsConstructor
 public class ViewCountConsumer {
 
+    /** 冪等消費 consumer 識別名（用於 (event_id, consumer_name) dedup） */
+    public static final String CONSUMER_NAME = "article.view-count";
+
     /** 瀏覽計數服務 */
     private final ViewCountService viewCountService;
+
+    /** MQ event 冪等處理服務 */
+    private final IdempotencyService idempotencyService;
 
     /**
      * 處理文章被瀏覽事件
@@ -45,6 +52,13 @@ public class ViewCountConsumer {
                                     Channel channel,
                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         try {
+            /* 冪等 check：舊訊息 eventId 為 null 則跳過去重照舊處理；重送（markProcessed=false）則 skip */
+            if (event.eventId() != null
+                    && !idempotencyService.markProcessed(event.eventId(), CONSUMER_NAME)) {
+                log.debug("瀏覽事件 {} 已處理過，skip", event.eventId());
+                channel.basicAck(deliveryTag, false);
+                return;
+            }
             viewCountService.incrementRedisViewCount(event.articleUuid());
             log.debug("文章 {} 瀏覽計數已增加", event.articleUuid());
             channel.basicAck(deliveryTag, false);
