@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -123,15 +124,22 @@ class ArticleQuerySubService {
         if (articleIds == null || articleIds.isEmpty()) {
             return List.of();
         }
-        List<ArticleSummaryResponse> results = new ArrayList<>();
-        for (Long id : articleIds) {
-            articleRepository.findById(id).ifPresent(article -> {
-                Map<UUID, List<TagSummaryResponse>> tagMap =
-                        responseMapper.batchToTagResponsesMap(List.of(article.getUuid()));
-                results.add(responseMapper.toSummaryResponse(article, tagMap));
-            });
+        // 批次載入，避免逐筆 findById + 逐篇 tag 查詢的 N+1（此端點含 series 詳情等公開讀取路徑）。
+        Map<Long, Article> byId = new HashMap<>();
+        articleRepository.findAllById(articleIds).forEach(a -> byId.put(a.getId(), a));
+        // 依 input id 順序輸出（series reading order 依賴此順序），跳過查無的 id。
+        List<Article> ordered = articleIds.stream()
+                .map(byId::get)
+                .filter(Objects::nonNull)
+                .toList();
+        if (ordered.isEmpty()) {
+            return List.of();
         }
-        return results;
+        List<UUID> uuids = ordered.stream().map(Article::getUuid).toList();
+        Map<UUID, List<TagSummaryResponse>> tagMap = responseMapper.batchToTagResponsesMap(uuids);
+        return ordered.stream()
+                .map(article -> responseMapper.toSummaryResponse(article, tagMap))
+                .collect(Collectors.toList());
     }
 
     List<Article> findByIds(List<Long> ids) {
