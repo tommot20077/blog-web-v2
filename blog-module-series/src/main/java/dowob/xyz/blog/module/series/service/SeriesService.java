@@ -207,7 +207,8 @@ public class SeriesService {
      * ——作者要看自己的草稿走管理端點，此處不做作者分支）。ArticleFacade 的 SP-B read 依契約
      * 不限狀態（見 ArticleFacade javadoc「caller 自行依 status 判斷」），過濾責任在此。
      * DRAFT / REJECTED / ARCHIVED / PENDING_REVIEW 皆非公開可見，故採白名單而非排除 DRAFT。
-     * 過濾後的列表同時餵給 toDetailResponse 與 myProgress，確保文章列表與進度分母口徑一致。
+     * 過濾後的列表同時餵給 toDetailResponse 與 myProgress，確保文章列表、articleCount 與進度分母口徑一致
+     * （articleCount 亦取過濾後大小，不沿用 series.article_count 這個含非公開文章的非正規化計數）。
      * </p>
      *
      * @param slug          Series URL slug
@@ -262,7 +263,9 @@ public class SeriesService {
         r.setSlug(row.getSlug());
         r.setDescription(row.getDescription());
         r.setCoverImageUrl(row.getCoverImageUrl());
-        r.setArticleCount(row.getArticleCount());
+        // articleCount 對齊已過濾的對外可見列表（row.article_count 為非正規化計數，含 DRAFT/REJECTED/
+        // ARCHIVED/PENDING_REVIEW，直接沿用會出現「count=N 但只列 M 篇」並反推出隱藏文章數）。
+        r.setArticleCount(articles.size());
         r.setCreatedAt(row.getCreatedAt());
         r.setUpdatedAt(row.getUpdatedAt());
         r.setAuthor(new AuthorSummary(
