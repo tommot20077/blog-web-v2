@@ -28,6 +28,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -649,8 +650,7 @@ class AuthControllerTest {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.get(anyString(), eq("version"))).thenReturn("v1");
-        when(hashOps.get(anyString(), eq("status"))).thenReturn("SUSPENDED");
+        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList("v1", "SUSPENDED", null));
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
@@ -674,9 +674,7 @@ class AuthControllerTest {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.get(anyString(), eq("version"))).thenReturn("v1");
-        when(hashOps.get(anyString(), eq("status"))).thenReturn("ACTIVE");
-        when(hashOps.get(anyString(), eq("role"))).thenReturn("USER");
+        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList("v1", "ACTIVE", "USER"));
         when(jwtService.generateAccessToken(anyLong(), anyString(), anyString()))
                 .thenReturn("new.access.token");
 
@@ -704,9 +702,7 @@ class AuthControllerTest {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.get(anyString(), eq("version"))).thenReturn("v1");
-        when(hashOps.get(anyString(), eq("status"))).thenReturn("ACTIVE");
-        when(hashOps.get(anyString(), eq("role"))).thenReturn(null);
+        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList("v1", "ACTIVE", null));
         when(authService.resolveUserRole(1L)).thenReturn("AUTHOR");
         when(jwtService.generateAccessToken(eq(1L), eq("AUTHOR"), eq("v1")))
                 .thenReturn("new.access.token.author");
@@ -718,6 +714,36 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.data.accessToken").value("new.access.token.author"));
 
         verify(jwtService).generateAccessToken(1L, "AUTHOR", "v1");
+    }
+
+    /**
+     * 驗證：Token 有效但 Redis auth hash 缺 version 欄位時，refresh 應以預設版本 "v1"
+     * 產生新 Access Token（`version != null ? version : "v1"` 分支的迴歸覆蓋）。
+     */
+    @Test
+    @DisplayName("POST /refresh → Redis 缺 version 欄位 → 應以預設 v1 產生新 Access Token")
+    void refresh_versionMissingInRedis_shouldUseV1Default() throws Exception {
+        @SuppressWarnings("unchecked")
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
+        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList(null, "ACTIVE", "USER"));
+        when(jwtService.generateAccessToken(eq(1L), eq("USER"), eq("v1")))
+                .thenReturn("new.access.token.v1default");
+
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new Cookie("refreshToken", "valid.refresh.token")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.accessToken").value("new.access.token.v1default"));
+
+        verify(jwtService).generateAccessToken(1L, "USER", "v1");
     }
 
     // =========================================================================
