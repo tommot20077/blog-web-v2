@@ -13,6 +13,7 @@ import dowob.xyz.blog.module.series.model.SeriesWithAuthor;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesSummaryResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -83,7 +84,7 @@ class SeriesServiceTest {
         req.setSlug("vue-101");
         req.setDescription("intro");
 
-        service.createSeries(userId, req);
+        SeriesSummaryResponse resp = service.createSeries(userId, req);
 
         ArgumentCaptor<Series> captor = ArgumentCaptor.forClass(Series.class);
         verify(repo).save(captor.capture());
@@ -93,6 +94,14 @@ class SeriesServiceTest {
         assertThat(saved.getTitle()).isEqualTo("Vue 101");
         assertThat(saved.getSlug()).isEqualTo("vue-101");
         assertThat(saved.getArticleCount()).isEqualTo(0);
+
+        // 對外只出 UUID（architecture.md）：回傳 DTO 帶 uuid 與 author summary，
+        // 不含內部 Long id / authorId。此斷言在 service 層鎖住「不洩漏」不變量，
+        // 不再只靠 SeriesControllerIT 的 .doesNotExist() 守衛。
+        assertThat(resp).isNotNull();
+        assertThat(resp.getUuid()).isEqualTo(seriesUuid);
+        assertThat(resp.getAuthor()).isNotNull();
+        assertThat(resp.getAuthor().getNickname()).isEqualTo("user");
     }
 
     @Test
@@ -125,12 +134,19 @@ class SeriesServiceTest {
         req.setTitle("new");
         req.setSlug("new-slug");
 
-        service.updateSeries(seriesUuid, userId, false, req);
+        SeriesSummaryResponse resp = service.updateSeries(seriesUuid, userId, false, req);
 
         ArgumentCaptor<Series> captor = ArgumentCaptor.forClass(Series.class);
         verify(repo).save(captor.capture());
         assertThat(captor.getValue().getTitle()).isEqualTo("new");
         assertThat(captor.getValue().getSlug()).isEqualTo("new-slug");
+
+        // 對外只出 UUID（architecture.md）：回傳 DTO 帶 uuid 與 author summary，
+        // 不含內部 Long id / authorId。
+        assertThat(resp).isNotNull();
+        assertThat(resp.getUuid()).isEqualTo(seriesUuid);
+        assertThat(resp.getAuthor()).isNotNull();
+        assertThat(resp.getAuthor().getNickname()).isEqualTo("user");
     }
 
     @Test
