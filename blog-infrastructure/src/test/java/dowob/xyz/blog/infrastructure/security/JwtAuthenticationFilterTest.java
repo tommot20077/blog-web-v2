@@ -288,6 +288,36 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
+    @DisplayName("Redis Miss 回填時，應一併寫入 role 欄位（供 /refresh 沿用，避免刷新時角色降級為 USER）")
+    @SuppressWarnings("unchecked")
+    void redisMiss_shouldCacheRoleField() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        UserAuthService.SimpleUserDetail authorUser =
+                new UserAuthService.SimpleUserDetail(USER_ID, "author@test.com", "AUTHOR", UserStatus.ACTIVE);
+
+        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
+        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
+        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
+        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
+        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.AUTHOR);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        /** Redis miss: 觸發 DB 回填 */
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
+        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
+        when(userAuthService.getUserDetail(USER_ID)).thenReturn(authorUser);
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(hashOps).put(RedisKeyConstant.getUserAuthKey(USER_ID),
+                RedisKeyConstant.FIELD_ROLE, "AUTHOR");
+    }
+
+    @Test
     @DisplayName("JWT 版本號與 Redis 儲存版本不一致時，應放行請求但 SecurityContext 保持空白")
     @SuppressWarnings("unchecked")
     void tokenVersionMismatch_shouldPassThroughWithoutSettingAuthentication() throws Exception {

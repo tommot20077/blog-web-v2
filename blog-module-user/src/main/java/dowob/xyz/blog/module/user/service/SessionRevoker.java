@@ -4,6 +4,8 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Session 撤銷服務
@@ -34,9 +36,33 @@ public class SessionRevoker {
      * DB 最新版本回填快取，舊 Access Token 因版本不符被拒；被清除的 Refresh Token
      * 也無法再通過 {@code /refresh} 的 ZSet 檢查。</p>
      *
+     * <p><b>交易語意</b>：本方法多由 {@code @Transactional} 的密碼／帳號變更流程呼叫。
+     * 若在交易「提交前」就刪除快取，併發請求可能在提交前因 cache miss 而以「尚未提交的
+     * 舊 Token 版本」回填 auth hash，使舊 Access Token 於交易提交後仍匹配快取而通過驗證，
+     * 撤銷形同失效。故當偵測到交易同步進行中時，將清理延遲至 {@code afterCommit} 執行，
+     * 確保回填讀到的必定是已提交的新版本；無交易時則立即清理。</p>
+     *
      * @param userId 目標用戶 ID
      */
     public void revokeAllSessions(Long userId) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    doRevoke(userId);
+                }
+            });
+        } else {
+            doRevoke(userId);
+        }
+    }
+
+    /**
+     * 實際執行 Redis 清理：刪除 auth hash 與 refresh ZSet。
+     *
+     * @param userId 目標用戶 ID
+     */
+    private void doRevoke(Long userId) {
         redisTemplate.delete(RedisKeyConstant.getUserAuthKey(userId));
         redisTemplate.delete(RedisKeyConstant.getUserRefreshKey(userId));
     }
