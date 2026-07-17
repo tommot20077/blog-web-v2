@@ -331,7 +331,7 @@ class SeriesServiceTest {
 
         var summary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
                 .uuid(uuidA).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(List.of(1L))).thenReturn(List.of(summary));
+        when(articleQueryService.getArticleSummariesByIds(List.of(1L), false)).thenReturn(List.of(summary));
 
         lenient().when(readingFacade.batchGetProgress(any(), any())).thenReturn(Map.of());
 
@@ -367,7 +367,7 @@ class SeriesServiceTest {
 
         var publishedSummary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
                 .uuid(publishedUuid).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(any())).thenReturn(List.of(publishedSummary));
+        when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
 
         // 唯一的 PUBLISHED 文章已讀完，故公開視角下沒有下一篇未讀
         lenient().when(readingFacade.batchGetProgress(eq(userId), any()))
@@ -376,7 +376,7 @@ class SeriesServiceTest {
         SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userId);
 
         // 非 PUBLISHED 不得進入 enrich 查詢，否則 title/slug/summary/content 會流到匿名訪客
-        verify(articleQueryService).getArticleSummariesByIds(List.of(1L));
+        verify(articleQueryService).getArticleSummariesByIds(List.of(1L), false);
         assertThat(resp.getArticles()).hasSize(1);
         assertThat(resp.getArticles().get(0).getUuid()).isEqualTo(publishedUuid);
 
@@ -406,7 +406,7 @@ class SeriesServiceTest {
 
         var publishedSummary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
                 .uuid(publishedUuid).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(any())).thenReturn(List.of(publishedSummary));
+        when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
 
         SeriesDetailResponse resp = service.getSeriesDetail("vue-101", null);
 

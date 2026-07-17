@@ -274,9 +274,11 @@ public class SeriesService {
         // 取得 articles sub-list：以 id 列表批次查詢，再補 series 三欄
         // SP-X: ArticleQueryService 跨模組 inject 議題（spec §9），同 BookmarkController pattern
         List<Long> articleIds = articles.stream().map(ArticleData::id).toList();
+        // includeSeriesNav=false：下方直接以本 series 的 row 覆寫 seriesUuid/seriesTitle，
+        // 不必讓 enrich 再查一次 SeriesFacade（查了也會被覆寫）。
         List<ArticleSummaryResponse> summaries = articleIds.isEmpty()
                 ? List.of()
-                : articleQueryService.getArticleSummariesByIds(articleIds);
+                : articleQueryService.getArticleSummariesByIds(articleIds, false);
         summaries.forEach(s -> {
             s.setSeriesUuid(row.getUuid());
             s.setSeriesTitle(row.getTitle());
