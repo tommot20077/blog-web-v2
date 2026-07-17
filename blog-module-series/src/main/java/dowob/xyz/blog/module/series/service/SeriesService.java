@@ -223,7 +223,7 @@ public class SeriesService {
         }
 
         List<ArticleData> articles = articleFacade.findBySeriesIdOrderByPosition(row.getId()).stream()
-                .filter(a -> ArticleStatus.PUBLISHED.name().equals(a.status()))
+                .filter(a -> ArticleStatus.isPubliclyVisible(a.status()))
                 .toList();
 
         SeriesDetailResponse resp = toDetailResponse(row, articles);
