@@ -32,19 +32,23 @@ build/
 
 ### VS Code ###
 .vscode/
-/ai-docs/
-/CLAUDE.md
 /src/main/resources/application-dev.yaml
 /k3s/product/
 /.env
 /docker/demo/.env
 /docker/prod/.env
-/GEMINI.md
 /blog-start/src/main/resources/application-prod.yaml
 /blog-start/src/main/resources/application-local.yaml
 /logs/
-/.claude/
 /docker/prod/
+# AI 治理層必須進版控(worktree/CI/clone 才讀得到制度);見 ai-docs/maintenance.md §3
+!/ai-docs/
+!/CLAUDE.md
+!/GEMINI.md
+!/.claude/
+/.claude/settings.local.json
+/.claude/worktrees/
+/.claude/scheduled_tasks.lock
 
 # 開發規劃文件
 plan.md
