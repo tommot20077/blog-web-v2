@@ -10,7 +10,8 @@ import java.util.UUID;
  *
  * @author Yuan
  * @version 1.0
+ * @param eventId     事件 dedup key（producer 每次 publish 時 random gen；舊訊息為 null）
  * @param articleUuid 文章公開 UUID
  * @param viewedAt    瀏覽時間戳
  */
-public record ArticleViewedEvent(UUID articleUuid, Instant viewedAt) {}
+public record ArticleViewedEvent(UUID eventId, UUID articleUuid, Instant viewedAt) {}

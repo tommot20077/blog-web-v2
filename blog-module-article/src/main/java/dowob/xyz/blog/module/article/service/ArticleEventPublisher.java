@@ -183,7 +183,7 @@ public class ArticleEventPublisher {
             rabbitTemplate.convertAndSend(
                     ArticleRabbitMqConfig.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_TAGGED,
-                    new ArticleTagEvent(article.getUuid(), tagIds));
+                    new ArticleTagEvent(UUID.randomUUID(), article.getUuid(), tagIds));
         } catch (Exception e) {
             log.warn("ArticleTagEvent MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
@@ -203,7 +203,7 @@ public class ArticleEventPublisher {
             rabbitTemplate.convertAndSend(
                     ArticleRabbitMqConfig.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_VIEWED,
-                    new ArticleViewedEvent(articleUuid, Instant.now()));
+                    new ArticleViewedEvent(UUID.randomUUID(), articleUuid, Instant.now()));
         } catch (Exception e) {
             log.warn("ArticleViewedEvent MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
