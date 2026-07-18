@@ -294,19 +294,24 @@ class AuthControllerTest {
     }
 
     // =========================================================================
-    // GET /api/v1/auth/verify-email 測試
+    // POST /api/v1/auth/verify-email 測試
     // =========================================================================
 
     /**
      * 驗證：有效的驗證 Token 應回傳 200 成功回應。
      */
     @Test
-    @DisplayName("GET /verify-email → 有效 Token → 應回傳 200 成功回應")
+    @DisplayName("POST /verify-email → 有效 Token → 應回傳 200 成功回應")
     void verifyEmail_validToken_shouldReturn200() throws Exception {
         doNothing().when(authService).verifyEmail("valid-token");
 
-        mockMvc.perform(get("/api/v1/auth/verify-email")
-                        .param("token", "valid-token"))
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "token": "valid-token"
+                                }
+                                """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
     }
@@ -315,15 +320,38 @@ class AuthControllerTest {
      * 驗證：無效的驗證 Token 應回傳 TOKEN_INVALID 錯誤碼。
      */
     @Test
-    @DisplayName("GET /verify-email → 無效 Token → 應回傳 TOKEN_INVALID 錯誤碼")
+    @DisplayName("POST /verify-email → 無效 Token → 應回傳 TOKEN_INVALID 錯誤碼")
     void verifyEmail_invalidToken_shouldReturnTokenInvalid() throws Exception {
         doThrow(new BusinessException(UserErrorCode.TOKEN_INVALID))
                 .when(authService).verifyEmail("invalid-token");
 
-        mockMvc.perform(get("/api/v1/auth/verify-email")
-                        .param("token", "invalid-token"))
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "token": "invalid-token"
+                                }
+                                """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.TOKEN_INVALID.getCode()));
+    }
+
+    /**
+     * 驗證：憑證不得經由 query string 傳遞（security.md 原則 8）。
+     *
+     * <p>
+     * 舊契約為 {@code GET /verify-email?token=...}，token 會進入 access log 與
+     * 瀏覽器歷史。此測試作為端點形狀的迴歸守衛，避免日後被改回 GET。
+     * </p>
+     */
+    @Test
+    @DisplayName("GET /verify-email?token= → 舊的 query string 形狀應不再被接受")
+    void verifyEmail_getWithTokenInQueryString_shouldNotBeAllowed() throws Exception {
+        mockMvc.perform(get("/api/v1/auth/verify-email")
+                        .param("token", "valid-token"))
+                .andExpect(status().isMethodNotAllowed());
+
+        verify(authService, never()).verifyEmail(any());
     }
 
     /**
@@ -762,18 +790,26 @@ class AuthControllerTest {
     }
 
     // =========================================================================
-    // GET /api/v1/auth/verify-email 補充測試
+    // POST /api/v1/auth/verify-email 補充測試
     // =========================================================================
 
     /**
-     * 驗證：缺少 token 參數時，GlobalExceptionHandler 的 handleBadRequestException 處理
-     * MissingServletRequestParameterException，回傳 HTTP 400。
+     * 驗證：token 為空白時應由 {@code @Valid} 攔下並回傳 HTTP 400。
      */
     @Test
-    @DisplayName("GET /verify-email → 缺少 token 參數 → GlobalExceptionHandler 回傳 400")
-    void verifyEmail_missingToken_shouldReturn400() throws Exception {
-        mockMvc.perform(get("/api/v1/auth/verify-email"))
-                .andExpect(status().isBadRequest());
+    @DisplayName("POST /verify-email → token 空白 → 應回傳驗證錯誤")
+    void verifyEmail_blankToken_shouldReturn400() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "token": ""
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+
+        verify(authService, never()).verifyEmail(any());
     }
 
     // =========================================================================

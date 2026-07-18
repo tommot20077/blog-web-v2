@@ -48,4 +48,10 @@ public final class DataBuilder {
         map.put("password", password);
         return map;
     }
+
+    public static Map<String, Object> verifyEmail(String token) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("token", token);
+        return map;
+    }
 }

@@ -261,9 +261,10 @@ class AuthE2E extends AbstractE2ETest {
                 String.class, "verify@test.com");
         assertThat(verificationToken).isNotNull();
 
-        // Act — 呼叫信箱驗證 API
-        mockMvc.perform(get(BASE_URL + "/verify-email")
-                        .param("token", verificationToken))
+        // Act — 呼叫信箱驗證 API（token 屬憑證，走 request body 而非 query string）
+        mockMvc.perform(post(BASE_URL + "/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.verifyEmail(verificationToken))))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 

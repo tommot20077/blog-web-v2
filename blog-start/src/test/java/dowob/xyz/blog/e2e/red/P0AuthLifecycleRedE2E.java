@@ -69,7 +69,9 @@ class P0AuthLifecycleRedE2E extends AbstractE2ETest {
                 email
         );
 
-        mockMvc.perform(get("/api/v1/auth/verify-email").param("token", token))
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.verifyEmail(token))))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 
