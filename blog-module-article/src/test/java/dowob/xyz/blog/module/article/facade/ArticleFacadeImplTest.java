@@ -31,6 +31,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -76,6 +79,9 @@ class ArticleFacadeImplTest {
     @Mock
     private ArticleEventPublisher articleEventPublisher;
 
+    @Mock
+    private TransactionTemplate transactionTemplate;
+
     private ArticleFacadeImpl facade;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
@@ -85,8 +91,14 @@ class ArticleFacadeImplTest {
     void setUp() {
         facade = new ArticleFacadeImpl(
             articleMapper, userFacade, recommendMapper, articleService,
-            articleRepository, tagFacade, articleEventPublisher
+            articleRepository, tagFacade, articleEventPublisher, transactionTemplate
         );
+
+        /** 讓 mock 的 TransactionTemplate 直接執行 callback，使受測方法主體照常運行 */
+        when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(mock(TransactionStatus.class));
+        });
     }
 
     // ─── SP-B helper：建立測試用 Article entity ───

@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -47,6 +48,18 @@ public class VersioningService {
     private final PreferenceResolver preferenceResolver;
     private final ArticleMarkdownRenderer markdownRenderer;
     private final TagFacade tagFacade;
+
+    /** Spring 宣告式事務模板（用於縮小事務範圍，確保 restore 的 MQ 於 DB commit 後才發送） */
+    private final TransactionTemplate transactionTemplate;
+
+    /**
+     * restore 第一階段（stash 交易）的產出：待還原的目標文章與來源版本。
+     *
+     * @param articleId 目標文章主鍵
+     * @param version   要還原的版本快照
+     */
+    private record RestorePlan(Long articleId, ArticleVersion version) {
+    }
 
     /**
      * 記錄自動快照並套用滾動保留策略。
@@ -231,24 +244,31 @@ public class VersioningService {
      * @param currentUserId 當前操作者 ID
      * @param isAdmin       是否為管理員（繞過 owner 檢查）
      */
-    @Transactional
     public void restore(UUID versionUuid, Long currentUserId, boolean isAdmin) {
-        ArticleVersion v = versionRepo.findByUuid(versionUuid)
-            .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
-        if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
-            throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
-        }
+        /* 1. stash 交易：權限檢查 + 將當前 article 狀態存為 AUTO snapshot（保護現有內容）。
+         *    此段先行 commit；若後續還原失敗，僅多一筆忠實反映「未還原」現況的 AUTO 快照，
+         *    且不會有任何 MQ 送出（事件由 applyRestoreContent 於其 commit 後才發）。 */
+        RestorePlan plan = transactionTemplate.execute(status -> {
+            ArticleVersion v = versionRepo.findByUuid(versionUuid)
+                .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
+            if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+                throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
+            }
 
-        ArticleContentData article = articleFacade.findContentById(v.getArticleId())
-            .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
+            ArticleContentData article = articleFacade.findContentById(v.getArticleId())
+                .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
 
-        /* 1. stash 當前 article 狀態為 AUTO snapshot（保護現有內容） */
-        ArticleVersion stash = snapshotFromContent(article, TYPE_AUTO, null);
-        versionRepo.save(stash);
-        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorId());
-        versionMapper.retainAuto(article.id(), cfg.retain());
+            ArticleVersion stash = snapshotFromContent(article, TYPE_AUTO, null);
+            versionRepo.save(stash);
+            AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorId());
+            versionMapper.retainAuto(article.id(), cfg.retain());
 
-        /* 2. atomic restore via ArticleFacade（mutate / save / syncArticleTags / publish events 全內部接管） */
+            return new RestorePlan(article.id(), v);
+        });
+
+        /* 2. stash 已 commit，且此處不在任何交易作用域內：
+         *    交由 ArticleFacade 以自身交易還原內容，並於其 commit 後 best-effort 發事件。 */
+        ArticleVersion v = plan.version();
         ArticleRestoreData restoreData = new ArticleRestoreData(
             v.getTitle(),
             v.getSlug(),
@@ -259,7 +279,7 @@ public class VersioningService {
             markdownRenderer.render(v.getContent()),
             v.getTags() != null ? v.getTags() : List.of()
         );
-        articleFacade.applyRestoreContent(article.id(), restoreData);
+        articleFacade.applyRestoreContent(plan.articleId(), restoreData);
     }
 
     /**

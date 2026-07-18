@@ -38,7 +38,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
@@ -753,6 +757,65 @@ class ArticleControllerIT {
                         org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.EXCHANGE),
                         org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                         org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
+    }
+
+    /**
+     * 驗證：取得文章時發送的 viewed 事件不得在交易作用域內送出。
+     *
+     * <p>規範依據：{@code ai-docs/code-standards.md} §Transaction+MQ 時序——禁止在 @Transactional
+     * 方法內呼叫 rabbitTemplate.convertAndSend。讀路徑雖無 DB 寫入，但仍屬字面違規，
+     * 且會在 MQ 網路 I/O 期間持有 DB 連線。</p>
+     *
+     * <p>本測試以事件送出當下是否存在作用中交易作為判準——僅驗事件有發，
+     * 在修復前後皆會通過，無法鑑別此缺陷。</p>
+     */
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - viewed 事件不得在交易作用域內送出")
+    void getArticle_publishesViewedOutsideTransaction() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("交易邊界驗證文章");
+        createRequest.setContent("驗證 viewed 事件不在交易內送出");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 記錄 viewed 事件送出當下是否仍在交易作用域內 */
+        AtomicBoolean txActiveAtPublish = new AtomicBoolean(false);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            txActiveAtPublish.set(TransactionSynchronizationManager.isActualTransactionActive());
+            return null;
+        }).when(rabbitTemplate).convertAndSend(
+                org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.EXCHANGE),
+                org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
+                org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk());
+
+        /** 先確認事件確實有送出，避免因未呼叫而讓下方斷言空過 */
+        org.mockito.Mockito.verify(rabbitTemplate, org.mockito.Mockito.times(1))
+                .convertAndSend(
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.EXCHANGE),
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
+                        org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
+
+        assertThat(txActiveAtPublish.get())
+                .as("viewed 事件不得在交易作用域內送出（code-standards §Transaction+MQ 時序）")
+                .isFalse();
     }
 
     // ===== Editor API 測試 =====

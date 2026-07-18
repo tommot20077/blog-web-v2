@@ -25,7 +25,7 @@ import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -86,6 +86,11 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * 文章事件發布元件（SP-D 新增：供 applyRestoreContent publish events 使用）
      */
     private final ArticleEventPublisher articleEventPublisher;
+
+    /**
+     * Spring 宣告式事務模板（用於縮小事務範圍，確保 MQ 於 DB commit 後才發送）
+     */
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
@@ -372,33 +377,42 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
-     * <p>atomic flow：撈 article → mutate 7 欄位 → save → syncArticleTags → publish events。</p>
+     * <p>flow：交易內（撈 article → mutate 7 欄位 → save → syncArticleTags）→ commit →
+     * best-effort publish events。</p>
+     *
+     * <p>DB 操作以 {@link TransactionTemplate} 收斂為單一交易，事件一律於 commit 後才發送：
+     * 若在交易內發送，commit 失敗時 version/search 模組已收到事件但文章實際未還原，
+     * 造成資料不一致（見 {@code ai-docs/code-standards.md} §Transaction+MQ 時序）。</p>
      *
      * <p>重要：syncArticleTags 必須在 publish events 之前完成，
      * 確保 search index update consumer 拿到的 tags 已是最新狀態。</p>
      */
     @Override
-    @Transactional
     public void applyRestoreContent(Long articleId, ArticleRestoreData data) {
-        Article article = articleRepository.findById(articleId)
-                .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
+        Article saved = transactionTemplate.execute(status -> {
+            Article article = articleRepository.findById(articleId)
+                    .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
 
-        article.setTitle(data.title());
-        article.setSlug(data.slug());
-        article.setContent(data.content());
-        article.setSummary(data.summary());
-        article.setCoverImageUrl(data.coverImageUrl());
-        if (data.status() != null) {
-            article.setStatus(ArticleStatus.valueOf(data.status()));
-        }
-        article.setContentHtml(data.contentHtml());
+            article.setTitle(data.title());
+            article.setSlug(data.slug());
+            article.setContent(data.content());
+            article.setSummary(data.summary());
+            article.setCoverImageUrl(data.coverImageUrl());
+            if (data.status() != null) {
+                article.setStatus(ArticleStatus.valueOf(data.status()));
+            }
+            article.setContentHtml(data.contentHtml());
 
-        Article saved = articleRepository.save(article);
+            Article updated = articleRepository.save(article);
 
-        // IMPORTANT: syncArticleTags 必須在 publish events 之前發 — search index update 需拿到正確 tags
-        tagFacade.syncArticleTags(saved.getUuid(),
-                data.tags() != null ? data.tags() : List.of());
+            /** IMPORTANT: syncArticleTags 必須在 publish events 之前發 — search index update 需拿到正確 tags */
+            tagFacade.syncArticleTags(updated.getUuid(),
+                    data.tags() != null ? data.tags() : List.of());
 
+            return updated;
+        });
+
+        /** DB 已 commit，best-effort 發送事件 */
         articleEventPublisher.publishContentChanged(saved, ArticleContentChangedEvent.Action.RESTORED);
         if (saved.getStatus() == ArticleStatus.PUBLISHED) {
             articleEventPublisher.publishUpdated(saved);

@@ -48,10 +48,14 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -327,6 +331,58 @@ class CrossModuleVersionIT {
         verify(articleEventPublisher).publishContentChanged(any(Article.class),
                 eq(dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action.RESTORED));
         verify(articleEventPublisher, org.mockito.Mockito.never()).publishUpdated(any(Article.class));
+    }
+
+    /**
+     * 驗證：restore 流程的 MQ 事件必須在 DB commit 之後才發送，不得於未 commit 的交易內送出。
+     *
+     * <p>規範依據：{@code ai-docs/code-standards.md} §Transaction+MQ 時序（BUG-2026-001 FIN-2 同型）。
+     * 若在交易內發事件，commit 失敗時 version/search 模組已收到事件但文章實際未還原，造成資料不一致。</p>
+     *
+     * <p>本測試以事件送出當下是否存在作用中交易作為判準——僅驗「文章已還原」或「事件有發」
+     * 在修復前後皆會通過，無法鑑別此缺陷。</p>
+     */
+    @Test
+    @DisplayName("restoreVersion → 事件必須於 DB commit 後才發送（不得在交易內）")
+    void restoreVersion_publishesEventsAfterCommit() throws Exception {
+        Article article = createDraftArticle(AUTHOR_ID, "Title A", "A-content");
+
+        ArticleVersion snapshot = new ArticleVersion();
+        snapshot.setUuid(UUID.randomUUID());
+        snapshot.setArticleId(article.getId());
+        snapshot.setAuthorId(AUTHOR_ID);
+        snapshot.setType(VersioningService.TYPE_MANUAL);
+        snapshot.setTitle("Title A");
+        snapshot.setSlug(article.getSlug());
+        snapshot.setContent("A-content");
+        snapshot.setStatus("DRAFT");
+        snapshot.setNote("snapshot of A");
+        snapshot.setCreatedAt(LocalDateTime.now());
+        snapshot = versionRepo.save(snapshot);
+
+        article.setTitle("Title B");
+        article.setContent("B-content");
+        articleRepo.save(article);
+
+        /* 記錄事件送出當下是否仍在交易作用域內 */
+        AtomicBoolean txActiveAtPublish = new AtomicBoolean(false);
+        doAnswer(invocation -> {
+            txActiveAtPublish.set(TransactionSynchronizationManager.isActualTransactionActive());
+            return null;
+        }).when(articleEventPublisher).publishContentChanged(any(Article.class), any());
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), snapshot.getUuid())
+                        .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /* 先確認事件確實有送出，避免因未呼叫而讓下方斷言空過 */
+        verify(articleEventPublisher).publishContentChanged(any(Article.class),
+                eq(ArticleContentChangedEvent.Action.RESTORED));
+
+        assertThat(txActiveAtPublish.get())
+                .as("ContentChanged(RESTORED) 必須於 DB commit 後才發送，不得在未 commit 的交易內")
+                .isFalse();
     }
 
     // ─── Test 4: deleteArticle → CASCADE 清除 versions ──────────────────────
