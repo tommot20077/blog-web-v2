@@ -422,4 +422,56 @@ class SeriesControllerIT {
                 .andExpect(jsonPath("$.data.myProgress.readCount").value(0))
                 .andExpect(jsonPath("$.data.myProgress.totalCount").value(0));
     }
+
+    @Test
+    @DisplayName("GET /series/{slug} - 非 PUBLISHED 文章不得出現在詳情（H3 全棧回歸）")
+    void getSlug_mixedStatuses_exposesPublishedOnly() throws Exception {
+        Series series = new Series();
+        series.setUuid(UUID.randomUUID());
+        series.setTitle("Mixed Series");
+        series.setSlug("mixed-series");
+        series.setAuthorId(USER1_ID);
+        // 非正規化計數含未發布文章；response 的 articleCount 不該沿用（見 #1）
+        series.setArticleCount(2);
+        series.setCreatedAt(LocalDateTime.now());
+        series.setUpdatedAt(LocalDateTime.now());
+        Series savedSeries = seriesRepo.save(series);
+
+        Article published = createPublishedArticle(USER1_ID);
+        published.setSeriesId(savedSeries.getId());
+        published.setSeriesPosition(1);
+        articleRepo.save(published);
+
+        // 直接屬於同一 series 的 DRAFT（模擬 PUBLISHED 加入後被改回草稿，series_id 未清空）
+        Article draft = new Article();
+        draft.setUuid(UUID.randomUUID());
+        draft.setAuthorId(USER1_ID);
+        draft.setTitle("SECRET DRAFT TITLE");
+        draft.setSlug("secret-draft-" + UUID.randomUUID());
+        draft.setContent("secret content");
+        draft.setContentHtml("<p>secret content</p>");
+        draft.setStatus(ArticleStatus.DRAFT);
+        draft.setLikeCount(0);
+        draft.setCommentCount(0);
+        draft.setViewCount(0L);
+        draft.setCreatedAt(LocalDateTime.now());
+        draft.setUpdatedAt(LocalDateTime.now());
+        draft.setSeriesId(savedSeries.getId());
+        draft.setSeriesPosition(2);
+        articleRepo.save(draft);
+
+        // 以 series 作者本人請求：仍只回 PUBLISHED（getSeriesDetail 刻意無作者分支）
+        mockMvc.perform(get("/api/v1/series/{slug}", "mixed-series")
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                // 只列出 PUBLISHED；length==1 且該篇為 published，即證明 DRAFT 的 title/slug/summary 未外洩
+                .andExpect(jsonPath("$.data.articles.length()").value(1))
+                .andExpect(jsonPath("$.data.articles[0].uuid").value(published.getUuid().toString()))
+                // articleCount 對齊過濾後數量（#1），不沿用 series.article_count=2
+                .andExpect(jsonPath("$.data.articleCount").value(1))
+                // 進度分母只算公開文章
+                .andExpect(jsonPath("$.data.myProgress.readCount").value(0))
+                .andExpect(jsonPath("$.data.myProgress.totalCount").value(1));
+    }
 }
