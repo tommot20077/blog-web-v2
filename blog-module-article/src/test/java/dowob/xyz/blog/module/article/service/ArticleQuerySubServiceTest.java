@@ -522,20 +522,33 @@ class ArticleQuerySubServiceTest {
         }
 
         @Test
-        @DisplayName("getArticleSummariesByIds maps each found article")
-        void getArticleSummariesByIds_mapsEachFoundArticle() {
-            Article article = buildArticle(ArticleStatus.PUBLISHED);
-            ArticleSummaryResponse summary = summaryResponse(article);
-            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
-            when(articleRepository.findById(ARTICLE_ID)).thenReturn(Optional.of(article));
-            when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
-            when(responseMapper.toSummaryResponse(article, tagMap)).thenReturn(summary);
+        @DisplayName("getArticleSummariesByIds 批次載入（findAllById + 單次 tag 查詢），不逐筆 findById")
+        void getArticleSummariesByIds_batchesLoadAndTags_noNPlusOne() {
+            Article a1 = buildArticle(ArticleStatus.PUBLISHED);
+            UUID uuid2 = UUID.randomUUID();
+            Article a2 = new Article();
+            a2.setId(22L);
+            a2.setUuid(uuid2);
+            a2.setStatus(ArticleStatus.PUBLISHED);
 
-            List<ArticleSummaryResponse> result = querySubService.getArticleSummariesByIds(List.of(ARTICLE_ID));
+            ArticleSummaryResponse s1 = summaryResponse(a1);
+            ArticleSummaryResponse s2 = ArticleSummaryResponse.builder().uuid(uuid2).build();
+            // findAllById 回傳順序刻意打亂，驗證輸出仍照 input id 順序 [ARTICLE_ID, 22]
+            when(articleRepository.findAllById(List.of(ARTICLE_ID, 22L))).thenReturn(List.of(a2, a1));
+            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of(), uuid2, List.of());
+            when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID, uuid2))).thenReturn(tagMap);
+            when(responseMapper.toSummaryResponse(a1, tagMap)).thenReturn(s1);
+            when(responseMapper.toSummaryResponse(a2, tagMap)).thenReturn(s2);
 
-            assertThat(result).containsExactly(summary);
-            verify(articleRepository).findById(ARTICLE_ID);
-            verify(responseMapper).toSummaryResponse(article, tagMap);
+            List<ArticleSummaryResponse> result =
+                    querySubService.getArticleSummariesByIds(List.of(ARTICLE_ID, 22L));
+
+            // 輸出照 input 順序
+            assertThat(result).containsExactly(s1, s2);
+            // 批次：findAllById 一次、tag 查詢一次；不得逐筆 findById
+            verify(articleRepository).findAllById(List.of(ARTICLE_ID, 22L));
+            verify(articleRepository, never()).findById(any());
+            verify(responseMapper).batchToTagResponsesMap(List.of(ARTICLE_UUID, uuid2));
         }
 
         @Test
@@ -543,7 +556,7 @@ class ArticleQuerySubServiceTest {
         void getArticleSummariesByIds_emptyInput_returnsEmptyList() {
             assertThat(querySubService.getArticleSummariesByIds(null)).isEmpty();
             assertThat(querySubService.getArticleSummariesByIds(List.of())).isEmpty();
-            verify(articleRepository, never()).findById(any());
+            verify(articleRepository, never()).findAllById(anyList());
         }
     }
 }
