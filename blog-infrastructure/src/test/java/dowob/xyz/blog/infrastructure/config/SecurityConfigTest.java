@@ -109,6 +109,21 @@ class SecurityConfigTest {
             return "category";
         }
 
+        @GetMapping("/api/v1/series")
+        public String listSeries() {
+            return "series-list";
+        }
+
+        @GetMapping("/api/v1/series/spring-boot")
+        public String getSeries() {
+            return "series-detail";
+        }
+
+        @PostMapping("/api/v1/series")
+        public String createSeries() {
+            return "series-created";
+        }
+
         @PostMapping("/api/v1/auth/logout")
         public String authLogout() {
             return "logout";
@@ -243,6 +258,27 @@ class SecurityConfigTest {
     void unauthenticatedGetFiles_shouldReturn200() throws Exception {
         mockMvc.perform(get("/api/v1/files/abc"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/series 列表應回傳 200")
+    void unauthenticatedListSeries_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/series"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/series/{slug} 詳情應回傳 200")
+    void unauthenticatedGetSeriesDetail_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/series/spring-boot"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/series 應回傳 401（僅開放 GET，寫入仍需認證）")
+    void unauthenticatedPostSeries_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/series"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

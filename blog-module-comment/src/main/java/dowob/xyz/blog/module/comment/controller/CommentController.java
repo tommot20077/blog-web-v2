@@ -48,8 +48,28 @@ public class CommentController {
 
     private final CommentService commentService;
 
+    /**
+     * 列出文章留言。
+     *
+     * <p>
+     * <b>匿名可存取</b>——本端點依 {@code security.md} 原則 7 的「選填認證公開端點」豁免，
+     * 故不標註 {@code @PreAuthorize}。三項豁免條件均成立：
+     * </p>
+     * <ol>
+     *   <li>路徑 {@code /api/v1/articles/**} 於 {@code SecurityConfig} 明確 {@code permitAll}（GET）；</li>
+     *   <li>{@code currentUserId} 允許為 null，僅用於選填個人化（如「已按讚」標記）；</li>
+     *   <li>本 JavaDoc 即為所需的豁免標註。</li>
+     * </ol>
+     *
+     * @param articleUuid   文章公開 UUID
+     * @param page          頁碼（自 1 起）
+     * @param size          每頁筆數
+     * @param sort          排序方式（newest / oldest 等）
+     * @param currentUserId 當前使用者 ID（未登入為 null，僅供個人化）
+     * @return 留言列表（含軟刪除佔位）
+     */
     @GetMapping("/articles/{articleUuid}/comments")
-    @Operation(summary = "列出文章留言（含軟刪除佔位）")
+    @Operation(summary = "列出文章留言（匿名可存取，含軟刪除佔位）")
     public ApiResponse<ArticleCommentListResponse> list(
             @PathVariable UUID articleUuid,
             @RequestParam(defaultValue = "1") int page,

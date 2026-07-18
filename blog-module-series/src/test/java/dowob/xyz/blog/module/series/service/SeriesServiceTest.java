@@ -386,12 +386,14 @@ class SeriesServiceTest {
         assertThat(resp.getMyProgress().getNextUnreadArticleUuid()).isNull();
     }
 
+    // ── E: getSeriesDetail articleCount 反映 PUBLISHED 數（finding #1）─────────
+
     @Test
     void getSeriesDetail_mixedStatuses_articleCountReflectsPublishedOnly() {
         SeriesWithAuthor row = new SeriesWithAuthor();
         row.setId(seriesId); row.setUuid(seriesUuid);
         row.setTitle("Vue 101"); row.setSlug("vue-101");
-        // 非正規化計數欄含非公開文章；response 的 articleCount 不得沿用此值
+        // 非正規化計數欄含非公開文章（此處帶漂移）；response 的 articleCount 不得沿用此值
         row.setArticleCount(3);
         row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
         when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
@@ -415,5 +417,30 @@ class SeriesServiceTest {
         assertThat(resp.getArticles()).hasSize(1);
     }
 
+    // ── F: getSeriesDetail 無任何 PUBLISHED 文章 → 回 200 空清單（series 仍視為存在，finding #3）─
+
+    @Test
+    void getSeriesDetail_noPublishedArticles_returnsEmptyArticles() {
+        SeriesWithAuthor row = new SeriesWithAuthor();
+        row.setId(seriesId); row.setUuid(seriesUuid);
+        row.setTitle("Draft Only"); row.setSlug("draft-only");
+        // 反正規化計數 > 0（漂移），但實際無 PUBLISHED
+        row.setArticleCount(2);
+        when(mapper.findBySlugWithAuthor("draft-only")).thenReturn(row);
+
+        List<ArticleData> articles = List.of(
+                new ArticleData(1L, UUID.randomUUID(), userId, ArticleStatus.DRAFT.name(), seriesId, 1),
+                new ArticleData(2L, UUID.randomUUID(), userId, ArticleStatus.PENDING_REVIEW.name(), seriesId, 2)
+        );
+        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
+
+        // series 一旦存在即回應（不因零篇公開而 404）：articles 為空、articleCount 為 0
+        SeriesDetailResponse resp = service.getSeriesDetail("draft-only", null);
+
+        assertThat(resp.getArticleCount()).isEqualTo(0);
+        assertThat(resp.getArticles()).isEmpty();
+        // 仍不得對未公開內容做任何 enrich 查詢
+        verify(articleQueryService, never()).getArticleSummariesByIds(any());
+    }
 }
 

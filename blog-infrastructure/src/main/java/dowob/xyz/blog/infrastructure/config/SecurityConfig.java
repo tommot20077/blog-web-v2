@@ -82,11 +82,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout").authenticated()
                         .requestMatchers("/api/v1/auth/**").permitAll()
 
-                        // 公開的 GET 請求（文章、標籤、檔案元資料、分類）
+                        // 公開的 GET 請求（文章、標籤、檔案元資料、分類、系列）
                         .requestMatchers(HttpMethod.GET, "/api/v1/articles/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/categories/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/series/**").permitAll()
 
                         /** 推薦 API（公開） */
                         .requestMatchers(HttpMethod.GET, "/api/v1/recommend/**").permitAll()
