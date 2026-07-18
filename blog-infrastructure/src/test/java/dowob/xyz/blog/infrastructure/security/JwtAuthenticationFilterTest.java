@@ -7,6 +7,7 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -75,6 +76,18 @@ class JwtAuthenticationFilterTest {
      */
     @BeforeEach
     void setUp() {
+        SecurityContextHolder.clearContext();
+    }
+
+    /**
+     * 每次測試後清空 SecurityContext。
+     *
+     * <p>本測試以真實 {@link JwtAuthenticationFilter} 直接寫入 {@link SecurityContextHolder}
+     * 的 ThreadLocal；若不於測試後清理，最後一個測試殘留的 Authentication 會沿同一 JVM fork
+     * 洩漏到後續測試類別（例如 {@code SecurityConfigTest} 的未認證端點斷言），造成順序相依的假失敗。</p>
+     */
+    @AfterEach
+    void tearDown() {
         SecurityContextHolder.clearContext();
     }
 
