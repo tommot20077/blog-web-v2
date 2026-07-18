@@ -75,7 +75,7 @@ class UserLifecycleFlowE2E extends AbstractE2ETest {
         // ===== 3. 驗證信箱 =====
         mockMvc.perform(post("/api/v1/auth/verify-email")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"token\":\"%s\"}".formatted(verificationToken)))
+                        .content(objectMapper.writeValueAsString(DataBuilder.verifyEmail(verificationToken))))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 
