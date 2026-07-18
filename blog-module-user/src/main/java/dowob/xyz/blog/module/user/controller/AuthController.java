@@ -29,6 +29,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
+
 /**
  * 認證控制器
  *
@@ -129,21 +131,21 @@ public class AuthController {
             throw unauthenticatedRefresh();
         }
 
-        String version = (String) redisTemplate.opsForHash()
-                .get(RedisKeyConstant.getUserAuthKey(userId), RedisKeyConstant.FIELD_VERSION);
-        String status = (String) redisTemplate.opsForHash()
-                .get(RedisKeyConstant.getUserAuthKey(userId), RedisKeyConstant.FIELD_STATUS);
+        /** 單次 multiGet 取回 version/status/role 三個欄位，避免對同一把 key 連做三次往返 */
+        List<Object> authFields = redisTemplate.opsForHash().multiGet(
+                RedisKeyConstant.getUserAuthKey(userId),
+                List.of(RedisKeyConstant.FIELD_VERSION, RedisKeyConstant.FIELD_STATUS, RedisKeyConstant.FIELD_ROLE));
+        String version = (String) authFields.get(0);
+        String status = (String) authFields.get(1);
+        String roleStr = (String) authFields.get(2);
 
         if (!"ACTIVE".equals(status)) {
             throw new BusinessException(UserErrorCode.ACCOUNT_SUSPENDED);
         }
 
-        String roleStr = (String) redisTemplate.opsForHash()
-                .get(RedisKeyConstant.getUserAuthKey(userId), RedisKeyConstant.FIELD_ROLE);
-
         String newAccessToken = jwtService.generateAccessToken(
                 userId,
-                roleStr != null ? roleStr : "USER",
+                roleStr != null ? roleStr : authService.resolveUserRole(userId),
                 version != null ? version : "v1"
         );
 

@@ -79,6 +79,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                     redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_VERSION, currentVersion);
                     redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_STATUS, currentStatus);
+                    /** 一併回填 role，供 /refresh 沿用 auth hash 取得實際角色，避免刷新時角色降級為 USER */
+                    redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_ROLE, userDetail.role());
                     redisTemplate.expire(redisKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
                 } else {
                     currentVersion = (String) redisVersionObj;

@@ -7,6 +7,7 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -75,6 +76,18 @@ class JwtAuthenticationFilterTest {
      */
     @BeforeEach
     void setUp() {
+        SecurityContextHolder.clearContext();
+    }
+
+    /**
+     * 每次測試後清空 SecurityContext。
+     *
+     * <p>本測試以真實 {@link JwtAuthenticationFilter} 直接寫入 {@link SecurityContextHolder}
+     * 的 ThreadLocal；若不於測試後清理，最後一個測試殘留的 Authentication 會沿同一 JVM fork
+     * 洩漏到後續測試類別（例如 {@code SecurityConfigTest} 的未認證端點斷言），造成順序相依的假失敗。</p>
+     */
+    @AfterEach
+    void tearDown() {
         SecurityContextHolder.clearContext();
     }
 
@@ -285,6 +298,36 @@ class JwtAuthenticationFilterTest {
                 RedisKeyConstant.FIELD_STATUS, UserStatus.PENDING_VERIFICATION.name());
         verify(chain).doFilter(request, response);
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Redis Miss 回填時，應一併寫入 role 欄位（供 /refresh 沿用，避免刷新時角色降級為 USER）")
+    @SuppressWarnings("unchecked")
+    void redisMiss_shouldCacheRoleField() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        HttpServletResponse response = mock(HttpServletResponse.class);
+        FilterChain chain = mock(FilterChain.class);
+        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+
+        UserAuthService.SimpleUserDetail authorUser =
+                new UserAuthService.SimpleUserDetail(USER_ID, "author@test.com", "AUTHOR", UserStatus.ACTIVE);
+
+        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
+        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
+        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
+        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
+        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.AUTHOR);
+        when(redisTemplate.opsForHash()).thenReturn(hashOps);
+        /** Redis miss: 觸發 DB 回填 */
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
+        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
+        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
+        when(userAuthService.getUserDetail(USER_ID)).thenReturn(authorUser);
+
+        filter.doFilterInternal(request, response, chain);
+
+        verify(hashOps).put(RedisKeyConstant.getUserAuthKey(USER_ID),
+                RedisKeyConstant.FIELD_ROLE, "AUTHOR");
     }
 
     @Test

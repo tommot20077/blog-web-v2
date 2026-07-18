@@ -64,6 +64,9 @@ public class AuthService {
     /** Spring 宣告式事務模板（用於縮小事務範圍，避免 MQ 在 transaction 內發送） */
     private final TransactionTemplate transactionTemplate;
 
+    /** Session 撤銷服務（重設密碼後撤銷所有既有 session，使被盜 Token 立即失效） */
+    private final SessionRevoker sessionRevoker;
+
     /**
      * 用戶註冊
      *
@@ -218,6 +221,7 @@ public class AuthService {
         String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, user.getTokenVersion());
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, user.getStatus().name());
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ROLE, user.getRole().name());
         redisTemplate.expire(authKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
 
         String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
@@ -459,8 +463,12 @@ public class AuthService {
     /**
      * 重設密碼
      *
-     * <p>驗證密碼重設 Token 有效後，更新密碼雜湊並遞增 tokenVersion 使舊 Token 失效，
-     * 最後刪除已使用的重設 Token。</p>
+     * <p>驗證密碼重設 Token 有效後，更新密碼雜湊並遞增 tokenVersion，隨即撤銷該用戶
+     * 所有既有 session（清除 Redis auth hash 與 refresh ZSet），使被盜的 Access Token
+     * 與 Refresh Token 立即失效——這是帳號救援的核心安全保證。最後刪除已使用的重設 Token。</p>
+     *
+     * <p>注意：僅遞增 DB tokenVersion 不足以立即失效，因 {@code JwtAuthenticationFilter}
+     * 命中 Redis 快取時讀到的仍是舊版本；故必須主動清除 Redis 快取。</p>
      *
      * @param token       密碼重設 Token 字串
      * @param newPassword 新的明文密碼
@@ -482,7 +490,25 @@ public class AuthService {
         user.setTokenVersion(incrementVersion(user.getTokenVersion()));
         userRepository.save(user);
 
+        sessionRevoker.revokeAllSessions(user.getId());
+
         verificationTokenRepository.delete(resetToken);
+    }
+
+    /**
+     * 查詢用戶當前角色
+     *
+     * <p>供 {@code /refresh} 於 Redis auth hash 缺少 role 欄位時回退至 DB 取得用戶實際角色，
+     * 避免刷新 Access Token 時角色被降級為 USER。</p>
+     *
+     * @param userId 用戶 ID
+     * @return 角色名稱（如 {@code "AUTHOR"}）
+     */
+    @Transactional(readOnly = true)
+    public String resolveUserRole(Long userId) {
+        return userRepository.findById(userId)
+                .map(user -> user.getRole().name())
+                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
     }
 
     /**

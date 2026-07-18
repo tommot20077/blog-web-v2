@@ -89,6 +89,10 @@ class AuthServiceTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
+    /** Mock：Session 撤銷服務 */
+    @Mock
+    private SessionRevoker sessionRevoker;
+
     /** 受測物件，由 Mockito 自動注入所有 @Mock */
     @InjectMocks
     private AuthService authService;
@@ -272,7 +276,7 @@ class AuthServiceTest {
 
         assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
         assertThat(result.refreshToken()).isEqualTo(MOCK_REFRESH_TOKEN);
-        verify(hashOperations, times(2)).put(anyString(), anyString(), anyString());
+        verify(hashOperations, times(3)).put(anyString(), anyString(), anyString());
         verify(zSetOps).add(anyString(), eq(MOCK_REFRESH_TOKEN), anyDouble());
     }
 
@@ -725,10 +729,10 @@ class AuthServiceTest {
        ========================================================================= */
 
     /**
-     * 驗證：resetPassword 使用有效 Token 應更新密碼並遞增 tokenVersion。
+     * 驗證：resetPassword 使用有效 Token 應更新密碼、遞增 tokenVersion 並撤銷所有 session。
      */
     @Test
-    @DisplayName("resetPassword → 有效 Token → 應更新密碼並遞增 tokenVersion")
+    @DisplayName("resetPassword → 有效 Token → 應更新密碼、遞增 tokenVersion 並撤銷所有 session")
     void resetPassword_withValidToken_shouldUpdatePassword() {
         String tokenStr = "valid-reset-token";
         VerificationToken resetToken = buildResetToken(tokenStr, LocalDateTime.now().plusMinutes(10));
@@ -744,7 +748,33 @@ class AuthServiceTest {
         ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(userCaptor.capture());
         assertThat(userCaptor.getValue().getTokenVersion()).isEqualTo("v2");
+        verify(sessionRevoker).revokeAllSessions(mockUser.getId());
         verify(verificationTokenRepository).delete(resetToken);
+    }
+
+    /**
+     * 驗證：resolveUserRole 應回傳 DB 中該用戶的實際角色名稱（供 refresh 於快取缺 role 時回退）。
+     */
+    @Test
+    @DisplayName("resolveUserRole → 應回傳 DB 中該用戶的角色名稱")
+    void resolveUserRole_shouldReturnRoleFromDb() {
+        User mockUser = buildActiveUser();
+        mockUser.setRole(Role.AUTHOR);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(mockUser));
+
+        assertThat(authService.resolveUserRole(1L)).isEqualTo("AUTHOR");
+    }
+
+    /**
+     * 驗證：resolveUserRole 在用戶不存在時應拋出 BusinessException。
+     */
+    @Test
+    @DisplayName("resolveUserRole → 用戶不存在 → 應拋出 BusinessException")
+    void resolveUserRole_userNotFound_shouldThrowBusinessException() {
+        when(userRepository.findById(1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.resolveUserRole(1L))
+                .isInstanceOf(BusinessException.class);
     }
 
     /**
