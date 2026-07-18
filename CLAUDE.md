@@ -36,6 +36,11 @@
 ## External Repositories
 
 - Infrastructure (Docker, k3s, deployment configs): `D:\end\workspace\infrastructure`
+- Frontend (Vue 3 SPA, API contract counterpart): `D:\end\workspace\vue\blog-web-v2-front-end`
+
+## Rules File Convention
+
+`CLAUDE.md`(本檔)是 AI 規則的**唯一真相**。root 的 `AGENTS.md` 與 `GEMINI.md` 只是指標檔——永不直接編輯它們,規則變更一律改本檔(見 [ai-docs/maintenance.md](ai-docs/maintenance.md) §3)。
 
 ## Schema Maintenance
 
@@ -57,3 +62,13 @@
 - Security and Permissions: [ai-docs/security.md](ai-docs/security.md)
 - Flyway Migration Convention: [ai-docs/flyway-convention.md](ai-docs/flyway-convention.md)
 - Integration Tests Log: [ai-docs/integration-tests/](ai-docs/integration-tests/)
+
+## Operating Rules Index(判斷與調度,做任何非平凡任務前先讀前兩份)
+
+- Project Judgment(何時停/問/換路,危險模式訊號): [ai-docs/judgment.md](ai-docs/judgment.md)
+- Agent Dispatch(模型調度、升降級、驗證不自驗): [ai-docs/agent-dispatch.md](ai-docs/agent-dispatch.md)
+- Task Briefs(subagent 交辦範本 ×5): [ai-docs/task-briefs.md](ai-docs/task-briefs.md)
+- Maintenance(學習晉升飛輪、檔案所有權表): [ai-docs/maintenance.md](ai-docs/maintenance.md)
+- Bug Post-mortems(踩雷紀錄,新任務前查同域舊坑): [ai-docs/bug-reports/INDEX.md](ai-docs/bug-reports/INDEX.md)
+- Backlog: [ai-docs/backlog/](ai-docs/backlog/)
+- Institution Notes(給未來 session 的信): [ai-docs/institution-notes.md](ai-docs/institution-notes.md)

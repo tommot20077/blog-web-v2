@@ -129,8 +129,17 @@
 - **~~原處方~~**:~~SQL 補 `AND status='PUBLISHED'`(成本最低影響最高的一項)~~ ← **錯層,勿照做**。
 - **原處方為何錯**:`ArticleFacade` javadoc 明文把 `findBySeriesIdOrderByPosition` 歸在 SP-B read 類——「**不限狀態**,回傳含 status 的 ArticleData,**caller 自行依 status 判斷(如 SeriesService 過濾 DRAFT)**」;`ArticleData` javadoc 也列明 status 欄位是為 SeriesService 保留的。**不過濾是契約刻意的設計,漏過濾的是 caller**。在 mapper 加條件會讓該方法與 `findById` / `findByIds` 等 SP-B 同類方法行為不一致,並使契約與實作漂移——下一個照 javadoc 假設「不限狀態」的呼叫者會中招。(`SeriesMapper.findPrevNav/findNextNav` 有 `AND status='PUBLISHED'` 不構成反證:那是 series 模組自己的 SQL,不經過 ArticleFacade 契約。)
 - **實際修法**:`getSeriesDetail` 內 `.filter(a -> ArticleStatus.PUBLISHED.name().equals(a.status()))`。採白名單而非「排除 DRAFT」——`ARCHIVED`(不再公開)與 `REJECTED`(僅作者可見)同樣不得公開。`toDetailResponse` 的 articleIds 由傳入列表推導,故**單點過濾即同時修好文章列表與 myProgress**,口徑一致。
-- **測試判準**(有鑑別力的設計):讓唯一的 PUBLISHED 文章「已讀」,修復前 `nextUnread` 會回傳 **DRAFT 的 UUID**(把洩漏演出來),修復後為 null。屬純過濾邏輯,`SeriesServiceTest`(已 mock articleFacade)即為適當層級,**不需整合測試**(非教訓 #1 的交易類)。
-- **後續**:`toDetailResponse` 的 `articleCount` 取自 `series.article_count` 非正規化計數欄,仍含非公開文章 → 匿名訪客會看到「articleCount=5 但只列 1 篇」。屬計數層級的次要洩漏,修它會動到該欄在其他端點的語意(另有 M6 競態),**未處理**。
+- **測試判準**(有鑑別力的設計):讓唯一的 PUBLISHED 文章「已讀」,修復前 `nextUnread` 會回傳 **DRAFT 的 UUID**(把洩漏演出來),修復後為 null。屬純過濾邏輯,`SeriesServiceTest`(已 mock articleFacade)即為適當層級。〔2026-07-18 補:另加了全棧 IT 作 defense-in-depth,見追加 #5。〕
+- **後續(articleCount 口徑)→ ✅ 已修,但⚠️ 兩條 PR 撞車(2026-07-18)**:
+  - **詳情側 articleCount**:`toDetailResponse` 改用 `articles.size()`(已過濾 PUBLISHED),不再取 `series.article_count` 非正規化欄。**#47(`5687359`)與 #49(`147e4cf`)各自獨立做了逐字相同的修改,連測試方法名 `getSeriesDetail_mixedStatuses_articleCountReflectsPublishedOnly` 都同名**——#49 基於舊 #47 頭(`f024805`)開發,不含 #47 這輪的新 commit。
+  - **歸屬裁定(Yuan 授權,2026-07-18)**:詳情側 articleCount **歸 #47**(H3 詳情端點語意本就在此,且 #47 先於 #49 合併)。**#49 需去重**:rebase 到更新後的 #47(`5f49245`)時,SeriesService 那行逐字相同會自動收斂,但**同名測試方法會變重複方法 → 編譯錯**,須由 #49 拿掉 `147e4cf` 裡的 articleCount hunk + 該測試。
+  - **列表側計數(findPublic)歸 #49**:`147e4cf` 另修了 `findPublic`/`countPublic` 改 `EXISTS(status='PUBLISHED')`(解 line 158「只含草稿系列曝光」)、`listPublic` size/page 上界、零篇已發布回 200 空清單——這些是 #49 獨有、#47 沒有,保留。
+  - **共同未動**:`article_count` 欄與其 increment/decrement hook 皆不改,故 M6 競態仍在。
+- **追加品質修正(2026-07-18,同輪 review findings #2–#5,均 TDD 紅→綠,已推入 PR #47)**:
+  - **#2**(`91e443c`)可見性政策收斂至 `ArticleStatus.isPubliclyVisible(String)`(String overload 委派 instance 方法),消除 `SeriesService` 硬寫 `PUBLISHED.name().equals` 的第二處政策真相。〔#47 獨有,#49 未動此行,rebase 不撞。〕
+  - **#4**(`d87f398`)`ArticleQuerySubService.getArticleSummariesByIds` 逐筆 `findById`+逐篇 tag 的 N+1 → 單次 `findAllById`+單次批次 tag,保留 input 順序(series 詳情與 Bookmark 共用,H5 後對外公開)。
+  - **#3**(`36681b7`)`getArticleSummariesByIds` 加 `includeSeriesNav` 開關(預設 true),series 詳情傳 false,省掉 enrich 內查了又被 row 覆寫的 `SeriesFacade.batchGetSeriesBasicInfo`。
+  - **#5**(`5f49245`)`SeriesControllerIT` 全棧回歸:含 DRAFT 的 series 以作者本人請求仍只回 PUBLISHED;實測暫停過濾時此 IT 會抓到 `SECRET DRAFT TITLE` 洩漏(`length` 2)。
 
 ### ✅ DONE(PR #50 + 前端 #39,commit `31a183d` / `15eea2e`)— H4. version / series 端點直接回傳 entity,內部 `Long id`/`authorId` 洩漏到 API 表面〔本次新發現〕
 
@@ -155,7 +164,7 @@
 - **真實後果(本次新發現,backlog 原文未載)**:前端公開頁 `/tags`(`TagsIndexView`)會打 `GET /api/v1/series` → 匿名 401 → 該頁以 `Promise.allSettled` **靜默降級為空清單**(原始碼註解自陳「series 失敗時靜默降級為空清單,區塊會自動隱藏」)→ **匿名訪客看不到系列區塊、登入者才看得到,且無任何錯誤跡象**。這是「設定與文件矛盾」在使用者面的實際代價,也是選 (a) 的決定性證據。
 - **一併修**:`CommentController.list:53` 同型較輕案例(路徑早由 `GET /api/v1/articles/**` 涵蓋、實質無越權,僅缺豁免 JavaDoc)→ 純文件補正,零行為變更。
 - **security.md / 前端 api-contract.md 已同步**(Yuan 授權),但**兩者皆 untracked,不在 PR diff 內**——見下方治理層觀察。
-- **後續(未處理)**:`GET /series` 列表會列出「只含草稿的系列」——`SeriesMapper.findPublic` 用 `WHERE s.article_count > 0`,而 `article_count` 含非 PUBLISHED。無內容洩漏(點進去文章列表是空的),但屬 #49 新增的匿名曝光面,與 #47 的 `articleCount` 口徑問題、M6 競態同源,建議合併為「series 計數口徑」一項處理。
+- **後續 → ✅ 已修(2026-07-18,commit `147e4cf`,PR #49)**:`SeriesMapper.findPublic`/`countPublic` 改以 `EXISTS(... status='PUBLISHED')` 判可見性 + 即時 PUBLISHED 計數投影,與 `article_count` 反正規化欄**解耦** → 只含草稿的系列不再進公開列表、列表 `articleCount` 亦即時反映實際公開數。**未動** `article_count` 欄本身(M6 競態仍在,見下)。另**依 Yuan 裁定**:零篇已發布的 series 詳情視為「存在」,回 200 空清單(列表策展與詳情存在性刻意分離),`getSeriesDetail` 不 404。守衛 `SeriesControllerIT.list_seriesWithOnlyDraft_excludedFromPublicList` / `getSlug_anonymous_seriesWithoutPublished_returnsEmpty` / `getSlug_anonymous_neverExposesDraftArticle`,另 `list_oversizedPageSize_clampedTo100`(size 夾 [1,100],防匿名放大查詢)。
 
 ### ✅ DONE(PR #48 + 前端 #38,commit `4c2a403` / 前端 `813df91`)— H6. `verifyEmail` 用 `@RequestParam String token`,憑證進 query string〔本次新發現〕
 
