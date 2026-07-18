@@ -331,7 +331,7 @@ class SeriesServiceTest {
 
         var summary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
                 .uuid(uuidA).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(List.of(1L))).thenReturn(List.of(summary));
+        when(articleQueryService.getArticleSummariesByIds(List.of(1L), false)).thenReturn(List.of(summary));
 
         lenient().when(readingFacade.batchGetProgress(any(), any())).thenReturn(Map.of());
 
@@ -367,7 +367,7 @@ class SeriesServiceTest {
 
         var publishedSummary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
                 .uuid(publishedUuid).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(any())).thenReturn(List.of(publishedSummary));
+        when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
 
         // 唯一的 PUBLISHED 文章已讀完，故公開視角下沒有下一篇未讀
         lenient().when(readingFacade.batchGetProgress(eq(userId), any()))
@@ -376,7 +376,7 @@ class SeriesServiceTest {
         SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userId);
 
         // 非 PUBLISHED 不得進入 enrich 查詢，否則 title/slug/summary/content 會流到匿名訪客
-        verify(articleQueryService).getArticleSummariesByIds(List.of(1L));
+        verify(articleQueryService).getArticleSummariesByIds(List.of(1L), false);
         assertThat(resp.getArticles()).hasSize(1);
         assertThat(resp.getArticles().get(0).getUuid()).isEqualTo(publishedUuid);
 
@@ -393,8 +393,8 @@ class SeriesServiceTest {
         SeriesWithAuthor row = new SeriesWithAuthor();
         row.setId(seriesId); row.setUuid(seriesUuid);
         row.setTitle("Vue 101"); row.setSlug("vue-101");
-        // 反正規化計數帶漂移：宣稱 5 篇，但實際只有 1 篇 PUBLISHED
-        row.setArticleCount(5);
+        // 非正規化計數欄含非公開文章（此處帶漂移）；response 的 articleCount 不得沿用此值
+        row.setArticleCount(3);
         row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
         when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
 
@@ -408,11 +408,11 @@ class SeriesServiceTest {
 
         var publishedSummary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
                 .uuid(publishedUuid).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(List.of(1L))).thenReturn(List.of(publishedSummary));
+        when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
 
         SeriesDetailResponse resp = service.getSeriesDetail("vue-101", null);
 
-        // articleCount 必須等於實際可見（PUBLISHED）文章數，而非反正規化 row.articleCount
+        // articleCount 必須對齊對外可見的文章數，否則讀者看到「count=3 但只列 1 篇」並反推出隱藏文章數
         assertThat(resp.getArticleCount()).isEqualTo(1);
         assertThat(resp.getArticles()).hasSize(1);
     }
@@ -442,6 +442,5 @@ class SeriesServiceTest {
         // 仍不得對未公開內容做任何 enrich 查詢
         verify(articleQueryService, never()).getArticleSummariesByIds(any());
     }
-
 }
 

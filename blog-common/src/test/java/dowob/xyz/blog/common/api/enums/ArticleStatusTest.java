@@ -58,4 +58,30 @@ class ArticleStatusTest {
             }
         }
     }
+
+    // ── String overload：跨模組以 status name（String）判斷可見性，收斂政策於此 ──
+
+    @Test
+    @DisplayName("isPubliclyVisible(\"PUBLISHED\") 應回傳 true")
+    void isPubliclyVisible_publishedName_returnsTrue() {
+        assertThat(ArticleStatus.isPubliclyVisible("PUBLISHED")).isTrue();
+    }
+
+    @Test
+    @DisplayName("String overload 與 enum instance 方法對每個狀態結果一致")
+    void isPubliclyVisible_byName_matchesInstanceMethod() {
+        for (ArticleStatus status : ArticleStatus.values()) {
+            assertThat(ArticleStatus.isPubliclyVisible(status.name()))
+                    .as("狀態 %s 的 String overload 應與 instance 方法一致", status)
+                    .isEqualTo(status.isPubliclyVisible());
+        }
+    }
+
+    @Test
+    @DisplayName("null 或未知 status name 一律不公開可見（不拋例外）")
+    void isPubliclyVisible_nullOrUnknownName_returnsFalse() {
+        assertThat(ArticleStatus.isPubliclyVisible(null)).isFalse();
+        assertThat(ArticleStatus.isPubliclyVisible("NOT_A_STATUS")).isFalse();
+        assertThat(ArticleStatus.isPubliclyVisible("")).isFalse();
+    }
 }

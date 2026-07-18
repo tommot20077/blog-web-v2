@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -36,7 +37,10 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -559,6 +563,56 @@ class ArticleQueryServiceTest {
             assertThat(result.getSeriesNav().getPrev()).isNotNull();
             assertThat(result.getSeriesNav().getPrev().getTitle()).isEqualTo("第一篇");
             assertThat(result.getSeriesNav().getNext()).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("getArticleSummariesByIds — series enrich 開關")
+    class GetArticleSummariesByIdsTests {
+
+        private ArticleSummaryResponse summaryWithSeriesPosition() {
+            return ArticleSummaryResponse.builder()
+                    .uuid(ARTICLE_UUID)
+                    .seriesPosition(1)
+                    .build();
+        }
+
+        @Test
+        @DisplayName("includeSeriesNav=false：不呼叫 seriesFacade，seriesUuid/seriesTitle 保持 null")
+        void getArticleSummariesByIds_skipSeriesNav_doesNotCallSeriesFacade() {
+            ArticleSummaryResponse summary = summaryWithSeriesPosition();
+            when(articleService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID)))
+                    .thenReturn(List.of(summary));
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID)))
+                    .thenReturn(List.of(buildArticleIdRow()));
+
+            List<ArticleSummaryResponse> result =
+                    articleQueryService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID), false);
+
+            // series 詳情自行以 row 覆寫 seriesUuid/seriesTitle，enrich 不該再查 SeriesFacade（會被覆寫，白費）
+            verify(seriesFacade, never()).batchGetSeriesBasicInfo(anyList());
+            assertThat(result.get(0).getSeriesUuid()).isNull();
+            assertThat(result.get(0).getSeriesTitle()).isNull();
+        }
+
+        @Test
+        @DisplayName("預設（1-arg）：仍呼叫 seriesFacade 補 seriesUuid/seriesTitle（BookmarkController 需要）")
+        void getArticleSummariesByIds_default_enrichesSeriesNav() {
+            UUID seriesUuid = UUID.randomUUID();
+            ArticleSummaryResponse summary = summaryWithSeriesPosition();
+            when(articleService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID)))
+                    .thenReturn(List.of(summary));
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID)))
+                    .thenReturn(List.of(buildArticleIdRow()));
+            when(seriesFacade.batchGetSeriesBasicInfo(List.of(ARTICLE_DB_ID)))
+                    .thenReturn(Map.of(ARTICLE_DB_ID, new SeriesBasicInfo(seriesUuid, "S")));
+
+            List<ArticleSummaryResponse> result =
+                    articleQueryService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID));
+
+            verify(seriesFacade).batchGetSeriesBasicInfo(List.of(ARTICLE_DB_ID));
+            assertThat(result.get(0).getSeriesUuid()).isEqualTo(seriesUuid);
+            assertThat(result.get(0).getSeriesTitle()).isEqualTo("S");
         }
     }
 }

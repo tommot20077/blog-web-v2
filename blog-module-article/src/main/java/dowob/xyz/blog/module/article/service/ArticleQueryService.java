@@ -161,14 +161,28 @@ public class ArticleQueryService {
     /**
      * 根據文章 ID 列表批次取得文章摘要（含 liked 狀態）。
      *
-     * <p>供 BookmarkController 使用：先取得摘要，再批次填充 liked 狀態。</p>
+     * <p>供 BookmarkController 使用：先取得摘要，再批次填充 liked 狀態（含 series 導覽）。</p>
      *
      * @param articleIds 文章資料庫主鍵列表
      * @return 文章摘要列表（liked 已填充）
      */
     public List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds) {
+        return getArticleSummariesByIds(articleIds, true);
+    }
+
+    /**
+     * 根據文章 ID 列表批次取得文章摘要，可選擇是否填充 series 導覽（seriesUuid / seriesTitle）。
+     *
+     * <p>SeriesService 詳情已自行以所屬 series 的 row 覆寫這兩欄，故傳 {@code false} 略過 enrich 內
+     * 的 SeriesFacade 批次查詢，避免查了又被覆寫的白工。其餘 caller 走預設 {@code true}。</p>
+     *
+     * @param articleIds       文章資料庫主鍵列表
+     * @param includeSeriesNav 是否以 SeriesFacade 補 seriesUuid / seriesTitle
+     * @return 文章摘要列表（liked 已填充）
+     */
+    public List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds, boolean includeSeriesNav) {
         List<ArticleSummaryResponse> records = articleService.getArticleSummariesByIds(articleIds);
-        enrich(records);
+        enrich(records, includeSeriesNav);
         return records;
     }
 
@@ -186,6 +200,10 @@ public class ArticleQueryService {
      * @param records ArticleSummaryResponse 列表
      */
     private void enrich(List<ArticleSummaryResponse> records) {
+        enrich(records, true);
+    }
+
+    private void enrich(List<ArticleSummaryResponse> records, boolean includeSeriesNav) {
         if (records == null || records.isEmpty()) {
             return;
         }
@@ -204,20 +222,22 @@ public class ArticleQueryService {
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toList());
 
-        // 補充 seriesUuid / seriesTitle（批次查詢，避免 N+1）
-        Map<Long, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfo(articleIds);
-        records.forEach(r -> {
-            if (r.getSeriesPosition() != null) {
-                Long id = uuidToId.get(r.getUuid());
-                if (id != null) {
-                    SeriesBasicInfo info = seriesMap.get(id);
-                    if (info != null) {
-                        r.setSeriesUuid(info.getSeriesUuid());
-                        r.setSeriesTitle(info.getSeriesTitle());
+        // 補充 seriesUuid / seriesTitle（批次查詢，避免 N+1）；caller 若自行覆寫這兩欄可傳 false 略過
+        if (includeSeriesNav) {
+            Map<Long, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfo(articleIds);
+            records.forEach(r -> {
+                if (r.getSeriesPosition() != null) {
+                    Long id = uuidToId.get(r.getUuid());
+                    if (id != null) {
+                        SeriesBasicInfo info = seriesMap.get(id);
+                        if (info != null) {
+                            r.setSeriesUuid(info.getSeriesUuid());
+                            r.setSeriesTitle(info.getSeriesTitle());
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
 
         if (userId == null) {
             records.forEach(r -> {

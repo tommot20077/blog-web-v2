@@ -214,7 +214,8 @@ public class SeriesService {
      * ——作者要看自己的草稿走管理端點，此處不做作者分支）。ArticleFacade 的 SP-B read 依契約
      * 不限狀態（見 ArticleFacade javadoc「caller 自行依 status 判斷」），過濾責任在此。
      * DRAFT / REJECTED / ARCHIVED / PENDING_REVIEW 皆非公開可見，故採白名單而非排除 DRAFT。
-     * 過濾後的列表同時餵給 toDetailResponse 與 myProgress，確保文章列表與進度分母口徑一致。
+     * 過濾後的列表同時餵給 toDetailResponse 與 myProgress，確保文章列表、articleCount 與進度分母口徑一致
+     * （articleCount 亦取過濾後大小，不沿用 series.article_count 這個含非公開文章的非正規化計數）。
      * </p>
      *
      * <p>
@@ -236,7 +237,7 @@ public class SeriesService {
         }
 
         List<ArticleData> articles = articleFacade.findBySeriesIdOrderByPosition(row.getId()).stream()
-                .filter(a -> ArticleStatus.PUBLISHED.name().equals(a.status()))
+                .filter(a -> ArticleStatus.isPubliclyVisible(a.status()))
                 .toList();
 
         SeriesDetailResponse resp = toDetailResponse(row, articles);
@@ -276,8 +277,9 @@ public class SeriesService {
         r.setSlug(row.getSlug());
         r.setDescription(row.getDescription());
         r.setCoverImageUrl(row.getCoverImageUrl());
-        // 只計已過濾的 PUBLISHED 文章數，與回傳的 articles 清單口徑一致；
-        // 不用 row.getArticleCount()（反正規化欄，含非 PUBLISHED 且會漂移）。
+        // articleCount 對齊已過濾的對外可見列表，與回傳的 articles 清單口徑一致；不用
+        // row.getArticleCount()（非正規化計數，含 DRAFT/REJECTED/ARCHIVED/PENDING_REVIEW，
+        // 直接沿用會出現「count=N 但只列 M 篇」並反推出隱藏文章數）。
         r.setArticleCount(articles.size());
         r.setCreatedAt(row.getCreatedAt());
         r.setUpdatedAt(row.getUpdatedAt());
@@ -287,9 +289,11 @@ public class SeriesService {
         // 取得 articles sub-list：以 id 列表批次查詢，再補 series 三欄
         // SP-X: ArticleQueryService 跨模組 inject 議題（spec §9），同 BookmarkController pattern
         List<Long> articleIds = articles.stream().map(ArticleData::id).toList();
+        // includeSeriesNav=false：下方直接以本 series 的 row 覆寫 seriesUuid/seriesTitle，
+        // 不必讓 enrich 再查一次 SeriesFacade（查了也會被覆寫）。
         List<ArticleSummaryResponse> summaries = articleIds.isEmpty()
                 ? List.of()
-                : articleQueryService.getArticleSummariesByIds(articleIds);
+                : articleQueryService.getArticleSummariesByIds(articleIds, false);
         summaries.forEach(s -> {
             s.setSeriesUuid(row.getUuid());
             s.setSeriesTitle(row.getTitle());

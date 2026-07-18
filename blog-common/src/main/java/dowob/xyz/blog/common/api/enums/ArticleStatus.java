@@ -45,4 +45,25 @@ public enum ArticleStatus {
     public boolean isPubliclyVisible() {
         return this == PUBLISHED;
     }
+
+    /**
+     * 以 status name（String）判斷是否公開可見。
+     *
+     * <p>跨模組傳遞時 status 常以 String 形式流通（例如 {@code ArticleData.status()}），
+     * 為避免各 caller 各自硬寫「等於 PUBLISHED」而讓可見性政策漂移，統一委派 {@link #isPubliclyVisible()}。
+     * null 或無法對應到列舉的字串一律視為不公開（不拋例外）。</p>
+     *
+     * @param statusName 文章狀態名稱（可為 null）
+     * @return 對應狀態公開可見時回傳 true；null / 未知字串回傳 false
+     */
+    public static boolean isPubliclyVisible(String statusName) {
+        if (statusName == null) {
+            return false;
+        }
+        try {
+            return valueOf(statusName).isPubliclyVisible();
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
 }
