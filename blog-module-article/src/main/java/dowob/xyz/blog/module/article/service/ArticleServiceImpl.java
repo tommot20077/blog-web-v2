@@ -45,9 +45,9 @@ public class ArticleServiceImpl implements ArticleService {
     /**
      * {@inheritDoc}
      *
-     * <p>刻意不標註 @Transactional：查詢已由 querySubService 以 readOnly 交易處理，
-     * 而 recordView 只操作 Redis 並發送 MQ；若在此開啟交易，viewed 事件會在交易作用域內送出
-     * （違反 code-standards §Transaction+MQ 時序），且會在 MQ I/O 期間持有 DB 連線。</p>
+     * <p>刻意不標註 @Transactional：本方法在查詢後緊接 recordView（僅操作 Redis 並發送 MQ）；
+     * 若在此開啟交易，viewed 事件會在交易作用域內送出（違反 code-standards §Transaction+MQ 時序），
+     * 且會在 MQ I/O 期間持有 DB 連線。</p>
      */
     @Override
     public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
