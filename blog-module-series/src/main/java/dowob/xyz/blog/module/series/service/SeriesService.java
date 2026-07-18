@@ -44,8 +44,13 @@ public class SeriesService {
     private final ArticleQueryService articleQueryService;  // SP-X: ArticleQueryService 跨模組 inject 議題（spec §9）
     private final ReadingFacade readingFacade;
 
+    /** 公開列表每頁筆數上界，避免未認證請求觸發無上界查詢。 */
+    private static final int MAX_PAGE_SIZE = 100;
+
     /**
-     * 列出公開的 Series 列表（article_count > 0），支援分頁。
+     * 列出公開的 Series 列表（至少含一篇 PUBLISHED 文章），支援分頁。
+     *
+     * <p>page 最小 1、size 夾在 [1, {@value #MAX_PAGE_SIZE}]，避免匿名端點被超大 size 放大查詢。</p>
      *
      * @param page 當前頁碼（1-based）
      * @param size 每頁筆數
@@ -53,6 +58,8 @@ public class SeriesService {
      */
     @Transactional(readOnly = true)
     public PageResult<SeriesSummaryResponse> listPublic(int page, int size) {
+        page = Math.max(page, 1);
+        size = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
         int offset = Math.max(0, (page - 1) * size);
         List<SeriesWithAuthor> rows = mapper.findPublic(size, offset);
         long total = mapper.countPublic();
@@ -210,9 +217,16 @@ public class SeriesService {
      * 過濾後的列表同時餵給 toDetailResponse 與 myProgress，確保文章列表與進度分母口徑一致。
      * </p>
      *
+     * <p>
+     * series 一旦存在即為公開實體：即使目前<b>無任何 PUBLISHED 文章</b>，仍正常回應且 articles 為空清單、
+     * articleCount 為 0。公開列表 {@code findPublic} 則另以「有無 PUBLISHED」策展，故此類 series 不進列表
+     * （列表策展與詳情存在性刻意分離）。
+     * </p>
+     *
      * @param slug          Series URL slug
      * @param currentUserId 當前使用者 ID（未登入為 null）
      * @return Series 詳情 response
+     * @throws BusinessException {@code S0101} 當 slug 對應的 series 不存在
      */
     @Transactional(readOnly = true)
     public SeriesDetailResponse getSeriesDetail(String slug, Long currentUserId) {
@@ -262,7 +276,9 @@ public class SeriesService {
         r.setSlug(row.getSlug());
         r.setDescription(row.getDescription());
         r.setCoverImageUrl(row.getCoverImageUrl());
-        r.setArticleCount(row.getArticleCount());
+        // 只計已過濾的 PUBLISHED 文章數，與回傳的 articles 清單口徑一致；
+        // 不用 row.getArticleCount()（反正規化欄，含非 PUBLISHED 且會漂移）。
+        r.setArticleCount(articles.size());
         r.setCreatedAt(row.getCreatedAt());
         r.setUpdatedAt(row.getUpdatedAt());
         r.setAuthor(new AuthorSummary(

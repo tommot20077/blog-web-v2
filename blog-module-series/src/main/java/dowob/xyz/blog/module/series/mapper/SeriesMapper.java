@@ -21,19 +21,33 @@ import java.util.List;
 @Mapper
 public interface SeriesMapper {
 
-    /** 列表（公開）：只列 article_count > 0 的 series，最新優先 */
+    /**
+     * 列表（公開）：只列「實際含至少一篇 PUBLISHED 文章」的 series，最新優先。
+     *
+     * <p>可見性與 article_count 反正規化欄位<b>解耦</b>——以 EXISTS 子查詢判斷真實公開內容，
+     * 避免文章 unpublish 後計數漂移導致「只含草稿」的 series 曝光給匿名訪客；
+     * article_count 投影亦改為即時 PUBLISHED 計數，與詳情端點口徑一致。</p>
+     */
     @Select("""
             SELECT s.id, s.uuid, s.title, s.slug, s.description, s.cover_image_url,
-                   s.author_id, s.article_count, s.created_at, s.updated_at,
+                   s.author_id,
+                   (SELECT COUNT(*) FROM articles a
+                     WHERE a.series_id = s.id AND a.status = 'PUBLISHED') AS article_count,
+                   s.created_at, s.updated_at,
                    u.uuid AS author_uuid, u.nickname AS author_nickname, u.avatar_url AS author_avatar_url
               FROM series s LEFT JOIN users u ON s.author_id = u.id
-             WHERE s.article_count > 0
+             WHERE EXISTS (SELECT 1 FROM articles a
+                            WHERE a.series_id = s.id AND a.status = 'PUBLISHED')
              ORDER BY s.created_at DESC
              LIMIT #{size} OFFSET #{offset}
             """)
     List<SeriesWithAuthor> findPublic(@Param("size") int size, @Param("offset") int offset);
 
-    @Select("SELECT COUNT(*) FROM series WHERE article_count > 0")
+    @Select("""
+            SELECT COUNT(*) FROM series s
+             WHERE EXISTS (SELECT 1 FROM articles a
+                            WHERE a.series_id = s.id AND a.status = 'PUBLISHED')
+            """)
     long countPublic();
 
     /** 單篇 by slug（公開） */

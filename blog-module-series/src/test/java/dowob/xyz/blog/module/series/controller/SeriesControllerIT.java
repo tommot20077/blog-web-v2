@@ -151,6 +151,26 @@ class SeriesControllerIT {
         return articleRepo.save(article);
     }
 
+    /** 建立一篇指定狀態的文章並關聯到 series（供公開可見性測試用）。 */
+    private Article createArticleInSeries(Long authorId, ArticleStatus status, Long seriesId, int position) {
+        Article article = new Article();
+        article.setUuid(UUID.randomUUID());
+        article.setAuthorId(authorId);
+        article.setTitle("Test Article " + UUID.randomUUID());
+        article.setSlug("test-article-" + UUID.randomUUID());
+        article.setContent("content");
+        article.setContentHtml("<p>content</p>");
+        article.setStatus(status);
+        article.setLikeCount(0);
+        article.setCommentCount(0);
+        article.setViewCount(0L);
+        article.setSeriesId(seriesId);
+        article.setSeriesPosition(position);
+        article.setCreatedAt(LocalDateTime.now());
+        article.setUpdatedAt(LocalDateTime.now());
+        return articleRepo.save(article);
+    }
+
     /** 建立一個測試 Series（不入庫，供 POST 請求用）。 */
     private Map<String, Object> createSeriesPayload(String title, String slug) {
         return Map.of("title", title, "slug", slug, "description", "Test description");
@@ -399,20 +419,20 @@ class SeriesControllerIT {
     }
 
     @Test
-    @DisplayName("GET /series/{slug} - 已認證用戶取得 series 詳情（含 myProgress）")
+    @DisplayName("GET /series/{slug} - 已認證用戶取得含 PUBLISHED 文章的 series 詳情（含 myProgress）")
     void getSlug_authenticated_includesMyProgress() throws Exception {
-        // 建立 series（article_count = 0 時 findPublic 不列出，但 findBySlug 可取得）
         Series series = new Series();
         series.setUuid(UUID.randomUUID());
         series.setTitle("Progress Series");
         series.setSlug("progress-series");
         series.setAuthorId(USER1_ID);
-        series.setArticleCount(0);
+        series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
-        seriesRepo.save(series);
+        Series saved = seriesRepo.save(series);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getId(), 1);
 
-        // 已認證用戶取得 series 詳情（myProgress 不應為 null）
+        // 已認證用戶取得 series 詳情（myProgress 不應為 null；readingFacade mock 回空 → readCount 0）
         mockMvc.perform(get("/api/v1/series/{slug}", "progress-series")
                         .with(asUser(USER1_ID, Role.AUTHOR)))
                 .andExpect(status().isOk())
@@ -420,21 +440,22 @@ class SeriesControllerIT {
                 .andExpect(jsonPath("$.data.slug").value("progress-series"))
                 .andExpect(jsonPath("$.data.myProgress").exists())
                 .andExpect(jsonPath("$.data.myProgress.readCount").value(0))
-                .andExpect(jsonPath("$.data.myProgress.totalCount").value(0));
+                .andExpect(jsonPath("$.data.myProgress.totalCount").value(1));
     }
 
     @Test
-    @DisplayName("GET /series/{slug} - 匿名可存取，回 200 且無 myProgress")
+    @DisplayName("GET /series/{slug} - 含 PUBLISHED 文章的 series 匿名可存取，回 200 且無 myProgress")
     void getSlug_anonymous_returns200WithoutMyProgress() throws Exception {
         Series series = new Series();
         series.setUuid(UUID.randomUUID());
         series.setTitle("Anonymous Series");
         series.setSlug("anonymous-series");
         series.setAuthorId(USER1_ID);
-        series.setArticleCount(0);
+        series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
-        seriesRepo.save(series);
+        Series saved = seriesRepo.save(series);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getId(), 1);
 
         // 未帶任何認證：本端點依 security.md 原則 7 豁免為公開端點，
         // 且 GET /api/v1/series/** 於 SecurityConfig 明確 permitAll。
@@ -447,10 +468,104 @@ class SeriesControllerIT {
     }
 
     @Test
+    @DisplayName("GET /series/{slug} - 只含草稿的 series → 匿名仍回 200 空清單（series 視為存在，列表另行策展，finding #3）")
+    void getSlug_anonymous_seriesWithoutPublished_returnsEmpty() throws Exception {
+        // 只有一篇 DRAFT 文章的 series：不進公開列表（策展），但詳情視為存在、回空清單
+        Series series = new Series();
+        series.setUuid(UUID.randomUUID());
+        series.setTitle("Draft Only Series");
+        series.setSlug("draft-only-series");
+        series.setAuthorId(USER1_ID);
+        series.setArticleCount(1);
+        series.setCreatedAt(LocalDateTime.now());
+        series.setUpdatedAt(LocalDateTime.now());
+        Series saved = seriesRepo.save(series);
+        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, saved.getId(), 1);
+
+        mockMvc.perform(get("/api/v1/series/{slug}", "draft-only-series"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.slug").value("draft-only-series"))
+                // 零篇公開：articleCount 0、articles 空、無 DRAFT 外洩
+                .andExpect(jsonPath("$.data.articleCount").value(0))
+                .andExpect(jsonPath("$.data.articles.length()").value(0))
+                .andExpect(jsonPath("$.data.myProgress").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /series/{slug} - 匿名不得看到 series 內的 DRAFT 文章（#47 過濾回歸守衛，finding #5）")
+    void getSlug_anonymous_neverExposesDraftArticle() throws Exception {
+        Series series = new Series();
+        series.setUuid(UUID.randomUUID());
+        series.setTitle("Mixed Series");
+        series.setSlug("mixed-series");
+        series.setAuthorId(USER1_ID);
+        series.setArticleCount(2);
+        series.setCreatedAt(LocalDateTime.now());
+        series.setUpdatedAt(LocalDateTime.now());
+        Series saved = seriesRepo.save(series);
+
+        Article published = createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getId(), 1);
+        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, saved.getId(), 2);
+
+        mockMvc.perform(get("/api/v1/series/{slug}", "mixed-series"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                // 只暴露 PUBLISHED：計數與清單皆為 1，DRAFT 不得外洩
+                .andExpect(jsonPath("$.data.articleCount").value(1))
+                .andExpect(jsonPath("$.data.articles.length()").value(1))
+                .andExpect(jsonPath("$.data.articles[0].uuid").value(published.getUuid().toString()))
+                .andExpect(jsonPath("$.data.myProgress").doesNotExist());
+    }
+
+    @Test
     @DisplayName("GET /series - 匿名可存取列表，回 200")
     void list_anonymous_returns200() throws Exception {
         mockMvc.perform(get("/api/v1/series"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    @Test
+    @DisplayName("GET /series - 只含草稿的 series 不出現在公開列表（不依賴反正規化計數，finding #2）")
+    void list_seriesWithOnlyDraft_excludedFromPublicList() throws Exception {
+        // series A：有一篇 PUBLISHED 文章 → 應出現
+        Series withPublished = new Series();
+        withPublished.setUuid(UUID.randomUUID());
+        withPublished.setTitle("Has Published");
+        withPublished.setSlug("has-published");
+        withPublished.setAuthorId(USER1_ID);
+        withPublished.setArticleCount(1);
+        withPublished.setCreatedAt(LocalDateTime.now());
+        withPublished.setUpdatedAt(LocalDateTime.now());
+        Series savedA = seriesRepo.save(withPublished);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, savedA.getId(), 1);
+
+        // series B：只有 DRAFT 文章，但反正規化 article_count 仍為 1（模擬 unpublish 後的漂移）→ 不應出現
+        Series draftOnly = new Series();
+        draftOnly.setUuid(UUID.randomUUID());
+        draftOnly.setTitle("Draft Only");
+        draftOnly.setSlug("draft-only");
+        draftOnly.setAuthorId(USER1_ID);
+        draftOnly.setArticleCount(1);
+        draftOnly.setCreatedAt(LocalDateTime.now());
+        draftOnly.setUpdatedAt(LocalDateTime.now());
+        Series savedB = seriesRepo.save(draftOnly);
+        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, savedB.getId(), 1);
+
+        mockMvc.perform(get("/api/v1/series"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records.length()").value(1))
+                .andExpect(jsonPath("$.data.records[0].slug").value("has-published"))
+                // articleCount 反映實際 PUBLISHED 數，而非反正規化欄
+                .andExpect(jsonPath("$.data.records[0].articleCount").value(1));
+    }
+
+    @Test
+    @DisplayName("GET /series?size=100000 - 每頁筆數夾到上界 100（未認證亦不能觸發無上界查詢，finding #4）")
+    void list_oversizedPageSize_clampedTo100() throws Exception {
+        mockMvc.perform(get("/api/v1/series").param("size", "100000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.size").value(100));
     }
 }
