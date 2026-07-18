@@ -104,7 +104,11 @@ public class SeriesService {
         s.setAuthorId(userId);
         s.setArticleCount(0);
         Series saved = repo.save(s);
-        return toSummaryResponse(mapper.findBySlugWithAuthor(saved.getSlug()));
+        SeriesWithAuthor row = mapper.findBySlugWithAuthor(saved.getSlug());
+        if (row == null) {
+            throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
+        }
+        return toSummaryResponse(row);
     }
 
     /**
@@ -135,7 +139,11 @@ public class SeriesService {
         if (req.getDescription() != null) s.setDescription(req.getDescription());
         if (req.getCoverImageUrl() != null) s.setCoverImageUrl(req.getCoverImageUrl());
         Series saved = repo.save(s);
-        return toSummaryResponse(mapper.findBySlugWithAuthor(saved.getSlug()));
+        SeriesWithAuthor row = mapper.findBySlugWithAuthor(saved.getSlug());
+        if (row == null) {
+            throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
+        }
+        return toSummaryResponse(row);
     }
 
     @Transactional

@@ -119,6 +119,29 @@ class SeriesServiceTest {
         verify(repo, never()).save(any());
     }
 
+    /**
+     * 寫入成功但 re-fetch 回傳 null（資料異常）時，應丟 BusinessException 而非 NPE，
+     * 比照 getSeriesDetail 的防禦式寫法（Copilot review 建議）。
+     */
+    @Test
+    void createSeries_refetchReturnsNull_throwsSeriesNotFound() {
+        when(repo.existsBySlug("vue-101")).thenReturn(false);
+        when(repo.save(any(Series.class))).thenAnswer(inv -> {
+            Series s = inv.getArgument(0);
+            s.setId(seriesId);
+            return s;
+        });
+        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(null);
+
+        CreateSeriesRequest req = new CreateSeriesRequest();
+        req.setTitle("Vue 101");
+        req.setSlug("vue-101");
+
+        assertThatThrownBy(() -> service.createSeries(userId, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
+    }
+
     @Test
     void updateSeries_byOwner_updatesAllFields() {
         Series existing = new Series();
@@ -147,6 +170,30 @@ class SeriesServiceTest {
         assertThat(resp.getUuid()).isEqualTo(seriesUuid);
         assertThat(resp.getAuthor()).isNotNull();
         assertThat(resp.getAuthor().getNickname()).isEqualTo("user");
+    }
+
+    /**
+     * 更新成功但 re-fetch 回傳 null（資料異常）時，應丟 BusinessException 而非 NPE，
+     * 避免「更新成功卻回 500」（Copilot review 建議）。
+     */
+    @Test
+    void updateSeries_refetchReturnsNull_throwsSeriesNotFound() {
+        Series existing = new Series();
+        existing.setId(seriesId); existing.setUuid(seriesUuid);
+        existing.setAuthorId(userId);
+        existing.setTitle("old"); existing.setSlug("old-slug");
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
+        when(repo.existsBySlug("new-slug")).thenReturn(false);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(mapper.findBySlugWithAuthor("new-slug")).thenReturn(null);
+
+        UpdateSeriesRequest req = new UpdateSeriesRequest();
+        req.setTitle("new");
+        req.setSlug("new-slug");
+
+        assertThatThrownBy(() -> service.updateSeries(seriesUuid, userId, false, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
     }
 
     @Test
