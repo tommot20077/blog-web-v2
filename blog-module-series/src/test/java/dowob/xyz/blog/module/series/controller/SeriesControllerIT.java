@@ -187,7 +187,11 @@ class SeriesControllerIT {
                         .content(objectMapper.writeValueAsString(payload)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
-                .andExpect(jsonPath("$.data.slug").value("spring-boot-series"));
+                .andExpect(jsonPath("$.data.slug").value("spring-boot-series"))
+                // 此端點原本直接回 Series entity，內部 Long ID 外洩（architecture.md：對外只出 UUID）
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.id").doesNotExist())
+                .andExpect(jsonPath("$.data.authorId").doesNotExist());
 
         assertThat(seriesRepo.findBySlug("spring-boot-series")).isPresent();
     }
@@ -257,7 +261,11 @@ class SeriesControllerIT {
                         .content(objectMapper.writeValueAsString(updatePayload)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
-                .andExpect(jsonPath("$.data.title").value("Updated Title"));
+                .andExpect(jsonPath("$.data.title").value("Updated Title"))
+                // 此端點原本直接回 Series entity，內部 Long ID 外洩（architecture.md：對外只出 UUID）
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.id").doesNotExist())
+                .andExpect(jsonPath("$.data.authorId").doesNotExist());
     }
 
     @Test

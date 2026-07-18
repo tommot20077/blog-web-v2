@@ -13,6 +13,7 @@ import dowob.xyz.blog.module.series.model.SeriesWithAuthor;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesSummaryResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -46,6 +47,24 @@ class SeriesServiceTest {
     private final UUID articleUuid = UUID.randomUUID();
     private final Long articleId = 200L;
 
+    /**
+     * stub create/update 寫入後的 re-fetch。
+     *
+     * <p>createSeries / updateSeries 回傳 SeriesSummaryResponse（對外只出 UUID，
+     * 不再回 entity），故寫入後會以 slug re-fetch 取得 author 欄位。本 helper 讓
+     * 該 re-fetch 回傳一筆對得上的 row；驗證寫入內容的斷言仍以 repo.save 的
+     * ArgumentCaptor 為準，不受影響。</p>
+     */
+    private void stubRefetchBySlug(String slug) {
+        SeriesWithAuthor row = new SeriesWithAuthor();
+        row.setId(seriesId);
+        row.setUuid(seriesUuid);
+        row.setSlug(slug);
+        row.setAuthorUuid(UUID.randomUUID());
+        row.setAuthorNickname("user");
+        lenient().when(mapper.findBySlugWithAuthor(slug)).thenReturn(row);
+    }
+
     private final Long userId = 1L;
     private final Long seriesId = 100L;
     private final UUID seriesUuid = UUID.randomUUID();
@@ -58,13 +77,14 @@ class SeriesServiceTest {
             s.setId(seriesId);
             return s;
         });
+        stubRefetchBySlug("vue-101");
 
         CreateSeriesRequest req = new CreateSeriesRequest();
         req.setTitle("Vue 101");
         req.setSlug("vue-101");
         req.setDescription("intro");
 
-        service.createSeries(userId, req);
+        SeriesSummaryResponse resp = service.createSeries(userId, req);
 
         ArgumentCaptor<Series> captor = ArgumentCaptor.forClass(Series.class);
         verify(repo).save(captor.capture());
@@ -74,6 +94,14 @@ class SeriesServiceTest {
         assertThat(saved.getTitle()).isEqualTo("Vue 101");
         assertThat(saved.getSlug()).isEqualTo("vue-101");
         assertThat(saved.getArticleCount()).isEqualTo(0);
+
+        // 對外只出 UUID（architecture.md）：回傳 DTO 帶 uuid 與 author summary，
+        // 不含內部 Long id / authorId。此斷言在 service 層鎖住「不洩漏」不變量，
+        // 不再只靠 SeriesControllerIT 的 .doesNotExist() 守衛。
+        assertThat(resp).isNotNull();
+        assertThat(resp.getUuid()).isEqualTo(seriesUuid);
+        assertThat(resp.getAuthor()).isNotNull();
+        assertThat(resp.getAuthor().getNickname()).isEqualTo("user");
     }
 
     @Test
@@ -91,6 +119,29 @@ class SeriesServiceTest {
         verify(repo, never()).save(any());
     }
 
+    /**
+     * 寫入成功但 re-fetch 回傳 null（資料異常）時，應丟 BusinessException 而非 NPE，
+     * 比照 getSeriesDetail 的防禦式寫法（Copilot review 建議）。
+     */
+    @Test
+    void createSeries_refetchReturnsNull_throwsSeriesNotFound() {
+        when(repo.existsBySlug("vue-101")).thenReturn(false);
+        when(repo.save(any(Series.class))).thenAnswer(inv -> {
+            Series s = inv.getArgument(0);
+            s.setId(seriesId);
+            return s;
+        });
+        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(null);
+
+        CreateSeriesRequest req = new CreateSeriesRequest();
+        req.setTitle("Vue 101");
+        req.setSlug("vue-101");
+
+        assertThatThrownBy(() -> service.createSeries(userId, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
+    }
+
     @Test
     void updateSeries_byOwner_updatesAllFields() {
         Series existing = new Series();
@@ -100,17 +151,49 @@ class SeriesServiceTest {
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
         when(repo.existsBySlug("new-slug")).thenReturn(false);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        stubRefetchBySlug("new-slug");
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("new");
         req.setSlug("new-slug");
 
-        service.updateSeries(seriesUuid, userId, false, req);
+        SeriesSummaryResponse resp = service.updateSeries(seriesUuid, userId, false, req);
 
         ArgumentCaptor<Series> captor = ArgumentCaptor.forClass(Series.class);
         verify(repo).save(captor.capture());
         assertThat(captor.getValue().getTitle()).isEqualTo("new");
         assertThat(captor.getValue().getSlug()).isEqualTo("new-slug");
+
+        // 對外只出 UUID（architecture.md）：回傳 DTO 帶 uuid 與 author summary，
+        // 不含內部 Long id / authorId。
+        assertThat(resp).isNotNull();
+        assertThat(resp.getUuid()).isEqualTo(seriesUuid);
+        assertThat(resp.getAuthor()).isNotNull();
+        assertThat(resp.getAuthor().getNickname()).isEqualTo("user");
+    }
+
+    /**
+     * 更新成功但 re-fetch 回傳 null（資料異常）時，應丟 BusinessException 而非 NPE，
+     * 避免「更新成功卻回 500」（Copilot review 建議）。
+     */
+    @Test
+    void updateSeries_refetchReturnsNull_throwsSeriesNotFound() {
+        Series existing = new Series();
+        existing.setId(seriesId); existing.setUuid(seriesUuid);
+        existing.setAuthorId(userId);
+        existing.setTitle("old"); existing.setSlug("old-slug");
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
+        when(repo.existsBySlug("new-slug")).thenReturn(false);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(mapper.findBySlugWithAuthor("new-slug")).thenReturn(null);
+
+        UpdateSeriesRequest req = new UpdateSeriesRequest();
+        req.setTitle("new");
+        req.setSlug("new-slug");
+
+        assertThatThrownBy(() -> service.updateSeries(seriesUuid, userId, false, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
     }
 
     @Test
@@ -135,8 +218,10 @@ class SeriesServiceTest {
         Series existing = new Series();
         existing.setId(seriesId); existing.setUuid(seriesUuid);
         existing.setAuthorId(999L);
+        existing.setSlug("admin-series");
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        stubRefetchBySlug("admin-series");
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("admin override");

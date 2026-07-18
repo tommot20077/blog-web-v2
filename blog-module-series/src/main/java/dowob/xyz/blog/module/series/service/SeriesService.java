@@ -82,8 +82,23 @@ public class SeriesService {
         return r;
     }
 
+    /**
+     * 建立 Series。
+     *
+     * <p>
+     * 回傳 {@link SeriesSummaryResponse} 而非 Series entity：entity 帶內部 {@code Long id}
+     * 與 {@code authorId}，違反 {@code architecture.md}「All external IDs must be UUIDs」。
+     * 採既有的 summary 形狀而非新增 DTO，使 create / update / list 回應一致（作者一律以
+     * {@code AuthorSummary} 呈現，含 nickname 與 avatar）。代價為寫入後多一次 re-fetch
+     * 以取得 author 欄位。
+     * </p>
+     *
+     * @param userId 建立者（即作者）ID
+     * @param req    建立請求
+     * @return 建立後的 Series summary（對外只出 UUID）
+     */
     @Transactional
-    public Series createSeries(Long userId, CreateSeriesRequest req) {
+    public SeriesSummaryResponse createSeries(Long userId, CreateSeriesRequest req) {
         if (repo.existsBySlug(req.getSlug())) {
             throw new BusinessException(SeriesErrorCode.SLUG_ALREADY_USED);
         }
@@ -95,11 +110,27 @@ public class SeriesService {
         s.setCoverImageUrl(req.getCoverImageUrl());
         s.setAuthorId(userId);
         s.setArticleCount(0);
-        return repo.save(s);
+        Series saved = repo.save(s);
+        SeriesWithAuthor row = mapper.findBySlugWithAuthor(saved.getSlug());
+        if (row == null) {
+            throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
+        }
+        return toSummaryResponse(row);
     }
 
+    /**
+     * 更新 Series（需 ownership 或 admin）。
+     *
+     * <p>回傳 {@link SeriesSummaryResponse} 而非 entity，理由見 {@link #createSeries}。</p>
+     *
+     * @param seriesUuid Series 公開 UUID
+     * @param userId     操作者 ID
+     * @param isAdmin    是否為管理員
+     * @param req        更新請求（僅非 null 欄位生效）
+     * @return 更新後的 Series summary（對外只出 UUID）
+     */
     @Transactional
-    public Series updateSeries(UUID seriesUuid, Long userId, boolean isAdmin, UpdateSeriesRequest req) {
+    public SeriesSummaryResponse updateSeries(UUID seriesUuid, Long userId, boolean isAdmin, UpdateSeriesRequest req) {
         Series s = repo.findByUuid(seriesUuid)
                 .orElseThrow(() -> new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND));
         if (!isAdmin && !s.getAuthorId().equals(userId)) {
@@ -114,7 +145,12 @@ public class SeriesService {
         }
         if (req.getDescription() != null) s.setDescription(req.getDescription());
         if (req.getCoverImageUrl() != null) s.setCoverImageUrl(req.getCoverImageUrl());
-        return repo.save(s);
+        Series saved = repo.save(s);
+        SeriesWithAuthor row = mapper.findBySlugWithAuthor(saved.getSlug());
+        if (row == null) {
+            throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
+        }
+        return toSummaryResponse(row);
     }
 
     @Transactional

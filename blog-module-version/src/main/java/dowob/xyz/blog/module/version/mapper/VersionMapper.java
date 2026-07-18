@@ -51,7 +51,7 @@ public interface VersionMapper {
      */
     @Select({
         "<script>",
-        "SELECT uuid, type, note, created_at, author_id, length(content) AS content_length",
+        "SELECT uuid, type, note, created_at, length(content) AS content_length",
         "  FROM article_versions",
         " WHERE article_id = #{articleId}",
         " <if test='typeFilter != null'>AND type = #{typeFilter}</if>",

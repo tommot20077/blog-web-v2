@@ -383,19 +383,30 @@ public class VersioningService {
 
     /**
      * 轉換 ArticleVersion 為 VersionDetailResponse。
+     *
+     * <p>
+     * 不映射 entity 的 authorId / categoryId / id / articleId —— 對外只出 UUID
+     * （{@code architecture.md}），理由見 {@link VersionDetailResponse} 的 javadoc。
+     * </p>
+     *
+     * <p>
+     * 公開給 controller 使用：{@code createManual} / {@code promote} 過去直接回傳 entity，
+     * 現改為經本方法映射。service 內部方法仍回傳 entity（供 ownership 檢查與既有呼叫者）。
+     * </p>
+     *
+     * @param v 版本 entity
+     * @return 對外安全的版本詳情 DTO
      */
-    private VersionDetailResponse toDetailResponse(ArticleVersion v) {
+    public VersionDetailResponse toDetailResponse(ArticleVersion v) {
         VersionDetailResponse r = new VersionDetailResponse();
         r.setUuid(v.getUuid());
         r.setType(v.getType());
         r.setNote(v.getNote());
         r.setCreatedAt(v.getCreatedAt());
-        r.setAuthorId(v.getAuthorId());
         r.setTitle(v.getTitle());
         r.setSlug(v.getSlug());
         r.setContent(v.getContent());
         r.setSummary(v.getSummary());
-        r.setCategoryId(v.getCategoryId());
         r.setCoverImageUrl(v.getCoverImageUrl());
         r.setStatus(v.getStatus());
         r.setTags(v.getTags());
