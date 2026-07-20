@@ -1068,4 +1068,167 @@ class ArticleControllerIT {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
     }
+
+    /**
+     * 建立一篇文章並送審，回傳其 UUID（withdraw 測試輔助方法）
+     *
+     * @param title 文章標題
+     * @return 已進入 PENDING_REVIEW 狀態的文章公開 UUID 字串
+     * @throws Exception MockMvc 執行例外
+     */
+    private String createPendingReviewArticle(String title) throws Exception {
+        String uuid = createArticle(title, "內容");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/submit")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"));
+        return uuid;
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - 作者抽回自己的待審文章 → 狀態變 DRAFT")
+    void withdrawArticle_authorWithdrawsOwnPendingReview_success() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        String uuid = createPendingReviewArticle("待抽回文章");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        /** 抽回後應可再次編輯（PUT 守衛只放行 DRAFT / REJECTED） */
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("抽回後改標題");
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("抽回後改標題"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - DRAFT 狀態抽回 → A0204")
+    void withdrawArticle_draftStatus_returnsA0204() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        String uuid = createArticle("草稿文章", "內容");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - PUBLISHED 狀態抽回 → A0204")
+    void withdrawArticle_publishedStatus_returnsA0204() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        String uuid = createArticle("已發布文章", "內容");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - REJECTED 狀態抽回 → A0204")
+    void withdrawArticle_rejectedStatus_returnsA0204() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        String uuid = createPendingReviewArticle("待駁回文章");
+
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("內容不符合規範");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - 其他 AUTHOR 抽回他人文章 → A0203")
+    void withdrawArticle_nonOwnerAuthor_returnsA0203() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        String uuid = createPendingReviewArticle("他人的待審文章");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(99L, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0203"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - ADMIN 抽回他人文章 → A0203（職責分離：ADMIN 應走 reject）")
+    void withdrawArticle_adminOnOthersArticle_returnsA0203() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        String uuid = createPendingReviewArticle("他人送審的文章");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(99L, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0203"));
+
+        /** ADMIN 對他人送審文章的正當途徑是 reject，該路徑不受本次收緊影響 */
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("內容不符合規範");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(99L, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void withdrawArticle_userRole_returns403() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - 未認證 → 401")
+    void withdrawArticle_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/withdraw"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - 文章不存在 → A0201")
+    void withdrawArticle_articleNotFound_returnsA0201() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+    }
 }

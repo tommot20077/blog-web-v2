@@ -343,6 +343,18 @@ class ArticleServiceTest {
         }
 
         @Test
+        @DisplayName("withdrawArticle delegates to commandSubService")
+        void withdrawArticle_delegatesToCommandSubService() {
+            ArticleResponse expected = ArticleResponse.builder().uuid(ARTICLE_UUID).build();
+            when(commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID)).thenReturn(expected);
+
+            ArticleResponse actual = articleService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            assertThat(actual).isSameAs(expected);
+            verify(commandSubService).withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+        }
+
+        @Test
         @DisplayName("incrementCommentCount delegates to commandSubService")
         void incrementCommentCount_delegatesToCommandSubService() {
             articleService.incrementCommentCount(ARTICLE_ID);

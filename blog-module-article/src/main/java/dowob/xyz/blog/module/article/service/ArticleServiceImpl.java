@@ -118,6 +118,12 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     @Override
+    @Transactional
+    public ArticleResponse withdrawArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+        return commandSubService.withdrawArticle(operatorId, operatorRole, articleUuid);
+    }
+
+    @Override
     public void incrementCommentCount(Long articleId) {
         commandSubService.incrementCommentCount(articleId);
     }

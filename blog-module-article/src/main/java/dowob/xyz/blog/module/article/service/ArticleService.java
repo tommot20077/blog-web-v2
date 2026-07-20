@@ -166,6 +166,22 @@ public interface ArticleService {
     ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid);
 
     /**
+     * 抽回送審文章（PENDING_REVIEW → DRAFT）
+     *
+     * <p>
+     * 供作者在審核完成前反悔、將文章退回草稿繼續編輯。
+     * 僅 PENDING_REVIEW 狀態可抽回；<b>權限僅限文章作者本人，ADMIN 亦不可抽回他人文章</b>
+     * （抽回與駁回職責分離：ADMIN 處理他人送審文章應走 {@link #rejectArticle}）。
+     * </p>
+     *
+     * @param operatorId   操作者資料庫主鍵
+     * @param operatorRole 操作者角色（保留以與其他狀態轉換方法簽章一致，不影響授權判斷）
+     * @param articleUuid  文章公開 UUID
+     * @return 抽回後的文章完整資訊
+     */
+    ArticleResponse withdrawArticle(Long operatorId, Role operatorRole, UUID articleUuid);
+
+    /**
      * 根據 slug 取得文章詳情
      *
      * @param slug       文章 URL slug
