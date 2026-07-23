@@ -66,7 +66,8 @@ class ArticleCommandSubService {
         article.setAuthorId(authorId);
         article.setTitle(request.getTitle());
         article.setContent(request.getContent());
-        article.setContentHtml(markdownRenderer.render(request.getContent()));
+        RenderResult renderResult = markdownRenderer.render(request.getContent());
+        article.setContentHtml(renderResult == null ? null : renderResult.html());
         article.setSummary(extractSummary(request.getContent(), request.getSummary()));
         article.setSlug(generateSlug(request.getTitle()));
         // 建立文章時狀態一律強制為 DRAFT，防止用戶繞過審核流程直接發布
@@ -139,7 +140,7 @@ class ArticleCommandSubService {
         }
         if (request.getContent() != null) {
             article.setContent(request.getContent());
-            article.setContentHtml(markdownRenderer.render(request.getContent()));
+            article.setContentHtml(markdownRenderer.render(request.getContent()).html());
         }
         if (request.getSummary() != null) {
             String baseContent = request.getContent() != null ? request.getContent() : article.getContent();

@@ -113,8 +113,8 @@ class ArticleCommandSubServiceTest {
         when(markdownRenderer.render(any())).thenAnswer(inv -> {
             String md = inv.getArgument(0);
             if (md == null) return null;
-            if (md.isEmpty()) return "";
-            return "<p>" + md + "</p>\n";
+            if (md.isEmpty()) return new RenderResult("", List.of());
+            return new RenderResult("<p>" + md + "</p>\n", List.of());
         });
         when(markdownRenderer.toPlainText(any())).thenAnswer(inv -> {
             String md = inv.getArgument(0);
@@ -1419,7 +1419,7 @@ class ArticleCommandSubServiceTest {
             request.setSummary("摘要");
 
             when(markdownRenderer.render("<script>alert('xss')</script>這是正常文字"))
-                    .thenReturn("這是正常文字");  // 模擬 OWASP 剝除 script 後的結果
+                    .thenReturn(new RenderResult("這是正常文字", List.of()));  // 模擬 OWASP 剝除 script 後的結果
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
             commandSubService.createArticle(AUTHOR_ID, request);
