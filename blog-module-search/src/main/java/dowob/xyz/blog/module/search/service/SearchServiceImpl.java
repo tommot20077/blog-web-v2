@@ -9,6 +9,7 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.repository.ArticleSearchRepository;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -204,7 +206,31 @@ public class SearchServiceImpl implements SearchService {
                 .map(this::toDocument)
                 .collect(Collectors.toList());
         articleSearchRepository.saveAll(documents);
+        redisTemplate.opsForValue().set(RedisKeyConstant.SEARCH_REINDEX_AT_KEY, LocalDateTime.now().toString());
         log.info("全量重建完成，共索引 {} 篇文章", documents.size());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public SearchIndexStatusResponse getIndexStatus() {
+        String lastReindexAt = redisTemplate.opsForValue().get(RedisKeyConstant.SEARCH_REINDEX_AT_KEY);
+        try {
+            long documentCount = articleSearchRepository.count();
+            return SearchIndexStatusResponse.builder()
+                    .documentCount(documentCount)
+                    .lastReindexAt(lastReindexAt)
+                    .healthy(true)
+                    .build();
+        } catch (Exception e) {
+            log.error("查詢 Elasticsearch 索引狀態失敗：{}", e.getMessage(), e);
+            return SearchIndexStatusResponse.builder()
+                    .documentCount(null)
+                    .lastReindexAt(lastReindexAt)
+                    .healthy(false)
+                    .build();
+        }
     }
 
     /**

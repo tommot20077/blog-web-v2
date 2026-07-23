@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.repository.ArticleSearchRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +23,7 @@ import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.data.elasticsearch.core.query.Query;
 import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 
 import java.time.LocalDateTime;
@@ -99,12 +101,19 @@ class SearchServiceTest {
     private ListOperations<String, String> listOperations;
 
     /**
+     * Redis String 值操作 Mock（用於重建時間戳讀寫）
+     */
+    @Mock
+    private ValueOperations<String, String> valueOperations;
+
+    /**
      * 測試前置：設定 Redis Template Mock 行為
      */
     @BeforeEach
     void setUp() {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(redisTemplate.opsForList()).thenReturn(listOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
     /**
@@ -564,6 +573,72 @@ class SearchServiceTest {
             searchService.reindexAll();
 
             verify(articleSearchRepository).saveAll(any());
+        }
+
+        /**
+         * 全量重建完成後，應將當下時間以 ISO-8601 字串寫入 Redis 時間戳 Key
+         */
+        @Test
+        @DisplayName("重建完成後，應寫入 search:reindex:at 時間戳")
+        void reindexAll_afterCompletion_writesTimestampToRedis() {
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
+
+            searchService.reindexAll();
+
+            verify(valueOperations).set(eq("search:reindex:at"), anyString());
+        }
+    }
+
+    /**
+     * getIndexStatus() 方法測試群組
+     */
+    @Nested
+    @DisplayName("getIndexStatus() 索引狀態查詢")
+    class GetIndexStatusTests {
+
+        /**
+         * ES 查詢成功時，應回傳文件數、時間戳與 healthy=true
+         */
+        @Test
+        @DisplayName("ES 健康時，應回傳正確文件數與健康狀態")
+        void getIndexStatus_whenEsHealthy_returnsDocumentCountAndTimestamp() {
+            when(articleSearchRepository.count()).thenReturn(13L);
+            when(valueOperations.get("search:reindex:at")).thenReturn("2026-07-20T21:30:00");
+
+            SearchIndexStatusResponse status = searchService.getIndexStatus();
+
+            assertThat(status.getDocumentCount()).isEqualTo(13L);
+            assertThat(status.getLastReindexAt()).isEqualTo("2026-07-20T21:30:00");
+            assertThat(status.isHealthy()).isTrue();
+        }
+
+        /**
+         * ES 查詢拋出例外時，不應拋出，應回傳 healthy=false 且 documentCount=null
+         */
+        @Test
+        @DisplayName("ES 不可達時，應回傳 healthy=false 且 documentCount=null，不拋出")
+        void getIndexStatus_whenEsThrows_returnsHealthyFalseWithNullCount() {
+            when(articleSearchRepository.count()).thenThrow(new RuntimeException("ES down"));
+
+            SearchIndexStatusResponse status = searchService.getIndexStatus();
+
+            assertThat(status.isHealthy()).isFalse();
+            assertThat(status.getDocumentCount()).isNull();
+        }
+
+        /**
+         * 從未執行過 reindexAll() 時，Redis 無時間戳資料，lastReindexAt 應為 null
+         */
+        @Test
+        @DisplayName("從未重建過時，lastReindexAt 應為 null")
+        void getIndexStatus_whenNeverReindexed_lastReindexAtIsNull() {
+            when(articleSearchRepository.count()).thenReturn(0L);
+            when(valueOperations.get("search:reindex:at")).thenReturn(null);
+
+            SearchIndexStatusResponse status = searchService.getIndexStatus();
+
+            assertThat(status.getLastReindexAt()).isNull();
+            assertThat(status.isHealthy()).isTrue();
         }
     }
 }

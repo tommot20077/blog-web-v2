@@ -305,6 +305,14 @@ public class RedisKeyConstant {
         return SEARCH_HISTORY_PREFIX + userId;
     }
 
+    /**
+     * 搜尋索引全量重建時間戳 Key (String，值為 ISO-8601 時間字串)
+     * Key: search:reindex:at
+     * <p>由 {@code SearchServiceImpl.reindexAll()} 於重建完成後寫入，
+     * 供 Admin 後台查詢索引狀態時讀取「最後重建時間」；從未重建過時該 Key 不存在。</p>
+     */
+    public static final String SEARCH_REINDEX_AT_KEY = "search:reindex:at";
+
     /** ===================== Recommend ===================== */
 
     /**
