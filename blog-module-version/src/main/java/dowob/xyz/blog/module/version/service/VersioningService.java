@@ -276,7 +276,7 @@ public class VersioningService {
             v.getSummary(),
             v.getCoverImageUrl(),
             v.getStatus(),
-            markdownRenderer.render(v.getContent()),
+            markdownRenderer.render(v.getContent()).html(),
             v.getTags() != null ? v.getTags() : List.of()
         );
         articleFacade.applyRestoreContent(plan.articleId(), restoreData);

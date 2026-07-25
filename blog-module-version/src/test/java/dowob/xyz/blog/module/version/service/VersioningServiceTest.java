@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
+import dowob.xyz.blog.module.article.service.RenderResult;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
@@ -326,7 +327,8 @@ class VersioningServiceTest {
         lenient().when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(markdownRenderer.render("new content")).thenReturn("<p>new content</p>");
+        when(markdownRenderer.render("new content"))
+            .thenReturn(new RenderResult("<p>new content</p>", List.of()));
 
         service.restore(versionUuid, authorId, false);
 
@@ -380,7 +382,8 @@ class VersioningServiceTest {
         lenient().when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(markdownRenderer.render(any())).thenReturn("<p/>");
+        lenient().when(markdownRenderer.render(any()))
+            .thenReturn(new RenderResult("<p/>", List.of()));
 
         service.restore(versionUuid, authorId, false);
 
