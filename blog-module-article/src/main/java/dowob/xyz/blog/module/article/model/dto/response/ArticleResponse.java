@@ -138,4 +138,11 @@ public class ArticleResponse {
      * 文章在系列中的導覽資訊（prev/next），不在 series 中時為 null
      */
     private SeriesNavigation seriesNav;
+
+    /**
+     * 文章章節導覽（Table of Contents），由內文 h2/h3 標題產生。
+     *
+     * <p>恆為非 null 陣列；無標題或 TOC 資料缺失/解析失敗時為空陣列 {@code []}。</p>
+     */
+    private List<TocEntry> toc;
 }

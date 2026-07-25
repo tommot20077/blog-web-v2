@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -14,6 +15,7 @@ import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.TocEntry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -30,6 +32,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -49,11 +52,13 @@ class ArticleResponseMapperTest {
     @Mock
     private ViewCountService viewCountService;
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     private ArticleResponseMapper mapper;
 
     @BeforeEach
     void setUp() {
-        mapper = new ArticleResponseMapper(articleMapper, categoryMapper, userFacade, viewCountService);
+        mapper = new ArticleResponseMapper(articleMapper, categoryMapper, userFacade, viewCountService, objectMapper);
     }
 
     @Nested
@@ -104,6 +109,57 @@ class ArticleResponseMapperTest {
             assertThat(resp.getLastReadProgress()).isEqualByComparingTo(BigDecimal.valueOf(42));
             assertThat(resp.getSeriesNav()).isSameAs(seriesNav);
         }
+
+        @Test
+        @DisplayName("toc正常反序列化：合法 JSON 陣列字串轉為對應 List<TocEntry>")
+        void toResponse_deserializesTocJson() {
+            Article article = article(UUID.randomUUID(), 5L);
+            article.setToc("[{\"id\":\"heading-a\",\"text\":\"A\",\"level\":2},"
+                    + "{\"id\":\"heading-b\",\"text\":\"B\",\"level\":3}]");
+            when(viewCountService.getViewCount(article.getUuid())).thenReturn(0L);
+
+            ArticleResponse resp = mapper.toResponse(article);
+
+            assertThat(resp.getToc()).containsExactly(
+                    new TocEntry("heading-a", "A", 2),
+                    new TocEntry("heading-b", "B", 3));
+        }
+
+        @Test
+        @DisplayName("toc為null回空陣列")
+        void toResponse_nullTocReturnsEmptyList() {
+            Article article = article(UUID.randomUUID(), 5L);
+            article.setToc(null);
+            when(viewCountService.getViewCount(article.getUuid())).thenReturn(0L);
+
+            ArticleResponse resp = mapper.toResponse(article);
+
+            assertThat(resp.getToc()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("toc為空字串回空陣列")
+        void toResponse_blankTocReturnsEmptyList() {
+            Article article = article(UUID.randomUUID(), 5L);
+            article.setToc("");
+            when(viewCountService.getViewCount(article.getUuid())).thenReturn(0L);
+
+            ArticleResponse resp = mapper.toResponse(article);
+
+            assertThat(resp.getToc()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("toc解析失敗回空陣列（不拋例外）")
+        void toResponse_malformedTocReturnsEmptyListWithoutThrowing() {
+            Article article = article(UUID.randomUUID(), 5L);
+            article.setToc("{not-valid-json");
+            when(viewCountService.getViewCount(article.getUuid())).thenReturn(0L);
+
+            ArticleResponse resp = assertDoesNotThrow(() -> mapper.toResponse(article));
+
+            assertThat(resp.getToc()).isEmpty();
+        }
     }
 
     @Nested
@@ -128,6 +184,39 @@ class ArticleResponseMapperTest {
             assertThat(resp.getStatus()).isEqualTo(ArticleStatus.DRAFT);
             assertThat(resp.getTags()).extracting(TagSummaryResponse::getName).containsExactly("Java");
             assertThat(resp.getCategories()).extracting(CategoryResponse::getName).containsExactly("Backend");
+        }
+
+        @Test
+        @DisplayName("toc正常反序列化：合法 JSON 陣列字串轉為對應 List<TocEntry>")
+        void toEditorResponse_deserializesTocJson() {
+            Article article = article(UUID.randomUUID(), 5L);
+            article.setToc("[{\"id\":\"heading-a\",\"text\":\"A\",\"level\":2}]");
+
+            EditorArticleResponse resp = mapper.toEditorResponse(article);
+
+            assertThat(resp.getToc()).containsExactly(new TocEntry("heading-a", "A", 2));
+        }
+
+        @Test
+        @DisplayName("toc為null回空陣列")
+        void toEditorResponse_nullTocReturnsEmptyList() {
+            Article article = article(UUID.randomUUID(), 5L);
+            article.setToc(null);
+
+            EditorArticleResponse resp = mapper.toEditorResponse(article);
+
+            assertThat(resp.getToc()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("toc解析失敗回空陣列（不拋例外）")
+        void toEditorResponse_malformedTocReturnsEmptyListWithoutThrowing() {
+            Article article = article(UUID.randomUUID(), 5L);
+            article.setToc("not-json-at-all");
+
+            EditorArticleResponse resp = assertDoesNotThrow(() -> mapper.toEditorResponse(article));
+
+            assertThat(resp.getToc()).isEmpty();
         }
     }
 
@@ -156,6 +245,21 @@ class ArticleResponseMapperTest {
             assertThat(resp.getAuthorNickname()).isEqualTo("Author");
             assertThat(resp.getTags()).extracting(TagSummaryResponse::getName).containsExactly("Java");
             verify(viewCountService, never()).getViewCount(uuid);
+        }
+
+        @Test
+        @DisplayName("summary不含toc：ArticleSummaryResponse 不應暴露 toc 欄位（列表頁不需要，避免無謂 payload）")
+        void toSummaryResponse_hasNoTocField() {
+            UUID uuid = UUID.randomUUID();
+            Article article = article(uuid, 3L);
+            article.setToc("[{\"id\":\"heading-a\",\"text\":\"A\",\"level\":2}]");
+
+            assertThat(ArticleSummaryResponse.class.getDeclaredFields())
+                    .extracting(java.lang.reflect.Field::getName)
+                    .doesNotContain("toc");
+
+            // 即便來源 article 帶有合法 toc JSON，toSummaryResponse 仍不應嘗試處理它、也不應丟出例外
+            assertThat(assertDoesNotThrow(() -> mapper.toSummaryResponse(article, List.of()))).isNotNull();
         }
     }
 

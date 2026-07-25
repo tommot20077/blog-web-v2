@@ -77,4 +77,11 @@ public class EditorArticleResponse {
      * 最後更新時間
      */
     private LocalDateTime updatedAt;
+
+    /**
+     * 文章章節導覽（Table of Contents），由內文 h2/h3 標題產生。
+     *
+     * <p>恆為非 null 陣列；無標題或 TOC 資料缺失/解析失敗時為空陣列 {@code []}。</p>
+     */
+    private List<TocEntry> toc;
 }
