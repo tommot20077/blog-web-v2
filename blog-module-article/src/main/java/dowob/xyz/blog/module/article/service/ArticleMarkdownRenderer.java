@@ -48,8 +48,13 @@ import java.util.regex.Pattern;
  * <p>渲染時自 Markdown AST 走訪 h2/h3 標題，產生依文件順序排列的 {@link TocEntry} 清單，
  * 並透過 flexmark {@link AttributeProvider} 對對應的 {@code <h2>}/{@code <h3>} 注入
  * {@code id="heading-<slug>"} 錨點。id 於消毒前注入，再由 sanitizer 以
- * {@link #HEADING_ID_PATTERN} 驗證放行——渲染器產生的 id 通過、使用者於 raw HTML 內嵌的
- * 任意 id 則被剝除，將所有 id 關在 {@code heading-} 命名空間內以縮小 DOM clobbering 面。</p>
+ * {@link #HEADING_ID_PATTERN} 驗證：<b>不符合 {@code heading-<slug>} 格式的 id 會被剝除；
+ * 符合該格式者一律放行</b>，包含使用者於 raw HTML 內手動寫入、恰好仿冒成
+ * {@code heading-} 命名空間格式的 id（例如刻意仿冒某個真實標題 slug 的
+ * {@code <h2 id="heading-安裝步驟">}）。此機制將攻擊面收斂在 {@code heading-} 命名空間內，
+ * 可防止任意字串的 DOM clobbering id，但<b>不保證</b> TOC 錨點一定指向渲染器產生的真實標題
+ * ——完整的 TOC 錨點防護是 best-effort，非強保證；如需強化（例如偵測/拒絕仿冒 id）應視為
+ * 獨立的 backlog 項目，非本機制涵蓋範圍。</p>
  *
  * @author Yuan
  * @version 2.0
@@ -74,9 +79,13 @@ public class ArticleMarkdownRenderer {
 
     /**
      * 合法 heading id 的格式：{@code heading-} 前綴加上 1~64 個 Unicode 字母/數字/連字號。
-     * 供 sanitizer 白名單放行渲染器產生的 id、剝除使用者注入的任意 id。
+     * 供 sanitizer 白名單放行渲染器產生的 id、剝除不符此格式的 id。
+     *
+     * <p>package-private（非 private）：讓同套件的單元測試可直接複用同一個 Pattern
+     * 物件驗證「渲染器自產 id 必然符合此格式」的不變量，避免測試另外複製一份正規表示式
+     * 造成兩處定義漂移。</p>
      */
-    private static final Pattern HEADING_ID_PATTERN = Pattern.compile("^heading-[\\p{L}\\p{N}-]{1,64}$");
+    static final Pattern HEADING_ID_PATTERN = Pattern.compile("^heading-[\\p{L}\\p{N}-]{1,64}$");
 
     /**
      * flexmark 解析選項（於 render 時重建帶 AttributeProvider 的 HtmlRenderer 時共用）。
@@ -166,6 +175,14 @@ public class ArticleMarkdownRenderer {
             }
             String text = StringUtils.trimToEmpty(new TextCollectingVisitor().collectAndGetText(heading));
             String id = buildHeadingId(text, idCounts);
+            // 不變量守門：buildHeadingId 承諾回傳必然符合 HEADING_ID_PATTERN 的 id。
+            // 這裡再次驗證是防禦深度——若此斷言曾經失敗，代表 buildHeadingId 本身有 bug
+            // （id 未過 sanitizer 白名單而被剝除，但 toc() 仍回傳該 id，形成死錨點），
+            // 應在測試中被抓到，而不是讓不一致的 TOC 悄悄流出去。
+            if (!HEADING_ID_PATTERN.matcher(id).matches()) {
+                throw new IllegalStateException(
+                        "產生的 heading id 不符合 HEADING_ID_PATTERN，將導致 TOC 與 HTML id 不一致：" + id);
+            }
             headingIds.put(heading, id);
             toc.add(new TocEntry(id, text, level));
         }
@@ -201,6 +218,17 @@ public class ArticleMarkdownRenderer {
      * <p>id = {@code heading-} + Unicode slug；同文重複的 slug 附加序號去重
      * （例：{@code heading-安裝步驟}、{@code heading-安裝步驟-2}）。</p>
      *
+     * <p><b>去重序號 headroom</b>：{@link #slugify(String)} 已將 slug 截斷至
+     * {@value #MAX_SLUG_LENGTH} 個 code point 上限，這與 {@link #HEADING_ID_PATTERN}
+     * 的 {@code {1,64}} 剛好吃滿。若直接在此 baseId 後面再接 {@code -<序號>}，兩個
+     * ≥64 字的相同標題會讓第二個 id 超過上限而不符合 pattern（sanitizer 會剝除該 id，
+     * 但 {@code toc()} 仍回傳含此 id 的條目，形成死錨點）。因此僅在需要附加序號時
+     * （{@code count > 1}），才依序號的實際字元數（例如兩位數的 {@code -11} 佔 3 碼）
+     * 動態讓出對應的 headroom，再次截斷 base slug，確保「slug 部份 + 序號」恆
+     * {@code <= MAX_SLUG_LENGTH}。{@code count} 為 {@code int}，十進位最多 10 位數，
+     * 故序號字串最長 11 碼（{@code -} + 10 位數），headroom 下限恆為
+     * {@code MAX_SLUG_LENGTH - 11 = 53 > 0}，不會發生截斷後無字元可用的情形。</p>
+     *
      * @param text     標題純文字
      * @param idCounts 記錄各基底 id 出現次數的可變對照表（跨呼叫累積同一篇文章的計數）
      * @return 去重後、保證匹配 {@link #HEADING_ID_PATTERN} 的 heading id
@@ -212,7 +240,13 @@ public class ArticleMarkdownRenderer {
         }
         String baseId = HEADING_ID_PREFIX + slug;
         int count = idCounts.merge(baseId, 1, Integer::sum);
-        return count == 1 ? baseId : baseId + "-" + count;
+        if (count == 1) {
+            return baseId;
+        }
+
+        String suffix = "-" + count;
+        String truncatedSlug = truncateToCodePoints(slug, MAX_SLUG_LENGTH - suffix.length());
+        return HEADING_ID_PREFIX + truncatedSlug + suffix;
     }
 
     /**
@@ -242,22 +276,42 @@ public class ArticleMarkdownRenderer {
             }
         }
 
-        /** 去除尾端連字號 */
-        int end = builder.length();
-        while (end > 0 && builder.charAt(end - 1) == '-') {
+        String slug = stripTrailingHyphens(builder.toString());
+        return truncateToCodePoints(slug, MAX_SLUG_LENGTH);
+    }
+
+    /**
+     * 以 code point 為單位將字串截斷至指定上限，避免切斷 surrogate pair，
+     * 並在截斷後再次去除尾端連字號（截斷點可能剛好落在連字號上）。
+     *
+     * <p>由 {@link #slugify(String)}（截斷至 {@value #MAX_SLUG_LENGTH}）與
+     * {@link #buildHeadingId(String, Map)}（去重序號 headroom，截斷至更短的上限）
+     * 共用，確保兩處的截斷語意一致。</p>
+     *
+     * @param slug          待截斷的 slug（已不含前導連字號）
+     * @param maxCodePoints 允許的最大 code point 數
+     * @return 截斷（必要時）且去除尾端連字號後的字串
+     */
+    private static String truncateToCodePoints(String slug, int maxCodePoints) {
+        if (slug.codePointCount(0, slug.length()) <= maxCodePoints) {
+            return slug;
+        }
+        int cut = slug.offsetByCodePoints(0, maxCodePoints);
+        return stripTrailingHyphens(slug.substring(0, cut));
+    }
+
+    /**
+     * 去除字串尾端連續的連字號。
+     *
+     * @param s 原始字串
+     * @return 去除尾端連字號後的字串
+     */
+    private static String stripTrailingHyphens(String s) {
+        int end = s.length();
+        while (end > 0 && s.charAt(end - 1) == '-') {
             end--;
         }
-        String slug = builder.substring(0, end);
-
-        /** 以 code point 為單位截斷，避免切斷 surrogate pair，並再次去除尾端連字號 */
-        if (slug.codePointCount(0, slug.length()) > MAX_SLUG_LENGTH) {
-            int cut = slug.offsetByCodePoints(0, MAX_SLUG_LENGTH);
-            slug = slug.substring(0, cut);
-            while (slug.endsWith("-")) {
-                slug = slug.substring(0, slug.length() - 1);
-            }
-        }
-        return slug;
+        return s.substring(0, end);
     }
 
     /**

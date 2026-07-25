@@ -249,4 +249,52 @@ class ArticleMarkdownRendererTest {
         assertThat(result.html()).contains("world");
         assertThat(result.html()).contains("<h2 id=\"heading-標題\">");
     }
+
+    // ─── T1a：buildHeadingId 去重序號 headroom 回歸 + 不變量 ───
+
+    @Test
+    @DisplayName("回歸：兩個 64 字重複標題，第二個 id 仍需符合 HEADING_ID_PATTERN")
+    void render_twoDuplicate64CharHeadings_secondIdStillMatchesPattern() {
+        String longTitle = "a".repeat(64);
+        RenderResult result = renderer.render("## " + longTitle + "\n\n## " + longTitle);
+
+        assertThat(result.toc()).hasSize(2);
+        String firstId = result.toc().get(0).id();
+        String secondId = result.toc().get(1).id();
+
+        // 第一個 id 剛好卡在上限（64 個字元），不應有去重序號
+        assertThat(firstId).isEqualTo("heading-" + longTitle);
+        assertThat(firstId).matches(ArticleMarkdownRenderer.HEADING_ID_PATTERN);
+
+        // 第二個 id 修前為 66 字元（64 + "-2"）而不符合 pattern；修後應截斷 base slug 讓總長度仍 <=64
+        assertThat(secondId).matches(ArticleMarkdownRenderer.HEADING_ID_PATTERN);
+        assertThat(secondId).endsWith("-2");
+
+        // TOC 回傳的 id 必須與 HTML 中實際存活的 id 一致，否則 TOC 產生死錨點
+        assertThat(result.html()).contains("id=\"" + firstId + "\"");
+        assertThat(result.html()).contains("id=\"" + secondId + "\"");
+    }
+
+    @Test
+    @DisplayName("不變量：長標題 + 高重複次數（含兩位數序號）+ fallback slug 下，所有 TOC id 皆符合 HEADING_ID_PATTERN 且與 HTML id 一致")
+    void render_allProducedTocIds_matchHeadingIdPattern() {
+        String longTitle = "測試標題".repeat(20); // 80 個 code point 的中文標題，觸發截斷路徑
+        StringBuilder markdown = new StringBuilder();
+        // 重複 11 次，讓去重序號跨過兩位數（-2 ... -11），驗證 headroom 隨序號位數動態調整
+        for (int i = 0; i < 11; i++) {
+            markdown.append("## ").append(longTitle).append("\n\n");
+        }
+        // 混入 fallback slug（純符號標題）情境的重複去重
+        for (int i = 0; i < 3; i++) {
+            markdown.append("## !!!\n\n");
+        }
+
+        RenderResult result = renderer.render(markdown.toString());
+
+        assertThat(result.toc()).hasSize(14);
+        for (TocEntry entry : result.toc()) {
+            assertThat(entry.id()).matches(ArticleMarkdownRenderer.HEADING_ID_PATTERN);
+            assertThat(result.html()).contains("id=\"" + entry.id() + "\"");
+        }
+    }
 }
