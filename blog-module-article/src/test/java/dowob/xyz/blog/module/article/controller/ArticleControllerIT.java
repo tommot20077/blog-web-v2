@@ -44,6 +44,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -1067,5 +1068,87 @@ class ArticleControllerIT {
                 .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    // ===== TOC 契約測試（T5：端到端驗證 T1-T4 渲染器 → 持久化 → DTO 串起來真的 work）=====
+
+    @Test
+    @DisplayName("建立含h2h3的文章_GET詳情_toc為結構化陣列")
+    void createArticleWithH2H3_getDetail_tocIsStructuredArray() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        /** 建立含 h2/h3 標題的文章：h2「安裝步驟」→ h3「Port 被佔用」→ h2「常見問題」（文件順序） */
+        String markdown = "## 安裝步驟\n\n安裝說明段落。\n\n### Port 被佔用\n\n子節說明文字。\n\n## 常見問題\n\n常見問題說明段落。";
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("TOC 契約驗證文章");
+        createRequest.setContent(markdown);
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 匿名取得已發布文章詳情，驗證 toc 為非空的結構化陣列，且順序與文件順序一致 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.toc").isArray())
+                .andExpect(jsonPath("$.data.toc", hasSize(3)))
+                // 第一個 ## 標題「安裝步驟」→ 陣列第一個 entry，level 為 2
+                .andExpect(jsonPath("$.data.toc[0].id").value("heading-安裝步驟"))
+                .andExpect(jsonPath("$.data.toc[0].id").value(matchesPattern("^heading-.*")))
+                .andExpect(jsonPath("$.data.toc[0].text").value("安裝步驟"))
+                .andExpect(jsonPath("$.data.toc[0].level").value(2))
+                // ### 子標題「Port 被佔用」緊接於後，level 為 3
+                .andExpect(jsonPath("$.data.toc[1].id").value("heading-port-被佔用"))
+                .andExpect(jsonPath("$.data.toc[1].id").value(matchesPattern("^heading-.*")))
+                .andExpect(jsonPath("$.data.toc[1].text").value("Port 被佔用"))
+                .andExpect(jsonPath("$.data.toc[1].level").value(3))
+                // 第二個 ## 標題「常見問題」排在最後，level 為 2
+                .andExpect(jsonPath("$.data.toc[2].id").value("heading-常見問題"))
+                .andExpect(jsonPath("$.data.toc[2].id").value(matchesPattern("^heading-.*")))
+                .andExpect(jsonPath("$.data.toc[2].text").value("常見問題"))
+                .andExpect(jsonPath("$.data.toc[2].level").value(2));
+    }
+
+    @Test
+    @DisplayName("建立無heading的文章_GET詳情_toc為空陣列")
+    void createArticleWithoutHeading_getDetail_tocIsEmptyArray() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        /** 建立純段落文章（內文無任何 ## / ### 標題） */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("無標題章節文章");
+        createRequest.setContent("這是一段純文字內容，沒有任何標題。第二句話延伸內容，僅為段落。");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 匿名取得已發布文章詳情，驗證 toc 為空陣列（非 null） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.toc").isArray())
+                .andExpect(jsonPath("$.data.toc", hasSize(0)));
     }
 }
