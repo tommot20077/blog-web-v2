@@ -38,6 +38,11 @@ Yuan 的要求是後者不可接受：**只有已發布文章的圖片才該公�
 3. **網址寫死在 markdown 內文。**
    `![alt](url)` 的 URL 存進 `articles.content`，因此**對外網址必須長期穩定**——不能直接發放會過期的簽名網址，否則文章內文會整片破圖。
 
+   **且此處已有一個現存缺陷**：後端回傳的網址帶容器內部主機名（`minio`），前端 `fileService.ts:5-15` 的
+   `normalizeUploadUrl()` 在**上傳當下**把它改寫為瀏覽器可達的 host。但網址一旦寫進 markdown 就凍結——
+   在 localhost 上傳的圖，內文永遠是 `localhost:9000/...`，**部署到正式域名後這些圖全破**。
+   本設計必須一併解決，否則只是把破洞從 `:9000` 搬到 `:9010`。
+
 4. **無 FileFacade。** 現有 facade 有 Article/Reading/Search/Series/Tag/User，唯獨沒有 File。跨模組綁定需新增。
 
 ## 3. 方案：代理端點 + 302 轉簽名網址
@@ -54,6 +59,29 @@ Yuan 的要求是後者不可接受：**只有已發布文章的圖片才該公�
 - bucket 維持**完全私有** → 無任何匿名可讀路徑
 - 權限在後端判斷 → 真正的存取控制（非 UUID 難猜的 obscurity）
 - 302 而非串流 → 圖片流量不經過應用伺服器，避免頻寬與 CPU 成本
+
+### 3.1 寫進 markdown 的是**相對路徑**（關鍵決策）
+
+```markdown
+![截圖](/api/v1/files/abc-123/content)
+```
+
+**不是** `https://host/api/v1/files/...`。理由：
+
+| | 相對路徑 | 絕對網址 | 自訂語法 `file:abc` |
+|---|---|---|---|
+| 標準 markdown | ✅ 相對連結為合法語法 | ✅ | ❌ 離開系統即失效 |
+| 換域名 | ✅ 不受影響 | ❌ 內文需全站改寫 | ✅ |
+| 換儲存後端 | ✅ 端點不變 | ❌ | ✅ |
+| 輸出時需改寫 | ✅ 不需，瀏覽器自行解析 | 不需 | ❌ 每條輸出路徑都要記得套 |
+
+相對路徑是唯一四項全過的選項，且**不需要 render-time 改寫**——瀏覽器對 `/api/...` 以當前 origin 解析是 HTML 內建行為，非需維護的邏輯。
+
+**業界佐證**：WordPress 內文存絕對網址，換域名需 `wp-cli search-replace` 全站取代，是知名的遷移痛點；Ghost 改存 `__GHOST_URL__/...` 佔位符於輸出時替換，正是為避免此問題。本設計用相對路徑達到同樣效果，且無需佔位符替換機制。
+
+**前提**：正式環境前後端同域（`90030.xyz`），相對路徑天然可用。本機開發前端 `:5500`／後端 `:9010` 非同源，需於 `vite.config.ts` 加 `/api` proxy 至 `:9010`——此舉本身即為改善，使 dev 拓撲對齊 prod，可消除僅在單邊出現的同源類問題。
+
+**已知取捨**：RSS／email 等非瀏覽器消費端拿到相對路徑無法解析，需在該輸出點自行絕對化。這是**單點、可控**的轉換，優於「換域名時改寫全部內容」。
 
 ## 4. 授權規則
 
@@ -96,7 +124,10 @@ CREATE INDEX idx_file_metadata_article_uuid ON file_metadata (article_uuid);
 
 ## 7. 其他變更
 
-- **`uploadFile` 回傳的 url** 改為 `{對外 base}/api/v1/files/{id}/content`，不再回傳 MinIO 直連網址。
+- **`uploadFile` 回傳的 url** 改為**相對路徑** `/api/v1/files/{id}/content`（見 §3.1），不再回傳 MinIO 直連網址，也不帶 host。
+- **前端 `normalizeUploadUrl()`（`fileService.ts:5-15`）應予移除**——它是為了修補「後端回傳容器內部主機名」而存在的補丁；改回相對路徑後該問題不存在，留著反而會對相對路徑做出非預期的 `new URL()` 解析（會拋錯後走 catch 原樣回傳，雖不致壞但屬死碼）。
+- **`vite.config.ts` 新增 dev proxy**：`/api` → `http://localhost:9010`，使本機相對路徑可解析、且 dev 拓撲對齊正式環境同域架構。
+  注意 `apiClient.ts:49` 目前以 `VITE_API_BASE_URL` 絕對網址呼叫 API，**本次不動它**（改動 API 呼叫方式風險過大且非本任務目標）；proxy 只服務內文圖片的相對路徑。
 - **`MinioConfig`**：**不得**設定 bucket 為公開；bucket 維持私有。（本機先前為了應急曾手動 `mc anonymous set download`，需一併還原為 private。）
 - **`SecurityConfig:88`** 的 `GET /api/v1/files/**` permitAll 需重新檢視：新端點需允許匿名到達（才能判斷規則 1、2），但判斷邏輯在 service 層，不可因 permitAll 就跳過檢查。
 - **presigned URL 效期**：建議 5 分鐘（夠瀏覽器完成一次載入，外流也很快失效）。
