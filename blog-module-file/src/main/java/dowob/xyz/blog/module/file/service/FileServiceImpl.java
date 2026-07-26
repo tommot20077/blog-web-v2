@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
@@ -77,6 +78,12 @@ public class FileServiceImpl implements FileService {
     /** 文章模組跨模組 Facade（canRead 判斷「已綁定文章是否已發布」用；不得直接查 article 表） */
     private final ArticleFacade articleFacade;
 
+    /**
+     * 使用者模組跨模組 Facade（將文章作者的 authorId（Long）轉換為 UUID，供 {@link #bindToArticle}
+     * 與 {@link #uploadFile} 的擁有權比對用；見安全複審 CRITICAL / MEDIUM 1 修復）。
+     */
+    private final UserFacade userFacade;
+
     /** Apache Tika MIME 類型偵測器（執行緒安全，可重用單一實例） */
     private final Tika tika = new Tika();
 
@@ -92,11 +99,17 @@ public class FileServiceImpl implements FileService {
      * 見 {@link FileService#uploadFile(MultipartFile, UsageType, UUID, String, UUID)} javadoc 說明原因）。
      * </p>
      *
+     * <p>
+     * <b>MEDIUM 1 修復</b>：{@code articleUuid} 僅在「呼叫者本人（{@code uploaderId}）即為該文章作者」時才會
+     * 被接受並寫入；否則視為未綁定（存 null），並記錄可疑嘗試。避免使用者上傳檔案時宣稱其屬於他人的
+     * （尤其是已發布）文章，使該檔案立即被 {@link #canRead} 判定為公開。見 {@link #resolveOwnedArticleUuid}。
+     * </p>
+     *
      * @param file         上傳的 MultipartFile
      * @param usageType    檔案用途類型
      * @param uploaderId   上傳者 UUID
      * @param uploaderRole 上傳者角色字串
-     * @param articleUuid  要一併綁定的文章 UUID；可為 null
+     * @param articleUuid  要一併綁定的文章 UUID；可為 null；非本人文章時會被忽略（存 null）
      * @return 上傳成功的檔案回應資訊
      */
     @Override
@@ -175,8 +188,9 @@ public class FileServiceImpl implements FileService {
          * B4：可選 articleUuid 直接綁定。刻意不呼叫 bindToArticle——
          * 該方法是「完整替換」語意，對單一新檔案呼叫會誤解除同文章其他既有綁定檔案。
          * 這裡是新建立的 metadata（尚未存在於 DB），直接 set 不影響任何其他列。
+         * MEDIUM 1：先驗證擁有權，非本人文章一律存 null（fail-safe）。
          */
-        metadata.setArticleUuid(articleUuid);
+        metadata.setArticleUuid(resolveOwnedArticleUuid(articleUuid, uploaderId));
         /** F-3: 僅 DB 操作在事務內；DB 失敗時補償刪除 MinIO 檔案 */
         try {
             transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.save(metadata));
@@ -287,6 +301,14 @@ public class FileServiceImpl implements FileService {
      * （呼叫端如 blog-module-article 掃描 content 取得的 UUID 可能是使用者輸入的壞連結，
      * 不應讓文章儲存因此失敗）。
      * </p>
+     *
+     * <p>
+     * <b>CRITICAL 修復（安全複審）：擁有權不變量</b>——一個檔案只能被綁定到「該檔案的上傳者
+     * == 該文章的作者」的文章上。否則安靜略過並記錄可疑嘗試（{@code log.warn}），不拋錯，
+     * 因為清單內容常源自使用者輸入的內文掃描，不應讓文章儲存因此失敗。文章不存在或無法解析
+     * 其作者 UUID 時，fail-safe 為「不綁定任何檔案」。解除綁定的第一段迴圈不受影響：
+     * 它只處理「目前已綁定到本文章」的檔案，在此不變量下這些檔案本就屬於該作者。
+     * </p>
      */
     @Override
     public void bindToArticle(UUID articleUuid, List<UUID> fileUuids) {
@@ -300,14 +322,68 @@ public class FileServiceImpl implements FileService {
             }
         }
 
+        if (targetIds.isEmpty()) {
+            return;
+        }
+
+        UUID authorUuid = resolveArticleAuthorUuid(articleUuid);
+        if (authorUuid == null) {
+            log.warn("bindToArticle：無法解析文章作者 UUID，fail-safe 不綁定任何檔案。articleUuid={}", articleUuid);
+            return;
+        }
+
         for (UUID fileUuid : targetIds) {
             fileMetadataRepository.findById(fileUuid).ifPresent(metadata -> {
-                if (!articleUuid.equals(metadata.getArticleUuid())) {
-                    metadata.setArticleUuid(articleUuid);
-                    fileMetadataRepository.save(metadata);
+                if (articleUuid.equals(metadata.getArticleUuid())) {
+                    return;
                 }
+                if (!authorUuid.equals(metadata.getUploaderId())) {
+                    log.warn("bindToArticle：拒絕綁定非本文章作者上傳的檔案（可疑嘗試）。"
+                                    + "fileUuid={}, articleUuid={}, uploaderId={}, articleAuthorUuid={}",
+                            fileUuid, articleUuid, metadata.getUploaderId(), authorUuid);
+                    return;
+                }
+                metadata.setArticleUuid(articleUuid);
+                fileMetadataRepository.save(metadata);
             });
         }
+    }
+
+    /**
+     * 解析文章作者的 UUID（跨模組：article authorId（Long）→ user UUID）。
+     *
+     * <p>用於 {@link #bindToArticle} 與 {@link #resolveOwnedArticleUuid} 的擁有權比對。
+     * 文章不存在、或其作者 UUID 無法解析時，皆回傳 null（fail-safe，由呼叫端決定如何處理）。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return 作者 UUID；無法解析時為 null
+     */
+    private UUID resolveArticleAuthorUuid(UUID articleUuid) {
+        return articleFacade.findByUuid(articleUuid)
+                .map(ArticleData::authorId)
+                .flatMap(userFacade::getUserUuidById)
+                .orElse(null);
+    }
+
+    /**
+     * 驗證 {@link #uploadFile} 可選的 {@code articleUuid} 參數：僅當呼叫者本人即為該文章作者時
+     * 才接受綁定，否則視為未綁定（fail-safe），並記錄可疑嘗試（MEDIUM 1 修復）。
+     *
+     * @param articleUuid 呼叫端宣稱要綁定的文章 UUID；可為 null
+     * @param uploaderId  本次上傳者 UUID
+     * @return 驗證通過的 articleUuid；未通過驗證或 articleUuid 為 null 時回傳 null
+     */
+    private UUID resolveOwnedArticleUuid(UUID articleUuid, UUID uploaderId) {
+        if (articleUuid == null) {
+            return null;
+        }
+        UUID authorUuid = resolveArticleAuthorUuid(articleUuid);
+        if (authorUuid != null && authorUuid.equals(uploaderId)) {
+            return articleUuid;
+        }
+        log.warn("uploadFile：忽略非本人文章的 articleUuid 綁定嘗試。articleUuid={}, uploaderId={}, resolvedAuthorUuid={}",
+                articleUuid, uploaderId, authorUuid);
+        return null;
     }
 
     /**

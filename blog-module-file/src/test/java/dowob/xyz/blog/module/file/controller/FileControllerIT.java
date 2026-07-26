@@ -530,6 +530,16 @@ class FileControllerIT {
 
         /**
          * 以指定角色上傳一個測試檔案，可選擇性帶 articleUuid 一併綁定，回傳新檔案的 UUID 字串。
+         *
+         * <p>
+         * MEDIUM 1 修復後的測試資料調整：下方各測試以 {@code new ArticleData(1L, articleUuid,
+         * USER_A_ID, ...)} 宣告 articleUuid 對應文章的作者為 {@code USER_A_ID}——因為
+         * {@code uploadAndGetFileId} 呼叫時的上傳者也是 {@code USER_A_ID}，兩者必須一致，
+         * 否則 {@code uploadFile} 新增的擁有權檢查（僅本人文章才接受 articleUuid）會使 metadata
+         * 存成未綁定（null），導致這些測試原本要驗證的「已綁定 PUBLISHED/DRAFT 文章」情境失真。
+         * 修復前這裡曾寫死不相關的 {@code 99L}，因為當時 uploadFile 不檢查擁有權，authorId
+         * 是誰並不影響上傳綁定是否成功。
+         * </p>
          */
         private String uploadAndGetFileId(UsageType usageType, Long uploaderInternalId, Role role, UUID articleUuid) throws Exception {
             MockMultipartFile file = createTestJpeg();
@@ -566,7 +576,7 @@ class FileControllerIT {
         void getFileContent_boundToPublishedArticle_anonymous_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "PUBLISHED", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "PUBLISHED", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
@@ -579,7 +589,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_anonymous_returns403() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
@@ -591,7 +601,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_nonUploader_returns403() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
@@ -604,7 +614,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_uploader_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
@@ -618,7 +628,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_admin_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
