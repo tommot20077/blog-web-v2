@@ -2,7 +2,7 @@ package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
-import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
@@ -82,7 +82,7 @@ class FileServiceTest {
     private TransactionTemplate transactionTemplate;
 
     @Mock
-    private ArticleFacade articleFacade;
+    private ArticleLookupFacade articleLookupFacade;
 
     @Mock
     private UserFacade userFacade;
@@ -911,7 +911,7 @@ class FileServiceTest {
             UUID articleUuid = UUID.randomUUID();
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, 99L, "PUBLISHED", null, null)));
 
             assertThat(fileService.canRead(fileId, null, false)).isTrue();
@@ -926,7 +926,7 @@ class FileServiceTest {
             UUID articleUuid = UUID.randomUUID();
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
 
             assertThat(fileService.canRead(fileId, null, false)).isFalse();
@@ -942,7 +942,7 @@ class FileServiceTest {
             UUID articleUuid = UUID.randomUUID();
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
 
             assertThat(fileService.canRead(fileId, otherUserId, false)).isFalse();
@@ -957,7 +957,7 @@ class FileServiceTest {
             UUID articleUuid = UUID.randomUUID();
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
 
             assertThat(fileService.canRead(fileId, uploaderId, false)).isTrue();
@@ -973,7 +973,7 @@ class FileServiceTest {
             UUID articleUuid = UUID.randomUUID();
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
 
             assertThat(fileService.canRead(fileId, adminId, true)).isTrue();
@@ -1035,7 +1035,7 @@ class FileServiceTest {
      * <p>
      * 安全複審 CRITICAL 修復：一個檔案只能被綁定到「該檔案的上傳者 == 該文章的作者」的文章上。
      * {@link #stubArticleAuthor} 統一建立「文章 articleUuid 的作者 UUID 為 authorUuid」的
-     * {@code articleFacade}/{@code userFacade} mock 鏈。
+     * {@code articleLookupFacade}/{@code userFacade} mock 鏈。
      * </p>
      */
     @Nested
@@ -1044,9 +1044,9 @@ class FileServiceTest {
 
         private static final Long AUTHOR_INTERNAL_ID = 100L;
 
-        /** 建立「文章 articleUuid 的作者為 authorUuid」的 articleFacade + userFacade mock 鏈 */
+        /** 建立「文章 articleUuid 的作者為 authorUuid」的 articleLookupFacade + userFacade mock 鏈 */
         private void stubArticleAuthor(UUID articleUuid, UUID authorUuid) {
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null)));
             when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.of(authorUuid));
         }
@@ -1244,7 +1244,7 @@ class FileServiceTest {
             metadataA.setId(fileA);
             metadataA.setUploaderId(UUID.randomUUID());
 
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
             when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
             when(fileMetadataRepository.findById(fileA)).thenReturn(Optional.of(metadataA));
 
@@ -1265,7 +1265,7 @@ class FileServiceTest {
             metadataA.setId(fileA);
             metadataA.setUploaderId(UUID.randomUUID());
 
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null)));
             when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.empty());
             when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
@@ -1325,7 +1325,7 @@ class FileServiceTest {
             UUID articleUuid = UUID.randomUUID();
             UUID uploaderId = UUID.randomUUID();
             Long authorInternalId = 200L;
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, authorInternalId, "DRAFT", null, null)));
             when(userFacade.getUserUuidById(authorInternalId)).thenReturn(Optional.of(uploaderId));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
@@ -1358,7 +1358,7 @@ class FileServiceTest {
             UUID uploaderId = UUID.randomUUID();
             UUID actualAuthorUuid = UUID.randomUUID();
             Long authorInternalId = 201L;
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, authorInternalId, "PUBLISHED", null, null)));
             when(userFacade.getUserUuidById(authorInternalId)).thenReturn(Optional.of(actualAuthorUuid));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);

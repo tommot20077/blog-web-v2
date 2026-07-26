@@ -3,7 +3,7 @@ package dowob.xyz.blog.module.file.service;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
-import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
@@ -75,8 +75,20 @@ public class FileServiceImpl implements FileService {
     /** Spring 宣告式事務模板（用於縮小 uploadFile 的事務範圍） */
     private final TransactionTemplate transactionTemplate;
 
-    /** 文章模組跨模組 Facade（canRead 判斷「已綁定文章是否已發布」用；不得直接查 article 表） */
-    private final ArticleFacade articleFacade;
+    /**
+     * 文章模組跨模組「最小依賴」查詢 Facade（canRead 判斷「已綁定文章是否已發布」、
+     * bindToArticle / uploadFile 判斷文章作者用；不得直接查 article 表）。
+     *
+     * <p>
+     * <b>刻意不注入 {@code ArticleFacade}</b>：那顆胖 Bean 的依賴閉包含
+     * {@code ArticleService} 與 {@code ArticleFileBinder}，而 {@code ArticleFileBinder}
+     * 反過來依賴 {@code FileFacade → FileServiceImpl}，會形成 Spring 建構子循環依賴
+     * 導致應用程式完全無法啟動（成因與修法見 {@link ArticleLookupFacade} javadoc）。
+     * 這裡改注入依賴閉包只有 {@code ArticleRepository} 的 {@link ArticleLookupFacade}，
+     * 環不成立，授權判斷仍完整保留在本 service 層。
+     * </p>
+     */
+    private final ArticleLookupFacade articleLookupFacade;
 
     /**
      * 使用者模組跨模組 Facade（將文章作者的 authorId（Long）轉換為 UUID，供 {@link #bindToArticle}
@@ -359,7 +371,7 @@ public class FileServiceImpl implements FileService {
      * @return 作者 UUID；無法解析時為 null
      */
     private UUID resolveArticleAuthorUuid(UUID articleUuid) {
-        return articleFacade.findByUuid(articleUuid)
+        return articleLookupFacade.findByUuid(articleUuid)
                 .map(ArticleData::authorId)
                 .flatMap(userFacade::getUserUuidById)
                 .orElse(null);
@@ -390,7 +402,7 @@ public class FileServiceImpl implements FileService {
      * {@inheritDoc}
      *
      * <p>
-     * 依 spec §4 授權矩陣依序判斷；「已綁定文章是否已發布」透過 {@link ArticleFacade#findByUuid}
+     * 依 spec §4 授權矩陣依序判斷；「已綁定文章是否已發布」透過 {@link ArticleLookupFacade#findByUuid}
      * 取得（不得直接查 article 表或注入 article 模組 repository，見 architecture.md）。
      * 未綁定（{@code articleUuid == null}）或綁定的文章查無資料，一律視為不公開（fail-safe）。
      * </p>
@@ -404,7 +416,7 @@ public class FileServiceImpl implements FileService {
             return true;
         }
         if (metadata.getArticleUuid() != null) {
-            Optional<ArticleData> boundArticle = articleFacade.findByUuid(metadata.getArticleUuid());
+            Optional<ArticleData> boundArticle = articleLookupFacade.findByUuid(metadata.getArticleUuid());
             if (boundArticle.isPresent() && ArticleStatus.isPubliclyVisible(boundArticle.get().status())) {
                 return true;
             }

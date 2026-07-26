@@ -2,7 +2,7 @@ package dowob.xyz.blog.module.file.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
-import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.TestFileApplication;
@@ -161,11 +161,11 @@ class FileControllerIT {
     private UserFacade userFacade;
 
     /**
-     * Mock ArticleFacade（FileServiceImpl.canRead 依賴，判斷已綁定文章是否已發布；
+     * Mock ArticleLookupFacade（FileServiceImpl.canRead 依賴，判斷已綁定文章是否已發布；
      * article 模組實作未在本 IT 的 scanBasePackages 內，須 mock 避免 context 啟動失敗）
      */
     @MockitoBean
-    private ArticleFacade articleFacade;
+    private ArticleLookupFacade articleLookupFacade;
 
     /**
      * 測試用使用者 A 的內部 ID
@@ -678,7 +678,7 @@ class FileControllerIT {
         @DisplayName("規則2：已綁定 PUBLISHED 文章的檔案，匿名存取 → 302")
         void getFileContent_boundToPublishedArticle_anonymous_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, USER_A_ID, "PUBLISHED", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
@@ -691,7 +691,7 @@ class FileControllerIT {
         @DisplayName("規則2 反例：已綁定 DRAFT 文章的檔案，匿名存取 → 403")
         void getFileContent_boundToDraftArticle_anonymous_returns403() throws Exception {
             UUID articleUuid = UUID.randomUUID();
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
@@ -703,7 +703,7 @@ class FileControllerIT {
         @DisplayName("已綁定 DRAFT 文章的檔案，非上傳者存取 → 403")
         void getFileContent_boundToDraftArticle_nonUploader_returns403() throws Exception {
             UUID articleUuid = UUID.randomUUID();
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
@@ -716,7 +716,7 @@ class FileControllerIT {
         @DisplayName("已綁定 DRAFT 文章的檔案，上傳者本人存取 → 302")
         void getFileContent_boundToDraftArticle_uploader_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
@@ -730,7 +730,7 @@ class FileControllerIT {
         @DisplayName("已綁定 DRAFT 文章的檔案，ADMIN 存取 → 302")
         void getFileContent_boundToDraftArticle_admin_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
-            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
