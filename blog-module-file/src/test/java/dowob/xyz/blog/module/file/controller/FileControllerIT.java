@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.file.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.file.TestFileApplication;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
@@ -152,6 +153,13 @@ class FileControllerIT {
      */
     @MockitoBean
     private UserFacade userFacade;
+
+    /**
+     * Mock ArticleFacade（FileServiceImpl.canRead 依賴，判斷已綁定文章是否已發布；
+     * article 模組實作未在本 IT 的 scanBasePackages 內，須 mock 避免 context 啟動失敗）
+     */
+    @MockitoBean
+    private ArticleFacade articleFacade;
 
     /**
      * 測試用使用者 A 的內部 ID

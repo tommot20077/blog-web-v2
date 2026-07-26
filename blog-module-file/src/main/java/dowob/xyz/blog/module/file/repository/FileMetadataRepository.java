@@ -36,4 +36,15 @@ public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUI
      */
     @Query("SELECT COALESCE(SUM(size), 0) FROM file_metadata WHERE uploader_id = :uploaderId")
     Long sumSizeByUploaderId(@Param("uploaderId") UUID uploaderId);
+
+    /**
+     * 依綁定的文章 UUID 查詢所有檔案
+     *
+     * <p>供 {@code bindToArticle} 重新綁定時，找出該文章目前已綁定、
+     * 但可能不在本次新清單內（需解除綁定）的舊檔案。</p>
+     *
+     * @param articleUuid 文章 UUID
+     * @return 已綁定此文章的檔案元資料列表
+     */
+    List<FileMetadata> findByArticleUuid(UUID articleUuid);
 }

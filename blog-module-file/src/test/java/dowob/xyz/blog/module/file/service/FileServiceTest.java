@@ -2,6 +2,8 @@ package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
@@ -35,6 +37,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -42,6 +45,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -73,6 +77,9 @@ class FileServiceTest {
 
     @Mock
     private TransactionTemplate transactionTemplate;
+
+    @Mock
+    private ArticleFacade articleFacade;
 
     private final FileProperties fileProperties = new FileProperties(
             Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)),
@@ -828,6 +835,302 @@ class FileServiceTest {
                     fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessageContaining("DB failure");
+        }
+    }
+
+    /** B2：uploadFile 新增 articleUuid 欄位後的 NULL 覆寫回歸檢查 */
+    @Nested
+    @DisplayName("uploadFile articleUuid 欄位回歸測試")
+    class UploadFileArticleUuidRegressionTests {
+
+        /**
+         * 驗證新增 articleUuid 欄位後，uploadFile（INSERT 新檔案）儲存的 metadata 之 articleUuid 為 null。
+         *
+         * <p>本專案已知風險：Spring Data JDBC 對未設值欄位送顯式 NULL，可能誤清既有值。
+         * 但 uploadFile 一律 {@code new FileMetadata()} 執行 INSERT（見 FileServiceImpl.uploadFile），
+         * 不會讀取既有列再覆寫，因此「清空既有 articleUuid」的風險場景在此路徑不成立——
+         * 新檔案本就應該是未綁定（null）狀態。本測試固定此事實，防止日後改動誤帶入非 null 預設值。</p>
+         */
+        @Test
+        @DisplayName("uploadFile_afterAddingArticleUuidField_savesWithNullArticleUuid")
+        void uploadFile_afterAddingArticleUuidField_savesWithNullArticleUuid() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isNull();
+        }
+    }
+
+    /** B2：canRead 授權矩陣測試（spec §4，每條規則含正例與反例） */
+    @Nested
+    @DisplayName("canRead 授權矩陣測試")
+    class CanReadTests {
+
+        private FileMetadata metadataWith(UUID fileId, UUID uploaderId, UsageType usageType, UUID articleUuid) {
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setUploaderId(uploaderId);
+            metadata.setUsageType(usageType);
+            metadata.setArticleUuid(articleUuid);
+            return metadata;
+        }
+
+        /** 規則1：usageType=AVATAR，匿名（requesterId=null）→ 允許 */
+        @Test
+        @DisplayName("canRead_avatarUsageType_anonymousAllowed")
+        void canRead_avatarUsageType_anonymousAllowed() {
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, UUID.randomUUID(), UsageType.AVATAR, null);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThat(fileService.canRead(fileId, null, false)).isTrue();
+        }
+
+        /** 規則2：已綁定 + PUBLISHED，匿名 → 允許 */
+        @Test
+        @DisplayName("canRead_boundToPublishedArticle_anonymousAllowed")
+        void canRead_boundToPublishedArticle_anonymousAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "PUBLISHED", null, null)));
+
+            assertThat(fileService.canRead(fileId, null, false)).isTrue();
+        }
+
+        /** 規則2 反例：已綁定 + DRAFT，匿名 → 拒絕 */
+        @Test
+        @DisplayName("canRead_boundToDraftArticle_anonymousDenied")
+        void canRead_boundToDraftArticle_anonymousDenied() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+
+            assertThat(fileService.canRead(fileId, null, false)).isFalse();
+        }
+
+        /** 已綁定 + DRAFT，非上傳者的一般使用者 → 拒絕 */
+        @Test
+        @DisplayName("canRead_boundToDraftArticle_otherUserDenied")
+        void canRead_boundToDraftArticle_otherUserDenied() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID otherUserId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+
+            assertThat(fileService.canRead(fileId, otherUserId, false)).isFalse();
+        }
+
+        /** 已綁定 + DRAFT，上傳者本人 → 允許 */
+        @Test
+        @DisplayName("canRead_boundToDraftArticle_uploaderAllowed")
+        void canRead_boundToDraftArticle_uploaderAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+
+            assertThat(fileService.canRead(fileId, uploaderId, false)).isTrue();
+        }
+
+        /** 已綁定 + DRAFT，ADMIN → 允許 */
+        @Test
+        @DisplayName("canRead_boundToDraftArticle_adminAllowed")
+        void canRead_boundToDraftArticle_adminAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID adminId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+
+            assertThat(fileService.canRead(fileId, adminId, true)).isTrue();
+        }
+
+        /** 關鍵 fail-safe：未綁定任何文章，匿名 → 拒絕 */
+        @Test
+        @DisplayName("canRead_unbound_anonymousDenied")
+        void canRead_unbound_anonymousDenied() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, null);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThat(fileService.canRead(fileId, null, false)).isFalse();
+        }
+
+        /** 未綁定，上傳者本人 → 允許 */
+        @Test
+        @DisplayName("canRead_unbound_uploaderAllowed")
+        void canRead_unbound_uploaderAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, null);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThat(fileService.canRead(fileId, uploaderId, false)).isTrue();
+        }
+
+        /** 未綁定，ADMIN → 允許（規則4與綁定狀態無關） */
+        @Test
+        @DisplayName("canRead_unbound_adminAllowed")
+        void canRead_unbound_adminAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID adminId = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, null);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThat(fileService.canRead(fileId, adminId, true)).isTrue();
+        }
+
+        /** 檔案不存在 → 依既有慣例（同 getFileMetadata / deleteFile）拋 BusinessException(FILE_NOT_FOUND) */
+        @Test
+        @DisplayName("canRead_fileNotFound_throwsBusinessException")
+        void canRead_fileNotFound_throwsBusinessException() {
+            UUID fileId = UUID.randomUUID();
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> fileService.canRead(fileId, UUID.randomUUID(), false))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(FileErrorCode.FILE_NOT_FOUND.getMessage());
+        }
+    }
+
+    /** B2：bindToArticle 測試——完整替換語意（非附加） */
+    @Nested
+    @DisplayName("bindToArticle 測試")
+    class BindToArticleTests {
+
+        /** 新綁定：清單內檔案皆設定 articleUuid */
+        @Test
+        @DisplayName("bindToArticle_withNewFiles_bindsAllToArticle")
+        void bindToArticle_withNewFiles_bindsAllToArticle() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID file1 = UUID.randomUUID();
+            UUID file2 = UUID.randomUUID();
+            FileMetadata metadata1 = new FileMetadata();
+            metadata1.setId(file1);
+            FileMetadata metadata2 = new FileMetadata();
+            metadata2.setId(file2);
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
+            when(fileMetadataRepository.findById(file1)).thenReturn(Optional.of(metadata1));
+            when(fileMetadataRepository.findById(file2)).thenReturn(Optional.of(metadata2));
+
+            fileService.bindToArticle(articleUuid, List.of(file1, file2));
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository, times(2)).save(captor.capture());
+            assertThat(captor.getAllValues())
+                    .allSatisfy(m -> assertThat(m.getArticleUuid()).isEqualTo(articleUuid));
+        }
+
+        /** 關鍵：重新綁定時，舊清單中不在新清單內的檔案要解除綁定（設回 null），避免權限殘留 */
+        @Test
+        @DisplayName("bindToArticle_whenRebinding_unbindsFilesNotInNewList")
+        void bindToArticle_whenRebinding_unbindsFilesNotInNewList() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID keepFile = UUID.randomUUID();
+            UUID removedFile = UUID.randomUUID();
+
+            FileMetadata keepMetadata = new FileMetadata();
+            keepMetadata.setId(keepFile);
+            keepMetadata.setArticleUuid(articleUuid);
+
+            FileMetadata removedMetadata = new FileMetadata();
+            removedMetadata.setId(removedFile);
+            removedMetadata.setArticleUuid(articleUuid);
+
+            /** 目前已綁定此文章的檔案：keepFile、removedFile */
+            when(fileMetadataRepository.findByArticleUuid(articleUuid))
+                    .thenReturn(List.of(keepMetadata, removedMetadata));
+            when(fileMetadataRepository.findById(keepFile)).thenReturn(Optional.of(keepMetadata));
+
+            /** 新清單只剩 keepFile，removedFile 應被解除綁定 */
+            fileService.bindToArticle(articleUuid, List.of(keepFile));
+
+            assertThat(removedMetadata.getArticleUuid()).isNull();
+            verify(fileMetadataRepository).save(removedMetadata);
+            assertThat(keepMetadata.getArticleUuid()).isEqualTo(articleUuid);
+        }
+
+        /** 空清單：解除該文章的所有既有綁定 */
+        @Test
+        @DisplayName("bindToArticle_withEmptyList_unbindsAllExistingBindings")
+        void bindToArticle_withEmptyList_unbindsAllExistingBindings() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID file1 = UUID.randomUUID();
+            UUID file2 = UUID.randomUUID();
+
+            FileMetadata metadata1 = new FileMetadata();
+            metadata1.setId(file1);
+            metadata1.setArticleUuid(articleUuid);
+            FileMetadata metadata2 = new FileMetadata();
+            metadata2.setId(file2);
+            metadata2.setArticleUuid(articleUuid);
+
+            when(fileMetadataRepository.findByArticleUuid(articleUuid))
+                    .thenReturn(List.of(metadata1, metadata2));
+
+            fileService.bindToArticle(articleUuid, List.of());
+
+            assertThat(metadata1.getArticleUuid()).isNull();
+            assertThat(metadata2.getArticleUuid()).isNull();
+            verify(fileMetadataRepository, times(2)).save(any(FileMetadata.class));
+        }
+
+        /** 傳 null 清單：等同空清單，解除所有既有綁定，不拋例外 */
+        @Test
+        @DisplayName("bindToArticle_withNullList_treatsAsEmptyAndUnbindsAll")
+        void bindToArticle_withNullList_treatsAsEmptyAndUnbindsAll() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID file1 = UUID.randomUUID();
+            FileMetadata metadata1 = new FileMetadata();
+            metadata1.setId(file1);
+            metadata1.setArticleUuid(articleUuid);
+
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(metadata1));
+
+            fileService.bindToArticle(articleUuid, null);
+
+            assertThat(metadata1.getArticleUuid()).isNull();
+        }
+
+        /** 清單內含不存在的 fileUuid → 安靜略過，不拋例外（內文可能含壞連結，不可讓綁定失敗） */
+        @Test
+        @DisplayName("bindToArticle_withNonExistentFileUuid_skipsQuietly")
+        void bindToArticle_withNonExistentFileUuid_skipsQuietly() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID nonExistentFile = UUID.randomUUID();
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
+            when(fileMetadataRepository.findById(nonExistentFile)).thenReturn(Optional.empty());
+
+            assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(nonExistentFile)))
+                    .doesNotThrowAnyException();
+
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
         }
     }
 

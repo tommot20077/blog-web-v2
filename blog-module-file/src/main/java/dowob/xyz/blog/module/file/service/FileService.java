@@ -67,4 +67,40 @@ public interface FileService {
      * @return 檔案元資料列表
      */
     List<FileMetadata> getUserFiles(UUID uploaderId, Pageable pageable);
+
+    /**
+     * 將指定檔案綁定至文章（設定該文章的完整檔案清單）
+     *
+     * <p>
+     * 語意為「完整替換」而非「附加」：{@code fileUuids} 內的檔案會綁定至 {@code articleUuid}；
+     * 原本已綁定 {@code articleUuid}、但不在本次清單內的檔案會被解除綁定（{@code articleUuid} 設回 null）。
+     * 這是為了避免文章編輯時移除某張圖片後，該圖片仍殘留「屬於已發布文章」的公開讀取權限。
+     * </p>
+     *
+     * @param articleUuid 文章 UUID
+     * @param fileUuids   應綁定至此文章的檔案 UUID 完整清單；可為空清單（代表解除此文章的所有綁定）
+     */
+    void bindToArticle(UUID articleUuid, List<UUID> fileUuids);
+
+    /**
+     * 判斷請求者是否有權讀取指定檔案內容（依授權矩陣，任一成立即放行）
+     *
+     * <p>
+     * 授權矩陣（見 {@code docs/superpowers/specs/2026-07-26-file-access-control-design.md} §4）：
+     * </p>
+     * <ol>
+     *   <li>{@code usageType = AVATAR} → 允許（含匿名）</li>
+     *   <li>已綁定文章且該文章狀態為 PUBLISHED → 允許（含匿名）</li>
+     *   <li>{@code requesterId} 等於上傳者 → 允許</li>
+     *   <li>{@code isAdmin} 為 true → 允許</li>
+     *   <li>以上皆非（含未綁定任何文章）→ 拒絕（fail-safe）</li>
+     * </ol>
+     *
+     * @param fileId      檔案 UUID
+     * @param requesterId 請求者 UUID；匿名請求傳 null
+     * @param isAdmin     請求者是否具 ADMIN 權限
+     * @return 允許讀取則 true，否則 false
+     * @throws dowob.xyz.blog.common.exception.BusinessException FILE_NOT_FOUND 若檔案不存在
+     */
+    boolean canRead(UUID fileId, UUID requesterId, boolean isAdmin);
 }

@@ -1,7 +1,10 @@
 package dowob.xyz.blog.module.file.service;
 
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
@@ -36,6 +39,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -66,6 +70,9 @@ public class FileServiceImpl implements FileService {
 
     /** Spring 宣告式事務模板（用於縮小 uploadFile 的事務範圍） */
     private final TransactionTemplate transactionTemplate;
+
+    /** 文章模組跨模組 Facade（canRead 判斷「已綁定文章是否已發布」用；不得直接查 article 表） */
+    private final ArticleFacade articleFacade;
 
     /** Apache Tika MIME 類型偵測器（執行緒安全，可重用單一實例） */
     private final Tika tika = new Tika();
@@ -252,6 +259,67 @@ public class FileServiceImpl implements FileService {
     @Override
     public List<FileMetadata> getUserFiles(UUID uploaderId, Pageable pageable) {
         return fileMetadataRepository.findByUploaderIdOrderByCreatedAtDesc(uploaderId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>
+     * 完整替換語意：先解除「目前已綁定此文章、但不在本次清單內」的舊檔案（設回 null），
+     * 再將清單內的檔案綁定至此文章。清單內若含不存在的 fileUuid，安靜略過
+     * （呼叫端如 blog-module-article 掃描 content 取得的 UUID 可能是使用者輸入的壞連結，
+     * 不應讓文章儲存因此失敗）。
+     * </p>
+     */
+    @Override
+    public void bindToArticle(UUID articleUuid, List<UUID> fileUuids) {
+        List<UUID> targetIds = (fileUuids != null) ? fileUuids : List.of();
+
+        List<FileMetadata> currentlyBound = fileMetadataRepository.findByArticleUuid(articleUuid);
+        for (FileMetadata bound : currentlyBound) {
+            if (!targetIds.contains(bound.getId())) {
+                bound.setArticleUuid(null);
+                fileMetadataRepository.save(bound);
+            }
+        }
+
+        for (UUID fileUuid : targetIds) {
+            fileMetadataRepository.findById(fileUuid).ifPresent(metadata -> {
+                if (!articleUuid.equals(metadata.getArticleUuid())) {
+                    metadata.setArticleUuid(articleUuid);
+                    fileMetadataRepository.save(metadata);
+                }
+            });
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>
+     * 依 spec §4 授權矩陣依序判斷；「已綁定文章是否已發布」透過 {@link ArticleFacade#findByUuid}
+     * 取得（不得直接查 article 表或注入 article 模組 repository，見 architecture.md）。
+     * 未綁定（{@code articleUuid == null}）或綁定的文章查無資料，一律視為不公開（fail-safe）。
+     * </p>
+     */
+    @Override
+    public boolean canRead(UUID fileId, UUID requesterId, boolean isAdmin) {
+        FileMetadata metadata = fileMetadataRepository.findById(fileId)
+                .orElseThrow(() -> new BusinessException(FileErrorCode.FILE_NOT_FOUND));
+
+        if (metadata.getUsageType() == UsageType.AVATAR) {
+            return true;
+        }
+        if (metadata.getArticleUuid() != null) {
+            Optional<ArticleData> boundArticle = articleFacade.findByUuid(metadata.getArticleUuid());
+            if (boundArticle.isPresent() && ArticleStatus.isPubliclyVisible(boundArticle.get().status())) {
+                return true;
+            }
+        }
+        if (metadata.belongsTo(requesterId)) {
+            return true;
+        }
+        return isAdmin;
     }
 
     /**

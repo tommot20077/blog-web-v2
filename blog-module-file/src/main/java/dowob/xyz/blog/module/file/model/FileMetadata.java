@@ -99,6 +99,17 @@ public class FileMetadata implements Persistable<UUID> {
     private LocalDateTime createdAt;
 
     /**
+     * 綁定的文章 UUID（nullable，對應 articles.uuid，無 FK）
+     *
+     * <p>
+     * null 代表尚未綁定任何文章，屬 fail-safe 預設：僅上傳者與 ADMIN 可讀，
+     * 避免新文章尚未儲存時上傳的圖片意外對外公開（見 V20 migration 註解）。
+     * </p>
+     */
+    @Column("article_uuid")
+    private UUID articleUuid;
+
+    /**
      * 判斷此實體是否為新實體（尚未寫入資料庫）。
      * Spring Data JDBC 依此決定執行 INSERT 或 UPDATE。
      *
