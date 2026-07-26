@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
@@ -104,6 +105,12 @@ class CategoryControllerIT {
 
     @MockitoBean
     private TagFacade tagFacade;
+
+    /**
+     * Mock FileFacade（避免依賴 File Module；Task B6 文章儲存時回填檔案綁定）
+     */
+    @MockitoBean
+    private FileFacade fileFacade;
 
     @MockitoBean
     private UserFacade userFacade;
