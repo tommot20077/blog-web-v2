@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.TestFileApplication;
+import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
@@ -13,6 +15,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -30,6 +33,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -41,11 +45,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -506,5 +512,178 @@ class FileControllerIT {
                 usageTypeProp.isMissingNode(),
                 "usageType 必須出現在 multipart/form-data requestBody schema 的 properties"
         );
+    }
+
+    /**
+     * B4：GET /api/v1/files/{id}/content 授權矩陣測試（spec §4/§9）。
+     *
+     * <p>
+     * 場景涵蓋：AVATAR 匿名可讀、已綁定 PUBLISHED 匿名可讀、已綁定 DRAFT（匿名/他人拒絕，
+     * 上傳者/ADMIN 允許）、未綁定 fail-safe（匿名拒絕，上傳者允許）、檔案不存在 404、
+     * 以及回應必須是 302 + Location（絕不可回傳圖片位元組）。
+     * Red：此端點目前不存在，GET 會落到 Spring 預設 404，下列非 404 期待的斷言會全部失敗。
+     * </p>
+     */
+    @Nested
+    @DisplayName("GET /api/v1/files/{id}/content 授權矩陣測試 (B4)")
+    class FileContentEndpointTests {
+
+        /**
+         * 以指定角色上傳一個測試檔案，可選擇性帶 articleUuid 一併綁定，回傳新檔案的 UUID 字串。
+         */
+        private String uploadAndGetFileId(UsageType usageType, Long uploaderInternalId, Role role, UUID articleUuid) throws Exception {
+            MockMultipartFile file = createTestJpeg();
+            var builder = multipart("/api/v1/files/upload")
+                    .file(file)
+                    .param("usageType", usageType.name());
+            if (articleUuid != null) {
+                builder.param("articleUuid", articleUuid.toString());
+            }
+            String uploadResponse = mockMvc.perform(builder
+                            .with(asUser(uploaderInternalId, role))
+                            .contentType(MediaType.MULTIPART_FORM_DATA))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            return objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+        }
+
+        @Test
+        @DisplayName("規則1：AVATAR 檔案，匿名存取 → 302 導向 presigned URL")
+        void getFileContent_avatarUsageType_anonymous_returns302() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+
+            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound())
+                    .andReturn();
+
+            String location = result.getResponse().getHeader("Location");
+            assertThat(location).isNotBlank();
+            assertThat(location).contains("X-Amz-Signature");
+        }
+
+        @Test
+        @DisplayName("規則2：已綁定 PUBLISHED 文章的檔案，匿名存取 → 302")
+        void getFileContent_boundToPublishedArticle_anonymous_returns302() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "PUBLISHED", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound())
+                    .andExpect(header().exists("Location"));
+        }
+
+        @Test
+        @DisplayName("規則2 反例：已綁定 DRAFT 文章的檔案，匿名存取 → 403")
+        void getFileContent_boundToDraftArticle_anonymous_returns403() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("已綁定 DRAFT 文章的檔案，非上傳者存取 → 403")
+        void getFileContent_boundToDraftArticle_nonUploader_returns403() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_B_ID, Role.AUTHOR)))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("已綁定 DRAFT 文章的檔案，上傳者本人存取 → 302")
+        void getFileContent_boundToDraftArticle_uploader_returns302() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_A_ID, Role.AUTHOR)))
+                    .andExpect(status().isFound())
+                    .andExpect(header().exists("Location"));
+        }
+
+        @Test
+        @DisplayName("已綁定 DRAFT 文章的檔案，ADMIN 存取 → 302")
+        void getFileContent_boundToDraftArticle_admin_returns302() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_B_ID, Role.ADMIN)))
+                    .andExpect(status().isFound())
+                    .andExpect(header().exists("Location"));
+        }
+
+        @Test
+        @DisplayName("fail-safe：未綁定任何文章的檔案，匿名存取 → 403")
+        void getFileContent_unbound_anonymous_returns403() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, null);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("未綁定任何文章的檔案，上傳者本人存取 → 302")
+        void getFileContent_unbound_uploader_returns302() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, null);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_A_ID, Role.AUTHOR)))
+                    .andExpect(status().isFound());
+        }
+
+        @Test
+        @DisplayName("檔案不存在 → 404")
+        void getFileContent_fileNotFound_returns404() throws Exception {
+            mockMvc.perform(get("/api/v1/files/" + UUID.randomUUID() + "/content"))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("回應必須是 302 + 有效 Location，絕不可回傳圖片位元組")
+        void getFileContent_response_isRedirectNotBytes() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+
+            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound())
+                    .andReturn();
+
+            String location = result.getResponse().getHeader("Location");
+            assertThat(location).isNotBlank();
+            /** 302 導向回應不應帶圖片 body：Content-Type 不應為圖片類型 */
+            assertThat(result.getResponse().getContentType()).isNotEqualTo(MediaType.IMAGE_JPEG_VALUE);
+        }
+
+        @Test
+        @DisplayName("uploadFile 回傳的 url 為相對路徑（以 /api/v1/files/ 開頭，不含 http）")
+        void uploadFile_returnsRelativePathUrl() throws Exception {
+            MockMultipartFile file = createTestJpeg();
+
+            String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                            .file(file)
+                            .param("usageType", "ARTICLE_CONTENT")
+                            .with(asUser(USER_A_ID, Role.AUTHOR))
+                            .contentType(MediaType.MULTIPART_FORM_DATA))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+
+            String url = objectMapper.readTree(uploadResponse).path("data").path("url").asText();
+            assertThat(url).startsWith("/api/v1/files/");
+            assertThat(url).doesNotContain("http");
+        }
     }
 }

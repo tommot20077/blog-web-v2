@@ -15,9 +15,11 @@ import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
+import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.http.Method;
 
 import java.io.ByteArrayInputStream;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +43,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 檔案服務實作
@@ -81,21 +84,23 @@ public class FileServiceImpl implements FileService {
     @Value("${minio.bucket-name}")
     private String bucketName;
 
-    /** MinIO 服務端點 */
-    @Value("${minio.endpoint}")
-    private String minioEndpoint;
-
     /**
-     * 上傳檔案至 MinIO 並儲存元資料
+     * 上傳檔案至 MinIO 並儲存元資料，可選擇性一併綁定至文章
+     *
+     * <p>
+     * {@code articleUuid} 有值時直接設定於新建立的 {@link FileMetadata}（非透過 {@link #bindToArticle}，
+     * 見 {@link FileService#uploadFile(MultipartFile, UsageType, UUID, String, UUID)} javadoc 說明原因）。
+     * </p>
      *
      * @param file         上傳的 MultipartFile
      * @param usageType    檔案用途類型
      * @param uploaderId   上傳者 UUID
      * @param uploaderRole 上傳者角色字串
+     * @param articleUuid  要一併綁定的文章 UUID；可為 null
      * @return 上傳成功的檔案回應資訊
      */
     @Override
-    public FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole) {
+    public FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole, UUID articleUuid) {
         /** F-2: 一次性讀取 bytes，避免多次消耗 InputStream */
         byte[] fileBytes;
         try {
@@ -166,6 +171,12 @@ public class FileServiceImpl implements FileService {
         metadata.setUploaderId(uploaderId);
         metadata.setCreatedAt(now);
         metadata.setNewEntity(true);
+        /**
+         * B4：可選 articleUuid 直接綁定。刻意不呼叫 bindToArticle——
+         * 該方法是「完整替換」語意，對單一新檔案呼叫會誤解除同文章其他既有綁定檔案。
+         * 這裡是新建立的 metadata（尚未存在於 DB），直接 set 不影響任何其他列。
+         */
+        metadata.setArticleUuid(articleUuid);
         /** F-3: 僅 DB 操作在事務內；DB 失敗時補償刪除 MinIO 檔案 */
         try {
             transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.save(metadata));
@@ -182,7 +193,13 @@ public class FileServiceImpl implements FileService {
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort），不影響上傳結果: {}", storagePath, e);
         }
-        String url = minioEndpoint + "/" + bucketName + "/" + storagePath;
+        /**
+         * B4 / spec §3.1：回傳相對路徑而非 MinIO 直連網址，避免絕對網址把域名焊進 markdown 內文
+         * （換域名時內文全破）。瀏覽器對 {@code /api/...} 以當前 origin 解析是 HTML 內建行為，
+         * 不需要 render-time 改寫。實際內容由 {@code GET /api/v1/files/{id}/content} 端點
+         * 判斷授權後 302 導向 MinIO presigned URL 取得。
+         */
+        String url = "/api/v1/files/" + fileId + "/content";
         return new FileUploadResponse(fileId, url, width, height, (long) fileBytes.length, usageType);
     }
 
@@ -320,6 +337,32 @@ public class FileServiceImpl implements FileService {
             return true;
         }
         return isAdmin;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>
+     * 使用 MinIO SDK {@code getPresignedObjectUrl}，方法固定為 GET，效期固定 5 分鐘（300 秒）。
+     * 本方法不做任何權限判斷，呼叫端（{@code FileController}）須先呼叫 {@link #canRead} 通過後才可呼叫。
+     * </p>
+     */
+    @Override
+    public String generatePresignedUrl(UUID fileId) {
+        FileMetadata metadata = fileMetadataRepository.findById(fileId)
+                .orElseThrow(() -> new BusinessException(FileErrorCode.FILE_NOT_FOUND));
+        try {
+            return minioClient.getPresignedObjectUrl(
+                    GetPresignedObjectUrlArgs.builder()
+                            .method(Method.GET)
+                            .bucket(bucketName)
+                            .object(metadata.getStoragePath())
+                            .expiry(5, TimeUnit.MINUTES)
+                            .build());
+        } catch (Exception e) {
+            log.error("產生 MinIO 簽名網址失敗: {}", metadata.getStoragePath(), e);
+            throw new SystemException(CommonErrorCode.STORAGE_ERROR);
+        }
     }
 
     /**

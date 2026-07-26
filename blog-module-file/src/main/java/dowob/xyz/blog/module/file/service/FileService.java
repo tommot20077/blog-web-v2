@@ -23,7 +23,7 @@ import java.util.UUID;
 public interface FileService {
 
     /**
-     * 上傳檔案
+     * 上傳檔案（不綁定文章）
      *
      * @param file         上傳的 MultipartFile
      * @param usageType    檔案用途類型
@@ -31,7 +31,33 @@ public interface FileService {
      * @param uploaderRole 上傳者角色字串（USER / AUTHOR / ADMIN）
      * @return 上傳成功的檔案回應資訊
      */
-    FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole);
+    default FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole) {
+        return uploadFile(file, usageType, uploaderId, uploaderRole, null);
+    }
+
+    /**
+     * 上傳檔案，並可選擇性地一併綁定至文章（B4）
+     *
+     * <p>
+     * 上傳當下文章可能尚未存在（新文章未儲存），因此 {@code articleUuid} 為可選：
+     * 有值即在建立此檔案的 metadata 時直接設定 {@code articleUuid}。
+     * </p>
+     *
+     * <p>
+     * <b>刻意不透過 {@link #bindToArticle} 實作此綁定</b>：{@code bindToArticle} 是「完整替換」語意
+     * （會解除該文章目前已綁定、但不在新清單內的其他檔案）。若對單一新檔案呼叫
+     * {@code bindToArticle(articleUuid, List.of(fileId))}，會把該文章既有的其他綁定檔案全部誤解除。
+     * 因此此處對新建立的 {@code FileMetadata} 直接設定 {@code articleUuid} 欄位，不影響同文章其他檔案。
+     * </p>
+     *
+     * @param file         上傳的 MultipartFile
+     * @param usageType    檔案用途類型
+     * @param uploaderId   上傳者 UUID
+     * @param uploaderRole 上傳者角色字串（USER / AUTHOR / ADMIN）
+     * @param articleUuid  要一併綁定的文章 UUID；可為 null（代表暫不綁定）
+     * @return 上傳成功的檔案回應資訊
+     */
+    FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole, UUID articleUuid);
 
     /**
      * 刪除檔案
@@ -103,4 +129,18 @@ public interface FileService {
      * @throws dowob.xyz.blog.common.exception.BusinessException FILE_NOT_FOUND 若檔案不存在
      */
     boolean canRead(UUID fileId, UUID requesterId, boolean isAdmin);
+
+    /**
+     * 產生指定檔案的 MinIO 短效簽名網址（B4：供 {@code GET /api/v1/files/{id}/content} 302 導向使用）
+     *
+     * <p>
+     * 效期固定 5 分鐘：足夠瀏覽器完成一次載入，即使網址外流也很快失效。
+     * 呼叫端須先以 {@link #canRead} 完成授權判斷後才呼叫本方法——本方法本身不做任何權限檢查。
+     * </p>
+     *
+     * @param fileId 檔案 UUID
+     * @return MinIO 簽名網址（含效期、簽章等查詢參數）
+     * @throws dowob.xyz.blog.common.exception.BusinessException FILE_NOT_FOUND 若檔案不存在
+     */
+    String generatePresignedUrl(UUID fileId);
 }

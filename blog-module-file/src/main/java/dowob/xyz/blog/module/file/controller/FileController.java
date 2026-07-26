@@ -1,9 +1,11 @@
 package dowob.xyz.blog.module.file.controller;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.file.model.FileMetadata;
@@ -16,8 +18,11 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -58,13 +63,15 @@ public class FileController {
     private final UserFacade userFacade;
 
     /**
-     * 上傳檔案（需要 FILE_UPLOAD 權限）
+     * 上傳檔案（需要 FILE_UPLOAD 權限），可選擇性一併綁定至文章
      *
      * @param file           上傳的檔案
      * @param usageType      用途類型
+     * @param articleUuid    要一併綁定的文章 UUID（可選；新文章尚未儲存時可留空，待文章儲存時再由
+     *                       {@code blog-module-article} 掃描內文回填綁定）
      * @param userId         當前登入用戶的資料庫主鍵
      * @param authentication 當前認證資訊（用於解析角色）
-     * @return 上傳成功的檔案資訊
+     * @return 上傳成功的檔案資訊（{@code url} 為相對路徑 {@code /api/v1/files/{id}/content}）
      */
     @PostMapping("/api/v1/files/upload")
     @PreAuthorize("hasAuthority('FILE_UPLOAD')")
@@ -78,12 +85,13 @@ public class FileController {
     public ApiResponse<FileUploadResponse> uploadFile(
             @Parameter(hidden = true) @RequestParam("file") MultipartFile file,
             @Parameter(hidden = true) @RequestParam("usageType") UsageType usageType,
+            @Parameter(hidden = true) @RequestParam(value = "articleUuid", required = false) UUID articleUuid,
             @AuthenticationPrincipal Long userId,
             Authentication authentication) {
         UUID uploaderId = resolveUserUuid(userId);
         Role roleEnum = SecurityUtils.resolveRole(authentication);
         String role = roleEnum != null ? roleEnum.name() : "USER";
-        return ApiResponse.success(fileService.uploadFile(file, usageType, uploaderId, role));
+        return ApiResponse.success(fileService.uploadFile(file, usageType, uploaderId, role, articleUuid));
     }
 
     /**
@@ -95,6 +103,55 @@ public class FileController {
     @GetMapping("/api/v1/files/{id}")
     public ApiResponse<FileMetadata> getFileMetadata(@PathVariable UUID id) {
         return ApiResponse.success(fileService.getFileMetadata(id));
+    }
+
+    /**
+     * 依授權矩陣判斷後，302 導向 MinIO 短效簽名網址取得檔案內容
+     *
+     * <p>
+     * 端點本身對所有請求皆「可到達」（見 {@code SecurityConfig} 的 permitAll 註解），
+     * 但實際授權判斷在 {@link FileService#canRead}，依 spec §4 授權矩陣：
+     * AVATAR、已綁定 PUBLISHED 文章的圖片對匿名開放；草稿圖片與未綁定檔案僅上傳者與 ADMIN 可讀。
+     * </p>
+     *
+     * <p>
+     * <b>絕不可回傳圖片位元組</b>：本端點僅回 302 + {@code Location}，由瀏覽器直接向 MinIO 取得實際內容，
+     * 讓圖片流量不經過應用伺服器（本設計的核心目的）。
+     * </p>
+     *
+     * @param id             檔案 UUID
+     * @param userId         當前登入用戶的資料庫主鍵（匿名為 null）
+     * @param authentication 當前認證資訊（用於判斷是否為 ADMIN）
+     * @param response       HTTP 回應（用於寫入 302 狀態碼與 Location 標頭）
+     */
+    @GetMapping("/api/v1/files/{id}/content")
+    public void getFileContent(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal Long userId,
+            Authentication authentication,
+            HttpServletResponse response) {
+        UUID requesterId = resolveOptionalUserUuid(userId);
+        boolean isAdmin = SecurityUtils.isAdmin(authentication);
+
+        boolean allowed;
+        try {
+            allowed = fileService.canRead(id, requesterId, isAdmin);
+        } catch (BusinessException e) {
+            /**
+             * canRead 依約定僅在檔案不存在時拋出 BusinessException(FILE_NOT_FOUND)。
+             * 其他端點的 FILE_NOT_FOUND 維持既有 HTTP 400 慣例，但本端點需要區分 404（不存在）
+             * 與 403（存在但無權限），故在此明確轉為 HTTP 404。
+             */
+            throw new HttpStatusBusinessException(FileErrorCode.FILE_NOT_FOUND, HttpStatus.NOT_FOUND);
+        }
+
+        if (!allowed) {
+            throw new HttpStatusBusinessException(FileErrorCode.FILE_ACCESS_DENIED, HttpStatus.FORBIDDEN);
+        }
+
+        String presignedUrl = fileService.generatePresignedUrl(id);
+        response.setStatus(HttpServletResponse.SC_FOUND);
+        response.setHeader(HttpHeaders.LOCATION, presignedUrl);
     }
 
     /**
@@ -161,6 +218,24 @@ public class FileController {
     private UUID resolveUserUuid(Long userId) {
         if (userId == null) {
             throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
+        }
+        return userFacade.getUserUuidById(userId)
+                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
+    }
+
+    /**
+     * 根據 userId 查詢使用者 UUID，匿名請求（userId 為 null）回傳 null
+     *
+     * <p>供 {@link #getFileContent} 等允許匿名存取的端點使用，與 {@link #resolveUserUuid} 的差異在於
+     * 匿名時不拋例外，因為授權判斷（{@link FileService#canRead}）本身接受 {@code requesterId = null}。</p>
+     *
+     * @param userId 用戶內部 ID；可為 null（匿名）
+     * @return 用戶 UUID；匿名時為 null
+     * @throws BusinessException 若 userId 非 null 但查無對應使用者
+     */
+    private UUID resolveOptionalUserUuid(Long userId) {
+        if (userId == null) {
+            return null;
         }
         return userFacade.getUserUuidById(userId)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));

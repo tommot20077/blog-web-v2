@@ -4,6 +4,8 @@ import dowob.xyz.blog.module.file.model.UsageType;
 import io.swagger.v3.oas.annotations.media.Schema;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.UUID;
+
 /**
  * 檔案上傳請求 DTO（OpenAPI 文件用）
  *
@@ -15,8 +17,9 @@ import org.springframework.web.multipart.MultipartFile;
  * {@code HttpMessageConverter} 鏈更簡潔。
  * </p>
  *
- * @param file      上傳的二進位檔案
- * @param usageType 檔案用途分類
+ * @param file        上傳的二進位檔案
+ * @param usageType   檔案用途分類
+ * @param articleUuid 要一併綁定的文章 UUID（可選；B4：新文章尚未儲存時可留空）
  * @author Yuan
  * @version 1.0
  */
@@ -26,6 +29,9 @@ public record FileUploadRequest(
         MultipartFile file,
 
         @Schema(description = "檔案用途（必填）", requiredMode = Schema.RequiredMode.REQUIRED)
-        UsageType usageType
+        UsageType usageType,
+
+        @Schema(description = "要一併綁定的文章 UUID（可選）", requiredMode = Schema.RequiredMode.NOT_REQUIRED)
+        UUID articleUuid
 ) {
 }

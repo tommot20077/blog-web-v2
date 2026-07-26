@@ -12,9 +12,11 @@ import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
+import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.http.Method;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -89,11 +91,15 @@ class FileServiceTest {
     @InjectMocks
     private FileServiceImpl fileService;
 
-    /** 測試前設定 bucketName、minioEndpoint 及 FileProperties 真實實例 */
+    /**
+     * 測試前設定 bucketName 及 FileProperties 真實實例。
+     *
+     * <p>B4：{@code minioEndpoint} 欄位已隨 uploadFile 改回傳相對路徑（不再組 MinIO 直連網址）而移除，
+     * 故不再需要於此設定。</p>
+     */
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(fileService, "bucketName", "test-bucket");
-        ReflectionTestUtils.setField(fileService, "minioEndpoint", "http://localhost:9000");
         ReflectionTestUtils.setField(fileService, "fileProperties", fileProperties);
         /** 讓 transactionTemplate.executeWithoutResult() 實際執行 callback */
         doAnswer(inv -> {
@@ -1131,6 +1137,134 @@ class FileServiceTest {
                     .doesNotThrowAnyException();
 
             verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+    }
+
+    /** B4：uploadFile 回傳相對路徑 URL（spec §3.1），不再回傳 MinIO 直連網址 */
+    @Nested
+    @DisplayName("uploadFile 相對路徑 URL 測試 (B4)")
+    class UploadFileRelativeUrlTests {
+
+        /**
+         * 驗證 uploadFile 回傳的 url 為相對路徑 {@code /api/v1/files/{id}/content}，
+         * 不再帶 MinIO endpoint host，避免換域名時內文全破（spec §3.1）。
+         * Red：目前實作組 {@code minioEndpoint + "/" + bucketName + "/" + storagePath}，此測試會失敗。
+         */
+        @Test
+        @DisplayName("uploadFile_returnsRelativePathUrl_notAbsoluteMinioUrl")
+        void uploadFile_returnsRelativePathUrl_notAbsoluteMinioUrl() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            assertThat(response.getUrl()).startsWith("/api/v1/files/");
+            assertThat(response.getUrl()).endsWith("/content");
+            assertThat(response.getUrl()).doesNotContain("http");
+            assertThat(response.getUrl()).contains(response.getId().toString());
+        }
+    }
+
+    /**
+     * B4：uploadFile 可選 articleUuid 參數 —— 有值即直接綁定；
+     * 刻意不透過 bindToArticle（完整替換語意），避免單檔上傳誤解除同文章其他既有綁定檔案。
+     */
+    @Nested
+    @DisplayName("uploadFile articleUuid 綁定測試 (B4)")
+    class UploadFileArticleUuidBindingTests {
+
+        /**
+         * Red：目前 FileService#uploadFile 僅有 4 個參數的簽章，此測試因找不到方法而編譯失敗。
+         */
+        @Test
+        @DisplayName("uploadFile_withArticleUuid_setsArticleUuidDirectlyWithoutTouchingOtherFiles")
+        void uploadFile_withArticleUuid_setsArticleUuidDirectlyWithoutTouchingOtherFiles() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            UUID articleUuid = UUID.randomUUID();
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR", articleUuid);
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isEqualTo(articleUuid);
+            /**
+             * 關鍵防呆：bindToArticle 的「完整替換」語意會先呼叫 findByArticleUuid 找出
+             * 該文章目前已綁定、但不在新清單內的舊檔案並解除綁定。單檔上傳綁定若誤用
+             * bindToArticle(articleUuid, List.of(newFileId))，會把同文章所有既有檔案一併解除綁定。
+             * 因此本測試斷言 findByArticleUuid 完全不被呼叫，確保走的是「直接 set」而非 bindToArticle。
+             */
+            verify(fileMetadataRepository, never()).findByArticleUuid(any());
+        }
+
+        /**
+         * Red：同上，5 參數簽章尚不存在。
+         */
+        @Test
+        @DisplayName("uploadFile_withNullArticleUuidParam_savesWithNullArticleUuid")
+        void uploadFile_withNullArticleUuidParam_savesWithNullArticleUuid() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR", null);
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isNull();
+        }
+    }
+
+    /** B4：generatePresignedUrl —— 產生短效簽名網址供 /content 端點 302 導向使用 */
+    @Nested
+    @DisplayName("generatePresignedUrl 測試 (B4)")
+    class GeneratePresignedUrlTests {
+
+        /**
+         * 驗證使用 MinIO SDK getPresignedObjectUrl 以 GET 方法、5 分鐘（300 秒）效期產生簽名網址。
+         * Red：FileService 尚無此方法，編譯失敗。
+         */
+        @Test
+        @DisplayName("generatePresignedUrl_whenFileExists_callsMinioWithGetMethodAndFiveMinuteExpiry")
+        void generatePresignedUrl_whenFileExists_callsMinioWithGetMethodAndFiveMinuteExpiry() throws Exception {
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/test.jpg");
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+                    .thenReturn("http://localhost:9000/test-bucket/articles/2024/01/01/test.jpg?X-Amz-Signature=abc");
+
+            String url = fileService.generatePresignedUrl(fileId);
+
+            assertThat(url).contains("X-Amz-Signature");
+            ArgumentCaptor<GetPresignedObjectUrlArgs> captor = ArgumentCaptor.forClass(GetPresignedObjectUrlArgs.class);
+            verify(minioClient).getPresignedObjectUrl(captor.capture());
+            GetPresignedObjectUrlArgs args = captor.getValue();
+            assertThat(args.method()).isEqualTo(Method.GET);
+            assertThat(args.bucket()).isEqualTo("test-bucket");
+            assertThat(args.object()).isEqualTo("articles/2024/01/01/test.jpg");
+            assertThat(args.expiry()).isEqualTo(300);
+        }
+
+        /**
+         * 檔案不存在時應拋出 BusinessException(FILE_NOT_FOUND)，讓 controller 能區分 404 vs 403。
+         * Red：方法不存在，編譯失敗。
+         */
+        @Test
+        @DisplayName("generatePresignedUrl_whenFileNotFound_throwsBusinessException")
+        void generatePresignedUrl_whenFileNotFound_throwsBusinessException() {
+            UUID fileId = UUID.randomUUID();
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> fileService.generatePresignedUrl(fileId))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(FileErrorCode.FILE_NOT_FOUND.getMessage());
         }
     }
 
