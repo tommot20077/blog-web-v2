@@ -408,8 +408,13 @@ class FileControllerIT {
                 .andExpect(jsonPath("$.code").value("00000"));
     }
 
+    /**
+     * MEDIUM 2 修復：本端點現套用 canRead 授權矩陣。此檔案為未綁定任何文章的
+     * ARTICLE_CONTENT（草稿態），故須以上傳者本人身分查詢才會通過；修復前這裡是匿名呼叫，
+     * 等同驗證了「任何人皆可查詢他人草稿檔案 metadata」的漏洞行為，現已調整為合法情境（擁有者本人）。
+     */
     @Test
-    @DisplayName("GET /api/v1/files/{id} - 取得已上傳檔案的元資料，應回傳 00000 且 data.id 不為 null")
+    @DisplayName("GET /api/v1/files/{id} - 擁有者本人取得已上傳檔案的元資料，應回傳 00000 且 data.id 不為 null")
     void getFileMetadata_existingFile_returns200() throws Exception {
         MockMultipartFile file = createTestJpeg();
 
@@ -423,10 +428,108 @@ class FileControllerIT {
 
         String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
 
+        mockMvc.perform(get("/api/v1/files/" + fileId)
+                .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.id").value(fileId));
+    }
+
+    /**
+     * MEDIUM 2 修復驗收：未綁定任何文章的草稿檔案（ARTICLE_CONTENT），匿名查詢 metadata
+     * 應被 canRead 拒絕（HTTP 403 + A0405），而非修復前的「完全不受授權矩陣約束」。
+     */
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - 匿名查詢他人未綁定草稿檔案的元資料，應回傳 HTTP 403")
+    void getFileMetadata_unboundDraftFile_anonymous_returns403() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "ARTICLE_CONTENT")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
+        mockMvc.perform(get("/api/v1/files/" + fileId))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("A0405"));
+    }
+
+    /**
+     * MEDIUM 2 迴歸驗證：canRead 規則1（AVATAR 對匿名開放）套用到 metadata 端點後，
+     * 公開情境（頭像）不受此次修復影響，匿名仍可查詢。
+     */
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - AVATAR 檔案，匿名查詢元資料應回傳 00000")
+    void getFileMetadata_avatarUsageType_anonymous_returns200() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "AVATAR")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
         mockMvc.perform(get("/api/v1/files/" + fileId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.id").value(fileId));
+    }
+
+    /**
+     * MEDIUM 2 迴歸驗證：ADMIN 不受擁有權限制，仍可查詢任何檔案的 metadata。
+     */
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - ADMIN 查詢他人未綁定草稿檔案的元資料，應回傳 00000")
+    void getFileMetadata_unboundDraftFile_admin_returns200() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "ARTICLE_CONTENT")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
+        mockMvc.perform(get("/api/v1/files/" + fileId)
+                        .with(asUser(USER_B_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    /**
+     * MEDIUM 2：metadata 回應不應洩漏內部儲存細節 storagePath（FileMetadata 已加 @JsonIgnore）。
+     */
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - 回應 JSON 不應包含 storagePath 欄位")
+    void getFileMetadata_response_doesNotExposeStoragePath() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "ARTICLE_CONTENT")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
+        mockMvc.perform(get("/api/v1/files/" + fileId)
+                        .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.storagePath").doesNotExist());
     }
 
     @Test

@@ -84,8 +84,15 @@ class FileE2E extends AbstractE2ETest {
 
         String fileId = objectMapper.readTree(uploadResponse).get("data").get("id").asText();
 
-        // Act & Assert — 用回傳 ID 查詢檔案元資料（公開端點）
-        mockMvc.perform(get("/api/v1/files/{id}", fileId))
+        /**
+         * MEDIUM 2 修復（安全複審）：GET /api/v1/files/{id} 現套用 canRead 授權矩陣，
+         * 不再是完全不受權限約束的端點。此檔案未綁定任何文章（草稿態），故須以上傳者本人身分
+         * 查詢才會通過；修復前此處為匿名呼叫，等同驗證了「任何人皆可查詢他人草稿檔案 metadata」
+         * 的漏洞行為，現已調整為合法情境（擁有者本人）。
+         */
+        // Act & Assert — 用回傳 ID 以擁有者身分查詢檔案元資料
+        mockMvc.perform(get("/api/v1/files/{id}", fileId)
+                        .with(AuthHelper.bearerToken(authorToken)))
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess())
                 .andExpect(E2EAssertions.hasData())

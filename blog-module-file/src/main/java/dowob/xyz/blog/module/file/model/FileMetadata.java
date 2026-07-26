@@ -49,7 +49,14 @@ public class FileMetadata implements Persistable<UUID> {
 
     /**
      * MinIO 儲存路徑
+     *
+     * <p>
+     * 內部儲存細節（MinIO object key），不對外序列化（{@code @JsonIgnore}）：
+     * 即使讀取端已通過 {@code canRead} 授權，仍不應洩漏內部儲存拓撲
+     * （見安全複審 B-review MEDIUM 2 / ai-docs/backlog M10）。
+     * </p>
      */
+    @JsonIgnore
     @Column("storage_path")
     private String storagePath;
 

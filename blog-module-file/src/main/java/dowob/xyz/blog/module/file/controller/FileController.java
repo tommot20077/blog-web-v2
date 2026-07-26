@@ -95,13 +95,31 @@ public class FileController {
     }
 
     /**
-     * 取得檔案元資料（公開端點）
+     * 取得檔案元資料
      *
-     * @param id 檔案 UUID
+     * <p>
+     * <b>MEDIUM 2 修復（安全複審）</b>：本端點原先完全不經授權判斷，任何人皆可查詢任一檔案的
+     * metadata（含草稿圖片的存在與綁定關係）。現套用與 {@link #getFileContent} 相同的
+     * {@link FileService#canRead} 授權矩陣：AVATAR、已綁定 PUBLISHED 文章的圖片對匿名開放；
+     * 草稿圖片與未綁定檔案僅上傳者與 ADMIN 可讀，無權限時回傳 HTTP 403。
+     * 檔案不存在則維持既有慣例（HTTP 400 + {@code FILE_NOT_FOUND}）。
+     * </p>
+     *
+     * @param id             檔案 UUID
+     * @param userId         當前登入用戶的資料庫主鍵（匿名為 null）
+     * @param authentication 當前認證資訊（用於判斷是否為 ADMIN）
      * @return 檔案元資料
      */
     @GetMapping("/api/v1/files/{id}")
-    public ApiResponse<FileMetadata> getFileMetadata(@PathVariable UUID id) {
+    public ApiResponse<FileMetadata> getFileMetadata(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal Long userId,
+            Authentication authentication) {
+        UUID requesterId = resolveOptionalUserUuid(userId);
+        boolean isAdmin = SecurityUtils.isAdmin(authentication);
+        if (!fileService.canRead(id, requesterId, isAdmin)) {
+            throw new HttpStatusBusinessException(FileErrorCode.FILE_ACCESS_DENIED, HttpStatus.FORBIDDEN);
+        }
         return ApiResponse.success(fileService.getFileMetadata(id));
     }
 
