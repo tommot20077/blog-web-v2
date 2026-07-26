@@ -5,7 +5,6 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
@@ -25,14 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -46,19 +41,12 @@ class ArticleCommandSubService {
     private final CategoryMapper categoryMapper;
     private final CategoryRepository categoryRepository;
     private final TagFacade tagFacade;
-    /** 檔案模組 Facade，供文章儲存後掃描 content 回填「檔案 → 文章」綁定（Task B6） */
-    private final FileFacade fileFacade;
+    /** 文章「檔案 → 文章」綁定回填元件，供文章儲存後掃描 content 回填綁定（Task B6，已抽出見 {@link ArticleFileBinder}） */
+    private final ArticleFileBinder articleFileBinder;
     private final ArticleMarkdownRenderer markdownRenderer;
     private final TransactionTemplate transactionTemplate;
     private final ArticleEntityFinder entityFinder;
     private final ArticleResponseMapper articleResponseMapper;
-
-    /**
-     * 內文檔案連結格式：{@code /api/v1/files/{uuid}/content}（見 spec §3.1 相對路徑決策）。
-     * 只匹配標準 UUID 格式（8-4-4-4-12 hex），格式不符者天然不會被擷取，等同安靜略過。
-     */
-    private static final Pattern FILE_CONTENT_URL_PATTERN = Pattern.compile(
-            "/api/v1/files/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/content");
 
     private static final Map<ArticleStatus, Set<ArticleStatus>> VALID_TRANSITIONS = Map.of(
             ArticleStatus.DRAFT, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.PENDING_REVIEW),
@@ -125,7 +113,7 @@ class ArticleCommandSubService {
         }
 
         /** DB 已 commit，best-effort 回填「檔案 → 文章」綁定（Task B6，失敗不影響建立結果） */
-        bindFilesToArticleSafely(saved.getUuid(), saved.getContent());
+        articleFileBinder.bindFilesToArticleSafely(saved.getUuid(), saved.getContent());
 
         return articleResponseMapper.toEditorResponse(saved);
     }
@@ -220,7 +208,7 @@ class ArticleCommandSubService {
         }
 
         /** DB 已 commit，best-effort 回填「檔案 → 文章」綁定（Task B6，失敗不影響更新結果） */
-        bindFilesToArticleSafely(updated.getUuid(), updated.getContent());
+        articleFileBinder.bindFilesToArticleSafely(updated.getUuid(), updated.getContent());
 
         return articleResponseMapper.toEditorResponse(updated);
     }
@@ -424,69 +412,6 @@ class ArticleCommandSubService {
             return null;
         }
         return plainText.substring(0, Math.min(200, plainText.length()));
-    }
-
-    /**
-     * 掃描文章內文，回填「檔案 → 文章」綁定（Task B6）。
-     *
-     * <p>
-     * 上傳圖片當下文章可能尚未存在（使用者開新文章、還沒儲存就貼圖），因此僅靠上傳時綁定
-     * 不足夠——這類「先貼圖、後存檔」的檔案會永遠停在未綁定狀態，而未綁定 = 私有（fail-safe），
-     * 導致文章發布後讀者看不到圖。文章儲存時必須重新掃描 content 並回填完整清單。
-     * </p>
-     *
-     * <p>
-     * <strong>穩健性</strong>：內文是使用者輸入，格式錯誤或不存在的 uuid 一律安靜略過，
-     * 絕不可讓文章儲存因此失敗。{@link FileFacade#bindFilesToArticle} 拋出的任何例外
-     * 皆視為 best-effort 失敗，僅記錄警告，不往外傳播——文章內容已經存好，綁定只是附帶動作，
-     * 不應讓使用者因為這個非核心步驟而遺失剛才的編輯內容。
-     * </p>
-     *
-     * <p>
-     * <strong>交易邊界</strong>：呼叫時機在呼叫端的 {@code transactionTemplate.execute(...)}
-     * 回傳（即 DB 交易已 commit）之後，比照 code-standards「Transaction + MQ 時序」規範——
-     * 不在交易作用域內對外（跨模組）呼叫，避免交易未提交卻已產生外部副作用，也避免在對外
-     * 呼叫期間持有本模組的 DB 連線。
-     * </p>
-     *
-     * @param articleUuid 文章公開 UUID
-     * @param content     文章目前的 Markdown 內文（可能為 null）
-     */
-    private void bindFilesToArticleSafely(UUID articleUuid, String content) {
-        List<UUID> fileUuids = extractFileUuids(content);
-        try {
-            fileFacade.bindFilesToArticle(articleUuid, fileUuids);
-        } catch (Exception e) {
-            log.warn("檔案綁定回填失敗（best-effort，不影響文章儲存）：articleUuid={}, error={}",
-                    articleUuid, e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 從 Markdown 內文中擷取所有 {@code /api/v1/files/{uuid}/content} 連結的 fileUuid。
-     *
-     * <p>
-     * 格式錯誤的 uuid（不符合標準 8-4-4-4-12 hex 格式）不會被正則比對到，等同安靜略過；
-     * 重複出現的 uuid 會去重（保留首次出現順序），無圖時回傳空清單。
-     * </p>
-     *
-     * @param content Markdown 內文（可能為 null 或空白）
-     * @return 內文中出現的檔案 UUID 清單（已去重，可能為空清單，但不為 null）
-     */
-    private List<UUID> extractFileUuids(String content) {
-        if (content == null || content.isBlank()) {
-            return List.of();
-        }
-        Set<UUID> fileUuids = new LinkedHashSet<>();
-        Matcher matcher = FILE_CONTENT_URL_PATTERN.matcher(content);
-        while (matcher.find()) {
-            try {
-                fileUuids.add(UUID.fromString(matcher.group(1)));
-            } catch (IllegalArgumentException e) {
-                log.debug("內文含格式錯誤的檔案 UUID，略過：{}", matcher.group(1));
-            }
-        }
-        return new ArrayList<>(fileUuids);
     }
 
     /**

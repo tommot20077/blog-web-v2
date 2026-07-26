@@ -139,6 +139,14 @@ class ArticleCommandSubServiceTest {
             return null;
         }).when(transactionTemplate).executeWithoutResult(any());
 
+        /**
+         * ArticleFileBinder 抽出後，ArticleCommandSubService 改依賴 ArticleFileBinder
+         * 而非直接依賴 FileFacade。這裡用「真實」的 ArticleFileBinder 包裝被 mock 的
+         * fileFacade，讓既有 FileBindingTests 的 verify(fileFacade)... 斷言不必修改就能
+         * 繼續通過——正則擷取與 try/catch 邏輯真的被執行，只是最終外部呼叫落在 mock 上。
+         */
+        ArticleFileBinder articleFileBinder = new ArticleFileBinder(fileFacade);
+
         commandSubService = new ArticleCommandSubService(
                 articleRepository,
                 articleMapper,
@@ -146,7 +154,7 @@ class ArticleCommandSubServiceTest {
                 categoryMapper,
                 categoryRepository,
                 tagFacade,
-                fileFacade,
+                articleFileBinder,
                 markdownRenderer,
                 transactionTemplate,
                 entityFinder,
