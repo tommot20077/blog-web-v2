@@ -104,6 +104,13 @@ class ArticleCommandSubService {
         @SuppressWarnings("unchecked")
         List<TagInfo> tagInfos = (List<TagInfo>) txResult[1];
 
+        /**
+         * DB 已 commit，best-effort 發送 ContentChanged(SAVED) MQ（供 version 模組觸發快照）。
+         * 建立狀態也是一份可還原的版本；若缺這行，初版內容永遠不會有快照，
+         * 作者第一次編輯並儲存後，初版內容就永久遺失（BUG-003）。
+         */
+        articleEventPublisher.publishContentChanged(saved, ArticleContentChangedEvent.Action.SAVED);
+
         /** DB 已 commit，best-effort 發送標籤事件 MQ（失敗不影響建立結果） */
         if (tagInfos != null && !tagInfos.isEmpty()) {
             List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
