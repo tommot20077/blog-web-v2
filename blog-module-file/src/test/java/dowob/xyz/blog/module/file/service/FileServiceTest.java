@@ -1277,6 +1277,81 @@ class FileServiceTest {
             assertThat(metadataA.getArticleUuid()).isNull();
             verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
         }
+
+        /**
+         * fail-safe 的真正含義：解析不到文章作者時「什麼都不動」，包含既有綁定。
+         *
+         * <p>原實作先跑解綁迴圈、再解析作者並於 null 時 return，等於在 articleLookupFacade
+         * 暫時查不到（文章剛被刪、或跨模組查詢瞬間失敗）時把該文章所有既有綁定清空且不會補回
+         * ——已發布文章的圖片全部退回「未綁定 = 私有」，讀者端整篇破圖。這正是 FileFacade
+         * javadoc 警告的「權限殘留反向問題」。上面兩個既有 fail-safe 測試把
+         * {@code findByArticleUuid} stub 成空清單，解綁迴圈是 no-op，因此測不到這條路徑。</p>
+         */
+        @Test
+        @DisplayName("bindToArticle_whenArticleNotFound_doesNotUnbindExistingFiles")
+        void bindToArticle_whenArticleNotFound_doesNotUnbindExistingFiles() {
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata alreadyBound = new FileMetadata();
+            alreadyBound.setId(UUID.randomUUID());
+            alreadyBound.setUploaderId(UUID.randomUUID());
+            alreadyBound.setArticleUuid(articleUuid);
+
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(alreadyBound));
+
+            assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(UUID.randomUUID())))
+                    .doesNotThrowAnyException();
+
+            assertThat(alreadyBound.getArticleUuid())
+                    .as("解析不到文章作者時不可解除既有綁定，否則已發布文章的圖片會全部變回私有")
+                    .isEqualTo(articleUuid);
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /** 同上，但失敗點在 userFacade（文章存在，但作者 internal id 解析不出 UUID） */
+        @Test
+        @DisplayName("bindToArticle_whenAuthorUuidNotResolvable_doesNotUnbindExistingFiles")
+        void bindToArticle_whenAuthorUuidNotResolvable_doesNotUnbindExistingFiles() {
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata alreadyBound = new FileMetadata();
+            alreadyBound.setId(UUID.randomUUID());
+            alreadyBound.setUploaderId(UUID.randomUUID());
+            alreadyBound.setArticleUuid(articleUuid);
+
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "PUBLISHED", null, null)));
+            when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(alreadyBound));
+
+            assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(UUID.randomUUID())))
+                    .doesNotThrowAnyException();
+
+            assertThat(alreadyBound.getArticleUuid()).isEqualTo(articleUuid);
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /**
+         * 對照組：明確傳空清單仍必須解除全部綁定（「完整替換」語意的合法用法），
+         * 此時不需要也不應該要求解析得到文章作者。確保上面的 fail-safe 修正
+         * 不會把「清空綁定」這條正常路徑一併擋掉。
+         */
+        @Test
+        @DisplayName("bindToArticle_withEmptyList_unbindsAllEvenWhenArticleNotFound")
+        void bindToArticle_withEmptyList_unbindsAllEvenWhenArticleNotFound() {
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata alreadyBound = new FileMetadata();
+            alreadyBound.setId(UUID.randomUUID());
+            alreadyBound.setUploaderId(UUID.randomUUID());
+            alreadyBound.setArticleUuid(articleUuid);
+
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(alreadyBound));
+
+            fileService.bindToArticle(articleUuid, List.of());
+
+            assertThat(alreadyBound.getArticleUuid()).isNull();
+            verify(fileMetadataRepository).save(alreadyBound);
+        }
     }
 
     /** B4：uploadFile 回傳相對路徑 URL（spec §3.1），不再回傳 MinIO 直連網址 */

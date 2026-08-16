@@ -40,9 +40,11 @@ import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -317,18 +319,47 @@ public class FileServiceImpl implements FileService {
      * <p>
      * <b>CRITICAL 修復（安全複審）：擁有權不變量</b>——一個檔案只能被綁定到「該檔案的上傳者
      * == 該文章的作者」的文章上。否則安靜略過並記錄可疑嘗試（{@code log.warn}），不拋錯，
-     * 因為清單內容常源自使用者輸入的內文掃描，不應讓文章儲存因此失敗。文章不存在或無法解析
-     * 其作者 UUID 時，fail-safe 為「不綁定任何檔案」。解除綁定的第一段迴圈不受影響：
-     * 它只處理「目前已綁定到本文章」的檔案，在此不變量下這些檔案本就屬於該作者。
+     * 因為清單內容常源自使用者輸入的內文掃描，不應讓文章儲存因此失敗。
+     * </p>
+     *
+     * <p>
+     * <b>fail-safe 的順序很重要</b>：解析不到文章作者時必須<b>在解綁之前</b>就整個放棄，
+     * 什麼都不動。若先跑解綁迴圈才發現作者解析失敗（文章剛被刪、或跨模組查詢瞬間失敗）並
+     * return，該文章的既有綁定已被清空且不會補回——已發布文章的圖片會全部退回
+     * 「未綁定 = 私有」，讀者端整篇破圖，正是 {@code FileFacade} javadoc 警告的
+     * 「權限殘留反向問題」。唯一例外是呼叫端<b>明確傳入空清單</b>：那是「清除本文章所有綁定」
+     * 的合法用法，語意上不需要作者資訊，因此不受此前置檢查限制。
+     * </p>
+     *
+     * <p>
+     * 全程標註 {@link Transactional}：解綁與綁定是同一次「完整替換」的兩半，中途拋例外
+     * 若各自獨立提交會留下半套綁定狀態（呼叫端 {@code ArticleFileBinder} 以 best-effort
+     * 吞掉例外，不會有人重試）。
      * </p>
      */
     @Override
+    @Transactional
     public void bindToArticle(UUID articleUuid, List<UUID> fileUuids) {
         List<UUID> targetIds = (fileUuids != null) ? fileUuids : List.of();
 
+        /*
+         * 先解析作者再動任何資料：解析不到就整個放棄（含解綁），避免把既有綁定清空後才失敗。
+         * 空清單是「清除全部綁定」的明確指令，不需要作者資訊，故跳過此前置檢查。
+         */
+        UUID authorUuid = null;
+        if (!targetIds.isEmpty()) {
+            authorUuid = resolveArticleAuthorUuid(articleUuid);
+            if (authorUuid == null) {
+                log.warn("bindToArticle：無法解析文章作者 UUID，fail-safe 完全不動綁定"
+                        + "（含既有綁定，避免已發布文章圖片被誤設為私有）。articleUuid={}", articleUuid);
+                return;
+            }
+        }
+
+        Set<UUID> targetIdSet = new HashSet<>(targetIds);
         List<FileMetadata> currentlyBound = fileMetadataRepository.findByArticleUuid(articleUuid);
         for (FileMetadata bound : currentlyBound) {
-            if (!targetIds.contains(bound.getId())) {
+            if (!targetIdSet.contains(bound.getId())) {
                 bound.setArticleUuid(null);
                 fileMetadataRepository.save(bound);
             }
@@ -338,21 +369,17 @@ public class FileServiceImpl implements FileService {
             return;
         }
 
-        UUID authorUuid = resolveArticleAuthorUuid(articleUuid);
-        if (authorUuid == null) {
-            log.warn("bindToArticle：無法解析文章作者 UUID，fail-safe 不綁定任何檔案。articleUuid={}", articleUuid);
-            return;
-        }
-
+        /* lambda 需要 effectively final 的擷取變數 */
+        final UUID articleAuthorUuid = authorUuid;
         for (UUID fileUuid : targetIds) {
             fileMetadataRepository.findById(fileUuid).ifPresent(metadata -> {
                 if (articleUuid.equals(metadata.getArticleUuid())) {
                     return;
                 }
-                if (!authorUuid.equals(metadata.getUploaderId())) {
+                if (!articleAuthorUuid.equals(metadata.getUploaderId())) {
                     log.warn("bindToArticle：拒絕綁定非本文章作者上傳的檔案（可疑嘗試）。"
                                     + "fileUuid={}, articleUuid={}, uploaderId={}, articleAuthorUuid={}",
-                            fileUuid, articleUuid, metadata.getUploaderId(), authorUuid);
+                            fileUuid, articleUuid, metadata.getUploaderId(), articleAuthorUuid);
                     return;
                 }
                 metadata.setArticleUuid(articleUuid);
