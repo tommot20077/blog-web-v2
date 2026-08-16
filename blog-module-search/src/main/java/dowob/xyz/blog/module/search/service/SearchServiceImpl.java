@@ -9,6 +9,7 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.repository.ArticleSearchRepository;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -204,7 +206,64 @@ public class SearchServiceImpl implements SearchService {
                 .map(this::toDocument)
                 .collect(Collectors.toList());
         articleSearchRepository.saveAll(documents);
+        /*
+         * 時間戳只是給後台顯示用的附帶資訊，寫入失敗不可讓「索引其實已重建成功」的動作
+         * 對外回報失敗（否則管理員會重複點擊，每次都真的重建一遍）。與專案內 MQ 發送
+         * 一致採 best-effort。
+         */
+        try {
+            redisTemplate.opsForValue().set(RedisKeyConstant.SEARCH_REINDEX_AT_KEY, LocalDateTime.now().toString());
+        } catch (Exception e) {
+            log.warn("寫入重建時間戳失敗（best-effort，索引已重建完成）：{}", e.getMessage());
+        }
         log.info("全量重建完成，共索引 {} 篇文章", documents.size());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public SearchIndexStatusResponse getIndexStatus() {
+        /*
+         * 兩個資料來源各自獨立 try：Redis 掛掉不該讓 ES 的數字消失，反之亦然。
+         * 原實作把 Redis 讀取放在 try 之外，Redis 一掛整個方法就拋出，違反本方法
+         * 「不拋例外、避免拖垮儀表板整格顯示」的介面契約。
+         */
+        Long documentCount = readDocumentCount();
+        return SearchIndexStatusResponse.builder()
+                .documentCount(documentCount)
+                .lastReindexAt(readLastReindexAt())
+                /* healthy 描述的是 Elasticsearch 可達性，不受 Redis 故障影響 */
+                .healthy(documentCount != null)
+                .build();
+    }
+
+    /**
+     * 讀取 Elasticsearch 索引文件數。
+     *
+     * @return 文件數；ES 不可達時為 {@code null}（呼叫端據此判定 healthy=false）
+     */
+    private Long readDocumentCount() {
+        try {
+            return articleSearchRepository.count();
+        } catch (Exception e) {
+            log.error("查詢 Elasticsearch 索引文件數失敗：{}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * 讀取最後一次全量重建的時間戳。
+     *
+     * @return ISO-8601 時間字串；從未重建過或 Redis 不可達時為 {@code null}
+     */
+    private String readLastReindexAt() {
+        try {
+            return redisTemplate.opsForValue().get(RedisKeyConstant.SEARCH_REINDEX_AT_KEY);
+        } catch (Exception e) {
+            log.warn("讀取重建時間戳失敗，視同從未重建：{}", e.getMessage());
+            return null;
+        }
     }
 
     /**

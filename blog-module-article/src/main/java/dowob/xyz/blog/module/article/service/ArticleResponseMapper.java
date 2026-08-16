@@ -14,6 +14,7 @@ import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -22,6 +23,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 class ArticleResponseMapper {
@@ -30,6 +32,7 @@ class ArticleResponseMapper {
     private final CategoryMapper categoryMapper;
     private final UserFacade userFacade;
     private final ViewCountService viewCountService;
+    private final ArticleTocCodec articleTocCodec;
 
     ArticleResponse toResponse(Article article) {
         return toResponse(
@@ -73,6 +76,7 @@ class ArticleResponseMapper {
                 .bookmarked(bookmarked)
                 .lastReadProgress(lastReadProgress)
                 .seriesNav(seriesNav)
+                .toc(articleTocCodec.deserialize(article.getToc()))
                 .build();
     }
 
@@ -95,6 +99,7 @@ class ArticleResponseMapper {
                 .rejectReason(article.getRejectReason())
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
+                .toc(articleTocCodec.deserialize(article.getToc()))
                 .build();
     }
 
@@ -190,4 +195,5 @@ class ArticleResponseMapper {
     String resolveAuthorNickname(Long authorId) {
         return userFacade.getUserNicknameById(authorId).orElse(null);
     }
+
 }

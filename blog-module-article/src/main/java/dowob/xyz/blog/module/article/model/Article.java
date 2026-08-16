@@ -77,6 +77,15 @@ public class Article {
     private String contentHtml;
 
     /**
+     * 文章章節導覽（TOC）JSON 字串（由 Service 層從 content_md 渲染時同步產生）
+     *
+     * <p>無 heading 時為 {@code "[]"}（非 null）。Spring Data JDBC 對未顯式設值欄位會送出
+     * 顯式 NULL，故 create/update 兩條路徑皆須顯式 set 此欄位。</p>
+     */
+    @Column("toc")
+    private String toc;
+
+    /**
      * 文章狀態
      */
     private ArticleStatus status;

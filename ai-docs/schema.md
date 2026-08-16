@@ -94,6 +94,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 | version | BIGINT | NOT NULL DEFAULT 1 | V7 新增；樂觀鎖 |
 | series_id | BIGINT | NULL REFERENCES series(id) ON DELETE SET NULL | V15 新增；所屬系列 |
 | series_position | INTEGER | NULL | V15 新增；在系列內的排序位置 |
+| toc | TEXT | | V19 新增；章節導覽 JSON |
 | published_at | TIMESTAMP | | |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 | updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
@@ -569,6 +570,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V16** | 新建 `article_versions` 表（type CHECK: AUTO/MANUAL/PUBLISHED；tags UUID[]；article_id FK ON DELETE CASCADE；2 個索引）；新建 `user_preferences` 表（K-V 通用；UNIQUE(user_id, pref_key)；user_id FK ON DELETE CASCADE） |
 | **V17** | 新建 `processed_events` 表（MQ event 冪等記錄）|
 | **V18** | `users` 新增 `location VARCHAR(100)`（nullable）+ 5 個通知偏好 `notification_comment/like/review/follow/newsletter BOOLEAN NOT NULL DEFAULT TRUE`（設定頁面後端持久化） |
+| **V19** | `articles` 新增 `toc TEXT`（nullable，無 DEFAULT；章節導覽 JSON，由渲染器於 create/update 重算） |
 
 ---
 

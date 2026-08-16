@@ -51,6 +51,12 @@ class RedisKeyConstantTest {
     }
 
     @Test
+    @DisplayName("SEARCH_REINDEX_AT_KEY 應為 search:reindex:at")
+    void searchReindexAtKey_hasExpectedValue() {
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_AT_KEY).isEqualTo("search:reindex:at");
+    }
+
+    @Test
     @DisplayName("RECOMMEND_TRENDING_PREFIX 應為 recommend:trending:")
     void recommendTrendingPrefix_hasExpectedValue() {
         assertThat(RedisKeyConstant.RECOMMEND_TRENDING_PREFIX).isEqualTo("recommend:trending:");
