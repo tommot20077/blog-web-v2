@@ -23,6 +23,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -32,6 +33,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
@@ -46,6 +48,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.containsString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -125,9 +132,13 @@ class FileControllerIT {
     private ObjectMapper objectMapper;
 
     /**
-     * 檔案元資料 Repository（用於測試清理）
+     * 檔案元資料 Repository（用於測試清理，並以 spy 計數 DB 查詢次數）
+     *
+     * <p>用 {@link MockitoSpyBean} 而非 {@link Autowired}：spy 會委派真實實作，
+     * 既有的清理用途不受影響，另可 verify {@code findById} 的呼叫次數——
+     * 內文圖片是熱路徑（一頁十張圖就是十個請求），每個請求查幾次 DB 必須釘住。</p>
      */
-    @Autowired
+    @MockitoSpyBean
     private FileMetadataRepository fileMetadataRepository;
 
     /**
@@ -757,6 +768,31 @@ class FileControllerIT {
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
                             .with(asUser(USER_A_ID, Role.AUTHOR)))
                     .andExpect(status().isFound());
+        }
+
+        @Test
+        @DisplayName("效能：單次 /content 請求只查一次 file_metadata（原本 canRead 與 presign 各查一次）")
+        void getFileContent_authorized_queriesMetadataOnlyOnce() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+            UUID fileUuid = UUID.fromString(fileId);
+            /** 上傳流程本身也會碰 repository，從這裡開始重新計數 */
+            clearInvocations(fileMetadataRepository);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound());
+
+            verify(fileMetadataRepository, times(1)).findById(fileUuid);
+        }
+
+        @Test
+        @DisplayName("快取：302 需帶 private 且短於 presign 效期的 Cache-Control，避免中間層共用他人網址")
+        void getFileContent_setsPrivateCacheControlShorterThanPresignExpiry() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL,
+                            allOf(containsString("private"), containsString("max-age=240"))));
         }
 
         @Test

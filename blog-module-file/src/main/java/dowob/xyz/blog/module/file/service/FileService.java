@@ -138,6 +138,22 @@ public interface FileService {
     boolean canRead(UUID fileId, UUID requesterId, boolean isAdmin);
 
     /**
+     * 判斷請求者是否有權讀取指定檔案內容（授權矩陣同 {@link #canRead(UUID, UUID, boolean)}）
+     *
+     * <p>
+     * 接受呼叫端<b>已取得</b>的 {@link FileMetadata}，省掉一次 DB 查詢。內文圖片是熱路徑
+     * （一頁十張圖 = 十個 {@code /content} 請求），呼叫端若為了產生簽名網址等用途已經
+     * 取過 metadata，就該重用它。
+     * </p>
+     *
+     * @param metadata    已取得的檔案元資料（不可為 null）
+     * @param requesterId 請求者 UUID；匿名請求傳 null
+     * @param isAdmin     請求者是否具 ADMIN 權限
+     * @return 允許讀取則 true，否則 false
+     */
+    boolean canRead(FileMetadata metadata, UUID requesterId, boolean isAdmin);
+
+    /**
      * 產生指定檔案的 MinIO 短效簽名網址（B4：供 {@code GET /api/v1/files/{id}/content} 302 導向使用）
      *
      * <p>
@@ -150,4 +166,15 @@ public interface FileService {
      * @throws dowob.xyz.blog.common.exception.BusinessException FILE_NOT_FOUND 若檔案不存在
      */
     String generatePresignedUrl(UUID fileId);
+
+    /**
+     * 產生指定檔案的 MinIO 短效簽名網址（接受已取得的 metadata，省掉一次 DB 查詢）
+     *
+     * <p>語意與效期同 {@link #generatePresignedUrl(UUID)}；同樣不做任何權限檢查，
+     * 呼叫端須先以 {@link #canRead(FileMetadata, UUID, boolean)} 完成授權判斷。</p>
+     *
+     * @param metadata 已取得的檔案元資料（不可為 null）
+     * @return MinIO 簽名網址
+     */
+    String generatePresignedUrl(FileMetadata metadata);
 }

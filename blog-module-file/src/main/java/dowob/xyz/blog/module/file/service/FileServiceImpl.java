@@ -438,7 +438,20 @@ public class FileServiceImpl implements FileService {
     public boolean canRead(UUID fileId, UUID requesterId, boolean isAdmin) {
         FileMetadata metadata = fileMetadataRepository.findById(fileId)
                 .orElseThrow(() -> new BusinessException(FileErrorCode.FILE_NOT_FOUND));
+        return canRead(metadata, requesterId, isAdmin);
+    }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>
+     * 授權矩陣本體，接受已取得的 {@link FileMetadata}，<b>不再查一次 DB</b>。
+     * 內文圖片是熱路徑（一頁十張圖就是十個 {@code /content} 請求），呼叫端若已經
+     * 為了別的用途取過 metadata，就該重用它而不是讓授權判斷再查一遍。
+     * </p>
+     */
+    @Override
+    public boolean canRead(FileMetadata metadata, UUID requesterId, boolean isAdmin) {
         if (metadata.getUsageType() == UsageType.AVATAR) {
             return true;
         }
@@ -466,6 +479,16 @@ public class FileServiceImpl implements FileService {
     public String generatePresignedUrl(UUID fileId) {
         FileMetadata metadata = fileMetadataRepository.findById(fileId)
                 .orElseThrow(() -> new BusinessException(FileErrorCode.FILE_NOT_FOUND));
+        return generatePresignedUrl(metadata);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>接受已取得的 {@link FileMetadata}，不再查一次 DB（理由同 {@link #canRead(FileMetadata, UUID, boolean)}）。</p>
+     */
+    @Override
+    public String generatePresignedUrl(FileMetadata metadata) {
         try {
             return minioClient.getPresignedObjectUrl(
                     GetPresignedObjectUrlArgs.builder()

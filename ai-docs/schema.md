@@ -572,6 +572,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V17** | 新建 `processed_events` 表（MQ event 冪等記錄）|
 | **V18** | `users` 新增 `location VARCHAR(100)`（nullable）+ 5 個通知偏好 `notification_comment/like/review/follow/newsletter BOOLEAN NOT NULL DEFAULT TRUE`（設定頁面後端持久化） |
 | **V20** | `file_metadata` 新增 `article_uuid UUID`（nullable，未綁定=私有）+ `idx_file_metadata_article_uuid`；刻意不設 FK（跨模組邊界，檔案存取控制地基） |
+| **V21** | 資料遷移（無 schema 變更）：把 `articles.content_md` / `content_html` 內殘留的 MinIO 絕對網址改寫為 `/api/v1/files/{id}/content`，並依「上傳者==作者」回填 `file_metadata.article_uuid`；解決 V20 之前寫入的內容繞過 `canRead` 授權（bucket 私有時破圖、公開時等同無授權）的問題。冪等 |
 
 ---
 

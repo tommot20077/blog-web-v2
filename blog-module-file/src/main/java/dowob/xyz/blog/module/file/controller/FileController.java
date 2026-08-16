@@ -63,6 +63,14 @@ public class FileController {
     private final UserFacade userFacade;
 
     /**
+     * {@code /content} 302 導向回應的快取秒數。
+     *
+     * <p>刻意短於 {@code FileServiceImpl} 產生 presigned URL 的 5 分鐘效期，
+     * 確保瀏覽器不會拿到已經過期的 Location。</p>
+     */
+    private static final int CONTENT_REDIRECT_CACHE_SECONDS = 240;
+
+    /**
      * 上傳檔案（需要 FILE_UPLOAD 權限），可選擇性一併綁定至文章
      *
      * @param file           上傳的檔案
@@ -117,10 +125,12 @@ public class FileController {
             Authentication authentication) {
         UUID requesterId = resolveOptionalUserUuid(userId);
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
-        if (!fileService.canRead(id, requesterId, isAdmin)) {
+        /* 先取一次 metadata 再授權，避免 canRead(id,..) 與 getFileMetadata(id) 各查一次 DB */
+        FileMetadata metadata = fileService.getFileMetadata(id);
+        if (!fileService.canRead(metadata, requesterId, isAdmin)) {
             throw new HttpStatusBusinessException(FileErrorCode.FILE_ACCESS_DENIED, HttpStatus.FORBIDDEN);
         }
-        return ApiResponse.success(fileService.getFileMetadata(id));
+        return ApiResponse.success(metadata);
     }
 
     /**
@@ -151,25 +161,39 @@ public class FileController {
         UUID requesterId = resolveOptionalUserUuid(userId);
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
 
-        boolean allowed;
+        /*
+         * 只查一次 metadata，授權判斷與簽名網址產生都重用它。
+         * 原本 canRead(id,..) 與 generatePresignedUrl(id) 各自 findById 一次——
+         * 一頁十張圖就是二十次 DB 查詢。
+         */
+        FileMetadata metadata;
         try {
-            allowed = fileService.canRead(id, requesterId, isAdmin);
+            metadata = fileService.getFileMetadata(id);
         } catch (BusinessException e) {
-            /**
-             * canRead 依約定僅在檔案不存在時拋出 BusinessException(FILE_NOT_FOUND)。
-             * 其他端點的 FILE_NOT_FOUND 維持既有 HTTP 400 慣例，但本端點需要區分 404（不存在）
-             * 與 403（存在但無權限），故在此明確轉為 HTTP 404。
+            /*
+             * 其他端點的 FILE_NOT_FOUND 維持既有 HTTP 400 慣例，但本端點需要區分
+             * 404（不存在）與 403（存在但無權限）。只轉換 FILE_NOT_FOUND，
+             * 其餘 BusinessException 原樣往外拋——否則會把無關的錯誤一律偽裝成 404。
              */
-            throw new HttpStatusBusinessException(FileErrorCode.FILE_NOT_FOUND, HttpStatus.NOT_FOUND);
+            if (FileErrorCode.FILE_NOT_FOUND.getCode().equals(e.getCode())) {
+                throw new HttpStatusBusinessException(FileErrorCode.FILE_NOT_FOUND, HttpStatus.NOT_FOUND);
+            }
+            throw e;
         }
 
-        if (!allowed) {
+        if (!fileService.canRead(metadata, requesterId, isAdmin)) {
             throw new HttpStatusBusinessException(FileErrorCode.FILE_ACCESS_DENIED, HttpStatus.FORBIDDEN);
         }
 
-        String presignedUrl = fileService.generatePresignedUrl(id);
+        String presignedUrl = fileService.generatePresignedUrl(metadata);
         response.setStatus(HttpServletResponse.SC_FOUND);
         response.setHeader(HttpHeaders.LOCATION, presignedUrl);
+        /*
+         * 302 本身可被瀏覽器短暫快取，省下同一頁重複載入時的往返；但必須是 private——
+         * 授權結果因人而異，且 Location 帶的是短效簽名網址，絕不可被共用快取層交叉服務。
+         * max-age 取 240 秒，短於 presigned URL 的 5 分鐘效期，避免快取到的網址已失效。
+         */
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "private, max-age=" + CONTENT_REDIRECT_CACHE_SECONDS);
     }
 
     /**
