@@ -422,6 +422,21 @@ class ArticleCommandSubServiceTest {
                     .as("即使 request 傳入 PUBLISHED，實際儲存的 Article 狀態必須為 DRAFT")
                     .isEqualTo(ArticleStatus.DRAFT);
         }
+
+        @Test
+        @DisplayName("正常：建立文章成功後，應發送 ContentChanged(SAVED) 事件（供 version 模組建立初版快照，BUG-003 回歸）")
+        void createArticle_shouldPublishContentChangedSaved() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("初版快照測試");
+            request.setContent("初版內容");
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            commandSubService.createArticle(AUTHOR_ID, request);
+
+            verify(articleEventPublisher).publishContentChanged(eq(saved), eq(ArticleContentChangedEvent.Action.SAVED));
+        }
     }
 
     @Nested
