@@ -238,6 +238,33 @@ public class ArticleController {
     }
 
     /**
+     * 抽回送審文章（僅限文章作者本人）
+     *
+     * <p>
+     * 將 PENDING_REVIEW 的文章退回 DRAFT，供作者在審核完成前反悔並繼續編輯。
+     * 僅 PENDING_REVIEW 狀態可抽回，其餘狀態回傳 A0204（狀態轉換不合法）。
+     * </p>
+     *
+     * <p>
+     * 權限嚴於其他寫入端點：<b>僅作者本人可抽回，ADMIN 抽回他人文章會得到 A0203</b>。
+     * 抽回與駁回為職責分離的兩個動作，ADMIN 審核不通過應改呼叫 {@code /reject}。
+     * </p>
+     *
+     * @param uuid           文章公開 UUID
+     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 抽回後的文章完整資訊
+     */
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
+    @PostMapping("/{uuid}/withdraw")
+    public ApiResponse<ArticleResponse> withdrawArticle(@PathVariable UUID uuid,
+                                                        @AuthenticationPrincipal Long operatorId,
+                                                        Authentication authentication) {
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleService.withdrawArticle(operatorId, operatorRole, uuid));
+    }
+
+    /**
      * 發布文章（需 AUTHOR 本人或 ADMIN）
      *
      * @param uuid           文章公開 UUID

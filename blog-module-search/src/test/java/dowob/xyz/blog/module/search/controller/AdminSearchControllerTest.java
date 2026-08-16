@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.service.SearchService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,7 +22,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -106,5 +109,38 @@ class AdminSearchControllerTest {
                 .andExpect(jsonPath("$.message").value("Elasticsearch 索引全量重建已完成"));
 
         verify(searchService).reindexAll();
+    }
+
+    // =========================================================================
+    // GET /api/admin/search/status 測試
+    // =========================================================================
+
+    @Test
+    @DisplayName("GET /api/admin/search/status — 一般用戶應回傳 403")
+    void status_asUser_returns403() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/search/status")
+                        .with(asUser()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /api/admin/search/status — Admin 用戶應回傳索引狀態結構")
+    void status_asAdmin_returnsStatus() throws Exception {
+        SearchIndexStatusResponse response = SearchIndexStatusResponse.builder()
+                .documentCount(13L)
+                .lastReindexAt("2026-07-20T21:30:00")
+                .healthy(true)
+                .build();
+        when(searchService.getIndexStatus()).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/admin/search/status")
+                        .with(asAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.documentCount").value(13))
+                .andExpect(jsonPath("$.data.lastReindexAt").value("2026-07-20T21:30:00"))
+                .andExpect(jsonPath("$.data.healthy").value(true));
+
+        verify(searchService).getIndexStatus();
     }
 }

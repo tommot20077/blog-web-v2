@@ -48,6 +48,11 @@ class ArticleCommandSubService {
     private final ArticleEntityFinder entityFinder;
     private final ArticleResponseMapper articleResponseMapper;
 
+    /**
+     * TOC JSON 編解碼器（寫入端序列化，讀取端由 ArticleResponseMapper 反序列化）
+     */
+    private final ArticleTocCodec articleTocCodec;
+
     private static final Map<ArticleStatus, Set<ArticleStatus>> VALID_TRANSITIONS = Map.of(
             ArticleStatus.DRAFT, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.PENDING_REVIEW),
             ArticleStatus.PENDING_REVIEW, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.DRAFT, ArticleStatus.REJECTED),
@@ -68,7 +73,9 @@ class ArticleCommandSubService {
         article.setAuthorId(authorId);
         article.setTitle(request.getTitle());
         article.setContent(request.getContent());
-        article.setContentHtml(markdownRenderer.render(request.getContent()));
+        RenderResult renderResult = markdownRenderer.render(request.getContent());
+        article.setContentHtml(renderResult == null ? null : renderResult.html());
+        article.setToc(articleTocCodec.serialize(renderResult == null ? null : renderResult.toc()));
         article.setSummary(extractSummary(request.getContent(), request.getSummary()));
         article.setSlug(generateSlug(request.getTitle()));
         // 建立文章時狀態一律強制為 DRAFT，防止用戶繞過審核流程直接發布
@@ -105,6 +112,13 @@ class ArticleCommandSubService {
         Article saved = (Article) txResult[0];
         @SuppressWarnings("unchecked")
         List<TagInfo> tagInfos = (List<TagInfo>) txResult[1];
+
+        /**
+         * DB 已 commit，best-effort 發送 ContentChanged(SAVED) MQ（供 version 模組觸發快照）。
+         * 建立狀態也是一份可還原的版本；若缺這行，初版內容永遠不會有快照，
+         * 作者第一次編輯並儲存後，初版內容就永久遺失（BUG-003）。
+         */
+        articleEventPublisher.publishContentChanged(saved, ArticleContentChangedEvent.Action.SAVED);
 
         /** DB 已 commit，best-effort 發送標籤事件 MQ（失敗不影響建立結果） */
         if (tagInfos != null && !tagInfos.isEmpty()) {
@@ -144,8 +158,12 @@ class ArticleCommandSubService {
         }
         if (request.getContent() != null) {
             article.setContent(request.getContent());
-            article.setContentHtml(markdownRenderer.render(request.getContent()));
+            RenderResult renderResult = markdownRenderer.render(request.getContent());
+            article.setContentHtml(renderResult.html());
+            article.setToc(articleTocCodec.serialize(renderResult.toc()));
         }
+        // request.getContent() 為 null：不重算 TOC，也不覆寫 article 上既有的 toc
+        // （entityFinder 載入的 Article 已帶有 DB 既有值，save 時原樣寫回）
         if (request.getSummary() != null) {
             String baseContent = request.getContent() != null ? request.getContent() : article.getContent();
             article.setSummary(extractSummary(baseContent, request.getSummary()));
@@ -337,6 +355,48 @@ class ArticleCommandSubService {
     }
 
     /**
+     * 抽回送審文章（PENDING_REVIEW → DRAFT）
+     *
+     * <p>
+     * 作者送審後在審核完成前反悔時使用，將文章退回草稿以便繼續編輯。
+     * 僅允許 PENDING_REVIEW 狀態抽回，其餘狀態一律拋出
+     * {@link ArticleErrorCode#ARTICLE_STATUS_TRANSITION_INVALID}。
+     * </p>
+     *
+     * <p>
+     * <b>權限刻意嚴於其他寫入操作：僅限文章作者本人</b>。抽回與駁回是職責分離的兩個動作
+     * ——「抽回」是作者主動收回自己送審的文章，「駁回」是 ADMIN 審核不通過。
+     * 因此本方法不走 {@link #checkWritePermission} 的 ADMIN ownership bypass，
+     * 改用 {@link #checkAuthorOnly}；ADMIN 要處理他人送審文章應走
+     * {@link #rejectArticle}（該路徑行為不受影響）。
+     * </p>
+     *
+     * <p>
+     * 刻意不發送任何 MQ 事件：PENDING_REVIEW 從未進入 Elasticsearch 索引
+     * （索引僅由 ArticlePublishedEvent / ArticleUpdatedEvent 建立，兩者皆限 PUBLISHED），
+     * 故無反向索引動作需求；此與同樣不發事件的 {@link #submitForReview}、
+     * {@link #rejectArticle} 對稱。
+     * </p>
+     *
+     * @param operatorId   操作者資料庫主鍵
+     * @param operatorRole 操作者角色（保留以與其他狀態轉換方法簽章一致；
+     *                     抽回為作者本人專屬，刻意不依角色放行）
+     * @param articleUuid  文章公開 UUID
+     * @return 抽回後的文章完整資訊
+     */
+    @Transactional
+    public ArticleResponse withdrawArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        checkAuthorOnly(operatorId, article);
+        if (article.getStatus() != ArticleStatus.PENDING_REVIEW) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
+        }
+        article.setStatus(ArticleStatus.DRAFT);
+        Article updated = articleRepository.save(article);
+        return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
      * 檢查寫入權限：ADMIN 可操作任何文章，AUTHOR 只能操作自己的
      *
      * @param operatorId   操作者 ID
@@ -347,6 +407,25 @@ class ArticleCommandSubService {
         if (operatorRole == Role.ADMIN) {
             return;
         }
+        if (!article.getAuthorId().equals(operatorId)) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+    }
+
+    /**
+     * 檢查嚴格作者身分：僅文章作者本人可通過，ADMIN 亦不例外
+     *
+     * <p>
+     * 與 {@link #checkWritePermission} 的差異在於<b>不提供 ADMIN ownership bypass</b>，
+     * 供「作者主動操作」語意的端點使用（目前為 {@link #withdrawArticle}）。
+     * 刻意獨立成一個方法而非在共用方法加開關，避免影響
+     * update / delete / submit / publish 既有的 ADMIN 管理權行為。
+     * </p>
+     *
+     * @param operatorId 操作者 ID
+     * @param article    目標文章
+     */
+    private void checkAuthorOnly(Long operatorId, Article article) {
         if (!article.getAuthorId().equals(operatorId)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
@@ -413,6 +492,7 @@ class ArticleCommandSubService {
         }
         return plainText.substring(0, Math.min(200, plainText.length()));
     }
+
 
     /**
      * 同步文章分類關聯

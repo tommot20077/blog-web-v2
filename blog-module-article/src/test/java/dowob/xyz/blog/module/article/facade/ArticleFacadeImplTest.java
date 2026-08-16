@@ -674,7 +674,7 @@ class ArticleFacadeImplTest {
         void applyRestoreContent_articleNotFound_throws() {
             when(articleRepository.findById(999L)).thenReturn(Optional.empty());
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", List.of()
+                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", "[]", List.of()
             );
 
             assertThatThrownBy(() -> facade.applyRestoreContent(999L, data))
@@ -691,7 +691,7 @@ class ArticleFacadeImplTest {
         void applyRestoreContent_publishedArticle_publishesBoth() {
             ArticleRestoreData data = new ArticleRestoreData(
                 "New Title", "new-slug", "# New", "New summary", "https://cdn/new.jpg",
-                "PUBLISHED", "<p>New</p>", List.of(UUID.randomUUID(), UUID.randomUUID())
+                "PUBLISHED", "<p>New</p>", "[]", List.of(UUID.randomUUID(), UUID.randomUUID())
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -714,7 +714,7 @@ class ArticleFacadeImplTest {
         @DisplayName("DRAFT article 還原 → 只發 publishContentChanged，不發 publishUpdated")
         void applyRestoreContent_draftArticle_publishesOnlyContentChanged() {
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", List.of()
+                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", "[]", List.of()
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -729,7 +729,7 @@ class ArticleFacadeImplTest {
         void applyRestoreContent_statusNull_doesNotChangeStatus() {
             ArticleStatus before = existing.getStatus();
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, null, "<p>c</p>", List.of()
+                "T", "s", "c", "sum", null, null, "<p>c</p>", "[]", List.of()
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -741,7 +741,7 @@ class ArticleFacadeImplTest {
         @DisplayName("tags 為 null → syncArticleTags 用空清單")
         void applyRestoreContent_tagsNull_syncWithEmptyList() {
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", null
+                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", "[]", null
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -750,10 +750,38 @@ class ArticleFacadeImplTest {
         }
 
         @Test
+        @DisplayName("toc 一併還原：article.toc 應更新為 data.toc()，不可停留在還原前的舊 TOC")
+        void applyRestoreContent_setsTocFromRestoreData() {
+            existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
+            String restoredToc = "[{\"id\":\"heading-新章節\",\"text\":\"新章節\",\"level\":2}]";
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "## 新章節", "sum", null, "PUBLISHED", "<h2 id=\"heading-新章節\">新章節</h2>",
+                restoredToc, List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getToc()).isEqualTo(restoredToc);
+        }
+
+        @Test
+        @DisplayName("toc 為 null → 存空 JSON 陣列（維持 articles.toc 恆為合法陣列的不變量）")
+        void applyRestoreContent_tocNull_storesEmptyJsonArray() {
+            existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", null, List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getToc()).isEqualTo("[]");
+        }
+
+        @Test
         @DisplayName("invocation 順序：save → syncArticleTags → publishEvents")
         void applyRestoreContent_invocationOrder_saveThenSyncTagsThenPublish() {
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", List.of()
+                "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", "[]", List.of()
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -793,7 +821,7 @@ class ArticleFacadeImplTest {
 
                 ArticleRestoreData data = new ArticleRestoreData(
                         "T", "s", "data.content() 不應被拿來掃描的內容", "sum", null,
-                        "DRAFT", "<p>c</p>", List.of());
+                        "DRAFT", "<p>c</p>", "[]", List.of());
 
                 /**
                  * 模擬 repository.save() 回傳的 entity 內容與 data.content() 不同：
@@ -819,7 +847,7 @@ class ArticleFacadeImplTest {
             void applyRestoreContent_contentWithoutImages_bindsEmptyList() {
                 ArticleRestoreData data = new ArticleRestoreData(
                         "T", "s", "純文字內容，沒有任何圖片連結", "sum", null,
-                        "DRAFT", "<p>c</p>", List.of());
+                        "DRAFT", "<p>c</p>", "[]", List.of());
 
                 facade.applyRestoreContent(articleId, data);
 
@@ -831,7 +859,7 @@ class ArticleFacadeImplTest {
             void applyRestoreContent_fileBindingThrows_restoreStillSucceeds() {
                 ArticleRestoreData data = new ArticleRestoreData(
                         "T", "s", "![img](/api/v1/files/" + UUID.randomUUID() + "/content)",
-                        "sum", null, "DRAFT", "<p>c</p>", List.of());
+                        "sum", null, "DRAFT", "<p>c</p>", "[]", List.of());
                 doThrow(new RuntimeException("file service 掛了"))
                         .when(fileFacade).bindFilesToArticle(any(), any());
 
@@ -846,7 +874,7 @@ class ArticleFacadeImplTest {
             @DisplayName("順序：save → publish events → bindFilesToArticleSafely（DB commit 後才對外呼叫綁定）")
             void applyRestoreContent_invocationOrder_saveThenPublishThenBind() {
                 ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", List.of());
+                        "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", "[]", List.of());
 
                 facade.applyRestoreContent(articleId, data);
 
