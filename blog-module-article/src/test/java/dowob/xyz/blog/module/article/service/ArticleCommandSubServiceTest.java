@@ -88,6 +88,9 @@ class ArticleCommandSubServiceTest {
 
     private ObjectMapper objectMapper;
 
+    /** 真實 codec：TOC 序列化行為本身是待驗證對象，不可 mock */
+    private ArticleTocCodec articleTocCodec;
+
     private ArticleCommandSubService commandSubService;
 
     private static final Long AUTHOR_ID = 1L;
@@ -141,6 +144,7 @@ class ArticleCommandSubServiceTest {
         }).when(transactionTemplate).executeWithoutResult(any());
 
         objectMapper = new ObjectMapper();
+        articleTocCodec = new ArticleTocCodec(objectMapper);
 
         commandSubService = new ArticleCommandSubService(
                 articleRepository,
@@ -153,7 +157,7 @@ class ArticleCommandSubServiceTest {
                 transactionTemplate,
                 entityFinder,
                 articleResponseMapper,
-                objectMapper);
+                articleTocCodec);
     }
 
     private EditorArticleResponse toEditorResponse(Article article) {

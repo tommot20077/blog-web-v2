@@ -8,6 +8,8 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
+import dowob.xyz.blog.module.article.service.ArticleTocCodec;
+import dowob.xyz.blog.module.article.service.RenderResult;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
@@ -47,6 +49,13 @@ public class VersioningService {
     private final VersionMapper versionMapper;
     private final PreferenceResolver preferenceResolver;
     private final ArticleMarkdownRenderer markdownRenderer;
+
+    /**
+     * TOC JSON 編解碼器：還原時把重算出的章節導覽序列化後交給 ArticleFacade 一併寫回。
+     * 與 markdownRenderer 同屬 article 模組的無狀態元件，跨模組注入的既有慣例。
+     */
+    private final ArticleTocCodec tocCodec;
+
     private final TagFacade tagFacade;
 
     /** Spring 宣告式事務模板（用於縮小事務範圍，確保 restore 的 MQ 於 DB commit 後才發送） */
@@ -269,6 +278,9 @@ public class VersioningService {
         /* 2. stash 已 commit，且此處不在任何交易作用域內：
          *    交由 ArticleFacade 以自身交易還原內容，並於其 commit 後 best-effort 發事件。 */
         ArticleVersion v = plan.version();
+        /* HTML 與 TOC 必須出自同一次 render，兩者一起回填；只回填 HTML 會讓 article.toc
+         * 停在還原前那版，章節導覽指向不存在的錨點。 */
+        RenderResult rendered = markdownRenderer.render(v.getContent());
         ArticleRestoreData restoreData = new ArticleRestoreData(
             v.getTitle(),
             v.getSlug(),
@@ -276,7 +288,8 @@ public class VersioningService {
             v.getSummary(),
             v.getCoverImageUrl(),
             v.getStatus(),
-            markdownRenderer.render(v.getContent()).html(),
+            rendered.html(),
+            tocCodec.serialize(rendered.toc()),
             v.getTags() != null ? v.getTags() : List.of()
         );
         articleFacade.applyRestoreContent(plan.articleId(), restoreData);

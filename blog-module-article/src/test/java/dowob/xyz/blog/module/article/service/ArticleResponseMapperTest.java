@@ -52,13 +52,13 @@ class ArticleResponseMapperTest {
     @Mock
     private ViewCountService viewCountService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ArticleTocCodec articleTocCodec = new ArticleTocCodec(new ObjectMapper());
 
     private ArticleResponseMapper mapper;
 
     @BeforeEach
     void setUp() {
-        mapper = new ArticleResponseMapper(articleMapper, categoryMapper, userFacade, viewCountService, objectMapper);
+        mapper = new ArticleResponseMapper(articleMapper, categoryMapper, userFacade, viewCountService, articleTocCodec);
     }
 
     @Nested

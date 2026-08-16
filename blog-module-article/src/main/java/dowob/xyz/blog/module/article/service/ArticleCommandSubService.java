@@ -1,7 +1,5 @@
 package dowob.xyz.blog.module.article.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
@@ -17,7 +15,6 @@ import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
-import dowob.xyz.blog.module.article.model.dto.response.TocEntry;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.repository.CategoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -50,9 +47,9 @@ class ArticleCommandSubService {
     private final ArticleResponseMapper articleResponseMapper;
 
     /**
-     * JSON 序列化工具（用於 TOC 持久化）
+     * TOC JSON 編解碼器（寫入端序列化，讀取端由 ArticleResponseMapper 反序列化）
      */
-    private final ObjectMapper objectMapper;
+    private final ArticleTocCodec articleTocCodec;
 
     private static final Map<ArticleStatus, Set<ArticleStatus>> VALID_TRANSITIONS = Map.of(
             ArticleStatus.DRAFT, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.PENDING_REVIEW),
@@ -76,7 +73,7 @@ class ArticleCommandSubService {
         article.setContent(request.getContent());
         RenderResult renderResult = markdownRenderer.render(request.getContent());
         article.setContentHtml(renderResult == null ? null : renderResult.html());
-        article.setToc(serializeToc(renderResult == null ? null : renderResult.toc()));
+        article.setToc(articleTocCodec.serialize(renderResult == null ? null : renderResult.toc()));
         article.setSummary(extractSummary(request.getContent(), request.getSummary()));
         article.setSlug(generateSlug(request.getTitle()));
         // 建立文章時狀態一律強制為 DRAFT，防止用戶繞過審核流程直接發布
@@ -151,7 +148,7 @@ class ArticleCommandSubService {
             article.setContent(request.getContent());
             RenderResult renderResult = markdownRenderer.render(request.getContent());
             article.setContentHtml(renderResult.html());
-            article.setToc(serializeToc(renderResult.toc()));
+            article.setToc(articleTocCodec.serialize(renderResult.toc()));
         }
         // request.getContent() 為 null：不重算 TOC，也不覆寫 article 上既有的 toc
         // （entityFinder 載入的 Article 已帶有 DB 既有值，save 時原樣寫回）
@@ -420,27 +417,6 @@ class ArticleCommandSubService {
         return plainText.substring(0, Math.min(200, plainText.length()));
     }
 
-    /**
-     * 將 TOC 條目序列化為 JSON 字串以持久化至 {@code articles.toc}。
-     *
-     * <p>空清單（或 null）一律存 {@code "[]"}，不存 null——Spring Data JDBC 對未顯式設值欄位
-     * 會送出顯式 NULL，覆寫既有資料（V19 schema 已留下此教訓）。序列化失敗時記錄警告並回退為
-     * 空陣列，不讓 TOC 問題阻斷建立/更新流程。</p>
-     *
-     * @param toc 渲染器產出的章節條目清單（可能為 null）
-     * @return JSON 陣列字串，恆非 null
-     */
-    private String serializeToc(List<TocEntry> toc) {
-        if (toc == null || toc.isEmpty()) {
-            return "[]";
-        }
-        try {
-            return objectMapper.writeValueAsString(toc);
-        } catch (JsonProcessingException e) {
-            log.warn("TOC 序列化失敗，改存空陣列：{}", e.getMessage());
-            return "[]";
-        }
-    }
 
     /**
      * 同步文章分類關聯

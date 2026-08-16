@@ -1,8 +1,5 @@
 package dowob.xyz.blog.module.article.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
@@ -16,7 +13,6 @@ import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
-import dowob.xyz.blog.module.article.model.dto.response.TocEntry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -36,7 +32,7 @@ class ArticleResponseMapper {
     private final CategoryMapper categoryMapper;
     private final UserFacade userFacade;
     private final ViewCountService viewCountService;
-    private final ObjectMapper objectMapper;
+    private final ArticleTocCodec articleTocCodec;
 
     ArticleResponse toResponse(Article article) {
         return toResponse(
@@ -80,7 +76,7 @@ class ArticleResponseMapper {
                 .bookmarked(bookmarked)
                 .lastReadProgress(lastReadProgress)
                 .seriesNav(seriesNav)
-                .toc(deserializeToc(article.getToc()))
+                .toc(articleTocCodec.deserialize(article.getToc()))
                 .build();
     }
 
@@ -103,7 +99,7 @@ class ArticleResponseMapper {
                 .rejectReason(article.getRejectReason())
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
-                .toc(deserializeToc(article.getToc()))
+                .toc(articleTocCodec.deserialize(article.getToc()))
                 .build();
     }
 
@@ -200,25 +196,4 @@ class ArticleResponseMapper {
         return userFacade.getUserNicknameById(authorId).orElse(null);
     }
 
-    /**
-     * 將持久化於 {@code articles.toc} 的 JSON 字串反序列化為結構化的 {@code List<TocEntry>}。
-     *
-     * <p>與 {@code ArticleCommandSubService#serializeToc} 對稱：該處序列化寫入，此處讀回。
-     * 空值（null/空字串）或解析失敗一律回傳空陣列，不拋例外——TOC 資料缺失或損毀不應使
-     * 文章本體無法讀取。</p>
-     *
-     * @param tocJson 資料庫欄位原始值，可能為 null 或空字串
-     * @return 反序列化後的章節條目清單，恆非 null
-     */
-    private List<TocEntry> deserializeToc(String tocJson) {
-        if (tocJson == null || tocJson.isBlank()) {
-            return List.of();
-        }
-        try {
-            return objectMapper.readValue(tocJson, new TypeReference<List<TocEntry>>() {});
-        } catch (JsonProcessingException e) {
-            log.warn("TOC 反序列化失敗，改回空陣列：{}", e.getMessage());
-            return List.of();
-        }
-    }
 }
