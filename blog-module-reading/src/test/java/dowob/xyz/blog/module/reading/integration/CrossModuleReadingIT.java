@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
+import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
@@ -105,6 +106,8 @@ class CrossModuleReadingIT {
     @MockitoBean private RabbitTemplate rabbitTemplate;
     @MockitoBean private TagFacade tagFacade;
     @MockitoBean private UserFacade userFacade;
+    /** article 模組的 ArticleFileBinder 依賴 FileFacade，其實作在 blog-module-file（未被本測試 scan） */
+    @MockitoBean private FileFacade fileFacade;
     @MockitoBean private UserAuthService userAuthService;
 
     private static final Long USER_ID = 1L;
