@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.version.consumer;
 
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
@@ -103,6 +104,10 @@ class ArticleVersionConsumerIT {
 
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /** article 模組的 ArticleFileBinder 依賴 FileFacade，其實作在 blog-module-file（未被本測試 scan） */
+    @MockitoBean
+    private FileFacade fileFacade;
 
     private static final Long AUTHOR_ID = 1L;
     private static final long DELIVERY_TAG = 1L;

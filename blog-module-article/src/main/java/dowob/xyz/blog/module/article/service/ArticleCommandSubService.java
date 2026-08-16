@@ -41,6 +41,8 @@ class ArticleCommandSubService {
     private final CategoryMapper categoryMapper;
     private final CategoryRepository categoryRepository;
     private final TagFacade tagFacade;
+    /** 文章「檔案 → 文章」綁定回填元件，供文章儲存後掃描 content 回填綁定（Task B6，已抽出見 {@link ArticleFileBinder}） */
+    private final ArticleFileBinder articleFileBinder;
     private final ArticleMarkdownRenderer markdownRenderer;
     private final TransactionTemplate transactionTemplate;
     private final ArticleEntityFinder entityFinder;
@@ -123,6 +125,9 @@ class ArticleCommandSubService {
             List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
             articleEventPublisher.publishTagged(saved, tagIds);
         }
+
+        /** DB 已 commit，best-effort 回填「檔案 → 文章」綁定（Task B6，失敗不影響建立結果） */
+        articleFileBinder.bindFilesToArticleSafely(saved.getUuid(), saved.getContent());
 
         return articleResponseMapper.toEditorResponse(saved);
     }
@@ -219,6 +224,9 @@ class ArticleCommandSubService {
             List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
             articleEventPublisher.publishTagged(updated, tagIds);
         }
+
+        /** DB 已 commit，best-effort 回填「檔案 → 文章」綁定（Task B6，失敗不影響更新結果） */
+        articleFileBinder.bindFilesToArticleSafely(updated.getUuid(), updated.getContent());
 
         return articleResponseMapper.toEditorResponse(updated);
     }

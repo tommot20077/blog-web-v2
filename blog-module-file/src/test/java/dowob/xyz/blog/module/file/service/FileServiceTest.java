@@ -2,6 +2,9 @@ package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
+import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
@@ -10,9 +13,11 @@ import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
+import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.http.Method;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -35,6 +40,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -42,6 +48,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -74,6 +81,12 @@ class FileServiceTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
+    @Mock
+    private ArticleLookupFacade articleLookupFacade;
+
+    @Mock
+    private UserFacade userFacade;
+
     private final FileProperties fileProperties = new FileProperties(
             Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)),
             Set.of("image/jpeg", "image/png", "image/webp", "image/gif")
@@ -82,11 +95,15 @@ class FileServiceTest {
     @InjectMocks
     private FileServiceImpl fileService;
 
-    /** 測試前設定 bucketName、minioEndpoint 及 FileProperties 真實實例 */
+    /**
+     * 測試前設定 bucketName 及 FileProperties 真實實例。
+     *
+     * <p>B4：{@code minioEndpoint} 欄位已隨 uploadFile 改回傳相對路徑（不再組 MinIO 直連網址）而移除，
+     * 故不再需要於此設定。</p>
+     */
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(fileService, "bucketName", "test-bucket");
-        ReflectionTestUtils.setField(fileService, "minioEndpoint", "http://localhost:9000");
         ReflectionTestUtils.setField(fileService, "fileProperties", fileProperties);
         /** 讓 transactionTemplate.executeWithoutResult() 實際執行 callback */
         doAnswer(inv -> {
@@ -828,6 +845,671 @@ class FileServiceTest {
                     fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessageContaining("DB failure");
+        }
+    }
+
+    /** B2：uploadFile 新增 articleUuid 欄位後的 NULL 覆寫回歸檢查 */
+    @Nested
+    @DisplayName("uploadFile articleUuid 欄位回歸測試")
+    class UploadFileArticleUuidRegressionTests {
+
+        /**
+         * 驗證新增 articleUuid 欄位後，uploadFile（INSERT 新檔案）儲存的 metadata 之 articleUuid 為 null。
+         *
+         * <p>本專案已知風險：Spring Data JDBC 對未設值欄位送顯式 NULL，可能誤清既有值。
+         * 但 uploadFile 一律 {@code new FileMetadata()} 執行 INSERT（見 FileServiceImpl.uploadFile），
+         * 不會讀取既有列再覆寫，因此「清空既有 articleUuid」的風險場景在此路徑不成立——
+         * 新檔案本就應該是未綁定（null）狀態。本測試固定此事實，防止日後改動誤帶入非 null 預設值。</p>
+         */
+        @Test
+        @DisplayName("uploadFile_afterAddingArticleUuidField_savesWithNullArticleUuid")
+        void uploadFile_afterAddingArticleUuidField_savesWithNullArticleUuid() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isNull();
+        }
+    }
+
+    /** B2：canRead 授權矩陣測試（spec §4，每條規則含正例與反例） */
+    @Nested
+    @DisplayName("canRead 授權矩陣測試")
+    class CanReadTests {
+
+        private FileMetadata metadataWith(UUID fileId, UUID uploaderId, UsageType usageType, UUID articleUuid) {
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setUploaderId(uploaderId);
+            metadata.setUsageType(usageType);
+            metadata.setArticleUuid(articleUuid);
+            return metadata;
+        }
+
+        /** 規則1：usageType=AVATAR，匿名（requesterId=null）→ 允許 */
+        @Test
+        @DisplayName("canRead_avatarUsageType_anonymousAllowed")
+        void canRead_avatarUsageType_anonymousAllowed() {
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, UUID.randomUUID(), UsageType.AVATAR, null);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThat(fileService.canRead(fileId, null, false)).isTrue();
+        }
+
+        /** 規則2：已綁定 + PUBLISHED，匿名 → 允許 */
+        @Test
+        @DisplayName("canRead_boundToPublishedArticle_anonymousAllowed")
+        void canRead_boundToPublishedArticle_anonymousAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "PUBLISHED", null, null)));
+
+            assertThat(fileService.canRead(fileId, null, false)).isTrue();
+        }
+
+        /** 規則2 反例：已綁定 + DRAFT，匿名 → 拒絕 */
+        @Test
+        @DisplayName("canRead_boundToDraftArticle_anonymousDenied")
+        void canRead_boundToDraftArticle_anonymousDenied() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+
+            assertThat(fileService.canRead(fileId, null, false)).isFalse();
+        }
+
+        /** 已綁定 + DRAFT，非上傳者的一般使用者 → 拒絕 */
+        @Test
+        @DisplayName("canRead_boundToDraftArticle_otherUserDenied")
+        void canRead_boundToDraftArticle_otherUserDenied() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID otherUserId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+
+            assertThat(fileService.canRead(fileId, otherUserId, false)).isFalse();
+        }
+
+        /** 已綁定 + DRAFT，上傳者本人 → 允許 */
+        @Test
+        @DisplayName("canRead_boundToDraftArticle_uploaderAllowed")
+        void canRead_boundToDraftArticle_uploaderAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+
+            assertThat(fileService.canRead(fileId, uploaderId, false)).isTrue();
+        }
+
+        /** 已綁定 + DRAFT，ADMIN → 允許 */
+        @Test
+        @DisplayName("canRead_boundToDraftArticle_adminAllowed")
+        void canRead_boundToDraftArticle_adminAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID adminId = UUID.randomUUID();
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+
+            assertThat(fileService.canRead(fileId, adminId, true)).isTrue();
+        }
+
+        /** 關鍵 fail-safe：未綁定任何文章，匿名 → 拒絕 */
+        @Test
+        @DisplayName("canRead_unbound_anonymousDenied")
+        void canRead_unbound_anonymousDenied() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, null);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThat(fileService.canRead(fileId, null, false)).isFalse();
+        }
+
+        /** 未綁定，上傳者本人 → 允許 */
+        @Test
+        @DisplayName("canRead_unbound_uploaderAllowed")
+        void canRead_unbound_uploaderAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, null);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThat(fileService.canRead(fileId, uploaderId, false)).isTrue();
+        }
+
+        /** 未綁定，ADMIN → 允許（規則4與綁定狀態無關） */
+        @Test
+        @DisplayName("canRead_unbound_adminAllowed")
+        void canRead_unbound_adminAllowed() {
+            UUID fileId = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID adminId = UUID.randomUUID();
+            FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, null);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThat(fileService.canRead(fileId, adminId, true)).isTrue();
+        }
+
+        /** 檔案不存在 → 依既有慣例（同 getFileMetadata / deleteFile）拋 BusinessException(FILE_NOT_FOUND) */
+        @Test
+        @DisplayName("canRead_fileNotFound_throwsBusinessException")
+        void canRead_fileNotFound_throwsBusinessException() {
+            UUID fileId = UUID.randomUUID();
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> fileService.canRead(fileId, UUID.randomUUID(), false))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(FileErrorCode.FILE_NOT_FOUND.getMessage());
+        }
+    }
+
+    /**
+     * B2：bindToArticle 測試——完整替換語意（非附加）+ 擁有權不變量
+     *
+     * <p>
+     * 安全複審 CRITICAL 修復：一個檔案只能被綁定到「該檔案的上傳者 == 該文章的作者」的文章上。
+     * {@link #stubArticleAuthor} 統一建立「文章 articleUuid 的作者 UUID 為 authorUuid」的
+     * {@code articleLookupFacade}/{@code userFacade} mock 鏈。
+     * </p>
+     */
+    @Nested
+    @DisplayName("bindToArticle 測試")
+    class BindToArticleTests {
+
+        private static final Long AUTHOR_INTERNAL_ID = 100L;
+
+        /** 建立「文章 articleUuid 的作者為 authorUuid」的 articleLookupFacade + userFacade mock 鏈 */
+        private void stubArticleAuthor(UUID articleUuid, UUID authorUuid) {
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null)));
+            when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.of(authorUuid));
+        }
+
+        /** 新綁定：清單內檔案皆設定 articleUuid（合法情境：檔案 uploader == 文章作者） */
+        @Test
+        @DisplayName("bindToArticle_withNewFiles_bindsAllToArticle")
+        void bindToArticle_withNewFiles_bindsAllToArticle() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID authorUuid = UUID.randomUUID();
+            UUID file1 = UUID.randomUUID();
+            UUID file2 = UUID.randomUUID();
+            FileMetadata metadata1 = new FileMetadata();
+            metadata1.setId(file1);
+            metadata1.setUploaderId(authorUuid);
+            FileMetadata metadata2 = new FileMetadata();
+            metadata2.setId(file2);
+            metadata2.setUploaderId(authorUuid);
+            stubArticleAuthor(articleUuid, authorUuid);
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
+            when(fileMetadataRepository.findById(file1)).thenReturn(Optional.of(metadata1));
+            when(fileMetadataRepository.findById(file2)).thenReturn(Optional.of(metadata2));
+
+            fileService.bindToArticle(articleUuid, List.of(file1, file2));
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository, times(2)).save(captor.capture());
+            assertThat(captor.getAllValues())
+                    .allSatisfy(m -> assertThat(m.getArticleUuid()).isEqualTo(articleUuid));
+        }
+
+        /** 關鍵：重新綁定時，舊清單中不在新清單內的檔案要解除綁定（設回 null），避免權限殘留 */
+        @Test
+        @DisplayName("bindToArticle_whenRebinding_unbindsFilesNotInNewList")
+        void bindToArticle_whenRebinding_unbindsFilesNotInNewList() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID authorUuid = UUID.randomUUID();
+            UUID keepFile = UUID.randomUUID();
+            UUID removedFile = UUID.randomUUID();
+
+            FileMetadata keepMetadata = new FileMetadata();
+            keepMetadata.setId(keepFile);
+            keepMetadata.setArticleUuid(articleUuid);
+            keepMetadata.setUploaderId(authorUuid);
+
+            FileMetadata removedMetadata = new FileMetadata();
+            removedMetadata.setId(removedFile);
+            removedMetadata.setArticleUuid(articleUuid);
+            removedMetadata.setUploaderId(authorUuid);
+
+            /**
+             * 補上作者解析 mock：雖然 keepFile 已綁定於本文章，第二迴圈對它是 no-op
+             * （{@code articleUuid.equals(metadata.getArticleUuid())} 提前為 true），本不會真正
+             * 觸發擁有權比對；但補齊 mock 讓此測試不依賴「作者解析失敗而整段跳過」的巧合，
+             * 明確驗證新不變量之下，合法的重新綁定情境仍正常運作。
+             */
+            stubArticleAuthor(articleUuid, authorUuid);
+            /** 目前已綁定此文章的檔案：keepFile、removedFile */
+            when(fileMetadataRepository.findByArticleUuid(articleUuid))
+                    .thenReturn(List.of(keepMetadata, removedMetadata));
+            when(fileMetadataRepository.findById(keepFile)).thenReturn(Optional.of(keepMetadata));
+
+            /** 新清單只剩 keepFile，removedFile 應被解除綁定 */
+            fileService.bindToArticle(articleUuid, List.of(keepFile));
+
+            assertThat(removedMetadata.getArticleUuid()).isNull();
+            verify(fileMetadataRepository).save(removedMetadata);
+            assertThat(keepMetadata.getArticleUuid()).isEqualTo(articleUuid);
+        }
+
+        /** 空清單：解除該文章的所有既有綁定 */
+        @Test
+        @DisplayName("bindToArticle_withEmptyList_unbindsAllExistingBindings")
+        void bindToArticle_withEmptyList_unbindsAllExistingBindings() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID file1 = UUID.randomUUID();
+            UUID file2 = UUID.randomUUID();
+
+            FileMetadata metadata1 = new FileMetadata();
+            metadata1.setId(file1);
+            metadata1.setArticleUuid(articleUuid);
+            FileMetadata metadata2 = new FileMetadata();
+            metadata2.setId(file2);
+            metadata2.setArticleUuid(articleUuid);
+
+            when(fileMetadataRepository.findByArticleUuid(articleUuid))
+                    .thenReturn(List.of(metadata1, metadata2));
+
+            fileService.bindToArticle(articleUuid, List.of());
+
+            assertThat(metadata1.getArticleUuid()).isNull();
+            assertThat(metadata2.getArticleUuid()).isNull();
+            verify(fileMetadataRepository, times(2)).save(any(FileMetadata.class));
+        }
+
+        /** 傳 null 清單：等同空清單，解除所有既有綁定，不拋例外 */
+        @Test
+        @DisplayName("bindToArticle_withNullList_treatsAsEmptyAndUnbindsAll")
+        void bindToArticle_withNullList_treatsAsEmptyAndUnbindsAll() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID file1 = UUID.randomUUID();
+            FileMetadata metadata1 = new FileMetadata();
+            metadata1.setId(file1);
+            metadata1.setArticleUuid(articleUuid);
+
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(metadata1));
+
+            fileService.bindToArticle(articleUuid, null);
+
+            assertThat(metadata1.getArticleUuid()).isNull();
+        }
+
+        /** 清單內含不存在的 fileUuid → 安靜略過，不拋例外（內文可能含壞連結，不可讓綁定失敗） */
+        @Test
+        @DisplayName("bindToArticle_withNonExistentFileUuid_skipsQuietly")
+        void bindToArticle_withNonExistentFileUuid_skipsQuietly() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID authorUuid = UUID.randomUUID();
+            UUID nonExistentFile = UUID.randomUUID();
+            /** 補上作者解析 mock，確保本測試真正走到 findById 回傳 empty 的 ifPresent no-op 路徑，
+             *  而非因作者解析失敗而在進入迴圈前就整段跳過。 */
+            stubArticleAuthor(articleUuid, authorUuid);
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
+            when(fileMetadataRepository.findById(nonExistentFile)).thenReturn(Optional.empty());
+
+            assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(nonExistentFile)))
+                    .doesNotThrowAnyException();
+
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /**
+         * CRITICAL 修復驗收 1（他人檔案不可被綁定）：
+         * 檔案 A 的 uploader 是 userX，文章 B 的作者是 userY → bindToArticle(B, [A]) 後，
+         * A 的 articleUuid 維持不變（未被改綁）。
+         */
+        @Test
+        @DisplayName("bindToArticle_whenFileOwnedByDifferentUser_doesNotBindAndLeavesArticleUuidUnchanged")
+        void bindToArticle_whenFileOwnedByDifferentUser_doesNotBindAndLeavesArticleUuidUnchanged() {
+            UUID articleB = UUID.randomUUID();
+            UUID userX = UUID.randomUUID();
+            UUID userY = UUID.randomUUID();
+            UUID fileA = UUID.randomUUID();
+
+            FileMetadata metadataA = new FileMetadata();
+            metadataA.setId(fileA);
+            metadataA.setUploaderId(userX);
+            metadataA.setArticleUuid(null);
+
+            stubArticleAuthor(articleB, userY);
+            when(fileMetadataRepository.findByArticleUuid(articleB)).thenReturn(List.of());
+            when(fileMetadataRepository.findById(fileA)).thenReturn(Optional.of(metadataA));
+
+            fileService.bindToArticle(articleB, List.of(fileA));
+
+            assertThat(metadataA.getArticleUuid()).isNull();
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /**
+         * CRITICAL 修復驗收 2（不可竊取他人已發布文章的圖）：
+         * 檔案 A 已綁定 userX 的文章 P，userY 的文章 Q 嘗試綁定 A → A 仍綁在 P。
+         */
+        @Test
+        @DisplayName("bindToArticle_whenAttackerTriesToStealAnotherArticlesFile_fileStaysWithOriginalArticle")
+        void bindToArticle_whenAttackerTriesToStealAnotherArticlesFile_fileStaysWithOriginalArticle() {
+            UUID articleP = UUID.randomUUID();
+            UUID articleQ = UUID.randomUUID();
+            UUID userX = UUID.randomUUID();
+            UUID userY = UUID.randomUUID();
+            UUID fileA = UUID.randomUUID();
+
+            FileMetadata metadataA = new FileMetadata();
+            metadataA.setId(fileA);
+            metadataA.setUploaderId(userX);
+            metadataA.setArticleUuid(articleP);
+
+            stubArticleAuthor(articleQ, userY);
+            when(fileMetadataRepository.findByArticleUuid(articleQ)).thenReturn(List.of());
+            when(fileMetadataRepository.findById(fileA)).thenReturn(Optional.of(metadataA));
+
+            fileService.bindToArticle(articleQ, List.of(fileA));
+
+            assertThat(metadataA.getArticleUuid()).isEqualTo(articleP);
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /** fail-safe：文章不存在 → 不綁定任何檔案、不拋錯 */
+        @Test
+        @DisplayName("bindToArticle_whenArticleNotFound_bindsNothingAndDoesNotThrow")
+        void bindToArticle_whenArticleNotFound_bindsNothingAndDoesNotThrow() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID fileA = UUID.randomUUID();
+            FileMetadata metadataA = new FileMetadata();
+            metadataA.setId(fileA);
+            metadataA.setUploaderId(UUID.randomUUID());
+
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
+            when(fileMetadataRepository.findById(fileA)).thenReturn(Optional.of(metadataA));
+
+            assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(fileA)))
+                    .doesNotThrowAnyException();
+
+            assertThat(metadataA.getArticleUuid()).isNull();
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /** fail-safe：文章存在但作者 UUID 無法解析（userFacade 查無）→ 不綁定任何檔案、不拋錯 */
+        @Test
+        @DisplayName("bindToArticle_whenAuthorUuidNotResolvable_bindsNothingAndDoesNotThrow")
+        void bindToArticle_whenAuthorUuidNotResolvable_bindsNothingAndDoesNotThrow() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID fileA = UUID.randomUUID();
+            FileMetadata metadataA = new FileMetadata();
+            metadataA.setId(fileA);
+            metadataA.setUploaderId(UUID.randomUUID());
+
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null)));
+            when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
+            when(fileMetadataRepository.findById(fileA)).thenReturn(Optional.of(metadataA));
+
+            assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(fileA)))
+                    .doesNotThrowAnyException();
+
+            assertThat(metadataA.getArticleUuid()).isNull();
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /**
+         * fail-safe 的真正含義：解析不到文章作者時「什麼都不動」，包含既有綁定。
+         *
+         * <p>原實作先跑解綁迴圈、再解析作者並於 null 時 return，等於在 articleLookupFacade
+         * 暫時查不到（文章剛被刪、或跨模組查詢瞬間失敗）時把該文章所有既有綁定清空且不會補回
+         * ——已發布文章的圖片全部退回「未綁定 = 私有」，讀者端整篇破圖。這正是 FileFacade
+         * javadoc 警告的「權限殘留反向問題」。上面兩個既有 fail-safe 測試把
+         * {@code findByArticleUuid} stub 成空清單，解綁迴圈是 no-op，因此測不到這條路徑。</p>
+         */
+        @Test
+        @DisplayName("bindToArticle_whenArticleNotFound_doesNotUnbindExistingFiles")
+        void bindToArticle_whenArticleNotFound_doesNotUnbindExistingFiles() {
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata alreadyBound = new FileMetadata();
+            alreadyBound.setId(UUID.randomUUID());
+            alreadyBound.setUploaderId(UUID.randomUUID());
+            alreadyBound.setArticleUuid(articleUuid);
+
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(alreadyBound));
+
+            assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(UUID.randomUUID())))
+                    .doesNotThrowAnyException();
+
+            assertThat(alreadyBound.getArticleUuid())
+                    .as("解析不到文章作者時不可解除既有綁定，否則已發布文章的圖片會全部變回私有")
+                    .isEqualTo(articleUuid);
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /** 同上，但失敗點在 userFacade（文章存在，但作者 internal id 解析不出 UUID） */
+        @Test
+        @DisplayName("bindToArticle_whenAuthorUuidNotResolvable_doesNotUnbindExistingFiles")
+        void bindToArticle_whenAuthorUuidNotResolvable_doesNotUnbindExistingFiles() {
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata alreadyBound = new FileMetadata();
+            alreadyBound.setId(UUID.randomUUID());
+            alreadyBound.setUploaderId(UUID.randomUUID());
+            alreadyBound.setArticleUuid(articleUuid);
+
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "PUBLISHED", null, null)));
+            when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(alreadyBound));
+
+            assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(UUID.randomUUID())))
+                    .doesNotThrowAnyException();
+
+            assertThat(alreadyBound.getArticleUuid()).isEqualTo(articleUuid);
+            verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
+        }
+
+        /**
+         * 對照組：明確傳空清單仍必須解除全部綁定（「完整替換」語意的合法用法），
+         * 此時不需要也不應該要求解析得到文章作者。確保上面的 fail-safe 修正
+         * 不會把「清空綁定」這條正常路徑一併擋掉。
+         */
+        @Test
+        @DisplayName("bindToArticle_withEmptyList_unbindsAllEvenWhenArticleNotFound")
+        void bindToArticle_withEmptyList_unbindsAllEvenWhenArticleNotFound() {
+            UUID articleUuid = UUID.randomUUID();
+            FileMetadata alreadyBound = new FileMetadata();
+            alreadyBound.setId(UUID.randomUUID());
+            alreadyBound.setUploaderId(UUID.randomUUID());
+            alreadyBound.setArticleUuid(articleUuid);
+
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(alreadyBound));
+
+            fileService.bindToArticle(articleUuid, List.of());
+
+            assertThat(alreadyBound.getArticleUuid()).isNull();
+            verify(fileMetadataRepository).save(alreadyBound);
+        }
+    }
+
+    /** B4：uploadFile 回傳相對路徑 URL（spec §3.1），不再回傳 MinIO 直連網址 */
+    @Nested
+    @DisplayName("uploadFile 相對路徑 URL 測試 (B4)")
+    class UploadFileRelativeUrlTests {
+
+        /**
+         * 驗證 uploadFile 回傳的 url 為相對路徑 {@code /api/v1/files/{id}/content}，
+         * 不再帶 MinIO endpoint host，避免換域名時內文全破（spec §3.1）。
+         * Red：目前實作組 {@code minioEndpoint + "/" + bucketName + "/" + storagePath}，此測試會失敗。
+         */
+        @Test
+        @DisplayName("uploadFile_returnsRelativePathUrl_notAbsoluteMinioUrl")
+        void uploadFile_returnsRelativePathUrl_notAbsoluteMinioUrl() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            assertThat(response.getUrl()).startsWith("/api/v1/files/");
+            assertThat(response.getUrl()).endsWith("/content");
+            assertThat(response.getUrl()).doesNotContain("http");
+            assertThat(response.getUrl()).contains(response.getId().toString());
+        }
+    }
+
+    /**
+     * B4：uploadFile 可選 articleUuid 參數 —— 有值即直接綁定；
+     * 刻意不透過 bindToArticle（完整替換語意），避免單檔上傳誤解除同文章其他既有綁定檔案。
+     */
+    @Nested
+    @DisplayName("uploadFile articleUuid 綁定測試 (B4)")
+    class UploadFileArticleUuidBindingTests {
+
+        /**
+         * 合法情境：uploaderId == 該文章作者 UUID → 正常直接綁定（MEDIUM 1 修復後仍需維持既有行為）。
+         */
+        @Test
+        @DisplayName("uploadFile_withArticleUuid_setsArticleUuidDirectlyWithoutTouchingOtherFiles")
+        void uploadFile_withArticleUuid_setsArticleUuidDirectlyWithoutTouchingOtherFiles() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            UUID articleUuid = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            Long authorInternalId = 200L;
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, authorInternalId, "DRAFT", null, null)));
+            when(userFacade.getUserUuidById(authorInternalId)).thenReturn(Optional.of(uploaderId));
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR", articleUuid);
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isEqualTo(articleUuid);
+            /**
+             * 關鍵防呆：bindToArticle 的「完整替換」語意會先呼叫 findByArticleUuid 找出
+             * 該文章目前已綁定、但不在新清單內的舊檔案並解除綁定。單檔上傳綁定若誤用
+             * bindToArticle(articleUuid, List.of(newFileId))，會把同文章所有既有檔案一併解除綁定。
+             * 因此本測試斷言 findByArticleUuid 完全不被呼叫，確保走的是「直接 set」而非 bindToArticle。
+             */
+            verify(fileMetadataRepository, never()).findByArticleUuid(any());
+        }
+
+        /**
+         * MEDIUM 1 修復驗收：articleUuid 對應的文章作者不是本次上傳者 → 忽略該參數，
+         * 存成 null（未綁定），不拋錯。
+         */
+        @Test
+        @DisplayName("uploadFile_withArticleUuidNotOwnedByRequester_savesWithNullArticleUuid")
+        void uploadFile_withArticleUuidNotOwnedByRequester_savesWithNullArticleUuid() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            UUID articleUuid = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            UUID actualAuthorUuid = UUID.randomUUID();
+            Long authorInternalId = 201L;
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, authorInternalId, "PUBLISHED", null, null)));
+            when(userFacade.getUserUuidById(authorInternalId)).thenReturn(Optional.of(actualAuthorUuid));
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR", articleUuid);
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isNull();
+        }
+
+        /**
+         * articleUuid 參數為 null（未指定綁定）→ 直接存 null，不涉及擁有權解析。
+         */
+        @Test
+        @DisplayName("uploadFile_withNullArticleUuidParam_savesWithNullArticleUuid")
+        void uploadFile_withNullArticleUuidParam_savesWithNullArticleUuid() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR", null);
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isNull();
+        }
+    }
+
+    /** B4：generatePresignedUrl —— 產生短效簽名網址供 /content 端點 302 導向使用 */
+    @Nested
+    @DisplayName("generatePresignedUrl 測試 (B4)")
+    class GeneratePresignedUrlTests {
+
+        /**
+         * 驗證使用 MinIO SDK getPresignedObjectUrl 以 GET 方法、5 分鐘（300 秒）效期產生簽名網址。
+         * Red：FileService 尚無此方法，編譯失敗。
+         */
+        @Test
+        @DisplayName("generatePresignedUrl_whenFileExists_callsMinioWithGetMethodAndFiveMinuteExpiry")
+        void generatePresignedUrl_whenFileExists_callsMinioWithGetMethodAndFiveMinuteExpiry() throws Exception {
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/test.jpg");
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
+                    .thenReturn("http://localhost:9000/test-bucket/articles/2024/01/01/test.jpg?X-Amz-Signature=abc");
+
+            String url = fileService.generatePresignedUrl(fileId);
+
+            assertThat(url).contains("X-Amz-Signature");
+            ArgumentCaptor<GetPresignedObjectUrlArgs> captor = ArgumentCaptor.forClass(GetPresignedObjectUrlArgs.class);
+            verify(minioClient).getPresignedObjectUrl(captor.capture());
+            GetPresignedObjectUrlArgs args = captor.getValue();
+            assertThat(args.method()).isEqualTo(Method.GET);
+            assertThat(args.bucket()).isEqualTo("test-bucket");
+            assertThat(args.object()).isEqualTo("articles/2024/01/01/test.jpg");
+            assertThat(args.expiry()).isEqualTo(300);
+        }
+
+        /**
+         * 檔案不存在時應拋出 BusinessException(FILE_NOT_FOUND)，讓 controller 能區分 404 vs 403。
+         * Red：方法不存在，編譯失敗。
+         */
+        @Test
+        @DisplayName("generatePresignedUrl_whenFileNotFound_throwsBusinessException")
+        void generatePresignedUrl_whenFileNotFound_throwsBusinessException() {
+            UUID fileId = UUID.randomUUID();
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> fileService.generatePresignedUrl(fileId))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(FileErrorCode.FILE_NOT_FOUND.getMessage());
         }
     }
 

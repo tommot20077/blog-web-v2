@@ -85,6 +85,18 @@ public class SecurityConfig {
                         // 公開的 GET 請求（文章、標籤、檔案元資料、分類、系列）
                         .requestMatchers(HttpMethod.GET, "/api/v1/articles/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
+                        /*
+                         * 檔案 GET 端點（含 /api/v1/files/{id} 元資料、/api/v1/files/{id}/content 內容代理）。
+                         *
+                         * 這裡的 permitAll 只代表「允許請求到達 Controller」，不代表資料本身公開！
+                         * /api/v1/files/{id}/content 的真正授權判斷在 FileService#canRead()
+                         * （依授權矩陣：AVATAR 與已發布文章圖片對匿名開放；草稿圖片與未綁定檔案
+                         * 僅上傳者與 ADMIN 可讀，見 docs/superpowers/specs/2026-07-26-file-access-control-design.md §4）。
+                         *
+                         * 護欄：日後絕不可因為看到這行 permitAll 就以為「檔案是公開端點」而移除或繞過
+                         * service 層的 canRead() 檢查——那等於讓草稿圖片對外洩漏，正是本次
+                         * 檔案存取控制（B4）要防止的漏洞。
+                         */
                         .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/categories/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/series/**").permitAll()

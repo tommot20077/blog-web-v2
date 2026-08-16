@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.file.controller;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.file.TestFileApplication;
@@ -107,6 +108,13 @@ class FileUploadQuotaIT {
 
     @MockitoBean
     private UserFacade userFacade;
+
+    /**
+     * Mock ArticleLookupFacade（FileServiceImpl.canRead 依賴；article 模組實作未在本 IT 的
+     * scanBasePackages 內，須 mock 避免 context 啟動失敗）
+     */
+    @MockitoBean
+    private ArticleLookupFacade articleLookupFacade;
 
     private static final Long AUTHOR_ID = 1L;
     private static final UUID AUTHOR_UUID = UUID.randomUUID();

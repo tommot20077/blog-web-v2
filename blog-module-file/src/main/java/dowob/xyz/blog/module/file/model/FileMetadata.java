@@ -49,7 +49,14 @@ public class FileMetadata implements Persistable<UUID> {
 
     /**
      * MinIO 儲存路徑
+     *
+     * <p>
+     * 內部儲存細節（MinIO object key），不對外序列化（{@code @JsonIgnore}）：
+     * 即使讀取端已通過 {@code canRead} 授權，仍不應洩漏內部儲存拓撲
+     * （見安全複審 B-review MEDIUM 2 / ai-docs/backlog M10）。
+     * </p>
      */
+    @JsonIgnore
     @Column("storage_path")
     private String storagePath;
 
@@ -97,6 +104,17 @@ public class FileMetadata implements Persistable<UUID> {
      */
     @Column("created_at")
     private LocalDateTime createdAt;
+
+    /**
+     * 綁定的文章 UUID（nullable，對應 articles.uuid，無 FK）
+     *
+     * <p>
+     * null 代表尚未綁定任何文章，屬 fail-safe 預設：僅上傳者與 ADMIN 可讀，
+     * 避免新文章尚未儲存時上傳的圖片意外對外公開（見 V20 migration 註解）。
+     * </p>
+     */
+    @Column("article_uuid")
+    private UUID articleUuid;
 
     /**
      * 判斷此實體是否為新實體（尚未寫入資料庫）。

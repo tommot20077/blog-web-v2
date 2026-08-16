@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.version.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
@@ -96,6 +97,8 @@ class VersionControllerIT {
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
     @MockitoBean private SeriesFacade seriesFacade;
+    /** article 模組的 ArticleFileBinder 依賴 FileFacade，其實作在 blog-module-file（未被本測試 scan） */
+    @MockitoBean private FileFacade fileFacade;
 
     private static final Long USER1_ID = 1L;
     private static final Long USER2_ID = 2L;

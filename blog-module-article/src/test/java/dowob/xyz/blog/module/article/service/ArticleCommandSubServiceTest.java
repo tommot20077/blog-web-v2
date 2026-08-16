@@ -7,6 +7,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
+import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
@@ -74,6 +75,9 @@ class ArticleCommandSubServiceTest {
 
     @Mock
     private TagFacade tagFacade;
+
+    @Mock
+    private FileFacade fileFacade;
 
     @Mock
     private ArticleMarkdownRenderer markdownRenderer;
@@ -144,6 +148,14 @@ class ArticleCommandSubServiceTest {
             return null;
         }).when(transactionTemplate).executeWithoutResult(any());
 
+        /**
+         * ArticleFileBinder 抽出後，ArticleCommandSubService 改依賴 ArticleFileBinder
+         * 而非直接依賴 FileFacade。這裡用「真實」的 ArticleFileBinder 包裝被 mock 的
+         * fileFacade，讓既有 FileBindingTests 的 verify(fileFacade)... 斷言不必修改就能
+         * 繼續通過——正則擷取與 try/catch 邏輯真的被執行，只是最終外部呼叫落在 mock 上。
+         */
+        ArticleFileBinder articleFileBinder = new ArticleFileBinder(fileFacade);
+
         objectMapper = new ObjectMapper();
         articleTocCodec = new ArticleTocCodec(objectMapper);
 
@@ -154,6 +166,7 @@ class ArticleCommandSubServiceTest {
                 categoryMapper,
                 categoryRepository,
                 tagFacade,
+                articleFileBinder,
                 markdownRenderer,
                 transactionTemplate,
                 entityFinder,
@@ -1772,6 +1785,198 @@ class ArticleCommandSubServiceTest {
             commandSubService.updateSeriesAssignment(1L, 10L, 2);
 
             verify(articleRepository, never()).save(any());
+        }
+    }
+
+    /**
+     * 檔案綁定回填測試（Task B6）
+     *
+     * <p>
+     * 文章 create/update 完成後，掃描 content 中出現的 {@code /api/v1/files/{uuid}/content}
+     * 連結，透過 FileFacade 將完整檔案清單回填綁定至該文章。
+     * </p>
+     *
+     * <p><strong>邊界分析場景表</strong></p>
+     * <pre>
+     * # | 情境                               | 輸入                                    | 預期行為
+     * 1 | 建立文章，內文含 3 張圖            | content 含 3 個不同檔案連結             | bindFilesToArticle 以 3 個 uuid 呼叫一次
+     * 2 | update 後內文只剩 1 張              | content 只剩 1 個連結                   | 以該 1 個 uuid 呼叫（完整替換語意交給 facade 解除舊綁定）
+     * 3 | 內文無圖                            | content 不含任何檔案連結                | 以空清單呼叫（不是不呼叫）
+     * 4 | 內文含格式錯誤 uuid                | not-a-uuid + 1 個正常連結               | 不拋錯，只綁定正常那個
+     * 5 | 同一張圖在內文出現兩次              | content 含相同 uuid 兩次                | 去重後只傳一個
+     * 6 | facade 拋例外（create）             | bindFilesToArticle 丟 RuntimeException  | createArticle 仍正常回傳
+     * 6'| facade 拋例外（update）             | bindFilesToArticle 丟 RuntimeException  | updateArticle 仍正常回傳
+     * 7 | updateArticle 未更新 content（僅改標題）| request.content 為 null              | 掃描既有 article.content，仍呼叫 facade
+     * </pre>
+     */
+    @Nested
+    @DisplayName("檔案綁定回填 (FileFacade.bindFilesToArticle)")
+    class FileBindingTests {
+
+        @Test
+        @DisplayName("正常：建立文章，內文含 3 張圖 → 以 3 個 uuid 呼叫 facade 一次")
+        void createArticle_contentWithThreeImages_bindsAllThreeFileUuids() {
+            UUID fileId1 = UUID.randomUUID();
+            UUID fileId2 = UUID.randomUUID();
+            UUID fileId3 = UUID.randomUUID();
+            String content = "![a](/api/v1/files/" + fileId1 + "/content)\n"
+                    + "文字\n"
+                    + "![b](/api/v1/files/" + fileId2 + "/content)\n"
+                    + "![c](/api/v1/files/" + fileId3 + "/content)";
+
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("含三張圖的文章");
+            request.setContent(content);
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            saved.setContent(content);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            commandSubService.createArticle(AUTHOR_ID, request);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
+            verify(fileFacade).bindFilesToArticle(eq(ARTICLE_UUID), captor.capture());
+            assertThat(captor.getValue()).containsExactlyInAnyOrder(fileId1, fileId2, fileId3);
+        }
+
+        @Test
+        @DisplayName("正常：update 後內文只剩 1 張圖 → 以該 1 個 uuid 呼叫（驗證完整替換語意交給 facade 解除舊綁定）")
+        void updateArticle_contentReducedToOneImage_bindsOnlyRemainingFileUuid() {
+            UUID keptFileId = UUID.randomUUID();
+            UUID removedFileId = UUID.randomUUID();
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setContent("![old1](/api/v1/files/" + keptFileId + "/content)\n"
+                    + "![old2](/api/v1/files/" + removedFileId + "/content)");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            String newContent = "![kept](/api/v1/files/" + keptFileId + "/content)";
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setContent(newContent);
+
+            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
+            verify(fileFacade).bindFilesToArticle(eq(ARTICLE_UUID), captor.capture());
+            assertThat(captor.getValue()).containsExactly(keptFileId);
+        }
+
+        @Test
+        @DisplayName("邊界：內文無圖 → 以空清單呼叫 facade（而非不呼叫）")
+        void createArticle_contentWithoutImages_bindsEmptyList() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("無圖文章");
+            request.setContent("純文字內容，沒有任何圖片連結");
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            saved.setContent("純文字內容，沒有任何圖片連結");
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            commandSubService.createArticle(AUTHOR_ID, request);
+
+            verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of());
+        }
+
+        @Test
+        @DisplayName("穩健性：內文含格式錯誤的 uuid → 不拋錯，其餘正常綁定")
+        void createArticle_contentWithMalformedUuid_skipsSilentlyAndBindsRest() {
+            UUID validFileId = UUID.randomUUID();
+            String content = "![bad](/api/v1/files/not-a-uuid/content)\n"
+                    + "![good](/api/v1/files/" + validFileId + "/content)";
+
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("含壞連結的文章");
+            request.setContent(content);
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            saved.setContent(content);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_ID, request);
+
+            assertThat(response).isNotNull();
+            verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of(validFileId));
+        }
+
+        @Test
+        @DisplayName("穩健性：同一張圖在內文出現兩次 → 去重，只傳一個")
+        void createArticle_sameFileUuidAppearsTwice_dedupesBeforeBind() {
+            UUID fileId = UUID.randomUUID();
+            String content = "![first](/api/v1/files/" + fileId + "/content)\n"
+                    + "重複貼了一次\n"
+                    + "![second](/api/v1/files/" + fileId + "/content)";
+
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("重複圖片的文章");
+            request.setContent(content);
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            saved.setContent(content);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+
+            commandSubService.createArticle(AUTHOR_ID, request);
+
+            verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of(fileId));
+        }
+
+        @Test
+        @DisplayName("穩健性：facade 拋例外 → 文章建立仍成功（不往外拋）")
+        void createArticle_fileFacadeThrows_articleSaveStillSucceeds() {
+            UUID fileId = UUID.randomUUID();
+            String content = "![img](/api/v1/files/" + fileId + "/content)";
+
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("facade 失敗的文章");
+            request.setContent(content);
+
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            saved.setContent(content);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+            doThrow(new RuntimeException("file service 掛了"))
+                    .when(fileFacade).bindFilesToArticle(any(), any());
+
+            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_ID, request);
+
+            assertThat(response).isNotNull();
+            assertThat(response.getUuid()).isEqualTo(ARTICLE_UUID);
+        }
+
+        @Test
+        @DisplayName("穩健性：updateArticle 時 facade 拋例外 → 更新仍成功回傳")
+        void updateArticle_fileFacadeThrows_updateStillSucceeds() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setContent("![img](/api/v1/files/" + UUID.randomUUID() + "/content)");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            doThrow(new RuntimeException("file service 掛了"))
+                    .when(fileFacade).bindFilesToArticle(any(), any());
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("更新標題但 facade 會失敗");
+
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            assertThat(response).isNotNull();
+        }
+
+        @Test
+        @DisplayName("邊界：updateArticle 未更新 content（title-only）→ 仍以既有 content 掃描並呼叫 facade")
+        void updateArticle_titleOnlyUpdate_scansExistingContentAndBinds() {
+            UUID existingFileId = UUID.randomUUID();
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setContent("![existing](/api/v1/files/" + existingFileId + "/content)");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("只改標題");
+            /** content 為 null，代表不更新內文 */
+
+            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of(existingFileId));
         }
     }
 

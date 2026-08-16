@@ -375,12 +375,14 @@ PRIMARY KEY (user_id, tag_id)
 | has_thumbnail | BOOLEAN | NOT NULL DEFAULT FALSE | |
 | uploader_id | UUID | NOT NULL | 對應 users.uuid |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+| article_uuid | UUID | NULL | V20 新增。對應 articles.uuid；NULL = 未綁定（私有，僅上傳者與 ADMIN 可讀，fail-safe）；刻意不設 FK（跨模組邊界，與 cover_image_url 用字串的既有取捨一致） |
 
 **Indexes:**
 - `file_metadata_pkey`（auto）on id
 - `idx_file_metadata_uploader_id`（V8）on uploader_id
+- `idx_file_metadata_article_uuid`（V20）on article_uuid
 
-**Foreign keys:** 無（uploader_id 為 UUID，邏輯上對應 users.uuid，但無 FK constraint）
+**Foreign keys:** 無（uploader_id 為 UUID，邏輯上對應 users.uuid，但無 FK constraint；article_uuid 同理，邏輯上對應 articles.uuid，亦無 FK constraint）
 
 ---
 
@@ -571,6 +573,8 @@ PRIMARY KEY (user_id, tag_id)
 | **V17** | 新建 `processed_events` 表（MQ event 冪等記錄）|
 | **V18** | `users` 新增 `location VARCHAR(100)`（nullable）+ 5 個通知偏好 `notification_comment/like/review/follow/newsletter BOOLEAN NOT NULL DEFAULT TRUE`（設定頁面後端持久化） |
 | **V19** | `articles` 新增 `toc TEXT`（nullable，無 DEFAULT；章節導覽 JSON，由渲染器於 create/update 重算） |
+| **V20** | `file_metadata` 新增 `article_uuid UUID`（nullable，未綁定=私有）+ `idx_file_metadata_article_uuid`；刻意不設 FK（跨模組邊界，檔案存取控制地基） |
+| **V21** | 資料遷移（無 schema 變更）：把 `articles.content_md` / `content_html` 內殘留的 MinIO 絕對網址改寫為 `/api/v1/files/{id}/content`，並依「上傳者==作者」回填 `file_metadata.article_uuid`；解決 V20 之前寫入的內容繞過 `canRead` 授權（bucket 私有時破圖、公開時等同無授權）的問題。冪等 |
 
 ---
 

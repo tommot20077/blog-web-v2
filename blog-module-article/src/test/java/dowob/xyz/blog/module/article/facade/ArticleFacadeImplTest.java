@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.facade;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
+import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
@@ -20,12 +21,14 @@ import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
+import dowob.xyz.blog.module.article.service.ArticleFileBinder;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -42,6 +45,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -82,6 +86,9 @@ class ArticleFacadeImplTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
+    @Mock
+    private FileFacade fileFacade;
+
     private ArticleFacadeImpl facade;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
@@ -89,9 +96,17 @@ class ArticleFacadeImplTest {
 
     @BeforeEach
     void setUp() {
+        /**
+         * 比照 ArticleCommandSubServiceTest：用「真實」的 ArticleFileBinder 包裝被 mock 的
+         * fileFacade，讓 applyRestoreContent 綁定回填測試能驗證到真正的正則擷取邏輯，
+         * 而不只是 mock-to-mock 的空殼呼叫。
+         */
+        ArticleFileBinder articleFileBinder = new ArticleFileBinder(fileFacade);
+
         facade = new ArticleFacadeImpl(
             articleMapper, userFacade, recommendMapper, articleService,
-            articleRepository, tagFacade, articleEventPublisher, transactionTemplate
+            articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
+            articleFileBinder
         );
 
         /** 讓 mock 的 TransactionTemplate 直接執行 callback，使受測方法主體照常運行 */
@@ -668,7 +683,7 @@ class ArticleFacadeImplTest {
                 .isEqualTo("A0201");
 
             verify(articleRepository, never()).save(any(Article.class));
-            verifyNoInteractions(tagFacade, articleEventPublisher);
+            verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
         }
 
         @Test
@@ -776,6 +791,99 @@ class ArticleFacadeImplTest {
             inOrder.verify(tagFacade).syncArticleTags(eq(articleUuid), anyList());
             inOrder.verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
             inOrder.verify(articleEventPublisher).publishUpdated(existing);
+        }
+
+        /**
+         * 修復：版本還原路徑繞過檔案綁定掃描，導致還原後文章圖片破圖。
+         *
+         * <p><strong>邊界分析場景表</strong></p>
+         * <pre>
+         * # | 情境                                   | 輸入                                  | 預期行為
+         * 1 | 還原內容含 2 張圖                       | saved.getContent() 含 2 個檔案連結     | bindFilesToArticle 以這 2 個 uuid 呼叫一次
+         *   |（且必須掃描 DB 實際存下的內容，而非 data.content()，防部分更新時漏字）|            |
+         * 2 | 還原內容無圖                             | saved.getContent() 不含任何檔案連結    | 以空清單呼叫（解除該文章既有綁定，正確行為）
+         * 3 | 綁定失敗（facade 拋例外）                 | bindFilesToArticle 丟 RuntimeException | 還原仍成功，不往外拋
+         * 4 | 呼叫順序                                 | -                                     | save → publish events → bindFilesToArticleSafely（DB commit 後才對外呼叫）
+         * 5 | article 不存在                          | -（見上方 applyRestoreContent_articleNotFound_throws） | 完全不觸發 fileFacade（verifyNoInteractions 已含 fileFacade）
+         * </pre>
+         */
+        @Nested
+        @DisplayName("檔案綁定回填（修復：版本還原繞過檔案綁定掃描）")
+        class RestoreFileBindingTests {
+
+            @Test
+            @DisplayName("正常：還原內容含 2 張圖 → 以還原後實際內容（saved.getContent()，非 data.content()）呼叫綁定一次")
+            void applyRestoreContent_contentWithTwoImages_bindsFileUuidsFromPersistedContent() {
+                UUID fileId1 = UUID.randomUUID();
+                UUID fileId2 = UUID.randomUUID();
+                String persistedContent = "![a](/api/v1/files/" + fileId1 + "/content)\n"
+                        + "![b](/api/v1/files/" + fileId2 + "/content)";
+
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "data.content() 不應被拿來掃描的內容", "sum", null,
+                        "DRAFT", "<p>c</p>", "[]", List.of());
+
+                /**
+                 * 模擬 repository.save() 回傳的 entity 內容與 data.content() 不同：
+                 * 綁定必須掃描 save() 回傳（DB 實際存下）的內容，而非呼叫端傳入的 data.content()，
+                 * 才能防禦「將來此路徑改成部分更新」時掃到不完整內容。
+                 */
+                when(articleRepository.save(any(Article.class))).thenAnswer(inv -> {
+                    Article a = inv.getArgument(0);
+                    a.setContent(persistedContent);
+                    return a;
+                });
+
+                facade.applyRestoreContent(articleId, data);
+
+                @SuppressWarnings("unchecked")
+                ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
+                verify(fileFacade).bindFilesToArticle(eq(articleUuid), captor.capture());
+                assertThat(captor.getValue()).containsExactlyInAnyOrder(fileId1, fileId2);
+            }
+
+            @Test
+            @DisplayName("邊界：還原內容無圖 → 以空清單呼叫綁定（解除該文章既有綁定，正確行為）")
+            void applyRestoreContent_contentWithoutImages_bindsEmptyList() {
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "純文字內容，沒有任何圖片連結", "sum", null,
+                        "DRAFT", "<p>c</p>", "[]", List.of());
+
+                facade.applyRestoreContent(articleId, data);
+
+                verify(fileFacade).bindFilesToArticle(articleUuid, List.of());
+            }
+
+            @Test
+            @DisplayName("穩健性：檔案綁定失敗 → 還原仍成功，不往外拋")
+            void applyRestoreContent_fileBindingThrows_restoreStillSucceeds() {
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "![img](/api/v1/files/" + UUID.randomUUID() + "/content)",
+                        "sum", null, "DRAFT", "<p>c</p>", "[]", List.of());
+                doThrow(new RuntimeException("file service 掛了"))
+                        .when(fileFacade).bindFilesToArticle(any(), any());
+
+                assertThatCode(() -> facade.applyRestoreContent(articleId, data))
+                        .doesNotThrowAnyException();
+
+                verify(articleRepository).save(existing);
+                assertThat(existing.getContent()).isNotBlank();
+            }
+
+            @Test
+            @DisplayName("順序：save → publish events → bindFilesToArticleSafely（DB commit 後才對外呼叫綁定）")
+            void applyRestoreContent_invocationOrder_saveThenPublishThenBind() {
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", "[]", List.of());
+
+                facade.applyRestoreContent(articleId, data);
+
+                InOrder inOrder = inOrder(articleRepository, articleEventPublisher, fileFacade);
+                inOrder.verify(articleRepository).save(existing);
+                inOrder.verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
+                inOrder.verify(articleEventPublisher).publishUpdated(existing);
+                inOrder.verify(fileFacade).bindFilesToArticle(eq(articleUuid), anyList());
+            }
         }
     }
 }

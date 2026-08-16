@@ -22,6 +22,7 @@ import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
+import dowob.xyz.blog.module.article.service.ArticleFileBinder;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.article.service.ArticleTocCodec;
 import lombok.RequiredArgsConstructor;
@@ -92,6 +93,18 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * Spring 宣告式事務模板（用於縮小事務範圍，確保 MQ 於 DB commit 後才發送）
      */
     private final TransactionTemplate transactionTemplate;
+
+    /**
+     * 文章「檔案 → 文章」綁定回填元件（修復：版本還原路徑繞過檔案綁定掃描導致還原後圖片破圖）
+     *
+     * <p>
+     * 比照 {@code ArticleCommandSubService} create/update 路徑（Task B6）：
+     * applyRestoreContent 會改動 article.content，因此還原後也必須重新掃描並回填「檔案 → 文章」
+     * 綁定，否則還原後內文引用的圖仍停在未綁定 = 私有（fail-safe），已發布文章會破圖；
+     * 而還原前內容引用、還原後不再引用的圖，其舊綁定也不會被解除（權限殘留）。
+     * </p>
+     */
+    private final ArticleFileBinder articleFileBinder;
 
     /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
@@ -387,6 +400,18 @@ public class ArticleFacadeImpl implements ArticleFacade {
      *
      * <p>重要：syncArticleTags 必須在 publish events 之前完成，
      * 確保 search index update consumer 拿到的 tags 已是最新狀態。</p>
+     *
+     * <p>
+     * <strong>檔案綁定回填（修復：還原後圖片破圖）</strong>：DB commit 後，比照
+     * {@code ArticleCommandSubService}（Task B6）另呼叫 {@link ArticleFileBinder#bindFilesToArticleSafely}，
+     * 掃描的是 {@code saved.getContent()}（DB 實際存下的那份），而非 {@code data.content()}——
+     * 避免將來若此路徑改成部分更新時，掃到不完整的內容。此呼叫與事件發送一樣是
+     * best-effort：{@code ArticleFileBinder} 內部已吞掉並記錄失敗，不會讓還原流程失敗。
+     * 呼叫時機同樣在 transactionTemplate.execute 回傳（即本方法自身交易已 commit）之後，
+     * 且 {@code VersioningService.restore} 本身並非 {@code @Transactional}
+     * （見 ai-docs/backlog/2026-07-14-full-review-findings.md §C2 補充），
+     * 故此處確實是「外層無交易」情境下的真實 post-commit。
+     * </p>
      */
     @Override
     public void applyRestoreContent(Long articleId, ArticleRestoreData data) {
@@ -425,6 +450,9 @@ public class ArticleFacadeImpl implements ArticleFacade {
         if (saved.getStatus() == ArticleStatus.PUBLISHED) {
             articleEventPublisher.publishUpdated(saved);
         }
+
+        /** DB 已 commit，best-effort 回填「檔案 → 文章」綁定：掃描 saved.getContent()（DB 實際存下的內容） */
+        articleFileBinder.bindFilesToArticleSafely(saved.getUuid(), saved.getContent());
     }
 
     /**

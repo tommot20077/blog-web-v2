@@ -2,8 +2,11 @@ package dowob.xyz.blog.module.file.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.TestFileApplication;
+import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
@@ -12,6 +15,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -19,6 +23,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -28,7 +33,9 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -40,11 +47,18 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.containsString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -118,9 +132,13 @@ class FileControllerIT {
     private ObjectMapper objectMapper;
 
     /**
-     * 檔案元資料 Repository（用於測試清理）
+     * 檔案元資料 Repository（用於測試清理，並以 spy 計數 DB 查詢次數）
+     *
+     * <p>用 {@link MockitoSpyBean} 而非 {@link Autowired}：spy 會委派真實實作，
+     * 既有的清理用途不受影響，另可 verify {@code findById} 的呼叫次數——
+     * 內文圖片是熱路徑（一頁十張圖就是十個請求），每個請求查幾次 DB 必須釘住。</p>
      */
-    @Autowired
+    @MockitoSpyBean
     private FileMetadataRepository fileMetadataRepository;
 
     /**
@@ -152,6 +170,13 @@ class FileControllerIT {
      */
     @MockitoBean
     private UserFacade userFacade;
+
+    /**
+     * Mock ArticleLookupFacade（FileServiceImpl.canRead 依賴，判斷已綁定文章是否已發布；
+     * article 模組實作未在本 IT 的 scanBasePackages 內，須 mock 避免 context 啟動失敗）
+     */
+    @MockitoBean
+    private ArticleLookupFacade articleLookupFacade;
 
     /**
      * 測試用使用者 A 的內部 ID
@@ -394,8 +419,13 @@ class FileControllerIT {
                 .andExpect(jsonPath("$.code").value("00000"));
     }
 
+    /**
+     * MEDIUM 2 修復：本端點現套用 canRead 授權矩陣。此檔案為未綁定任何文章的
+     * ARTICLE_CONTENT（草稿態），故須以上傳者本人身分查詢才會通過；修復前這裡是匿名呼叫，
+     * 等同驗證了「任何人皆可查詢他人草稿檔案 metadata」的漏洞行為，現已調整為合法情境（擁有者本人）。
+     */
     @Test
-    @DisplayName("GET /api/v1/files/{id} - 取得已上傳檔案的元資料，應回傳 00000 且 data.id 不為 null")
+    @DisplayName("GET /api/v1/files/{id} - 擁有者本人取得已上傳檔案的元資料，應回傳 00000 且 data.id 不為 null")
     void getFileMetadata_existingFile_returns200() throws Exception {
         MockMultipartFile file = createTestJpeg();
 
@@ -409,10 +439,108 @@ class FileControllerIT {
 
         String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
 
+        mockMvc.perform(get("/api/v1/files/" + fileId)
+                .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.id").value(fileId));
+    }
+
+    /**
+     * MEDIUM 2 修復驗收：未綁定任何文章的草稿檔案（ARTICLE_CONTENT），匿名查詢 metadata
+     * 應被 canRead 拒絕（HTTP 403 + A0405），而非修復前的「完全不受授權矩陣約束」。
+     */
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - 匿名查詢他人未綁定草稿檔案的元資料，應回傳 HTTP 403")
+    void getFileMetadata_unboundDraftFile_anonymous_returns403() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "ARTICLE_CONTENT")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
+        mockMvc.perform(get("/api/v1/files/" + fileId))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("A0405"));
+    }
+
+    /**
+     * MEDIUM 2 迴歸驗證：canRead 規則1（AVATAR 對匿名開放）套用到 metadata 端點後，
+     * 公開情境（頭像）不受此次修復影響，匿名仍可查詢。
+     */
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - AVATAR 檔案，匿名查詢元資料應回傳 00000")
+    void getFileMetadata_avatarUsageType_anonymous_returns200() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "AVATAR")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
         mockMvc.perform(get("/api/v1/files/" + fileId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.id").value(fileId));
+    }
+
+    /**
+     * MEDIUM 2 迴歸驗證：ADMIN 不受擁有權限制，仍可查詢任何檔案的 metadata。
+     */
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - ADMIN 查詢他人未綁定草稿檔案的元資料，應回傳 00000")
+    void getFileMetadata_unboundDraftFile_admin_returns200() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "ARTICLE_CONTENT")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
+        mockMvc.perform(get("/api/v1/files/" + fileId)
+                        .with(asUser(USER_B_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    /**
+     * MEDIUM 2：metadata 回應不應洩漏內部儲存細節 storagePath（FileMetadata 已加 @JsonIgnore）。
+     */
+    @Test
+    @DisplayName("GET /api/v1/files/{id} - 回應 JSON 不應包含 storagePath 欄位")
+    void getFileMetadata_response_doesNotExposeStoragePath() throws Exception {
+        MockMultipartFile file = createTestJpeg();
+
+        String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                .file(file)
+                .param("usageType", "ARTICLE_CONTENT")
+                .with(asUser(USER_A_ID, Role.AUTHOR))
+                .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String fileId = objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+
+        mockMvc.perform(get("/api/v1/files/" + fileId)
+                        .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.storagePath").doesNotExist());
     }
 
     @Test
@@ -498,5 +626,213 @@ class FileControllerIT {
                 usageTypeProp.isMissingNode(),
                 "usageType 必須出現在 multipart/form-data requestBody schema 的 properties"
         );
+    }
+
+    /**
+     * B4：GET /api/v1/files/{id}/content 授權矩陣測試（spec §4/§9）。
+     *
+     * <p>
+     * 場景涵蓋：AVATAR 匿名可讀、已綁定 PUBLISHED 匿名可讀、已綁定 DRAFT（匿名/他人拒絕，
+     * 上傳者/ADMIN 允許）、未綁定 fail-safe（匿名拒絕，上傳者允許）、檔案不存在 404、
+     * 以及回應必須是 302 + Location（絕不可回傳圖片位元組）。
+     * Red：此端點目前不存在，GET 會落到 Spring 預設 404，下列非 404 期待的斷言會全部失敗。
+     * </p>
+     */
+    @Nested
+    @DisplayName("GET /api/v1/files/{id}/content 授權矩陣測試 (B4)")
+    class FileContentEndpointTests {
+
+        /**
+         * 以指定角色上傳一個測試檔案，可選擇性帶 articleUuid 一併綁定，回傳新檔案的 UUID 字串。
+         *
+         * <p>
+         * MEDIUM 1 修復後的測試資料調整：下方各測試以 {@code new ArticleData(1L, articleUuid,
+         * USER_A_ID, ...)} 宣告 articleUuid 對應文章的作者為 {@code USER_A_ID}——因為
+         * {@code uploadAndGetFileId} 呼叫時的上傳者也是 {@code USER_A_ID}，兩者必須一致，
+         * 否則 {@code uploadFile} 新增的擁有權檢查（僅本人文章才接受 articleUuid）會使 metadata
+         * 存成未綁定（null），導致這些測試原本要驗證的「已綁定 PUBLISHED/DRAFT 文章」情境失真。
+         * 修復前這裡曾寫死不相關的 {@code 99L}，因為當時 uploadFile 不檢查擁有權，authorId
+         * 是誰並不影響上傳綁定是否成功。
+         * </p>
+         */
+        private String uploadAndGetFileId(UsageType usageType, Long uploaderInternalId, Role role, UUID articleUuid) throws Exception {
+            MockMultipartFile file = createTestJpeg();
+            var builder = multipart("/api/v1/files/upload")
+                    .file(file)
+                    .param("usageType", usageType.name());
+            if (articleUuid != null) {
+                builder.param("articleUuid", articleUuid.toString());
+            }
+            String uploadResponse = mockMvc.perform(builder
+                            .with(asUser(uploaderInternalId, role))
+                            .contentType(MediaType.MULTIPART_FORM_DATA))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            return objectMapper.readTree(uploadResponse).path("data").path("id").asText();
+        }
+
+        @Test
+        @DisplayName("規則1：AVATAR 檔案，匿名存取 → 302 導向 presigned URL")
+        void getFileContent_avatarUsageType_anonymous_returns302() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+
+            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound())
+                    .andReturn();
+
+            String location = result.getResponse().getHeader("Location");
+            assertThat(location).isNotBlank();
+            assertThat(location).contains("X-Amz-Signature");
+        }
+
+        @Test
+        @DisplayName("規則2：已綁定 PUBLISHED 文章的檔案，匿名存取 → 302")
+        void getFileContent_boundToPublishedArticle_anonymous_returns302() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, USER_A_ID, "PUBLISHED", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound())
+                    .andExpect(header().exists("Location"));
+        }
+
+        @Test
+        @DisplayName("規則2 反例：已綁定 DRAFT 文章的檔案，匿名存取 → 403")
+        void getFileContent_boundToDraftArticle_anonymous_returns403() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("已綁定 DRAFT 文章的檔案，非上傳者存取 → 403")
+        void getFileContent_boundToDraftArticle_nonUploader_returns403() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_B_ID, Role.AUTHOR)))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("已綁定 DRAFT 文章的檔案，上傳者本人存取 → 302")
+        void getFileContent_boundToDraftArticle_uploader_returns302() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_A_ID, Role.AUTHOR)))
+                    .andExpect(status().isFound())
+                    .andExpect(header().exists("Location"));
+        }
+
+        @Test
+        @DisplayName("已綁定 DRAFT 文章的檔案，ADMIN 存取 → 302")
+        void getFileContent_boundToDraftArticle_admin_returns302() throws Exception {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_B_ID, Role.ADMIN)))
+                    .andExpect(status().isFound())
+                    .andExpect(header().exists("Location"));
+        }
+
+        @Test
+        @DisplayName("fail-safe：未綁定任何文章的檔案，匿名存取 → 403")
+        void getFileContent_unbound_anonymous_returns403() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, null);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("未綁定任何文章的檔案，上傳者本人存取 → 302")
+        void getFileContent_unbound_uploader_returns302() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, null);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_A_ID, Role.AUTHOR)))
+                    .andExpect(status().isFound());
+        }
+
+        @Test
+        @DisplayName("效能：單次 /content 請求只查一次 file_metadata（原本 canRead 與 presign 各查一次）")
+        void getFileContent_authorized_queriesMetadataOnlyOnce() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+            UUID fileUuid = UUID.fromString(fileId);
+            /** 上傳流程本身也會碰 repository，從這裡開始重新計數 */
+            clearInvocations(fileMetadataRepository);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound());
+
+            verify(fileMetadataRepository, times(1)).findById(fileUuid);
+        }
+
+        @Test
+        @DisplayName("快取：302 需帶 private 且短於 presign 效期的 Cache-Control，避免中間層共用他人網址")
+        void getFileContent_setsPrivateCacheControlShorterThanPresignExpiry() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL,
+                            allOf(containsString("private"), containsString("max-age=240"))));
+        }
+
+        @Test
+        @DisplayName("檔案不存在 → 404")
+        void getFileContent_fileNotFound_returns404() throws Exception {
+            mockMvc.perform(get("/api/v1/files/" + UUID.randomUUID() + "/content"))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("回應必須是 302 + 有效 Location，絕不可回傳圖片位元組")
+        void getFileContent_response_isRedirectNotBytes() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+
+            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isFound())
+                    .andReturn();
+
+            String location = result.getResponse().getHeader("Location");
+            assertThat(location).isNotBlank();
+            /** 302 導向回應不應帶圖片 body：Content-Type 不應為圖片類型 */
+            assertThat(result.getResponse().getContentType()).isNotEqualTo(MediaType.IMAGE_JPEG_VALUE);
+        }
+
+        @Test
+        @DisplayName("uploadFile 回傳的 url 為相對路徑（以 /api/v1/files/ 開頭，不含 http）")
+        void uploadFile_returnsRelativePathUrl() throws Exception {
+            MockMultipartFile file = createTestJpeg();
+
+            String uploadResponse = mockMvc.perform(multipart("/api/v1/files/upload")
+                            .file(file)
+                            .param("usageType", "ARTICLE_CONTENT")
+                            .with(asUser(USER_A_ID, Role.AUTHOR))
+                            .contentType(MediaType.MULTIPART_FORM_DATA))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+
+            String url = objectMapper.readTree(uploadResponse).path("data").path("url").asText();
+            assertThat(url).startsWith("/api/v1/files/");
+            assertThat(url).doesNotContain("http");
+        }
     }
 }
