@@ -18,9 +18,11 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -165,6 +167,8 @@ public class ArticleMarkdownRenderer {
         List<TocEntry> toc = new ArrayList<>();
         Map<Node, String> headingIds = new IdentityHashMap<>();
         Map<String, Integer> idCounts = new HashMap<>();
+        /* 已實際產出的 id：保證最終 id 全篇唯一（序號 id 可能撞上別的標題的天然 slug） */
+        Set<String> usedIds = new HashSet<>();
         for (Node node : doc.getDescendants()) {
             if (!(node instanceof Heading heading)) {
                 continue;
@@ -174,7 +178,7 @@ public class ArticleMarkdownRenderer {
                 continue;
             }
             String text = StringUtils.trimToEmpty(new TextCollectingVisitor().collectAndGetText(heading));
-            String id = buildHeadingId(text, idCounts);
+            String id = buildHeadingId(text, idCounts, usedIds);
             // 不變量守門：buildHeadingId 承諾回傳必然符合 HEADING_ID_PATTERN 的 id。
             // 這裡再次驗證是防禦深度——若此斷言曾經失敗，代表 buildHeadingId 本身有 bug
             // （id 未過 sanitizer 白名單而被剝除，但 toc() 仍回傳該 id，形成死錨點），
@@ -229,24 +233,44 @@ public class ArticleMarkdownRenderer {
      * 故序號字串最長 11 碼（{@code -} + 10 位數），headroom 下限恆為
      * {@code MAX_SLUG_LENGTH - 11 = 53 > 0}，不會發生截斷後無字元可用的情形。</p>
      *
+     * <p><b>最終 id 去重（非僅 baseId 計數）</b>：只對 baseId 計數不足以保證唯一，因為
+     * 去重序號產生的 id 可能與另一個標題「天然」slug 相同——例如
+     * {@code ## 安裝步驟} / {@code ## 安裝步驟 2} / {@code ## 安裝步驟}，第三個標題的
+     * {@code heading-安裝步驟-2} 會撞上第二個標題的天然 slug。結果是 HTML 出現重複 id
+     * （無效 HTML），且第二條 TOC 點下去會跳到第一條。因此改為對<b>實際產出的 id</b>
+     * 記錄使用狀況，撞到就繼續遞增序號直到唯一。每次遞增都產生不同的後綴字串，
+     * 且已用 id 集合有限，迴圈必然終止。</p>
+     *
      * @param text     標題純文字
      * @param idCounts 記錄各基底 id 出現次數的可變對照表（跨呼叫累積同一篇文章的計數）
-     * @return 去重後、保證匹配 {@link #HEADING_ID_PATTERN} 的 heading id
+     * @param usedIds  已實際產出過的 id 集合（跨呼叫累積），用於保證最終 id 全篇唯一
+     * @return 去重後、保證匹配 {@link #HEADING_ID_PATTERN} 且全篇唯一的 heading id
      */
-    private String buildHeadingId(String text, Map<String, Integer> idCounts) {
+    private String buildHeadingId(String text, Map<String, Integer> idCounts, Set<String> usedIds) {
         String slug = slugify(text);
         if (slug.isEmpty()) {
             slug = FALLBACK_SLUG;
         }
         String baseId = HEADING_ID_PREFIX + slug;
-        int count = idCounts.merge(baseId, 1, Integer::sum);
-        if (count == 1) {
-            return baseId;
-        }
 
+        int count = idCounts.merge(baseId, 1, Integer::sum);
+        String candidate = (count == 1) ? baseId : buildNumberedId(slug, count);
+        while (!usedIds.add(candidate)) {
+            candidate = buildNumberedId(slug, idCounts.merge(baseId, 1, Integer::sum));
+        }
+        return candidate;
+    }
+
+    /**
+     * 以「slug + 去重序號」組出 heading id，並依序號的實際字元數讓出對應 headroom。
+     *
+     * @param slug  已 slugify 的標題文字
+     * @param count 去重序號（{@code >= 2}）
+     * @return 長度恆 {@code <= HEADING_ID_PREFIX + MAX_SLUG_LENGTH} 的 heading id
+     */
+    private String buildNumberedId(String slug, int count) {
         String suffix = "-" + count;
-        String truncatedSlug = truncateToCodePoints(slug, MAX_SLUG_LENGTH - suffix.length());
-        return HEADING_ID_PREFIX + truncatedSlug + suffix;
+        return HEADING_ID_PREFIX + truncateToCodePoints(slug, MAX_SLUG_LENGTH - suffix.length()) + suffix;
     }
 
     /**

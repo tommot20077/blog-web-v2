@@ -218,6 +218,53 @@ class ArticleMarkdownRendererTest {
     }
 
     @Test
+    @DisplayName("護欄：相對路徑 img src 不可被 sanitizer 剝除（檔案存取控制的內文圖片全靠它）")
+    void render_relativeImageSrc_isPreserved() {
+        /*
+         * 檔案上傳改回傳相對路徑 /api/v1/files/{id}/content 後，內文圖片全部是相對 URL。
+         * sanitizer 設了 allowUrlProtocols("http","https")——若這組設定連帶把「沒有協定」
+         * 的相對 URL 一起剝掉，所有內文圖片都會渲染成沒有 src 的 <img>，
+         * 整個檔案存取控制等於白做。此測試把「相對路徑放行」釘成回歸護欄。
+         */
+        RenderResult result = renderer.render(
+                "![示意圖](/api/v1/files/09c03730-17b3-48a2-96cf-aa7da7d5c96d/content)");
+
+        assertThat(result.html())
+                .as("相對路徑的 img src 必須保留")
+                .contains("src=\"/api/v1/files/09c03730-17b3-48a2-96cf-aa7da7d5c96d/content\"");
+    }
+
+    @Test
+    @DisplayName("TOC：去重序號不可與另一個標題自然產生的 slug 相撞（heading-安裝步驟-2 衝突）")
+    void render_headingIdCollidingWithDedupSuffix_producesUniqueIds() {
+        /*
+         * 「安裝步驟 2」的 slug 天然就是 安裝步驟-2，與「安裝步驟」第二次出現的去重序號
+         * 產出的 id 完全相同。原實作只對 baseId 計數、不檢查最終 id 是否已被用掉，
+         * 兩個標題會拿到同一個 id：HTML 出現重複 id（無效），且第二條 TOC 點下去會跳到第一條。
+         */
+        RenderResult result = renderer.render("## 安裝步驟\n\n## 安裝步驟 2\n\n## 安裝步驟");
+
+        assertThat(result.toc()).extracting(TocEntry::id)
+                .as("三個標題必須拿到三個互異的 id")
+                .doesNotHaveDuplicates()
+                .hasSize(3);
+        result.toc().forEach(entry ->
+                assertThat(result.html())
+                        .as("TOC 的每個 id 都必須在 HTML 中實際存在，否則是死錨點")
+                        .contains("id=\"" + entry.id() + "\""));
+    }
+
+    @Test
+    @DisplayName("TOC：反向順序同樣不可相撞（先出現 heading-安裝步驟-2，後續去重需跳號）")
+    void render_naturalSlugTakenBeforeDedup_producesUniqueIds() {
+        RenderResult result = renderer.render("## 安裝步驟 2\n\n## 安裝步驟\n\n## 安裝步驟");
+
+        assertThat(result.toc()).extracting(TocEntry::id).doesNotHaveDuplicates().hasSize(3);
+        result.toc().forEach(entry ->
+                assertThat(result.html()).contains("id=\"" + entry.id() + "\""));
+    }
+
+    @Test
     @DisplayName("TOC：h1 與 h4 不納入 TOC，僅收 h2/h3")
     void render_h1AndH4_notIncludedInToc() {
         RenderResult result = renderer.render("# 主標題\n\n## 章節\n\n#### 小節");
