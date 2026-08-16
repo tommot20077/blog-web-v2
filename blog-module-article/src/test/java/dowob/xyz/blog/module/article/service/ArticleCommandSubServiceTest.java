@@ -49,6 +49,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -1100,6 +1101,133 @@ class ArticleCommandSubServiceTest {
             assertThatThrownBy(() -> commandSubService.submitForReview(OTHER_USER_ID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+        }
+    }
+
+    @Nested
+    @DisplayName("withdrawArticle")
+    class WithdrawArticleTests {
+
+        @Test
+        @DisplayName("正常：作者抽回自己的 PENDING_REVIEW 文章 → DRAFT")
+        void withdrawArticle_pendingReviewToDraft_success() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getStatus()).isEqualTo(ArticleStatus.DRAFT);
+        }
+
+        @Test
+        @DisplayName("異常：ADMIN 抽回他人文章 → ARTICLE_ACCESS_DENIED（職責分離：ADMIN 應走 reject）")
+        void withdrawArticle_adminOnOthersArticle_denied() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(OTHER_USER_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+            verify(articleRepository, never()).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("正常：ADMIN 抽回自己送審的文章 → DRAFT（守衛依作者身分而非角色）")
+        void withdrawArticle_adminWithdrawsOwnArticle_success() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+        }
+
+        @Test
+        @DisplayName("正常：抽回不發送任何 MQ 事件（與 submitForReview 對稱）")
+        void withdrawArticle_publishesNoEvent() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            verifyNoInteractions(articleEventPublisher);
+        }
+
+        @Test
+        @DisplayName("異常：DRAFT 狀態抽回 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void withdrawArticle_draftStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+            verify(articleRepository, never()).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("異常：PUBLISHED 狀態抽回 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void withdrawArticle_publishedStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+            verify(articleRepository, never()).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("異常：REJECTED 狀態抽回 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void withdrawArticle_rejectedStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+            verify(articleRepository, never()).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("異常：ARCHIVED 狀態抽回 → ARTICLE_STATUS_TRANSITION_INVALID")
+        void withdrawArticle_archivedStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+            verify(articleRepository, never()).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("異常：非作者抽回他人文章 → ARTICLE_ACCESS_DENIED")
+        void withdrawArticle_otherUserDenied() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(OTHER_USER_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+            verify(articleRepository, never()).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("異常：文章不存在 → ARTICLE_NOT_FOUND")
+        void withdrawArticle_articleNotFound() {
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID))
+                    .thenThrow(new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
+
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
         }
     }
 
