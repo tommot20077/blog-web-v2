@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.search.service;
 
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 
 import java.util.List;
@@ -105,4 +106,17 @@ public interface SearchService {
      * </p>
      */
     void reindexAll();
+
+    /**
+     * 查詢搜尋索引狀態
+     *
+     * <p>
+     * 提供 Admin 後台查看 Elasticsearch 索引運維概況：文件數、最後一次全量重建時間、
+     * ES 是否可達。查詢 ES 失敗時捕捉例外，回傳 {@code healthy=false} 且
+     * {@code documentCount=null}，本方法本身不拋出例外，避免拖垮儀表板整格顯示。
+     * </p>
+     *
+     * @return 搜尋索引狀態
+     */
+    SearchIndexStatusResponse getIndexStatus();
 }
