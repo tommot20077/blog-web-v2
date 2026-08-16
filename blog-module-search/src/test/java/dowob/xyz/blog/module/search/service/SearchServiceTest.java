@@ -32,11 +32,13 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -587,6 +589,23 @@ class SearchServiceTest {
 
             verify(valueOperations).set(eq("search:reindex:at"), anyString());
         }
+
+        /**
+         * 時間戳只是給後台顯示用的附帶資訊，Redis 掛掉不應讓「索引其實已經重建成功」
+         * 的動作對外回報失敗——否則管理員會重複點擊重建，而每次都真的重建了一遍。
+         * 專案內 MQ 發送皆為 best-effort，此處保持一致。
+         */
+        @Test
+        @DisplayName("Redis 時間戳寫入失敗時，不應讓已完成的重建對外拋錯")
+        void reindexAll_whenTimestampWriteFails_doesNotThrow() {
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
+            doThrow(new RuntimeException("Redis down"))
+                    .when(valueOperations).set(eq("search:reindex:at"), anyString());
+
+            assertThatCode(() -> searchService.reindexAll()).doesNotThrowAnyException();
+
+            verify(articleSearchRepository).saveAll(any());
+        }
     }
 
     /**
@@ -639,6 +658,40 @@ class SearchServiceTest {
 
             assertThat(status.getLastReindexAt()).isNull();
             assertThat(status.isHealthy()).isTrue();
+        }
+
+        /**
+         * 介面 javadoc 承諾「本方法本身不拋出例外，避免拖垮儀表板整格顯示」，
+         * 但原實作把 Redis 讀取放在 try 之外——Redis 掛掉時整個方法拋出，後台整格 500。
+         * ES 有防護而 Redis 沒有，且 Redis 掛掉的機率不會比 ES 低。
+         */
+        @Test
+        @DisplayName("Redis 不可達時，不應拋出；lastReindexAt 為 null，ES 健康仍回報 healthy=true")
+        void getIndexStatus_whenRedisThrows_returnsStatusWithoutThrowing() {
+            when(articleSearchRepository.count()).thenReturn(7L);
+            when(valueOperations.get("search:reindex:at")).thenThrow(new RuntimeException("Redis down"));
+
+            SearchIndexStatusResponse status = searchService.getIndexStatus();
+
+            assertThat(status.getLastReindexAt()).isNull();
+            assertThat(status.getDocumentCount()).isEqualTo(7L);
+            assertThat(status.isHealthy())
+                    .as("healthy 描述的是 Elasticsearch 可達性，不應被 Redis 故障影響")
+                    .isTrue();
+        }
+
+        /** Redis 與 ES 同時故障時仍須回傳可顯示的結果，不可拋出 */
+        @Test
+        @DisplayName("Redis 與 ES 同時不可達時，回傳 healthy=false 且不拋出")
+        void getIndexStatus_whenRedisAndEsBothFail_returnsUnhealthyWithoutThrowing() {
+            when(valueOperations.get("search:reindex:at")).thenThrow(new RuntimeException("Redis down"));
+            when(articleSearchRepository.count()).thenThrow(new RuntimeException("ES down"));
+
+            SearchIndexStatusResponse status = searchService.getIndexStatus();
+
+            assertThat(status.isHealthy()).isFalse();
+            assertThat(status.getDocumentCount()).isNull();
+            assertThat(status.getLastReindexAt()).isNull();
         }
     }
 }
