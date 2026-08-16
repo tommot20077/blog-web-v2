@@ -23,6 +23,7 @@ import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleService;
+import dowob.xyz.blog.module.article.service.ArticleTocCodec;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -402,6 +403,13 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 article.setStatus(ArticleStatus.valueOf(data.status()));
             }
             article.setContentHtml(data.contentHtml());
+            /*
+             * TOC 必須與 contentHtml 一起回填：兩者出自 caller 的同一次 render。
+             * 若漏掉這行，article.toc 會停在還原前那版（Spring Data JDBC 把載入時的舊值原樣寫回），
+             * 章節導覽就會指向還原後 HTML 中不存在的錨點。
+             * data.toc() 為 null 時存空陣列，維持 articles.toc 恆為合法 JSON 陣列的不變量。
+             */
+            article.setToc(data.toc() != null ? data.toc() : ArticleTocCodec.EMPTY_TOC_JSON);
 
             Article updated = articleRepository.save(article);
 

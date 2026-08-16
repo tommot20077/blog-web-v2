@@ -1,11 +1,15 @@
 package dowob.xyz.blog.module.version.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
+import dowob.xyz.blog.module.article.model.dto.response.TocEntry;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
+import dowob.xyz.blog.module.article.service.ArticleTocCodec;
+import dowob.xyz.blog.module.article.service.RenderResult;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
@@ -17,6 +21,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.postgresql.util.PSQLException;
 import org.postgresql.util.PSQLState;
@@ -50,6 +55,12 @@ class VersioningServiceTest {
     @Mock private ArticleMarkdownRenderer markdownRenderer;
     @Mock private TagFacade tagFacade;
     @Mock private TransactionTemplate transactionTemplate;
+
+    /**
+     * 刻意用真實 codec 而非 mock：本測試要驗證的正是「傳給 facade 的 toc 是不是真的重算結果」，
+     * mock 掉序列化等於把待驗證的行為換成 stub。
+     */
+    @Spy private ArticleTocCodec tocCodec = new ArticleTocCodec(new ObjectMapper());
 
     @InjectMocks private VersioningService service;
 
@@ -326,7 +337,8 @@ class VersioningServiceTest {
         lenient().when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(markdownRenderer.render("new content")).thenReturn("<p>new content</p>");
+        when(markdownRenderer.render("new content"))
+            .thenReturn(new RenderResult("<p>new content</p>", List.of()));
 
         service.restore(versionUuid, authorId, false);
 
@@ -363,6 +375,65 @@ class VersioningServiceTest {
     }
 
     /**
+     * Regression：還原時 TOC 必須與 contentHtml 一起重算並寫回。
+     * 若只回填 contentHtml、放任 article.toc 停在還原前那版，
+     * API 回的章節導覽會指向 HTML 中不存在的錨點（死連結、少節或多節）。
+     */
+    @Test
+    void restore_passesReRenderedTocToFacade() {
+        ArticleContentData current = contentData(articleId, authorId, "Old", "old content");
+
+        ArticleVersion target = existingVersion("MANUAL");
+        target.setContent("## 新章節");
+        target.setStatus("PUBLISHED");
+
+        when(versionRepo.findByUuid(versionUuid)).thenReturn(Optional.of(target));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(current));
+        lenient().when(preferenceResolver.resolveForUser(authorId))
+            .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
+        when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(markdownRenderer.render("## 新章節")).thenReturn(new RenderResult(
+            "<h2 id=\"heading-新章節\">新章節</h2>",
+            List.of(new TocEntry("heading-新章節", "新章節", 2))));
+
+        service.restore(versionUuid, authorId, false);
+
+        ArgumentCaptor<ArticleRestoreData> rdCaptor = ArgumentCaptor.forClass(ArticleRestoreData.class);
+        verify(articleFacade).applyRestoreContent(eq(articleId), rdCaptor.capture());
+        assertThat(rdCaptor.getValue().toc())
+            .as("還原後的 toc 必須是重算結果，與 contentHtml 出自同一次 render")
+            .contains("heading-新章節")
+            .contains("\"level\":2");
+    }
+
+    /**
+     * 邊界：版本內容沒有任何 h2/h3 時，toc 要傳空 JSON 陣列而非 null——
+     * Spring Data JDBC 會把 null 顯式寫回 DB，破壞 articles.toc 恆為合法陣列的不變量。
+     */
+    @Test
+    void restore_contentWithoutHeadings_passesEmptyJsonArray() {
+        ArticleContentData current = contentData(articleId, authorId, "Old", "old content");
+
+        ArticleVersion target = existingVersion("MANUAL");
+        target.setContent("純段落，沒有標題");
+        target.setStatus("DRAFT");
+
+        when(versionRepo.findByUuid(versionUuid)).thenReturn(Optional.of(target));
+        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(current));
+        lenient().when(preferenceResolver.resolveForUser(authorId))
+            .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
+        when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(markdownRenderer.render("純段落，沒有標題"))
+            .thenReturn(new RenderResult("<p>純段落，沒有標題</p>", List.of()));
+
+        service.restore(versionUuid, authorId, false);
+
+        ArgumentCaptor<ArticleRestoreData> rdCaptor = ArgumentCaptor.forClass(ArticleRestoreData.class);
+        verify(articleFacade).applyRestoreContent(eq(articleId), rdCaptor.capture());
+        assertThat(rdCaptor.getValue().toc()).isEqualTo("[]");
+    }
+
+    /**
      * Regression：restore 一個非 PUBLISHED 的快照時不可由 VersioningService 發 publishUpdated；
      * event 的條件判斷已移入 ArticleFacade.applyRestoreContent 內部。
      * VersioningService 層只需確認 applyRestoreContent 被呼叫，
@@ -380,7 +451,8 @@ class VersioningServiceTest {
         lenient().when(preferenceResolver.resolveForUser(authorId))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        lenient().when(markdownRenderer.render(any())).thenReturn("<p/>");
+        lenient().when(markdownRenderer.render(any()))
+            .thenReturn(new RenderResult("<p/>", List.of()));
 
         service.restore(versionUuid, authorId, false);
 

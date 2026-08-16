@@ -46,6 +46,11 @@ class ArticleCommandSubService {
     private final ArticleEntityFinder entityFinder;
     private final ArticleResponseMapper articleResponseMapper;
 
+    /**
+     * TOC JSON 編解碼器（寫入端序列化，讀取端由 ArticleResponseMapper 反序列化）
+     */
+    private final ArticleTocCodec articleTocCodec;
+
     private static final Map<ArticleStatus, Set<ArticleStatus>> VALID_TRANSITIONS = Map.of(
             ArticleStatus.DRAFT, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.PENDING_REVIEW),
             ArticleStatus.PENDING_REVIEW, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.DRAFT, ArticleStatus.REJECTED),
@@ -66,7 +71,9 @@ class ArticleCommandSubService {
         article.setAuthorId(authorId);
         article.setTitle(request.getTitle());
         article.setContent(request.getContent());
-        article.setContentHtml(markdownRenderer.render(request.getContent()));
+        RenderResult renderResult = markdownRenderer.render(request.getContent());
+        article.setContentHtml(renderResult == null ? null : renderResult.html());
+        article.setToc(articleTocCodec.serialize(renderResult == null ? null : renderResult.toc()));
         article.setSummary(extractSummary(request.getContent(), request.getSummary()));
         article.setSlug(generateSlug(request.getTitle()));
         // 建立文章時狀態一律強制為 DRAFT，防止用戶繞過審核流程直接發布
@@ -139,8 +146,12 @@ class ArticleCommandSubService {
         }
         if (request.getContent() != null) {
             article.setContent(request.getContent());
-            article.setContentHtml(markdownRenderer.render(request.getContent()));
+            RenderResult renderResult = markdownRenderer.render(request.getContent());
+            article.setContentHtml(renderResult.html());
+            article.setToc(articleTocCodec.serialize(renderResult.toc()));
         }
+        // request.getContent() 為 null：不重算 TOC，也不覆寫 article 上既有的 toc
+        // （entityFinder 載入的 Article 已帶有 DB 既有值，save 時原樣寫回）
         if (request.getSummary() != null) {
             String baseContent = request.getContent() != null ? request.getContent() : article.getContent();
             article.setSummary(extractSummary(baseContent, request.getSummary()));
@@ -405,6 +416,7 @@ class ArticleCommandSubService {
         }
         return plainText.substring(0, Math.min(200, plainText.length()));
     }
+
 
     /**
      * 同步文章分類關聯
