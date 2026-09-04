@@ -161,11 +161,14 @@ class ArticleCommandSubService {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
 
-        // 狀態守衛：只有 DRAFT 或 REJECTED 允許透過 PUT 編輯內容
-        ArticleStatus currentStatus = article.getStatus();
-        if (currentStatus != ArticleStatus.DRAFT && currentStatus != ArticleStatus.REJECTED) {
-            throw new BusinessException(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED);
-        }
+        /*
+         * 內容凍結守衛：只有 DRAFT / REJECTED 允許改寫內容，其餘狀態拋 ARTICLE_EDIT_NOT_ALLOWED。
+         * 判斷本身已收斂進 ArticleContentFreezePolicy（唯一真相），與版本還原路徑
+         * （ArticleFacadeImpl.applyRestoreContent）共用同一份——F-H1：還原原本不受此約束，
+         * 作者送審後仍能換掉內容（審核 TOCTOU）；修法若在還原那邊複製一份判斷，
+         * 就會再造出 SEC-02 剛收斂掉的「多套真相」。
+         */
+        ArticleContentFreezePolicy.assertContentEditable(article.getStatus());
 
         if (request.getTitle() != null) {
             article.setTitle(request.getTitle());
