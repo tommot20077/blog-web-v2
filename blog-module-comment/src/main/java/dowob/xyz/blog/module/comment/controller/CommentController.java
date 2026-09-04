@@ -56,7 +56,8 @@ public class CommentController {
      * 故不標註 {@code @PreAuthorize}。三項豁免條件均成立：
      * </p>
      * <ol>
-     *   <li>路徑 {@code /api/v1/articles/**} 於 {@code SecurityConfig} 明確 {@code permitAll}（GET）；</li>
+     *   <li>路徑 {@code GET /api/v1/articles/{uuid}/comments} 於 {@code SecurityConfig} 以明確清單 {@code permitAll}
+     *       （UUID 形狀比對，非萬用字元；見 {@code SecurityConfig.PUBLIC_ARTICLE_COMMENTS}）；</li>
      *   <li>{@code currentUserId} 允許為 null，僅用於選填個人化（如「已按讚」標記）；</li>
      *   <li>本 JavaDoc 即為所需的豁免標註。</li>
      * </ol>

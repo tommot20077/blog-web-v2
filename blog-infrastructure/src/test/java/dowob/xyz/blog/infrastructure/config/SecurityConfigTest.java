@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -51,6 +52,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("SecurityConfig 授權規則測試")
 class SecurityConfigTest {
 
+    /** 測試用文章 UUID（SecurityConfig 的公開規則以 UUID 形狀限定路徑參數） */
+    private static final String ARTICLE_UUID = "11111111-1111-1111-1111-111111111111";
+
+    /** 測試用版本 UUID */
+    private static final String VERSION_UUID = "22222222-2222-2222-2222-222222222222";
+
     @Autowired
     private MockMvc mockMvc;
 
@@ -79,9 +86,62 @@ class SecurityConfigTest {
             return "register";
         }
 
-        @GetMapping("/api/v1/articles/123")
-        public String getArticle() {
+        // ── 文章端點（對齊 ArticleController / CommentController / VersionController
+        //    / HighlightController / ReadingProgressController 的實際 URL 形狀）──
+
+        @GetMapping("/api/v1/articles")
+        public String listArticles() {
+            return "articles";
+        }
+
+        @GetMapping("/api/v1/articles/archive")
+        public String getArchive() {
+            return "archive";
+        }
+
+        @GetMapping("/api/v1/articles/slug/{slug}")
+        public String getArticleBySlug(@PathVariable String slug) {
+            return "article-by-slug";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}")
+        public String getArticle(@PathVariable String uuid) {
             return "article";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/comments")
+        public String listComments(@PathVariable String uuid) {
+            return "comments";
+        }
+
+        @GetMapping("/api/v1/articles/me")
+        public String getMyArticles() {
+            return "my-articles";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/edit")
+        public String getArticleForEdit(@PathVariable String uuid) {
+            return "article-for-edit";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/versions")
+        public String listVersions(@PathVariable String uuid) {
+            return "versions";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/versions/{versionUuid}")
+        public String getVersionDetail(@PathVariable String uuid, @PathVariable String versionUuid) {
+            return "version-detail";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/highlights")
+        public String listHighlights(@PathVariable String uuid) {
+            return "highlights";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/progress")
+        public String getProgress(@PathVariable String uuid) {
+            return "progress";
         }
 
         @PostMapping("/api/v1/articles")
@@ -233,9 +293,118 @@ class SecurityConfigTest {
     // ── 公開 GET 端點 ──
 
     @Test
-    @DisplayName("未認證 GET /api/v1/articles/** 應回傳 200")
-    void unauthenticatedGetArticles_shouldReturn200() throws Exception {
-        mockMvc.perform(get("/api/v1/articles/123"))
+    @DisplayName("未認證 GET /api/v1/articles 列表應回傳 200")
+    void unauthenticatedListArticles_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/archive 應回傳 200")
+    void unauthenticatedGetArchive_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/slug/{slug} 應回傳 200")
+    void unauthenticatedGetArticleBySlug_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/slug/my-first-post"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid} 應回傳 200")
+    void unauthenticatedGetArticleByUuid_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/comments 應回傳 200")
+    void unauthenticatedListComments_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/comments"))
+                .andExpect(status().isOk());
+    }
+
+    // ── SEC-09：已收窄的 articles 子端點（URL 層兒底，不再只靠方法層 @PreAuthorize）──
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/me 應回傳 401")
+    void unauthenticatedGetMyArticles_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/me"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/edit 應回傳 401")
+    void unauthenticatedGetArticleForEdit_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/edit"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/versions 應回傳 401")
+    void unauthenticatedListVersions_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/versions"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/versions/{versionUuid} 應回傳 401")
+    void unauthenticatedGetVersionDetail_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/versions/" + VERSION_UUID))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/highlights 應回傳 401")
+    void unauthenticatedListHighlights_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/highlights"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/progress 應回傳 401")
+    void unauthenticatedGetProgress_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/progress"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── SEC-09：收窄後合法使用者仍須能存取（正向案例）──
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/me 應回傳 200")
+    void authenticatedGetMyArticles_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/me").with(asUser()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/{uuid}/edit 應回傳 200")
+    void authenticatedGetArticleForEdit_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/edit").with(asAuthor()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/{uuid}/versions 應回傳 200")
+    void authenticatedListVersions_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/versions").with(asAuthor()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/{uuid}/highlights 應回傳 200")
+    void authenticatedListHighlights_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/highlights").with(asUser()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/{uuid}/progress 應回傳 200")
+    void authenticatedGetProgress_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/progress").with(asUser()))
                 .andExpect(status().isOk());
     }
 
@@ -447,7 +616,7 @@ class SecurityConfigTest {
         @Test
         @DisplayName("OPTIONS preflight 請求帶 http://localhost:5500 Origin 應回傳 200 且含 CORS 回應標頭")
         void preflightRequest_fromLocalhostPort5500_shouldReturn200() throws Exception {
-            mockMvc.perform(options("/api/v1/articles/123")
+            mockMvc.perform(options("/api/v1/articles/" + ARTICLE_UUID)
                             .header("Origin", "http://localhost:5500")
                             .header("Access-Control-Request-Method", "GET"))
                     .andExpect(status().isOk())
@@ -457,7 +626,7 @@ class SecurityConfigTest {
         @Test
         @DisplayName("OPTIONS preflight 請求帶 http://127.0.0.1:5500 Origin 應回傳 200 且含 CORS 回應標頭")
         void preflightRequest_from127Port5500_shouldReturn200() throws Exception {
-            mockMvc.perform(options("/api/v1/articles/123")
+            mockMvc.perform(options("/api/v1/articles/" + ARTICLE_UUID)
                             .header("Origin", "http://127.0.0.1:5500")
                             .header("Access-Control-Request-Method", "GET"))
                     .andExpect(status().isOk())
@@ -467,7 +636,7 @@ class SecurityConfigTest {
         @Test
         @DisplayName("OPTIONS preflight 帶不在白名單的 Origin → 不應回傳 Access-Control-Allow-Origin 標頭")
         void preflightRequest_fromUnknownOrigin_shouldNotReturnAllowOriginHeader() throws Exception {
-            mockMvc.perform(options("/api/v1/articles/123")
+            mockMvc.perform(options("/api/v1/articles/" + ARTICLE_UUID)
                             .header("Origin", "http://evil.example.com")
                             .header("Access-Control-Request-Method", "GET"))
                     .andExpect(header().doesNotExist("Access-Control-Allow-Origin"))
@@ -477,7 +646,7 @@ class SecurityConfigTest {
         @Test
         @DisplayName("CORS 回應應包含 Access-Control-Allow-Credentials: true")
         void corsResponse_shouldIncludeAllowCredentialsHeader() throws Exception {
-            mockMvc.perform(options("/api/v1/articles/123")
+            mockMvc.perform(options("/api/v1/articles/" + ARTICLE_UUID)
                             .header("Origin", "http://localhost:5500")
                             .header("Access-Control-Request-Method", "GET"))
                     .andExpect(status().isOk())

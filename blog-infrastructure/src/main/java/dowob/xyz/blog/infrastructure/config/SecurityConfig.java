@@ -44,6 +44,23 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SecurityConfig {
 
+    /**
+     * UUID 形狀的路徑參數樣板（8-4-4-4-12 hex）。
+     *
+     * <p>用來限縮 articles 公開規則的比對範圍：若改用單段萬用字元 {@code /api/v1/articles/*}，
+     * 任何未來新增的字面量子路徑（例如既有的 {@code /api/v1/articles/me}）都會被通配吃掉而
+     * 意外變成 URL 層公開。以 UUID 形狀比對可讓「非 UUID 的字面量路徑」預設落入
+     * {@code anyRequest().authenticated()}（fail-closed）。</p>
+     */
+    private static final String UUID_PATH_VARIABLE =
+            "{uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}";
+
+    /** 公開的文章詳情端點：{@code GET /api/v1/articles/{uuid}} */
+    private static final String PUBLIC_ARTICLE_DETAIL = "/api/v1/articles/" + UUID_PATH_VARIABLE;
+
+    /** 公開的文章留言端點：{@code GET /api/v1/articles/{uuid}/comments} */
+    private static final String PUBLIC_ARTICLE_COMMENTS = PUBLIC_ARTICLE_DETAIL + "/comments";
+
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
     private final ObjectMapper objectMapper;
@@ -83,7 +100,34 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/auth/**").permitAll()
 
                         // 公開的 GET 請求（文章、標籤、檔案元資料、分類、系列）
-                        .requestMatchers(HttpMethod.GET, "/api/v1/articles/**").permitAll()
+                        /*
+                         * 公開的文章讀取端點（SEC-09 收窄）。
+                         *
+                         * 原本是 `GET /api/v1/articles/**` 整段 permitAll，使 me / edit / versions /
+                         * highlights / progress 在 URL 層等同公開，只靠方法層 @PreAuthorize 兜底，
+                         * 違反 ai-docs/security.md 原則 1「兩層防護缺一不可」——任何一個 handler
+                         * 漏標 @PreAuthorize 就直接裸奔。
+                         *
+                         * 改為明確列舉「匿名可讀」的四條讀取端點 + 留言列表，其餘（含未來新增的
+                         * 子資源）一律落入 anyRequest().authenticated()。
+                         *
+                         * 清單依據（逐條對應實作）：
+                         *   GET /api/v1/articles                  ArticleController#getPublishedArticles（無 @PreAuthorize）
+                         *   GET /api/v1/articles/archive          ArticleController#getArchive（無 @PreAuthorize）
+                         *   GET /api/v1/articles/slug/{slug}      ArticleController#getArticleBySlug（無 @PreAuthorize）
+                         *   GET /api/v1/articles/{uuid}           ArticleController#getArticle（無 @PreAuthorize）
+                         *   GET /api/v1/articles/{uuid}/comments  CommentController#list（原則 7 豁免，JavaDoc 明載匿名可讀）
+                         *
+                         * 護欄：新增任何 articles 子端點時，預設就是「需認證」；要放行必須同步
+                         * 更新本清單、ai-docs/security.md 的 Public Endpoints 表與 SecurityConfigTest，
+                         * 且依 ai-docs/judgment.md §5 需 Yuan 拍板。
+                         */
+                        .requestMatchers(HttpMethod.GET, "/api/v1/articles").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/articles/archive").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/articles/slug/*").permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_ARTICLE_DETAIL).permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_ARTICLE_COMMENTS).permitAll()
+
                         .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
                         /*
                          * 檔案 GET 端點（含 /api/v1/files/{id} 元資料、/api/v1/files/{id}/content 內容代理）。

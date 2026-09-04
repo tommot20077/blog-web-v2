@@ -120,6 +120,17 @@ public class ArticleController {
     /**
      * 取得單篇文章詳情
      *
+     * <p>
+     * <b>匿名可存取</b>——本端點依 {@code security.md} 原則 7 的「選填認證公開端點」豁免，
+     * 故不標註 {@code @PreAuthorize}。三項豁免條件均成立：
+     * </p>
+     * <ol>
+     *   <li>路徑 {@code GET /api/v1/articles/{uuid}} 於 {@code SecurityConfig} 以明確清單 {@code permitAll}
+     *       （UUID 形狀比對，非萬用字元；見 {@code SecurityConfig.PUBLIC_ARTICLE_DETAIL}）；</li>
+     *   <li>{@code viewerId} 允許為 null，僅用於選填個人化與未發布文章的作者可見性判斷；</li>
+     *   <li>本 JavaDoc 即為所需的豁免標註。</li>
+     * </ol>
+     *
      * @param uuid           文章公開 UUID
      * @param request        HTTP 請求（用於取得客戶端 IP）
      * @param viewerId       當前登入用戶的資料庫主鍵（匿名為 null）
