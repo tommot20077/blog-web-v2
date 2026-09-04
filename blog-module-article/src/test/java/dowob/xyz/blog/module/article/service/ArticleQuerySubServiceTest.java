@@ -194,6 +194,66 @@ class ArticleQuerySubServiceTest {
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
             verify(responseMapper, never()).toResponse(any());
         }
+
+        /**
+         * 下架文章的可見性：與 DRAFT / PENDING_REVIEW 同一條政策（僅作者與 ADMIN）。
+         * 這三案把政策釘在測試上，讓 checkReadPermission 委派 ArticleVisibility 的重構
+         * 有可比對的行為基準（政策內容不變，只換實作位置）。
+         */
+        @Test
+        @DisplayName("archived article is hidden from anonymous viewer")
+        void getArticle_archived_anonymousDenied() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, null, Role.USER))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+            verify(responseMapper, never()).toResponse(any());
+        }
+
+        @Test
+        @DisplayName("archived article can be read by author")
+        void getArticle_archived_authorCanAccess() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            ArticleResponse expected = articleResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            assertThat(querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR)).isSameAs(expected);
+        }
+
+        @Test
+        @DisplayName("archived article can be read by admin")
+        void getArticle_archived_adminCanAccess() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            ArticleResponse expected = articleResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            assertThat(querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.ADMIN)).isSameAs(expected);
+        }
+
+        /**
+         * fail-safe：作者欄位為 null 時，匿名檢視者不得因為「兩個 null 相等」而被當成作者本人。
+         *
+         * <p>articles.author_id 是 NOT NULL，正常資料不會走到這裡；但「作者比對」的正確形狀
+         * 就是必須先確定有檢視者。這正是 checkReadPermission 自己一份實作與
+         * {@code ArticleVisibility} 唯一的差異（後者多了 viewerId != null 守衛），
+         * 委派之後這個邊界才有唯一解。</p>
+         */
+        @Test
+        @DisplayName("author id 為 null 時，匿名檢視者不得被當成作者本人")
+        void getArticle_nullAuthorId_anonymousDenied() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            article.setAuthorId(null);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, null, Role.USER))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+            verify(responseMapper, never()).toResponse(any());
+        }
     }
 
     @Nested
