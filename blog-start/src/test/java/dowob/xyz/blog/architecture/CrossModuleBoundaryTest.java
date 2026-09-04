@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +47,42 @@ class CrossModuleBoundaryTest {
             "articles", "module.article",
             "comments", "module.comment"
     );
+
+    /**
+     * 業務表 → 該表名的 SQL 比對 pattern（每個表各自一條，非硬編碼）。
+     *
+     * <p>要求 word boundary（{@code \b}）＋容許任意空白（含換行，SQL text block
+     * 常見寫法如 {@code FROM\n    articles}）＋可選 {@code public.} schema 前綴。
+     * {@code \b} 是防 false positive 的關鍵：{@code article_tags} /
+     * {@code article_categories} / {@code article_versions} 這些以 {@code article}
+     * 開頭但接底線的真實表名，因為 {@code articles} 字面值本身在其中根本不出現
+     * （少了結尾的 {@code s} 緊接在 {@code e} 後面），加上 {@code \b} 雙重保險，
+     * 兩者都不會被誤判為 {@code articles}。（詳見 CrossModuleBoundaryTest 對應
+     * false-positive 驗證，task-7_5-report.md）</p>
+     */
+    private static final Map<String, Pattern> BUSINESS_TABLE_PATTERNS = BUSINESS_TABLE_OWNERS.keySet().stream()
+            .collect(Collectors.toMap(
+                    table -> table,
+                    table -> Pattern.compile(
+                            "(?is)\\b(from|join|update)\\s+(public\\.)?" + Pattern.quote(table) + "\\b")));
+
+    /**
+     * 模組擁有權 pattern：owner 套件片段（如 {@code module.article}）必須以
+     * 完整 segment 出現在 mapper 的 package name 中，不可只是子字串前綴。
+     *
+     * <p>修這個是因為原本用 {@code packageName.contains("module.article")}，
+     * 未來若有模組取名為 {@code ...module.articleWorkflow.mapper}，
+     * {@code "module.articleWorkflow".contains("module.article")} 為 true，
+     * 會被誤判為 articles 的 owner，靜默豁免——這正是要堵的假陰性。
+     * 用 {@code (^|\.)owner(\.|$)} 要求 owner 片段前後都是 package 分隔點
+     * 或字串邊界，{@code module.articleWorkflow} 就不會匹配
+     * {@code module.article}。</p>
+     */
+    private static final Map<String, Pattern> OWNER_PACKAGE_PATTERNS = BUSINESS_TABLE_OWNERS.values().stream()
+            .distinct()
+            .collect(Collectors.toMap(
+                    owner -> owner,
+                    owner -> Pattern.compile("(^|\\.)" + Pattern.quote(owner) + "(\\.|$)")));
 
     @Test
     @DisplayName("mapper 不得在 SQL 中存取他模組的業務表")
@@ -91,12 +128,10 @@ class CrossModuleBoundaryTest {
     }
 
     private static boolean hasForeignBusinessTable(String sql, String packageName) {
-        String lower = sql.toLowerCase();
         return BUSINESS_TABLE_OWNERS.entrySet().stream().anyMatch(e -> {
-            boolean touches = lower.contains("from " + e.getKey())
-                           || lower.contains("join " + e.getKey())
-                           || lower.contains("update " + e.getKey());
-            return touches && !packageName.contains(e.getValue());
+            boolean touches = BUSINESS_TABLE_PATTERNS.get(e.getKey()).matcher(sql).find();
+            boolean isOwner = OWNER_PACKAGE_PATTERNS.get(e.getValue()).matcher(packageName).find();
+            return touches && !isOwner;
         });
     }
 }
