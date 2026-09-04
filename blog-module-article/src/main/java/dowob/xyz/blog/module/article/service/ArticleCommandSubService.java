@@ -179,6 +179,13 @@ class ArticleCommandSubService {
             article.setCoverImageUrl(request.getCoverImageUrl());
         }
 
+        /**
+         * 狀態轉換後統一清除過期的駁回理由。
+         * 涵蓋 REJECTED →(PUT status=DRAFT)→ DRAFT 與其後的 DRAFT → PENDING_REVIEW / PUBLISHED
+         * ——這條「兩步走」路徑全程不經 submitForReview，若不清除，理由會一路殘留到公開回應。
+         */
+        clearRejectReasonIfNotRejected(article);
+
         /** DB 操作（save + syncCategories + syncTags）在同一個 transaction 內 */
         Object[] txResult = transactionTemplate.execute(status -> {
             Article updated;
@@ -280,6 +287,12 @@ class ArticleCommandSubService {
             article.setPublishedAt(LocalDateTime.now());
         }
 
+        /**
+         * 發布前清除過期的駁回理由：曾被駁回的文章若殘留理由，發布後即成為
+         * 匿名可讀的公開內容（GET /api/v1/articles/{uuid} 與公開列表）。
+         */
+        clearRejectReasonIfNotRejected(article);
+
         /** DB 操作（save + 查詢 tags）在同一個 transaction 內 */
         Object[] txResult = transactionTemplate.execute(status -> {
             Article saved = articleRepository.save(article);
@@ -349,7 +362,7 @@ class ArticleCommandSubService {
             throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
         }
         article.setStatus(ArticleStatus.PENDING_REVIEW);
-        article.setRejectReason(null);
+        clearRejectReasonIfNotRejected(article);
         Article updated = articleRepository.save(article);
         return articleResponseMapper.toResponse(updated);
     }
@@ -392,8 +405,33 @@ class ArticleCommandSubService {
             throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
         }
         article.setStatus(ArticleStatus.DRAFT);
+        clearRejectReasonIfNotRejected(article);
         Article updated = articleRepository.save(article);
         return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
+     * 清除已過期的駁回理由：文章只要不在 {@link ArticleStatus#REJECTED}，就不該帶著駁回理由。
+     *
+     * <p>
+     * {@code rejectReason} 的語意是「<b>這次</b>駁回的理由」，文章一旦離開 REJECTED 即失效。
+     * 過期理由若殘留，會隨文章進入公開狀態而外流給匿名讀者
+     * （遮蔽層見 {@code ArticleResponseMapper#resolveRejectReason}，本方法為縱深防禦的第二層）。
+     * </p>
+     *
+     * <p>
+     * 刻意放在各個「明確的狀態轉換點」而非 {@link #validateStatusTransition} 內部：
+     * 守衛只負責判斷合法性、不應有副作用，且版本還原
+     * （{@code ArticleFacadeImpl#applyRestoreContent}）本來就繞過守衛，
+     * 靠守衛清除會漏掉那條路徑。
+     * </p>
+     *
+     * @param article 目標文章（狀態必須已設定為轉換後的目標狀態）
+     */
+    private void clearRejectReasonIfNotRejected(Article article) {
+        if (article.getStatus() != ArticleStatus.REJECTED) {
+            article.setRejectReason(null);
+        }
     }
 
     /**

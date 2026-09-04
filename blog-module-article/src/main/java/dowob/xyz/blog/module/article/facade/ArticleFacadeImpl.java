@@ -436,6 +436,18 @@ public class ArticleFacadeImpl implements ArticleFacade {
              */
             article.setToc(data.toc() != null ? data.toc() : ArticleTocCodec.EMPTY_TOC_JSON);
 
+            /*
+             * 版本還原是唯一繞過 validateStatusTransition 的狀態轉換路徑：
+             * REJECTED 的文章可以被直接還原成 DRAFT / PUBLISHED 版本。
+             * rejectReason 的語意是「這次駁回的理由」，文章一旦不在 REJECTED 就已過期；
+             * 不清除的話會隨文章進入公開狀態外流給匿名讀者
+             * （遮蔽層見 ArticleResponseMapper#resolveRejectReason，此處為縱深防禦第二層，
+             * 與 ArticleCommandSubService#clearRejectReasonIfNotRejected 同一條規則）。
+             */
+            if (article.getStatus() != ArticleStatus.REJECTED) {
+                article.setRejectReason(null);
+            }
+
             Article updated = articleRepository.save(article);
 
             /** IMPORTANT: syncArticleTags 必須在 publish events 之前發 — search index update 需拿到正確 tags */

@@ -489,6 +489,83 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
+        @DisplayName("正常：REJECTED →（PUT status=DRAFT）→ 離開 REJECTED 時必須清除 rejectReason")
+        void updateArticle_rejectedToDraft_clearsRejectReason() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            article.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.DRAFT);
+
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+            assertThat(response.getRejectReason()).isNull();
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("正常：兩步走繞過第二段（DRAFT 殘留理由 →PUT status=PENDING_REVIEW）仍須清除 rejectReason")
+        void updateArticle_draftToPendingReview_clearsStaleRejectReason() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PENDING_REVIEW);
+
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("正常：DRAFT 殘留理由 →（PUT status=PUBLISHED）→ 必須清除 rejectReason")
+        void updateArticle_draftToPublished_clearsStaleRejectReason() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PUBLISHED);
+
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("正常：REJECTED 文章僅改內容、未帶 status → 仍在 REJECTED，rejectReason 保留")
+        void updateArticle_rejectedWithoutStatusChange_keepsRejectReason() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            article.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("修正後標題");
+
+            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getStatus()).isEqualTo(ArticleStatus.REJECTED);
+            assertThat(captor.getValue().getRejectReason()).isEqualTo("內部審核評語：抄襲疑慮，勿對外");
+        }
+
+        @Test
         @DisplayName("異常：非作者嘗試更新他人文章 → ARTICLE_ACCESS_DENIED")
         void updateArticle_otherUserDenied() {
             Article article = buildArticle(ArticleStatus.DRAFT);
@@ -786,6 +863,22 @@ class ArticleCommandSubServiceTest {
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
             verify(articleEventPublisher).publishPublished(any(Article.class), any());
+        }
+
+        @Test
+        @DisplayName("正常：DRAFT 殘留 rejectReason → PUBLISHED 時必須清除（否則洩漏給匿名讀者）")
+        void publishArticle_draftWithStaleRejectReason_clearsRejectReason() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            assertThat(response.getRejectReason()).isNull();
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isNull();
         }
 
         @Test
@@ -1134,6 +1227,22 @@ class ArticleCommandSubServiceTest {
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
             assertThat(captor.getValue().getStatus()).isEqualTo(ArticleStatus.DRAFT);
+        }
+
+        @Test
+        @DisplayName("正常：抽回時一併清除殘留的 rejectReason（DRAFT 不該帶駁回理由）")
+        void withdrawArticle_clearsStaleRejectReason() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            article.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+
+            assertThat(response.getRejectReason()).isNull();
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isNull();
         }
 
         @Test

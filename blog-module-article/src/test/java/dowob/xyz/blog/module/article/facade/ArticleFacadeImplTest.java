@@ -725,6 +725,36 @@ class ArticleFacadeImplTest {
         }
 
         @Test
+        @DisplayName("REJECTED 文章還原到非 REJECTED 版本 → 清除 rejectReason（版本還原繞過 validateStatusTransition）")
+        void applyRestoreContent_restoringRejectedToPublished_clearsRejectReason() {
+            existing.setStatus(ArticleStatus.REJECTED);
+            existing.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", "[]", List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
+            assertThat(existing.getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("還原後仍為 REJECTED → rejectReason 保留（理由尚未過期）")
+        void applyRestoreContent_restoringToRejectedStatus_keepsRejectReason() {
+            existing.setStatus(ArticleStatus.REJECTED);
+            existing.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "REJECTED", "<p>c</p>", "[]", List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getStatus()).isEqualTo(ArticleStatus.REJECTED);
+            assertThat(existing.getRejectReason()).isEqualTo("內部審核評語：抄襲疑慮，勿對外");
+        }
+
+        @Test
         @DisplayName("status 為 null → 不更新 article.status")
         void applyRestoreContent_statusNull_doesNotChangeStatus() {
             ArticleStatus before = existing.getStatus();

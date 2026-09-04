@@ -9,6 +9,7 @@ import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleTestApplication;
+import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
@@ -44,14 +45,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -1320,5 +1324,158 @@ class ArticleControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.toc").isArray())
                 .andExpect(jsonPath("$.data.toc", hasSize(0)));
+    }
+
+    /**
+     * 內部審核評語（rejectReason）不得出現在匿名可存取的公開回應中。
+     *
+     * <p>刻意在文章發布「之後」直接把 reject_reason 寫回 DB，模擬修復前既已存在的殘留資料
+     * ——縱深防禦第一層必須在清空邏輯失效（或歷史資料未清）時仍然守得住，
+     * 故本測試不依賴第二層的清空行為。</p>
+     */
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - 已發布文章殘留 rejectReason → 匿名與他人看不到，作者與 ADMIN 看得到")
+    void getArticle_publishedWithStaleRejectReason_maskedFromNonOwner() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        final String internalNote = "INTERNAL-REVIEW-NOTE-DO-NOT-LEAK";
+        final Long otherUserId = 42L;
+        final Long adminUserId = 43L;
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("曾被駁回後發布的文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        /** 模擬殘留資料：已發布文章的 reject_reason 仍留在 DB */
+        Article stored = articleRepository.findByUuid(UUID.fromString(uuid)).orElseThrow();
+        stored.setRejectReason(internalNote);
+        articleRepository.save(stored);
+
+        /** 匿名讀者：整份回應都不得出現內部評語 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rejectReason").isEmpty())
+                .andExpect(content().string(not(containsString(internalNote))));
+
+        /** 其他已登入的一般使用者：同樣不得看到 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(otherUserId, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rejectReason").isEmpty())
+                .andExpect(content().string(not(containsString(internalNote))));
+
+        /** 匿名的公開列表：同樣不得出現 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.records[0].rejectReason").isEmpty())
+                .andExpect(content().string(not(containsString(internalNote))));
+
+        /** 作者本人：看得到（審核回饋需送達作者） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rejectReason").value(internalNote));
+
+        /** ADMIN：看得到（審核者需檢視自己寫的評語） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(adminUserId, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rejectReason").value(internalNote));
+
+        /** 作者的「我的文章」列表：看得到（P0 審核流程契約） */
+        mockMvc.perform(get("/api/v1/articles/me")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records[0].rejectReason").value(internalNote));
+    }
+
+    /**
+     * 縱深防禦第二層：兩步走繞過路徑（REJECTED →PUT DRAFT→ DRAFT →publish→ PUBLISHED）
+     * 全程不經 submitForReview，rejectReason 必須在離開 REJECTED 時就被清掉。
+     */
+    @Test
+    @DisplayName("REJECTED →PUT status=DRAFT→ publish：兩步走繞過路徑也必須清空 rejectReason")
+    void rejectedArticle_twoStepBypassToPublished_clearsRejectReasonInDatabase() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+
+        final String internalNote = "INTERNAL-REVIEW-NOTE-TWO-STEP";
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("兩步走繞過的文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        /** 送審 */
+        UpdateArticleRequest submitRequest = new UpdateArticleRequest();
+        submitRequest.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PENDING_REVIEW);
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(submitRequest)))
+                .andExpect(status().isOk());
+
+        /** ADMIN 駁回 */
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason(internalNote);
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+
+        /** 第一步：PUT status=DRAFT（不經 submitForReview） */
+        UpdateArticleRequest toDraft = new UpdateArticleRequest();
+        toDraft.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.DRAFT);
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(toDraft)))
+                .andExpect(status().isOk());
+
+        assertThat(articleRepository.findByUuid(UUID.fromString(uuid)).orElseThrow().getRejectReason())
+                .as("離開 REJECTED 時就該清空")
+                .isNull();
+
+        /** 第二步：發布 */
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        assertThat(articleRepository.findByUuid(UUID.fromString(uuid)).orElseThrow().getRejectReason())
+                .as("已發布文章不得殘留內部審核評語")
+                .isNull();
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString(internalNote))));
     }
 }
