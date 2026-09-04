@@ -9,7 +9,7 @@
 | URL layer | `HttpSecurity.requestMatchers()` | Coarse-grained, by URL pattern |
 | Method layer | `@PreAuthorize` | Fine-grained, by Permission / Role |
 
-The URL layer protects `/api/admin/**` (ADMIN only). The method layer uses `hasAuthority('XXX')` to guard specific operations.
+The URL layer protects `/api/v1/admin/**` (ADMIN only). The method layer uses `hasAuthority('XXX')` to guard specific operations.
 **Both layers must be applied. Never rely on only one.**
 
 ### 2. URL Rule Order Must Not Be Reversed
@@ -17,15 +17,15 @@ The URL layer protects `/api/admin/**` (ADMIN only). The method layer uses `hasA
 In `SecurityConfig`, **more specific rules must come before `anyRequest()`**:
 
 ```
-/api/admin/**  → hasRole("ADMIN")    ← must be first
-anyRequest()   → authenticated()     ← must be last
+/api/v1/admin/**  → hasRole("ADMIN")    ← must be first
+anyRequest()      → authenticated()     ← must be last
 ```
 
 If the order is wrong, `anyRequest()` matches first and shadows the admin rule, creating a security hole.
 
 ### 3. Role vs Fine-Grained Permission
 
-*   **Role** (`ROLE_XXX`) is used for coarse-grained URL protection (e.g., `/api/admin/**`).
+*   **Role** (`ROLE_XXX`) is used for coarse-grained URL protection (e.g., `/api/v1/admin/**`).
 *   **Permission** (e.g., `ARTICLE_CREATE`) is used for fine-grained method protection (e.g., `@PreAuthorize`).
 *   The static mapping between roles and permissions is defined in the `Role` enum — nowhere else.
 
@@ -131,24 +131,64 @@ public void changePassword(...) {
 
 ## Public Endpoints (No Authentication Required)
 
+> 下表**依 `SecurityConfig` 中的宣告順序排列**,每一列對應一條 `permitAll()`。
+
 | Method | Path | Description |
 |--------|------|-------------|
-| ANY | `/api/v1/auth/**` | Login, registration, etc. |
-| GET | `/api/v1/articles/**` | Public article browsing |
+| ANY | `/actuator/health/**`, `/actuator/info` | K3s liveness/readiness probe 與服務資訊 |
+| ANY | `/swagger-ui/**`, `/v3/api-docs/**`, `/swagger-ui.html` | API documentation |
+| ANY | `/favicon.ico`, `/error` | favicon 與 Servlet 容器的錯誤轉發路徑 |
+| ANY | `/api/v1/auth/**` | Login, registration, refresh 等。**例外**:`POST /api/v1/auth/logout` 已在上一條規則設為 `authenticated()` |
+| GET | `/api/v1/articles` | 已發布文章列表 |
+| GET | `/api/v1/articles/archive` | 文章封存(依年月彙整) |
+| GET | `/api/v1/articles/slug/{slug}` | 依 slug 取已發布文章 |
+| GET | `/api/v1/articles/{uuid}` | 依 uuid 取文章(`{uuid}` 以 UUID 形狀比對,非 UUID 的字面量子路徑不落在此規則內) |
+| GET | `/api/v1/articles/{uuid}/comments` | 文章留言列表(原則 7 豁免的匿名可讀端點) |
 | GET | `/api/v1/tags/**` | Tag queries |
-| GET | `/api/v1/files/**` | Public file access |
+| GET | `/api/v1/files/**` | **不代表檔案公開**——permitAll 只代表「請求可到達 Controller」,實際授權在 `FileService#canRead()`(AVATAR 與已發布文章圖片對匿名開放;草稿圖片與未綁定檔案僅上傳者與 ADMIN 可讀) |
 | GET | `/api/v1/categories/**` | Category queries |
 | GET | `/api/v1/series/**` | Public series browsing(列表與詳情;寫入仍需認證) |
 | GET | `/api/v1/recommend/**` | Recommendations |
 | GET | `/api/v1/search` | Search |
 | GET | `/api/v1/search/suggest` | Search suggestions |
-| ANY | `/swagger-ui/**`, `/v3/api-docs/**` | API documentation |
-| ANY | Static resources | css, js, images, etc. |
+
+**`/api/v1/articles/**` 底下明確「不公開」的端點**(SEC-09 收窄後由 URL 層 + 方法層雙重把關):
+
+| Method | Path | 方法層守衛 |
+|--------|------|-----------|
+| GET | `/api/v1/articles/me` | `@PreAuthorize("isAuthenticated()")` |
+| GET | `/api/v1/articles/{uuid}/edit` | `@PreAuthorize("hasAuthority('ARTICLE_EDIT')")` |
+| GET | `/api/v1/articles/{uuid}/versions`、`/versions/{versionUuid}` | `@PreAuthorize("isAuthenticated()")` |
+| GET | `/api/v1/articles/{uuid}/highlights` | `@PreAuthorize("isAuthenticated()")` |
+| GET | `/api/v1/articles/{uuid}/progress` | `@PreAuthorize("isAuthenticated()")` |
 
 > 此表必須與 `blog-infrastructure/.../config/SecurityConfig.java` 的 `permitAll()` 規則**一對一對得上**;改任一邊都要同步另一邊與前端 `ai-docs/api-contract.md`。
 > (2026-07-07 依 `SecurityConfig.java:75-102` 校正:移除 `GET /api/v1/users/**`——已收窄,見 `SecurityConfigTest.java:235`「已收窄 permitAll」;補上 categories、recommend。)
 > (2026-07-16 依 Yuan 裁定新增 `GET /api/v1/series/**`:此前 SecurityConfig 無 series 規則,該路徑落入 `anyRequest().authenticated()`,與 `SeriesController` JavaDoc 自稱「公開」矛盾(backlog H5 / 07-07 #3),且使公開的前端 `/tags` 頁對匿名訪客靜默隱藏系列區塊。**僅開放 GET**,寫入維持認證;守衛見 `SecurityConfigTest` 的 `unauthenticatedListSeries_shouldReturn200` / `unauthenticatedGetSeriesDetail_shouldReturn200` / `unauthenticatedPostSeries_shouldReturn401`。)
 > (2026-07-18 commit `147e4cf`:series 對匿名開放後的讀取端點強化。permitAll 面**不變**,僅收斂匿名可見內容——(1) 公開列表 `findPublic`/`countPublic` 改以 `EXISTS(status='PUBLISHED')` 判可見性,只含草稿的系列不再曝光給匿名;(2) `getSeriesDetail` 一律只回 PUBLISHED 文章、`articleCount` 為實際公開數,零篇已發布仍回 200 空清單(series 視為存在,列表另行策展);(3) `listPublic` 的 `size` 夾 [1,100] 防匿名放大查詢。此三項是「原則 7 選填認證公開端點」豁免下、匿名可見面的縱深控制。守衛 `SeriesControllerIT.list_seriesWithOnlyDraft_excludedFromPublicList` / `getSlug_anonymous_neverExposesDraftArticle` / `getSlug_anonymous_seriesWithoutPublished_returnsEmpty` / `list_oversizedPageSize_clampedTo100`。)
 
+> (2026-09-04 SEC-09 + SEC-27 一次校正,依 `SecurityConfig.java` 逐條核對:
+> **(1) SEC-09 收窄** `GET /api/v1/articles/**` → 明確列舉 5 條公開讀取端點。原本整段 permitAll 使
+> me / edit / versions / highlights / progress 在 URL 層等同公開,只靠方法層 `@PreAuthorize` 兜底,
+> 違反原則 1「兩層防護缺一不可」。收窄前實測仍 fail-closed(方法層有擋),故非現存漏洞,而是補上縱深防禦。
+> 公開清單經前端 repo(`blog-web-v2-front-end` develop)逐一核對匿名呼叫路徑後確認:list / archive /
+> slug / uuid 由首頁、文章列表、標籤頁、作者頁、封存頁、文章詳情匿名呼叫;comments 由
+> `useComments` 無條件呼叫(不受 `isAuthenticated` 保護);highlights 與 progress 的 GET 在前端分別由
+> `useArticleHighlights.canLoad` / `usePersistedReadingProgress.canPersist` 以 `authStore.isAuthenticated`
+> 擋住,versions / edit / me 僅在 `requiresAuth` 路由下呼叫,收窄不影響匿名瀏覽。
+> 守衛:`SecurityConfigTest` 的 `unauthenticatedListArticles_shouldReturn200` /
+> `unauthenticatedGetArchive_shouldReturn200` / `unauthenticatedGetArticleBySlug_shouldReturn200` /
+> `unauthenticatedGetArticleByUuid_shouldReturn200` / `unauthenticatedListComments_shouldReturn200`
+> 與 `unauthenticatedGetMyArticles_shouldReturn401` / `unauthenticatedGetArticleForEdit_shouldReturn401` /
+> `unauthenticatedListVersions_shouldReturn401` / `unauthenticatedGetVersionDetail_shouldReturn401` /
+> `unauthenticatedListHighlights_shouldReturn401` / `unauthenticatedGetProgress_shouldReturn401`,
+> 另有 5 條 `authenticated*_shouldReturn200` 正向案例確保沒擋掉合法使用者。
+> **(2) SEC-27 文件校正**:`/api/admin/**` → `/api/v1/admin/**`(全檔);補上實作早已存在但未入表的
+> `/actuator/health/**`、`/actuator/info`、`/favicon.ico`、`/error`、`/swagger-ui.html`;
+> `GET /api/v1/files/**` 的描述由「Public file access」改為 PR #54 之後的實際語意
+> (permitAll 只代表可到達 Controller,授權在 `canRead`);移除與任何 `permitAll()` 都對不上的
+> 「Static resources / css, js, images」列——本專案是純 API 後端,靜態資源由 nginx 供應,
+> `SecurityConfig` 只有 `/favicon.ico` 與 `/error` 兩條,以此二者取代之(**未改變任何端點的公開與否**)。)
+
 All other endpoints require **authentication** (`authenticated()`).
-`/api/admin/**` additionally requires the **ADMIN role**.
+`/api/v1/admin/**` additionally requires the **ADMIN role**.
