@@ -37,7 +37,15 @@ import java.util.UUID;
  *   <li>DELETE /api/v1/articles/{articleUuid}/versions/{versionUuid} — 刪除快照</li>
  * </ul>
  *
- * <p>所有端點皆需已認證（isAuthenticated），owner 與 admin 檢查在 service 層執行。</p>
+ * <p>owner 與 admin 檢查一律在 service 層執行（security.md 原則 4：能力歸
+ * {@code @PreAuthorize}，歸屬歸 service 層）。</p>
+ *
+ * <p>兩個 GET（list / getDetail）僅讀取，要求 {@code isAuthenticated()}。
+ * 四個寫入端點（manual / restore / promote / delete）皆會改寫或刪除文章的版本資料，
+ * 因此比照 {@code PUT /api/v1/articles/{uuid}} 要求 {@code ARTICLE_EDIT} 細粒度權限——
+ * restore 首先於 F-M1 收斂，manual / promote / delete 於 M-1（PR #68 review）跟進，
+ * 統一「會寫入就要 ARTICLE_EDIT」的標準，避免被降級為 USER 的前作者仍能寫入或
+ * 刪除自己文章的版本資料。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -88,9 +96,12 @@ public class VersionController {
     /**
      * POST /api/v1/articles/{articleUuid}/versions/manual
      * 建立手動快照（type=MANUAL）。
+     *
+     * <p>M-1（MEDIUM，PR #68 review）：與 restore（F-M1）同一威脅模型——此端點會寫入
+     * 完整內容複本，比照收斂為 {@code ARTICLE_EDIT}，避免被降級為 USER 的前作者仍能寫入。</p>
      */
     @PostMapping("/manual")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "建立手動快照")
     public ApiResponse<VersionDetailResponse> createManual(
             @PathVariable UUID articleUuid,
@@ -106,9 +117,16 @@ public class VersionController {
     /**
      * POST /api/v1/articles/{articleUuid}/versions/{versionUuid}/restore
      * 將指定版本快照還原為文章當前狀態。
+     *
+     * <p>F-M1：還原是對文章內容的寫入，權限要求比照 {@code PUT /api/v1/articles/{uuid}} 的
+     * {@code ARTICLE_EDIT}——原本只要 {@code isAuthenticated()}，導致角色被降級為 USER 的前作者
+     * 仍能改寫自己的文章，與更新文章的標準不一致。</p>
+     *
+     * <p>owner 檢查仍在 {@code VersioningService.restore}（ADMIN 可繞過），
+     * 內容凍結檢查在 article 模組的 {@code ArticleFacade.applyRestoreContent}（F-H1）。</p>
      */
     @PostMapping("/{versionUuid}/restore")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "還原快照")
     public ApiResponse<Void> restore(
             @PathVariable UUID articleUuid,
@@ -123,9 +141,12 @@ public class VersionController {
     /**
      * POST /api/v1/articles/{articleUuid}/versions/{versionUuid}/promote
      * 將 AUTO 快照升級為 MANUAL（使用者救援機制）。
+     *
+     * <p>M-1（MEDIUM，PR #68 review）：與 restore（F-M1）同一威脅模型——此端點把可被
+     * {@code retainAuto} 汰除的快照變成永久列，比照收斂為 {@code ARTICLE_EDIT}。</p>
      */
     @PostMapping("/{versionUuid}/promote")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "AUTO 升級為 MANUAL")
     public ApiResponse<VersionDetailResponse> promote(
             @PathVariable UUID articleUuid,
@@ -140,9 +161,13 @@ public class VersionController {
     /**
      * DELETE /api/v1/articles/{articleUuid}/versions/{versionUuid}
      * 刪除快照（僅允許 MANUAL / AUTO；PUBLISHED 不可刪）。
+     *
+     * <p>M-1（MEDIUM，PR #68 review）：與 restore（F-M1）同一威脅模型——此操作破壞性且
+     * 不可逆，比照收斂為 {@code ARTICLE_EDIT}，避免被降級為 USER 的前作者仍能清掉
+     * 自己文章的版本證據。</p>
      */
     @DeleteMapping("/{versionUuid}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "刪除快照")
     public ApiResponse<Void> delete(
             @PathVariable UUID articleUuid,

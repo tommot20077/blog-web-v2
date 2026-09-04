@@ -11,6 +11,7 @@
 | 第一輪 | 2026-07-10 | 實作層三路唯讀稽核，承接架構層體檢（見 `roadmap.md`） | AUTH / RACE / DATA |
 | 第二輪 | 2026-07 | 檔案上傳 / 內容淨化 / 依賴 / 前端 / 測試品質 | FILE / XSS / DEP / FE / TEST |
 | 第三輪 | 2026-09-04 | `origin/develop` @ `f0e3cb1`（**含 PR #53–#59 全部合併後**）後端三維度靜態稽核 | SEC / ARCH / PERF |
+| PR 複審 | 2026-09-04 | 第三輪修復 PR 合併後的複審（PR #66 收斂狀態守衛後，restore 路徑剩餘的攻擊面） | F |
 
 ---
 
@@ -252,6 +253,25 @@
 | SEC-24 | Low | 兩個 admin 端點缺 `@Valid`，且其 DTO 完全無約束。`tag.color` 通常被前端綁進 `:style` ⇒ CSS 注入面；`description`/`reason` 無長度上限。權限為 ADMIN 故影響有限 | `AdminTagController.java:47-50`、`ArticleController.java:295-298`、`UpdateTagRequest.java:21,26,31`、`RejectArticleRequest.java:21` | OPEN |
 | SEC-25 | Low | 輸入長度約束與 DB 欄位不一致：`RegisterRequest.nickname` 無 `@Size` vs `schema.md:27` `VARCHAR(50)` ⇒ 51 字元註冊拋例外 → `GlobalExceptionHandler:243` 回 **500 而非 400**（可探測欄位邊界）；`socialLinks` / `content` 無上限屬資源濫用面 | `RegisterRequest.java:48-50`、`UpdateProfileRequest.java:44`、`Create/UpdateArticleRequest`；`content` 一項對應 backlog `2026-07-25-toc-security-followup.md §2` | OPEN |
 | SEC-27 | Low/Info | `security.md` Public Endpoints 表與 `SecurityConfig` 三處對不上：(1) 表寫 `/api/admin/**`、實作是 `/api/v1/admin/**`；(2) `/actuator/health/**`、`/actuator/info`、`/favicon.ico`、`/error` 未入表；(3) `GET /api/v1/files/**` 描述為「Public file access」但實作已改為「permitAll 只代表可到達 Controller，授權在 `canRead`」。表下方明文要求一對一對得上 | `ai-docs/security.md`（原則 2 表）、`SecurityConfig.java:75,79,88-100,112`、`FileController.java:121-134` | OPEN / NEEDS-DECISION（Q5，`judgment.md §5`）|
+
+---
+
+## F — PR 複審（2026-09-04，PR #66 合併後的 restore 路徑）
+
+> 第三輪的 SEC-02 只涵蓋 restore 的**狀態**面（PR #66 已移除 restore 改 status 的能力）。
+> 複審 #66 的成果時發現同一端點還有**內容**面與**權限**面兩個缺口，與 SEC-02 同根不同面，
+> 依編號慣例「同一現象不重複登記」不適用（是兩個獨立現象），故另立 F 前綴登記。
+> **AUTH-01 / SEC-02 的狀態不因本節改變**（Q6 的狀態面已由 #66 處理，一致性連鎖面仍待處理）。
+
+| ID | 嚴重度 | 標題 | 證據 | 狀態 |
+|----|--------|------|------|------|
+| F-H1 | High | `POST /articles/{uuid}/versions/{versionUuid}/restore` 繞過內容凍結守衛 → **審核 TOCTOU**。`updateArticle` 明訂 PENDING_REVIEW / PUBLISHED / ARCHIVED 內容凍結（PUT 回 A0209），還原路徑完全不受約束：作者送審後仍能用還原把內容換掉，**admin 審的是 A、通過的是 B**。PR #66 修完狀態面後 restore 不再改 status，換內容在狀態機上完全無痕，反而更隱蔽（非 #66 引入，#66 只是移除了會意外暴露它的副作用） | **已修證據**：判斷抽為單一真相 `ArticleContentFreezePolicy.java:47,62,75`（`DRAFT`/`REJECTED` 可編輯、null fail-safe 視為凍結）；兩條寫入路徑共用同一份——PUT `ArticleCommandSubService.java:171`、還原 `ArticleFacadeImpl.java:459`（守衛在 `findById` 之後、任何 `set*` 之前，故凍結狀態下 entity 一個欄位都不會被動到）；契約寫入 `ArticleFacade.java` 的 `applyRestoreContent` JavaDoc（`@throws ARTICLE_EDIT_NOT_ALLOWED`）。守衛刻意放在 article 模組自己的寫入方法內而非 caller 端（`architecture.md` 跨模組邊界：業務 data 的寫必走 owner module 的 service），任何呼叫端都繞不過去。測試：`ArticleFacadeImplTest.java:988`（`ContentFreezeGuard`，5 組參數化）、`VersionControllerIT.java:309`（凍結三態 → 400 A0209 且 DB 內容未變）、`:333`（DRAFT/REJECTED 仍 200 且內容確實還原，防修過頭）、`ArticleContentFreezePolicyTest.java:38`（`@EnumSource` 全狀態覆蓋，新增狀態漏表態即紅） | **DONE**（commit `f680711` 抽政策 + `38a0a0e` 套用；RED 證據：`VersionControllerIT` 修前 PENDING_REVIEW restore 回 200）|
+| F-M1 | Medium | 同一 restore 端點只要求 `isAuthenticated()`，**不需 `ARTICLE_EDIT`** → 角色被降級為 USER 的前作者仍能改寫自己已發布的文章；且與 `PUT /api/v1/articles/{uuid}` 需要 `ARTICLE_EDIT` 的標準不一致（`security.md` 原則 3 的細粒度權限面） | **已修證據**：`VersionController.java:122` 改為 `@PreAuthorize("hasAuthority('ARTICLE_EDIT')")`，比照 PUT。owner 檢查**原本就有**、本次未動（`VersioningService.java:264` 以 `v.getAuthorId()` 比對 currentUserId、ADMIN 繞過，V0102；`v.authorId` 由 `snapshotFromContent` 取自 `article.authorId()`，見 `VersioningService.java:444`），符合 `security.md` 原則 4「能力歸 `@PreAuthorize`、歸屬歸 service 層」。測試：`VersionControllerIT.java:358`（Role.USER → 403 且無還原副作用）、`:375`（非作者 → 400 V0102；**此條在守衛實作前即為綠**，正是 owner 檢查本來就存在的證據）| **DONE**（commit `7a2e0d1`；RED 證據：修前 Role.USER restore 回 200）|
+
+> **修復後的殘留項（已知，另行追蹤，不在本節狀態內）**：
+> (1) 被拒絕的 restore 仍會先留下一筆 AUTO stash 快照並跑 `retainAuto`——`VersioningService.restore` 的 stash 交易先 commit，守衛在其後才擋；
+> (2) `ArticleFacadeImpl` 內 `if (saved.getStatus() == PUBLISHED) publishUpdated(...)` 因 PUBLISHED 被擋在方法外而成為不可達分支（依「不動還原邏輯」保留為防禦性程式碼）；
+> (3) 前端 `blog-web-v2-front-end` 的「還原」按鈕若無 status gating，非草稿狀態會收到 400 A0209。
 
 ---
 
