@@ -8,6 +8,7 @@ import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -72,25 +73,33 @@ public interface SeriesMapper {
     int decrementArticleCount(@Param("id") Long id);
 
     /**
-     * 批次取得 articles 對應的 series 基本資訊（給 ArticleQueryService.enrich 用，避免 N+1）。
+     * 批次取得 series 基本資訊（給 ArticleQueryService.enrich 用，避免 N+1）。
+     *
+     * <p>原版本以 articleIds 為入參並 JOIN articles 取 series_id（ARCH-13 第 7 處）。
+     * 但呼叫端在 article 模組內、手上已有 {@code ArticleData.seriesId}，
+     * 故改為直接收 seriesIds，本查詢不再碰 articles。</p>
+     *
+     * @param seriesIds series 主鍵集合
+     * @return series 基本資訊列
      */
     @Select({
         "<script>",
-        "SELECT a.id AS article_id, s.uuid AS series_uuid, s.title AS series_title",
-        "  FROM articles a",
-        "  JOIN series s ON a.series_id = s.id",
-        " WHERE a.id IN",
-        "<foreach collection='articleIds' item='id' open='(' separator=',' close=')'>",
+        "SELECT id AS seriesId, uuid AS seriesUuid, title AS seriesTitle",
+        "  FROM series",
+        " WHERE id IN",
+        "<foreach collection='seriesIds' item='id' open='(' separator=',' close=')'>",
         "  #{id}",
         "</foreach>",
         "</script>"
     })
-    List<ArticleSeriesRow> findSeriesByArticleIds(@Param("articleIds") List<Long> articleIds);
+    List<SeriesBasicRow> findBasicInfoBySeriesIds(@Param("seriesIds") Collection<Long> seriesIds);
 
-    @lombok.Data
-    class ArticleSeriesRow {
-        private Long articleId;
-        private java.util.UUID seriesUuid;
-        private String seriesTitle;
-    }
+    /**
+     * {@link #findBasicInfoBySeriesIds} 的投影列。
+     *
+     * @param seriesId    series 主鍵
+     * @param seriesUuid  series 公開 UUID
+     * @param seriesTitle series 標題
+     */
+    record SeriesBasicRow(Long seriesId, java.util.UUID seriesUuid, String seriesTitle) {}
 }

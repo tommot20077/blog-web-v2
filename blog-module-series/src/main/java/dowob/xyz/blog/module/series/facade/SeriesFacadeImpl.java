@@ -12,6 +12,7 @@ import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -73,15 +74,17 @@ public class SeriesFacadeImpl implements SeriesFacade {
         return Optional.of(nav);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
-    public Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(List<Long> articleIds) {
-        if (articleIds == null || articleIds.isEmpty()) {
+    public Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(Collection<Long> seriesIds) {
+        if (seriesIds == null || seriesIds.isEmpty()) {
             return Collections.emptyMap();
         }
-        return seriesMapper.findSeriesByArticleIds(articleIds).stream()
+        return seriesMapper.findBasicInfoBySeriesIds(seriesIds).stream()
                 .collect(Collectors.toMap(
-                        SeriesMapper.ArticleSeriesRow::getArticleId,
-                        row -> new SeriesBasicInfo(row.getSeriesUuid(), row.getSeriesTitle())
-                ));
+                        SeriesMapper.SeriesBasicRow::seriesId,
+                        row -> new SeriesBasicInfo(row.seriesUuid(), row.seriesTitle())));
     }
 }

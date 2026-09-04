@@ -17,6 +17,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -222,14 +223,19 @@ public class ArticleQueryService {
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toList());
 
+        Map<Long, Long> articleIdToSeriesId = idRows.stream()
+                .filter(a -> a.getSeriesId() != null)
+                .collect(Collectors.toMap(Article::getId, Article::getSeriesId));
+
         // 補充 seriesUuid / seriesTitle（批次查詢，避免 N+1）；caller 若自行覆寫這兩欄可傳 false 略過
-        if (includeSeriesNav) {
-            Map<Long, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfo(articleIds);
+        if (includeSeriesNav && !articleIdToSeriesId.isEmpty()) {
+            Map<Long, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfo(
+                    new HashSet<>(articleIdToSeriesId.values()));
             records.forEach(r -> {
                 if (r.getSeriesPosition() != null) {
                     Long id = uuidToId.get(r.getUuid());
                     if (id != null) {
-                        SeriesBasicInfo info = seriesMap.get(id);
+                        SeriesBasicInfo info = seriesMap.get(articleIdToSeriesId.get(id));
                         if (info != null) {
                             r.setSeriesUuid(info.getSeriesUuid());
                             r.setSeriesTitle(info.getSeriesTitle());

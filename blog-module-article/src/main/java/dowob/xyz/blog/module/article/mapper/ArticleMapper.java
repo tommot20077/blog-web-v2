@@ -447,14 +447,15 @@ public interface ArticleMapper {
      * </p>
      *
      * @param uuids 文章公開 UUID 列表
-     * @return uuid → id 對應結果（以 {@code id} 欄位回傳，含 {@code uuid} 欄位用於 mapping）
+     * @return uuid → id/seriesId 對應結果
      */
     @Results(id = "uuidToIdMap", value = {
             @Result(property = "id", column = "id"),
-            @Result(property = "uuid", column = "uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class)
+            @Result(property = "uuid", column = "uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class),
+            @Result(property = "seriesId", column = "series_id")
     })
     @Select("<script>" +
-            "SELECT id, uuid FROM articles " +
+            "SELECT id, uuid, series_id FROM articles " +
             "WHERE uuid IN " +
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")

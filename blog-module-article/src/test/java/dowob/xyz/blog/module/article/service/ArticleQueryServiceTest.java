@@ -37,7 +37,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -74,6 +74,7 @@ class ArticleQueryServiceTest {
     private static final Long AUTHOR_ID = 1L;
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
     private static final Long ARTICLE_DB_ID = 42L;
+    private static final Long SERIES_DB_ID = 300L;
 
     /**
      * 建立測試用 ArticleSummaryResponse
@@ -111,12 +112,13 @@ class ArticleQueryServiceTest {
     }
 
     /**
-     * 建立 Article stub（僅含 uuid 和 id，供 findIdsByUuids 回傳）
+     * 建立 Article stub（含 uuid、id、seriesId，供 findIdsByUuids 回傳）
      */
     private Article buildArticleIdRow() {
         Article a = new Article();
         a.setId(ARTICLE_DB_ID);
         a.setUuid(ARTICLE_UUID);
+        a.setSeriesId(SERIES_DB_ID);
         return a;
     }
 
@@ -590,7 +592,7 @@ class ArticleQueryServiceTest {
                     articleQueryService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID), false);
 
             // series 詳情自行以 row 覆寫 seriesUuid/seriesTitle，enrich 不該再查 SeriesFacade（會被覆寫，白費）
-            verify(seriesFacade, never()).batchGetSeriesBasicInfo(anyList());
+            verify(seriesFacade, never()).batchGetSeriesBasicInfo(anyCollection());
             assertThat(result.get(0).getSeriesUuid()).isNull();
             assertThat(result.get(0).getSeriesTitle()).isNull();
         }
@@ -604,13 +606,13 @@ class ArticleQueryServiceTest {
                     .thenReturn(List.of(summary));
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID)))
                     .thenReturn(List.of(buildArticleIdRow()));
-            when(seriesFacade.batchGetSeriesBasicInfo(List.of(ARTICLE_DB_ID)))
-                    .thenReturn(Map.of(ARTICLE_DB_ID, new SeriesBasicInfo(seriesUuid, "S")));
+            when(seriesFacade.batchGetSeriesBasicInfo(Set.of(SERIES_DB_ID)))
+                    .thenReturn(Map.of(SERIES_DB_ID, new SeriesBasicInfo(seriesUuid, "S")));
 
             List<ArticleSummaryResponse> result =
                     articleQueryService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID));
 
-            verify(seriesFacade).batchGetSeriesBasicInfo(List.of(ARTICLE_DB_ID));
+            verify(seriesFacade).batchGetSeriesBasicInfo(Set.of(SERIES_DB_ID));
             assertThat(result.get(0).getSeriesUuid()).isEqualTo(seriesUuid);
             assertThat(result.get(0).getSeriesTitle()).isEqualTo("S");
         }
