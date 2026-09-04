@@ -201,12 +201,16 @@ public interface ArticleFacade {
      *   <li>save Article</li>
      *   <li>syncArticleTags — 必須在 publish events 之前</li>
      *   <li>publishContentChanged(article, RESTORED)</li>
-     *   <li>若 article.status == PUBLISHED：publishUpdated(article)</li>
+     *   <li>若 article.status == PUBLISHED：publishUpdated(article)
+     *       ——<strong>在目前的 {@code ArticleContentFreezePolicy} 下不可達</strong>：
+     *       能通過第 2 步守衛走到這裡的文章必為 DRAFT / REJECTED，必不為 PUBLISHED，
+     *       此判準因而永遠為 false。保留為防禦性分支，供日後政策放寬（若 PUBLISHED
+     *       重新允許還原）時直接復活，而不必重寫這段重新索引邏輯。</li>
      * </ol>
      *
      * <p><strong>SEC-02：不會改動 article.status</strong>。還原只還原內容，狀態轉換的唯一真相是
-     * {@code ArticleCommandSubService.VALID_TRANSITIONS}；上述步驟 6 的判準是「文章現在的狀態」，
-     * 與快照當時的狀態無關。</p>
+     * {@code ArticleCommandSubService.VALID_TRANSITIONS}；上述 {@code publishUpdated} 的判準是
+     * 「文章現在的狀態」，與快照當時的狀態無關。</p>
      *
      * <p><strong>F-H1：內容凍結對還原一體適用</strong>。只有 DRAFT / REJECTED 允許改寫內容；
      * PENDING_REVIEW / PUBLISHED / ARCHIVED 一律拒絕（A0209），與 {@code PUT /api/v1/articles/{uuid}}
