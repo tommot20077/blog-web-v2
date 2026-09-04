@@ -42,4 +42,24 @@ class SearchRabbitMqConfigTest {
         assertThat(queue.getArguments()).containsKey("x-dead-letter-exchange");
         assertThat(queue.getArguments().get("x-dead-letter-exchange")).isEqualTo("blog.dlq");
     }
+
+    @Test
+    @DisplayName("searchIndexArchiveQueue 包含 DLQ x-dead-letter-exchange 設定")
+    void searchIndexArchiveQueue_hasDlqArgs() {
+        Queue queue = config.searchIndexArchiveQueue();
+        assertThat(queue.getArguments()).containsKey("x-dead-letter-exchange");
+        assertThat(queue.getArguments().get("x-dead-letter-exchange")).isEqualTo("blog.dlq");
+    }
+
+    @Test
+    @DisplayName("下架索引 Queue 綁定 article.archived，與 article.deleted 分開（避免 series 計數被連帶遞減）")
+    void searchIndexArchiveBinding_bindsToArchivedRoutingKey() {
+        assertThat(SearchRabbitMqConfig.ROUTING_KEY_ARCHIVED).isEqualTo("article.archived");
+        assertThat(SearchRabbitMqConfig.ROUTING_KEY_ARCHIVED)
+                .isNotEqualTo(SearchRabbitMqConfig.ROUTING_KEY_DELETED);
+        assertThat(config.searchIndexArchiveBinding().getRoutingKey())
+                .isEqualTo(SearchRabbitMqConfig.ROUTING_KEY_ARCHIVED);
+        assertThat(config.searchIndexArchiveBinding().getDestination())
+                .isEqualTo(SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_ARCHIVE);
+    }
 }

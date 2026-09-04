@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.search.listener;
 
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.listener.dto.ArticleArchivedMessage;
 import dowob.xyz.blog.module.search.listener.dto.ArticleDeletedMessage;
 import dowob.xyz.blog.module.search.listener.dto.ArticlePublishedMessage;
 import dowob.xyz.blog.module.search.service.SearchService;
@@ -157,6 +158,48 @@ class ArticleSearchListenerTest {
             listener.onArticleUpdated(message, channel, 2L);
 
             verify(channel).basicNack(2L, false, false);
+        }
+    }
+
+    /**
+     * 文章下架事件測試
+     *
+     * <p>下架（PUBLISHED → ARCHIVED）後文章不再公開，索引必須移除，
+     * 否則搜尋結果仍會曝光已下架文章的標題與內文摘要。</p>
+     */
+    @Nested
+    @DisplayName("onArticleArchived")
+    class OnArticleArchivedTests {
+
+        @Test
+        @DisplayName("正常：收到下架訊息時，應移除該文章的 ES 索引並 ACK")
+        void onArticleArchived_shouldDeleteIndexAndAck() throws IOException {
+            UUID uuid = UUID.randomUUID();
+            ArticleArchivedMessage message = new ArticleArchivedMessage();
+            message.setEventId(UUID.randomUUID());
+            message.setArticleUuid(uuid);
+            message.setOccurredAt(Instant.now());
+
+            listener.onArticleArchived(message, channel, 1L);
+
+            verify(searchService).deleteIndex(uuid.toString());
+            verify(channel).basicAck(1L, false);
+        }
+
+        @Test
+        @DisplayName("異常：移除索引失敗時，應 NACK 至 DLQ（不 requeue）")
+        void onArticleArchived_onError_shouldNack() throws IOException {
+            UUID uuid = UUID.randomUUID();
+            ArticleArchivedMessage message = new ArticleArchivedMessage();
+            message.setEventId(UUID.randomUUID());
+            message.setArticleUuid(uuid);
+            message.setOccurredAt(Instant.now());
+
+            doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
+
+            listener.onArticleArchived(message, channel, 7L);
+
+            verify(channel).basicNack(7L, false, false);
         }
     }
 

@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.search.listener;
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.module.search.config.SearchRabbitMqConfig;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.listener.dto.ArticleArchivedMessage;
 import dowob.xyz.blog.module.search.listener.dto.ArticleDeletedMessage;
 import dowob.xyz.blog.module.search.listener.dto.ArticlePublishedMessage;
 import dowob.xyz.blog.module.search.service.SearchService;
@@ -21,7 +22,7 @@ import java.util.stream.Collectors;
  * 文章搜尋索引監聽器
  *
  * <p>
- * 消費 RabbitMQ 隊列，接收文章發布、更新、刪除事件，
+ * 消費 RabbitMQ 隊列，接收文章發布、更新、刪除、下架事件，
  * 同步維護 Elasticsearch 索引。
  * </p>
  *
@@ -110,6 +111,42 @@ public class ArticleSearchListener {
             log.debug("文章索引移除成功並已 ACK：uuid={}", message.getArticleUuid());
         } catch (Exception e) {
             log.error("文章索引移除失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
+            channel.basicNack(deliveryTag, false, false);
+        }
+    }
+
+    /**
+     * 接收文章下架事件，從 Elasticsearch 移除索引
+     *
+     * <p>
+     * 下架（PUBLISHED → ARCHIVED）代表文章不再公開，索引若不移除，
+     * 搜尋結果仍會曝光已下架文章的標題與內文摘要。處置與刪除相同（移除 document），
+     * 但走獨立的 routing key／queue——{@code article.deleted} 另有 series 模組訂閱並遞減
+     * {@code series.article_count}，共用會使該計數被誤扣（見
+     * {@code SearchRabbitMqConfig#ROUTING_KEY_ARCHIVED}）。
+     * </p>
+     *
+     * <p>
+     * {@code deleteById} 對不存在的 document 為 no-op，故本處理天然冪等，重送不會出錯。
+     * 文章若之後被復原並重新發布，索引會由 {@code article.published} 事件重新建立。
+     * </p>
+     *
+     * @param message     文章下架訊息
+     * @param channel     RabbitMQ Channel
+     * @param deliveryTag 訊息標籤
+     * @throws IOException 處理 ACK/NACK 時的 IO 異常
+     */
+    @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_ARCHIVE, containerFactory = "rabbitListenerContainerFactory")
+    public void onArticleArchived(ArticleArchivedMessage message,
+            Channel channel,
+            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+        log.info("收到文章下架事件，移除索引：uuid={}", message.getArticleUuid());
+        try {
+            searchService.deleteIndex(message.getArticleUuid().toString());
+            channel.basicAck(deliveryTag, false);
+            log.debug("已下架文章索引移除成功並已 ACK：uuid={}", message.getArticleUuid());
+        } catch (Exception e) {
+            log.error("已下架文章索引移除失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
             channel.basicNack(deliveryTag, false, false);
         }
     }
