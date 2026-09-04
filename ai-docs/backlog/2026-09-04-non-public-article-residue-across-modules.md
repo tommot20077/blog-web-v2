@@ -20,6 +20,7 @@ PUBLISHED 全公開；非 PUBLISHED 只有**作者本人與 ADMIN**。
 | 收藏列表不濾 status | `131866b` | `BookmarkController.myBookmarks` caller 端過濾 |
 | 下架事件送不出／消不掉時靜默 | `5058fd5` | producer / consumer 皆 ERROR + articleUuid + eventId |
 | `reindexAll` 沒有補救路徑 | `17d5adc` | 幽靈 document 清除（詳見 `2026-07-29-index-cache-rebuild-completeness.md`） |
+| 收藏列表 total 高估／每頁筆數不一致 | （本 PR） | `BookmarkQueryService` 先過濾再分頁；前端 `BookmarksView.vue:25` 以 `pages` 畫分頁器，高估會產生空尾頁 |
 
 ## 仍開放
 
