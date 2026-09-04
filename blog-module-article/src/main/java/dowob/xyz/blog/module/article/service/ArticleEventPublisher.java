@@ -177,14 +177,20 @@ public class ArticleEventPublisher {
      * 發送文章下架事件至 RabbitMQ（供搜尋模組移除 Elasticsearch 索引）。
      *
      * <p>僅在文章狀態已轉為 ARCHIVED 且 DB 已 commit 後才應呼叫；
-     * 與其他事件一致採 best-effort，失敗僅 log warn 不影響下架結果。</p>
+     * 與其他事件一致採 best-effort，發送失敗不往外拋、不影響已 commit 的下架結果。</p>
+     *
+     * <p><b>失敗一律 ERROR（與其他 best-effort 事件的 warn 不同）</b>：下架用於法務／侵權撤下，
+     * 而移除 ES 索引是唯一的撤下機制，consumer 端失敗又是 requeue=false 直入 DLQ。
+     * 若這裡只留 warn，「端點回 200 下架成功」與「文章仍搜尋得到」會同時成立而無人察覺。
+     * 訊息帶 eventId 與 articleUuid，讓維運可告警並人工補送。</p>
      *
      * @param article 已下架的文章實體
      */
     public void publishArchived(Article article) {
+        UUID eventId = UUID.randomUUID();
         try {
             ArticleArchivedEvent event = new ArticleArchivedEvent(
-                    UUID.randomUUID(),
+                    eventId,
                     article.getUuid(),
                     Instant.now());
             rabbitTemplate.convertAndSend(
@@ -192,7 +198,9 @@ public class ArticleEventPublisher {
                     ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED,
                     event);
         } catch (Exception e) {
-            log.warn("ArticleArchivedEvent MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+            log.error("文章下架事件發送失敗，Elasticsearch 索引可能未移除，需人工補送："
+                            + "articleUuid={}, eventId={}, error={}",
+                    article.getUuid(), eventId, e.getMessage(), e);
         }
     }
 

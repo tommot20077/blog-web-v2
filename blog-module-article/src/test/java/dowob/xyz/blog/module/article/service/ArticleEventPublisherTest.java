@@ -13,9 +13,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -161,7 +168,7 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("穩健性：MQ 發送失敗時僅 log warn，不往外拋（best-effort）")
+        @DisplayName("穩健性：MQ 發送失敗時不往外拋（best-effort，下架結果本身已 commit）")
         void publishArchived_whenMqThrows_doesNotPropagate() {
             Article article = new Article();
             article.setId(301L);
@@ -174,6 +181,79 @@ class ArticleEventPublisherTest {
                             any(Object.class));
 
             assertThatCode(() -> publisher.publishArchived(article)).doesNotThrowAnyException();
+        }
+
+        /**
+         * 下架是合規動作（法務／侵權撤下），且 ES 索引移除是唯一的撤下機制。
+         * 發送失敗若只留 warn，維運不會察覺——「下架成功」的 200 與實際仍可被搜尋到並存。
+         * 故失敗必須是 ERROR，且訊息要帶得出是哪一篇（articleUuid），才可被告警與人工補送。
+         */
+        @Test
+        @DisplayName("可觀測性：MQ 發送失敗必須以 ERROR 記錄並帶 articleUuid")
+        void publishArchived_whenMqThrows_logsErrorWithArticleUuid() {
+            Article article = new Article();
+            article.setId(302L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(7L);
+
+            doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
+                    .convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                            eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                            any(Object.class));
+
+            CapturingAppender appender = attachAppender();
+            try {
+                publisher.publishArchived(article);
+            } finally {
+                detachAppender(appender);
+            }
+
+            assertThat(appender.events).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(event.getMessage().getFormattedMessage())
+                        .contains(article.getUuid().toString());
+            });
+        }
+    }
+
+    /**
+     * 掛上捕捉用 appender 以取得 {@link ArticleEventPublisher} 的日誌事件。
+     *
+     * @return 已啟動並掛載的 appender
+     */
+    private CapturingAppender attachAppender() {
+        CapturingAppender appender = new CapturingAppender();
+        appender.start();
+        ((Logger) LogManager.getLogger(ArticleEventPublisher.class)).addAppender(appender);
+        return appender;
+    }
+
+    /**
+     * 卸載測試用 appender，避免污染其他測試。
+     *
+     * @param appender 先前掛上的 appender
+     */
+    private void detachAppender(CapturingAppender appender) {
+        ((Logger) LogManager.getLogger(ArticleEventPublisher.class)).removeAppender(appender);
+        appender.stop();
+    }
+
+    /**
+     * 捕捉日誌事件的測試用 appender（log4j2 為本專案的日誌實作，見 root pom 排除
+     * spring-boot-starter-logging 並改用 log4j-slf4j2-impl）。
+     */
+    private static final class CapturingAppender extends AbstractAppender {
+
+        /** 捕捉到的日誌事件 */
+        private final List<LogEvent> events = new ArrayList<>();
+
+        private CapturingAppender() {
+            super("archive-test-capture", null, null, true, Property.EMPTY_ARRAY);
+        }
+
+        @Override
+        public void append(LogEvent event) {
+            events.add(event.toImmutable());
         }
     }
 }

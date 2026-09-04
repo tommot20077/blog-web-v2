@@ -146,7 +146,13 @@ public class ArticleSearchListener {
             channel.basicAck(deliveryTag, false);
             log.debug("已下架文章索引移除成功並已 ACK：uuid={}", message.getArticleUuid());
         } catch (Exception e) {
-            log.error("已下架文章索引移除失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
+            /*
+             * requeue=false ⇒ 直入 DLQ，沒有自動重試。下架是合規動作，這條路徑失敗
+             * 代表文章仍留在搜尋索引裡，故日誌必須帶足人工補送所需的上下文：
+             * articleUuid（要刪哪一篇）與 eventId（對得回 producer 端的那筆事件）。
+             */
+            log.error("已下架文章索引移除失敗，訊息已進 DLQ 需人工處理：articleUuid={}, eventId={}, error={}",
+                    message.getArticleUuid(), message.getEventId(), e.getMessage(), e);
             channel.basicNack(deliveryTag, false, false);
         }
     }
