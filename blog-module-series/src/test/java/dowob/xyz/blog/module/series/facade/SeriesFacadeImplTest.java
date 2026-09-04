@@ -7,6 +7,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -46,7 +47,8 @@ class SeriesFacadeImplTest {
     }
 
     @Test
-    void 導覽走ArticleFacade而非SeriesMapper() {
+    @DisplayName("導覽走 ArticleFacade 而非 SeriesMapper")
+    void navigationUsesArticleFacadeNotSeriesMapper() {
         UUID prevUuid = UUID.randomUUID();
         UUID nextUuid = UUID.randomUUID();
         when(articleFacade.findById(articleId)).thenReturn(Optional.of(articleAt(2)));
@@ -67,7 +69,8 @@ class SeriesFacadeImplTest {
     }
 
     @Test
-    void 首篇的prev為null() {
+    @DisplayName("首篇的 prev 為 null")
+    void firstArticlePrevIsNull() {
         when(articleFacade.findById(articleId)).thenReturn(Optional.of(articleAt(1)));
         when(seriesRepo.findById(seriesId)).thenReturn(Optional.of(series()));
         when(articleFacade.findPrevPublishedInSeries(seriesId, 1)).thenReturn(Optional.empty());
@@ -83,7 +86,8 @@ class SeriesFacadeImplTest {
     }
 
     @Test
-    void series無公開文章時totalCount為0() {
+    @DisplayName("series 無公開文章時 totalCount 為 0")
+    void whenSeriesHasNoPublishedArticles_totalCountIsZero() {
         when(articleFacade.findById(articleId)).thenReturn(Optional.of(articleAt(1)));
         when(seriesRepo.findById(seriesId)).thenReturn(Optional.of(series()));
         when(articleFacade.findPrevPublishedInSeries(seriesId, 1)).thenReturn(Optional.empty());

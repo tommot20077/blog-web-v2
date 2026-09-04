@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -37,7 +38,8 @@ class BookmarkQueryServiceTest {
     }
 
     @Test
-    void total為過濾後的可見數而非收藏列數() {
+    @DisplayName("total 為過濾後的可見數，而非收藏列數")
+    void totalIsFilteredVisibleCountNotBookmarkRowCount() {
         when(bookmarkService.findAllMyBookmarkedArticleIds(userId))
                 .thenReturn(List.of(1L, 2L, 3L, 4L, 5L));
         when(articleFacade.filterReadableIds(List.of(1L, 2L, 3L, 4L, 5L), userId, false))
@@ -53,7 +55,8 @@ class BookmarkQueryServiceTest {
     }
 
     @Test
-    void 每頁筆數在有被過濾項時仍然填滿() {
+    @DisplayName("每頁筆數在有被過濾項時仍然填滿")
+    void pageSizeStillFullyFilledWhenSomeItemsAreFiltered() {
         when(bookmarkService.findAllMyBookmarkedArticleIds(userId))
                 .thenReturn(List.of(1L, 2L, 3L, 4L, 5L, 6L));
         when(articleFacade.filterReadableIds(List.of(1L, 2L, 3L, 4L, 5L, 6L), userId, false))
@@ -69,7 +72,8 @@ class BookmarkQueryServiceTest {
     }
 
     @Test
-    void 第二頁取正確的切片() {
+    @DisplayName("第二頁取正確的切片")
+    void secondPageTakesCorrectSlice() {
         when(bookmarkService.findAllMyBookmarkedArticleIds(userId))
                 .thenReturn(List.of(1L, 2L, 3L, 4L));
         when(articleFacade.filterReadableIds(List.of(1L, 2L, 3L, 4L), userId, false))
@@ -84,7 +88,8 @@ class BookmarkQueryServiceTest {
     }
 
     @Test
-    void 無收藏時不呼叫下游() {
+    @DisplayName("無收藏時不呼叫下游")
+    void whenNoBookmarks_doesNotCallDownstream() {
         when(bookmarkService.findAllMyBookmarkedArticleIds(userId)).thenReturn(List.of());
 
         PageResult<ArticleSummaryResponse> result = service.listMyBookmarks(userId, false, 1, 20);
@@ -96,7 +101,8 @@ class BookmarkQueryServiceTest {
     }
 
     @Test
-    void 超出範圍的頁回空清單但total不變() {
+    @DisplayName("超出範圍的頁回空清單，但 total 不變")
+    void outOfRangePageReturnsEmptyListButTotalUnchanged() {
         when(bookmarkService.findAllMyBookmarkedArticleIds(userId)).thenReturn(List.of(1L, 2L));
         when(articleFacade.filterReadableIds(List.of(1L, 2L), userId, false))
                 .thenReturn(List.of(1L, 2L));
@@ -109,7 +115,8 @@ class BookmarkQueryServiceTest {
     }
 
     @Test
-    void admin身分會傳遞給facade() {
+    @DisplayName("admin 身分會傳遞給 facade")
+    void adminFlagIsPassedToFacade() {
         when(bookmarkService.findAllMyBookmarkedArticleIds(userId)).thenReturn(List.of(1L));
         when(articleFacade.filterReadableIds(List.of(1L), userId, true)).thenReturn(List.of(1L));
         when(articleQueryService.getArticleSummariesByIds(List.of(1L))).thenReturn(summaries(1));
@@ -120,7 +127,8 @@ class BookmarkQueryServiceTest {
     }
 
     @Test
-    void page乘size溢位int時不拋例外且回空清單() {
+    @DisplayName("page 乘 size 溢位 int 時不拋例外，且回空清單")
+    void whenPageTimesSizeOverflowsInt_doesNotThrowAndReturnsEmptyList() {
         when(bookmarkService.findAllMyBookmarkedArticleIds(userId)).thenReturn(List.of(1L, 2L));
         when(articleFacade.filterReadableIds(List.of(1L, 2L), userId, false))
                 .thenReturn(List.of(1L, 2L));

@@ -16,6 +16,7 @@ import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesSummaryResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -533,7 +534,8 @@ class SeriesServiceTest {
     // ── G: listPublic 三段式（Task 5）─────────────────────────────────────
 
     @Test
-    void listPublic只列出有公開文章的series且articleCount為即時計數() {
+    @DisplayName("listPublic 只列出有公開文章的 series，且 articleCount 為即時計數")
+    void listPublicOnlyListsSeriesWithPublishedArticlesAndArticleCountIsLive() {
         when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
         when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
                 .thenReturn(Map.of(10L, 3, 30L, 1));
@@ -559,7 +561,8 @@ class SeriesServiceTest {
     }
 
     @Test
-    void listPublic第二頁只取該頁的id() {
+    @DisplayName("listPublic 第二頁只取該頁的 id")
+    void listPublicSecondPageOnlyTakesIdsOfThatPage() {
         when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
         when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
                 .thenReturn(Map.of(10L, 1, 20L, 1, 30L, 1));
@@ -578,7 +581,8 @@ class SeriesServiceTest {
     }
 
     @Test
-    void listPublic全無公開文章時回空頁且不查明細() {
+    @DisplayName("listPublic 全無公開文章時回空頁，且不查明細")
+    void listPublicWhenNoPublishedArticles_returnsEmptyPageWithoutDetailQuery() {
         when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L));
         when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L))).thenReturn(Map.of());
 
@@ -590,7 +594,8 @@ class SeriesServiceTest {
     }
 
     @Test
-    void listPublic超出範圍的頁回空清單但total不變() {
+    @DisplayName("listPublic 超出範圍的頁回空清單，但 total 不變")
+    void listPublicOutOfRangePageReturnsEmptyListButTotalUnchanged() {
         when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L));
         when(articleFacade.countPublishedBySeriesIds(List.of(10L))).thenReturn(Map.of(10L, 1));
 

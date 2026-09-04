@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.facade;
 
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,12 +28,14 @@ class ArticleFacadeSetPredicateTest {
     class CountPublishedBySeriesIds {
 
         @Test
-        void 空輸入不查詢直接回空map() {
+        @DisplayName("空輸入不查詢，直接回空 map")
+        void emptyInputReturnsEmptyMapWithoutQuery() {
             assertThat(facade.countPublishedBySeriesIds(List.of())).isEmpty();
         }
 
         @Test
-        void 只回傳有公開文章的series且計數正確() {
+        @DisplayName("只回傳有公開文章的 series，且計數正確")
+        void onlyReturnsSeriesWithPublishedArticlesAndCorrectCount() {
             when(articleMapper.countPublishedBySeriesIds(List.of(1L, 2L, 3L)))
                     .thenReturn(List.of(
                             new ArticleMapper.SeriesPublishedCountRow(1L, 3),
@@ -50,13 +53,15 @@ class ArticleFacadeSetPredicateTest {
     class NavQueries {
 
         @Test
-        void 首篇沒有prev() {
+        @DisplayName("首篇沒有 prev")
+        void firstArticleHasNoPrev() {
             when(articleMapper.findPrevPublishedInSeries(10L, 1)).thenReturn(null);
             assertThat(facade.findPrevPublishedInSeries(10L, 1)).isEmpty();
         }
 
         @Test
-        void 有prev時包成ArticleNavRef() {
+        @DisplayName("有 prev 時包成 ArticleNavRef")
+        void whenPrevExists_wrapsAsArticleNavRef() {
             UUID uuid = UUID.randomUUID();
             when(articleMapper.findPrevPublishedInSeries(10L, 3))
                     .thenReturn(new ArticleNavRef(uuid, "前一篇", "prev-slug"));
@@ -70,7 +75,8 @@ class ArticleFacadeSetPredicateTest {
         }
 
         @Test
-        void 末篇沒有next() {
+        @DisplayName("末篇沒有 next")
+        void lastArticleHasNoNext() {
             when(articleMapper.findNextPublishedInSeries(10L, 9)).thenReturn(null);
             assertThat(facade.findNextPublishedInSeries(10L, 9)).isEmpty();
         }
@@ -80,12 +86,14 @@ class ArticleFacadeSetPredicateTest {
     class FilterReadableIds {
 
         @Test
-        void 空輸入不查詢直接回空清單() {
+        @DisplayName("空輸入不查詢，直接回空清單")
+        void emptyInputReturnsEmptyListWithoutQuery() {
             assertThat(facade.filterReadableIds(List.of(), 1L, false)).isEmpty();
         }
 
         @Test
-        void 匿名只看得到published且維持輸入順序() {
+        @DisplayName("匿名只看得到 published，且維持輸入順序")
+        void anonymousOnlySeesPublishedAndKeepsInputOrder() {
             when(articleMapper.findVisibilityRowsByIds(List.of(3L, 1L, 2L)))
                     .thenReturn(List.of(
                             new ArticleMapper.ArticleVisibilityRow(1L, "PUBLISHED", 99L),
@@ -98,7 +106,8 @@ class ArticleFacadeSetPredicateTest {
         }
 
         @Test
-        void 作者本人看得到自己的非公開文章() {
+        @DisplayName("作者本人看得到自己的非公開文章")
+        void authorCanSeeOwnNonPublicArticle() {
             when(articleMapper.findVisibilityRowsByIds(List.of(1L, 2L)))
                     .thenReturn(List.of(
                             new ArticleMapper.ArticleVisibilityRow(1L, "ARCHIVED", 42L),
@@ -110,7 +119,8 @@ class ArticleFacadeSetPredicateTest {
         }
 
         @Test
-        void admin看得到全部() {
+        @DisplayName("admin 看得到全部")
+        void adminCanSeeAll() {
             when(articleMapper.findVisibilityRowsByIds(List.of(1L, 2L)))
                     .thenReturn(List.of(
                             new ArticleMapper.ArticleVisibilityRow(1L, "ARCHIVED", 99L),
@@ -122,7 +132,8 @@ class ArticleFacadeSetPredicateTest {
         }
 
         @Test
-        void 已刪除的id不會出現在結果中() {
+        @DisplayName("已刪除的 id 不會出現在結果中")
+        void deletedIdDoesNotAppearInResult() {
             when(articleMapper.findVisibilityRowsByIds(List.of(1L, 404L)))
                     .thenReturn(List.of(
                             new ArticleMapper.ArticleVisibilityRow(1L, "PUBLISHED", 99L)));
