@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.facade;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
@@ -10,6 +11,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
@@ -571,5 +573,53 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 article.getCoverImageUrl(),
                 article.getStatus() != null ? article.getStatus().name() : null
         );
+    }
+
+    // ─── 集合述詞實作 ───
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Map<Long, Integer> countPublishedBySeriesIds(Collection<Long> seriesIds) {
+        if (seriesIds == null || seriesIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return articleMapper.countPublishedBySeriesIds(seriesIds).stream()
+                .collect(Collectors.toMap(
+                        ArticleMapper.SeriesPublishedCountRow::seriesId,
+                        ArticleMapper.SeriesPublishedCountRow::publishedCount));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<ArticleNavRef> findPrevPublishedInSeries(Long seriesId, Integer currentPosition) {
+        return Optional.ofNullable(articleMapper.findPrevPublishedInSeries(seriesId, currentPosition));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<ArticleNavRef> findNextPublishedInSeries(Long seriesId, Integer currentPosition) {
+        return Optional.ofNullable(articleMapper.findNextPublishedInSeries(seriesId, currentPosition));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, boolean isAdmin) {
+        if (candidateIds == null || candidateIds.isEmpty()) {
+            return List.of();
+        }
+        Set<Long> readable = articleMapper.findVisibilityRowsByIds(candidateIds).stream()
+                .filter(row -> ArticleVisibility.isReadableBy(
+                        row.status(), row.authorId(), viewerId, isAdmin))
+                .map(ArticleMapper.ArticleVisibilityRow::id)
+                .collect(Collectors.toSet());
+        return candidateIds.stream().filter(readable::contains).toList();
     }
 }

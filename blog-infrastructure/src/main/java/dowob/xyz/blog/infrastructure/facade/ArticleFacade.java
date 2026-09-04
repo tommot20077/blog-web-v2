@@ -3,6 +3,7 @@ package dowob.xyz.blog.infrastructure.facade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
@@ -10,6 +11,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -245,4 +247,56 @@ public interface ArticleFacade {
      *                                                          ARTICLE_EDIT_NOT_ALLOWED 若文章目前狀態內容凍結
      */
     void applyRestoreContent(Long articleId, ArticleRestoreData data);
+
+    // ─── 集合述詞（Set Predicate，architecture.md §跨模組邊界規則）───
+
+    /**
+     * 集合述詞：一次取得多個 series 各自的 PUBLISHED 文章數。
+     *
+     * <p>供 series 模組同時作為「哪些 series 有公開內容」的過濾條件與
+     * {@code article_count} 的即時投影，取代原本直讀 articles 的
+     * EXISTS ＋ COUNT 子查詢（ARCH-13 / PERF-34）。</p>
+     *
+     * <p><b>傳輸量界限</b>：與 {@code seriesIds} 大小成正比。series 為低基數實體
+     * （部落格量級為數十），可接受。<b>重評門檻：series 總數 > 5,000。</b></p>
+     *
+     * @param seriesIds series 主鍵集合；空集合回傳空 Map
+     * @return series 主鍵 → PUBLISHED 文章數；<b>只含 count &gt; 0 者</b>
+     */
+    Map<Long, Integer> countPublishedBySeriesIds(Collection<Long> seriesIds);
+
+    /**
+     * series 內 PUBLISHED 且位置小於 current 的最後一篇（prev 導覽）。
+     *
+     * @param seriesId        series 主鍵
+     * @param currentPosition 當前文章在 series 內的位置
+     * @return 前一篇；當前為第一篇時為 {@code Optional.empty()}
+     */
+    Optional<ArticleNavRef> findPrevPublishedInSeries(Long seriesId, Integer currentPosition);
+
+    /**
+     * series 內 PUBLISHED 且位置大於 current 的第一篇（next 導覽）。
+     *
+     * @param seriesId        series 主鍵
+     * @param currentPosition 當前文章在 series 內的位置
+     * @return 後一篇；當前為最後一篇時為 {@code Optional.empty()}
+     */
+    Optional<ArticleNavRef> findNextPublishedInSeries(Long seriesId, Integer currentPosition);
+
+    /**
+     * 集合述詞：篩出 candidateIds 中「對該 viewer 可見」者，<b>維持輸入順序</b>。
+     *
+     * <p>可見性委派 {@code blog-common} 的 {@code ArticleVisibility}（單一真相）：
+     * PUBLISHED 全公開；非 PUBLISHED 僅作者本人與 ADMIN。查無此 id（已硬刪）者不會出現在結果中。</p>
+     *
+     * <p><b>傳輸量界限</b>：與 {@code candidateIds} 大小成正比，非與頁大小成正比。
+     * 目前唯一 caller 是收藏列表，界限為單一使用者的收藏數 B；payload 僅 id。
+     * <b>重評門檻：任一使用者 B &gt; 5,000。</b></p>
+     *
+     * @param candidateIds 候選文章主鍵（依 caller 期望的顯示順序）；空清單回傳空清單
+     * @param viewerId     檢視者主鍵；匿名為 null
+     * @param isAdmin      檢視者是否為 ADMIN
+     * @return 可見的文章主鍵，順序與輸入一致
+     */
+    List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, boolean isAdmin);
 }

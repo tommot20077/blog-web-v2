@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.mapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.config.UUIDTypeHandler;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.TagWithArticleUuid;
 import org.apache.ibatis.annotations.Arg;
@@ -14,6 +15,7 @@ import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -281,6 +283,120 @@ public interface ArticleMapper {
      */
     @Select("SELECT * FROM articles WHERE series_id = #{seriesId} ORDER BY series_position")
     List<Article> findBySeriesIdOrderByPosition(@Param("seriesId") Long seriesId);
+
+    /**
+     * 集合述詞：一次算出多個 series 各自的 PUBLISHED 文章數。
+     *
+     * <p>取代 series 模組原本直讀 articles 的 EXISTS ＋ COUNT 兩個子查詢
+     * （ARCH-13 / PERF-34）。GROUP BY 天然只回傳有資料的 series，
+     * 故 count = 0 者不出現在結果中，caller 可直接以 key 集合當作過濾條件。</p>
+     *
+     * @param seriesIds series 主鍵集合（不得為空，由 caller 保證）
+     * @return 每個有公開文章的 series 及其計數
+     */
+    @Select({
+        "<script>",
+        "SELECT series_id AS seriesId, COUNT(*) AS publishedCount",
+        "  FROM articles",
+        " WHERE status = 'PUBLISHED'",
+        "   AND series_id IN",
+        "<foreach collection='seriesIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        " GROUP BY series_id",
+        "</script>"
+    })
+    List<SeriesPublishedCountRow> countPublishedBySeriesIds(@Param("seriesIds") Collection<Long> seriesIds);
+
+    /**
+     * series 內 PUBLISHED 且 position 小於 current 的最後一筆（prev 導覽）。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（uuid, title, slug）必須與 {@link ArticleNavRef} 的元件順序一致，不可調整。</p>
+     *
+     * @param seriesId        series 主鍵
+     * @param currentPosition 當前文章在 series 內的位置
+     * @return 前一篇，若當前為第一篇則回傳 null
+     */
+    @Select("""
+            SELECT uuid, title, slug
+              FROM articles
+             WHERE series_id = #{seriesId}
+               AND status = 'PUBLISHED'
+               AND series_position < #{currentPosition}
+             ORDER BY series_position DESC
+             LIMIT 1
+            """)
+    ArticleNavRef findPrevPublishedInSeries(@Param("seriesId") Long seriesId,
+                                            @Param("currentPosition") Integer currentPosition);
+
+    /**
+     * series 內 PUBLISHED 且 position 大於 current 的第一筆（next 導覽）。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（uuid, title, slug）必須與 {@link ArticleNavRef} 的元件順序一致，不可調整。</p>
+     *
+     * @param seriesId        series 主鍵
+     * @param currentPosition 當前文章在 series 內的位置
+     * @return 後一篇，若當前為最後一篇則回傳 null
+     */
+    @Select("""
+            SELECT uuid, title, slug
+              FROM articles
+             WHERE series_id = #{seriesId}
+               AND status = 'PUBLISHED'
+               AND series_position > #{currentPosition}
+             ORDER BY series_position ASC
+             LIMIT 1
+            """)
+    ArticleNavRef findNextPublishedInSeries(@Param("seriesId") Long seriesId,
+                                            @Param("currentPosition") Integer currentPosition);
+
+    /**
+     * 集合述詞：取回一批文章的可見性判斷所需欄位。
+     *
+     * <p>只投影 id / status / author_id 三欄，刻意不用 {@code SELECT *}
+     * （避免把 content / content_html 等 TEXT 欄位拉進記憶體）。
+     * 政策判斷本身在 {@code ArticleFacadeImpl} 委派 {@code ArticleVisibility}，
+     * <b>不在 SQL 內重寫</b>——可見性政策必須維持單一真相。</p>
+     *
+     * @param articleIds 文章主鍵集合（不得為空，由 caller 保證）
+     * @return 可見性判斷所需的欄位列
+     */
+    @Select({
+        "<script>",
+        "SELECT id, status, author_id AS authorId",
+        "  FROM articles",
+        " WHERE id IN",
+        "<foreach collection='articleIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        "</script>"
+    })
+    List<ArticleVisibilityRow> findVisibilityRowsByIds(@Param("articleIds") Collection<Long> articleIds);
+
+    /**
+     * {@link #countPublishedBySeriesIds} 的投影列。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（seriesId, publishedCount）必須與此 record 的元件順序一致，不可調整。</p>
+     *
+     * @param seriesId       series 主鍵
+     * @param publishedCount 該 series 的 PUBLISHED 文章數
+     */
+    record SeriesPublishedCountRow(Long seriesId, Integer publishedCount) {}
+
+    /**
+     * {@link #findVisibilityRowsByIds} 的投影列。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（id, status, authorId）必須與此 record 的元件順序一致，不可調整。</p>
+     *
+     * @param id       文章主鍵
+     * @param status   文章狀態名稱
+     * @param authorId 作者主鍵
+     */
+    record ArticleVisibilityRow(Long id, String status, Long authorId) {}
 
     /**
      * 撈文章對應的 tag UUID 列表（給 ArticleDeletedEvent rich payload 用）。
