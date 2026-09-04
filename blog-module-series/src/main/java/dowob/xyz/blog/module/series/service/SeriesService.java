@@ -91,11 +91,16 @@ public class SeriesService {
                 .toList();
 
         long total = visibleIds.size();
-        int offset = Math.max(0, (page - 1) * size);
+        // page 為 client 給的 int，(page - 1) * size 以 int 相乘在大 page 時會溢位成負數；
+        // 舊寫法 Math.max(0, …) 會把溢位的負值吞成 0，等於靜默地回第 1 頁內容，卻仍回報呼叫端
+        // 給的巨大 page 號，與姊妹端點 BookmarkQueryService 對同樣輸入的行為（回空清單）不一致。
+        // (long) 必須放在第一個運算元上，讓整個乘法以 long 運算，避免相乘當下就已溢位。
+        long offset = (long) (page - 1) * size;
         if (offset >= visibleIds.size()) {
             return PageResult.of(page, size, total, List.of());
         }
-        List<Long> pageIds = visibleIds.subList(offset, Math.min(offset + size, visibleIds.size()));
+        int from = (int) offset;
+        List<Long> pageIds = visibleIds.subList(from, Math.min(from + size, visibleIds.size()));
 
         Map<Long, SeriesWithAuthor> rowById = mapper.findByIdsWithAuthor(pageIds).stream()
                 .collect(Collectors.toMap(SeriesWithAuthor::getId, r -> r));
