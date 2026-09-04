@@ -7,6 +7,7 @@ import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleWebTestConfiguration;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
@@ -27,7 +28,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.never;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -78,6 +82,16 @@ class AdminArticleControllerTest {
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
                 new UsernamePasswordAuthenticationToken(1L, null, authorities);
+        return authentication(auth);
+    }
+
+    private static RequestPostProcessor asAuthor() {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.AUTHOR.getSpringSecurityRole()));
+        Role.AUTHOR.getPermissions().forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(3L, null, authorities);
         return authentication(auth);
     }
 
@@ -162,6 +176,106 @@ class AdminArticleControllerTest {
                 .andExpect(status().isOk());
 
         verify(articleQueryService).getPendingArticles(1, 10);
+    }
+
+    // =========================================================================
+    // POST /api/v1/admin/articles/{uuid}/archive
+    // =========================================================================
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → 未認證 → 應回傳 401")
+    void archiveArticle_unauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive"))
+                .andExpect(status().isUnauthorized());
+        verify(articleService, never()).archiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → 一般用戶 → 應回傳 403（URL 層 hasRole(ADMIN) 即擋下）")
+    void archiveArticle_asUser_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive")
+                        .with(asUser()))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).archiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → AUTHOR → 應回傳 403（下架非作者自助操作）")
+    void archiveArticle_asAuthor_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive")
+                        .with(asAuthor()))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).archiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → Admin → 200，並以 ADMIN 角色委派 service")
+    void archiveArticle_asAdmin_shouldReturn200AndDelegate() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        ArticleResponse response = ArticleResponse.builder()
+                .uuid(uuid)
+                .title("已下架文章")
+                .status(ArticleStatus.ARCHIVED)
+                .build();
+        when(articleService.archiveArticle(1L, Role.ADMIN, uuid)).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                        .with(asAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("ARCHIVED"));
+
+        verify(articleService).archiveArticle(1L, Role.ADMIN, uuid);
+    }
+
+    // =========================================================================
+    // POST /api/v1/admin/articles/{uuid}/unarchive
+    // =========================================================================
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → 未認證 → 應回傳 401")
+    void unarchiveArticle_unauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/unarchive"))
+                .andExpect(status().isUnauthorized());
+        verify(articleService, never()).unarchiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → 一般用戶 → 應回傳 403")
+    void unarchiveArticle_asUser_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/unarchive")
+                        .with(asUser()))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).unarchiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → AUTHOR → 應回傳 403")
+    void unarchiveArticle_asAuthor_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/unarchive")
+                        .with(asAuthor()))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).unarchiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → Admin → 200，回到 DRAFT 並以 ADMIN 角色委派 service")
+    void unarchiveArticle_asAdmin_shouldReturn200AndDelegate() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        ArticleResponse response = ArticleResponse.builder()
+                .uuid(uuid)
+                .title("已復原文章")
+                .status(ArticleStatus.DRAFT)
+                .build();
+        when(articleService.unarchiveArticle(1L, Role.ADMIN, uuid)).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                        .with(asAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        verify(articleService).unarchiveArticle(1L, Role.ADMIN, uuid);
     }
 
 }

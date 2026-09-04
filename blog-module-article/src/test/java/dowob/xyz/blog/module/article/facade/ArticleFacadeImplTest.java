@@ -41,9 +41,11 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -408,6 +410,61 @@ class ArticleFacadeImplTest {
             assertThat(result).hasSize(1);
             assertThat(result.get(0).authorUsername()).isNull();
             assertThat(result.get(0).authorNickname()).isNull();
+        }
+    }
+
+    /**
+     * 幽靈 document 清除的「即時查證」查詢。
+     *
+     * <p>search 模組掃到 ES 裡的 document id 後，必須回 DB 問「這些現在還是 PUBLISHED 嗎」，
+     * 而不是拿重建當下的快照來比對——否則快照撈完之後才發布的文章會被當成幽靈刪掉。
+     * 判準必須即時，且 articles 是業務 Data，跨模組只能走本 facade（architecture.md）。</p>
+     */
+    @Nested
+    @DisplayName("filterPublishedUuids（幽靈清除的即時查證）")
+    class FilterPublishedUuids {
+
+        @Test
+        @DisplayName("只回傳目前確實是 PUBLISHED 的 uuid")
+        void returnsOnlyCurrentlyPublishedUuids() {
+            UUID published = UUID.randomUUID();
+            UUID archived = UUID.randomUUID();
+            when(articleMapper.findPublishedUuidsIn(List.of(published, archived)))
+                    .thenReturn(List.of(published.toString()));
+
+            Set<UUID> result = facade.filterPublishedUuids(List.of(published, archived));
+
+            assertThat(result).containsExactly(published);
+        }
+
+        @Test
+        @DisplayName("輸入為空時不查 DB（避免 IN () 語法錯誤）")
+        void whenEmptyInput_doesNotQueryDatabase() {
+            assertThat(facade.filterPublishedUuids(List.of())).isEmpty();
+            assertThat(facade.filterPublishedUuids(null)).isEmpty();
+
+            verify(articleMapper, never()).findPublishedUuidsIn(any());
+        }
+
+        /**
+         * ES 掃描是分頁的，單次回查的 id 數等於一頁的大小；一次全塞進 {@code IN (...)}
+         * 會產生超長 SQL 與過多 bind 參數，故 facade 內部再切批。
+         */
+        @Test
+        @DisplayName("超過批次上限時分批查詢，每批不超過上限")
+        void whenInputExceedsBatchSize_splitsIntoBatches() {
+            List<UUID> uuids = new ArrayList<>();
+            for (int i = 0; i < 1200; i++) {
+                uuids.add(UUID.randomUUID());
+            }
+            when(articleMapper.findPublishedUuidsIn(any())).thenReturn(List.of());
+
+            facade.filterPublishedUuids(uuids);
+
+            ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
+            verify(articleMapper, times(3)).findPublishedUuidsIn(captor.capture());
+            assertThat(captor.getAllValues()).allSatisfy(batch -> assertThat(batch).hasSizeLessThanOrEqualTo(500));
+            assertThat(captor.getAllValues().stream().mapToInt(List::size).sum()).isEqualTo(1200);
         }
     }
 

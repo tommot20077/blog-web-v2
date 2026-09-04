@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
@@ -172,12 +173,23 @@ class ArticleQuerySubService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * 文章詳情端點的可見性檢查。
+     *
+     * <p>政策本體委派 {@link ArticleVisibility}——同一條「誰可以讀到非公開文章」的規則，
+     * comment（留言串）與 reading（收藏列表）也在用。留第二份等價實作只靠慣例維持同步，
+     * 下次改政策就會漏掉一邊。本方法只負責把「不可讀」轉成 ARTICLE_NOT_FOUND
+     * （不回 403，避免成為存在性探測器）。</p>
+     *
+     * @param article    文章實體
+     * @param viewerId   檢視者資料庫主鍵；匿名為 null
+     * @param viewerRole 檢視者角色
+     */
     private void checkReadPermission(Article article, Long viewerId, Role viewerRole) {
-        boolean isAdmin = Role.ADMIN == viewerRole;
-        boolean isAuthor = Objects.equals(article.getAuthorId(), viewerId);
-        boolean isPublished = article.getStatus().isPubliclyVisible();
+        boolean readable = ArticleVisibility.isReadableBy(
+                article.getStatus(), article.getAuthorId(), viewerId, Role.ADMIN == viewerRole);
 
-        if (!isPublished && !isAdmin && !isAuthor) {
+        if (!readable) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }
     }

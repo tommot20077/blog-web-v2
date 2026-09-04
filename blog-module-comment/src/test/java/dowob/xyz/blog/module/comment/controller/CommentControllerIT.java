@@ -432,4 +432,89 @@ class CommentControllerIT {
         Article a = articleRepo.findByUuid(articleUuid).orElseThrow();
         assertThat(a.getCommentCount()).isEqualTo(0);
     }
+
+    // ─── 8. 文章可見性（下架後留言不得對外曝光）───
+
+    /**
+     * 將 setup 建立的文章改為 ARCHIVED（下架）。
+     */
+    private void archiveArticle() {
+        Article a = articleRepo.findByUuid(articleUuid).orElseThrow();
+        a.setStatus(ArticleStatus.ARCHIVED);
+        articleRepo.save(a);
+    }
+
+    @Test
+    @DisplayName("GET - 文章下架後，匿名取不到任何留言（200 + 空列表）")
+    void list_archivedArticle_anonymous_returnsEmptyList() throws Exception {
+        createCommentDirectly(USER_ID, null);
+        archiveArticle();
+
+        mockMvc.perform(get("/api/v1/articles/{uuid}/comments", articleUuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.topLevels.records.length()").value(0))
+                .andExpect(jsonPath("$.data.topLevels.total").value(0))
+                .andExpect(jsonPath("$.data.totalCommentCount").value(0));
+    }
+
+    @Test
+    @DisplayName("GET - 文章下架後，非作者的登入者也取不到留言")
+    void list_archivedArticle_otherUser_returnsEmptyList() throws Exception {
+        createCommentDirectly(USER_ID, null);
+        archiveArticle();
+
+        mockMvc.perform(get("/api/v1/articles/{uuid}/comments", articleUuid)
+                .with(asUser(OTHER_USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.topLevels.records.length()").value(0))
+                .andExpect(jsonPath("$.data.totalCommentCount").value(0));
+    }
+
+    @Test
+    @DisplayName("GET - 文章下架後，作者本人仍看得到自己文章的留言")
+    void list_archivedArticle_author_stillSeesComments() throws Exception {
+        createCommentDirectly(USER_ID, null);
+        archiveArticle();
+
+        mockMvc.perform(get("/api/v1/articles/{uuid}/comments", articleUuid)
+                .with(asUser(USER_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.topLevels.records.length()").value(1));
+    }
+
+    @Test
+    @DisplayName("GET - 文章下架後，ADMIN 仍看得到留言")
+    void list_archivedArticle_admin_stillSeesComments() throws Exception {
+        createCommentDirectly(USER_ID, null);
+        archiveArticle();
+
+        mockMvc.perform(get("/api/v1/articles/{uuid}/comments", articleUuid)
+                .with(asUser(ADMIN_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.topLevels.records.length()").value(1));
+    }
+
+    @Test
+    @DisplayName("GET - 未發布（DRAFT）文章的留言同樣不對匿名曝光")
+    void list_draftArticle_anonymous_returnsEmptyList() throws Exception {
+        createCommentDirectly(USER_ID, null);
+        Article a = articleRepo.findByUuid(articleUuid).orElseThrow();
+        a.setStatus(ArticleStatus.DRAFT);
+        articleRepo.save(a);
+
+        mockMvc.perform(get("/api/v1/articles/{uuid}/comments", articleUuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.topLevels.records.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("GET - 不存在的文章與已下架文章回應形狀一致（不成為存在性探測器）")
+    void list_unknownArticle_anonymous_returnsEmptyList() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/{uuid}/comments", UUID.randomUUID()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.topLevels.records.length()").value(0))
+                .andExpect(jsonPath("$.data.totalCommentCount").value(0));
+    }
 }

@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.comment.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
@@ -10,6 +11,7 @@ import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.response.ArticleCommentListResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -43,6 +45,7 @@ class CommentServiceTest {
     private final Long userId = 10L;
     private final Long articleId = 100L;
     private final UUID articleUuid = UUID.randomUUID();
+    private final Long authorId = 7L;
 
     @Test
     void createComment_topLevel_savesWithUuidAndDefaults() {
@@ -362,14 +365,14 @@ class CommentServiceTest {
 
     @Test
     void listComments_topLevelNewestFirstByDefault() {
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
+        stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(eq(articleId), eq("newest"), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
         when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of(makeRow(11L, 1L)));
         when(commentMapper.countByArticle(articleId)).thenReturn(3);
         when(commentMapper.countTopLevelByArticle(articleId)).thenReturn(2);
 
-        ArticleCommentListResponse resp = service.listComments(articleUuid, null, "newest", 1, 20);
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, false, "newest", 1, 20);
 
         assertThat(resp.getTopLevels().getRecords()).hasSize(2);
         assertThat(resp.getTotalCommentCount()).isEqualTo(3);
@@ -389,14 +392,14 @@ class CommentServiceTest {
         deletedTop.setLikeCount(5);
         deletedTop.setCreatedAt(LocalDateTime.now());
 
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
+        stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(deletedTop));
         when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
         when(commentMapper.countByArticle(any())).thenReturn(1);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
 
-        ArticleCommentListResponse resp = service.listComments(articleUuid, null, "newest", 1, 20);
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, false, "newest", 1, 20);
 
         var first = resp.getTopLevels().getRecords().get(0);
         assertThat(first.getDeleted()).isTrue();
@@ -410,7 +413,7 @@ class CommentServiceTest {
     @Test
     void listComments_includesLikedFlagForCurrentUser() {
         Long userIdForTest = 99L;
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
+        stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
         when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
@@ -419,7 +422,7 @@ class CommentServiceTest {
         when(commentMapper.findLikedCommentIdsByUser(eq(userIdForTest), any()))
                 .thenReturn(List.of(1L));
 
-        ArticleCommentListResponse resp = service.listComments(articleUuid, userIdForTest, "newest", 1, 20);
+        ArticleCommentListResponse resp = service.listComments(articleUuid, userIdForTest, false, "newest", 1, 20);
 
         assertThat(resp.getTopLevels().getRecords().get(0).getLiked()).isTrue();
         assertThat(resp.getTopLevels().getRecords().get(1).getLiked()).isFalse();
@@ -427,14 +430,14 @@ class CommentServiceTest {
 
     @Test
     void listComments_unauthenticated_likedFlagAlwaysFalse() {
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
+        stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null)));
         when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
         when(commentMapper.countByArticle(any())).thenReturn(1);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
 
-        ArticleCommentListResponse resp = service.listComments(articleUuid, null, "newest", 1, 20);
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, false, "newest", 1, 20);
 
         assertThat(resp.getTopLevels().getRecords().get(0).getLiked()).isFalse();
         verify(commentMapper, org.mockito.Mockito.never()).findLikedCommentIdsByUser(any(), any());
@@ -456,5 +459,105 @@ class CommentServiceTest {
         row.setAuthorNickname("user" + id);
         row.setAuthorAvatarUrl(null);
         return row;
+    }
+
+    // ── 文章可見性（下架／未發布文章的留言不得對外曝光）────────────────────
+
+    @Test
+    @DisplayName("文章已下架時，匿名取得空清單且不查詢任何留言")
+    void listComments_archivedArticle_anonymous_returnsEmptyAndSkipsCommentQueries() {
+        stubArticle("ARCHIVED", authorId);
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, false, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords()).isEmpty();
+        assertThat(resp.getTopLevels().getTotal()).isZero();
+        assertThat(resp.getTotalCommentCount()).isZero();
+        verify(commentMapper, org.mockito.Mockito.never())
+                .findTopLevelByArticle(any(), any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("文章已下架時，非作者的登入者同樣取得空清單")
+    void listComments_archivedArticle_otherUser_returnsEmpty() {
+        stubArticle("ARCHIVED", authorId);
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, 99L, false, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("文章已下架時，作者本人仍取得留言")
+    void listComments_archivedArticle_author_returnsComments() {
+        stubArticle("ARCHIVED", authorId);
+        stubOneTopLevelComment();
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, authorId, false, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("文章已下架時，ADMIN 仍取得留言")
+    void listComments_archivedArticle_admin_returnsComments() {
+        stubArticle("ARCHIVED", authorId);
+        stubOneTopLevelComment();
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, 99L, true, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("文章為 DRAFT 時，匿名取得空清單")
+    void listComments_draftArticle_anonymous_returnsEmpty() {
+        stubArticle("DRAFT", authorId);
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, false, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("文章不存在時回傳空清單（與不可見文章同形狀，不成為存在性探測器）")
+    void listComments_articleNotFound_returnsEmpty() {
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, false, "newest", 1, 20);
+
+        assertThat(resp.getTopLevels().getRecords()).isEmpty();
+        assertThat(resp.getTotalCommentCount()).isZero();
+        verify(commentMapper, org.mockito.Mockito.never())
+                .findTopLevelByArticle(any(), any(), anyInt(), anyInt());
+    }
+
+    /**
+     * 以指定狀態／作者 stub 跨模組文章查詢。
+     *
+     * @param status   文章狀態名稱
+     * @param ownerId  文章作者資料庫主鍵
+     */
+    private void stubArticle(String status, Long ownerId) {
+        when(articleFacade.findByUuid(articleUuid))
+                .thenReturn(Optional.of(new ArticleData(articleId, articleUuid, ownerId, status, null, null)));
+    }
+
+    /**
+     * stub 一篇 PUBLISHED 文章（多數既有測試的前提）。
+     */
+    private void stubPublishedArticle() {
+        stubArticle("PUBLISHED", authorId);
+    }
+
+    /**
+     * stub 「該文章有 1 則 top-level 留言」的 mapper 回應。
+     */
+    private void stubOneTopLevelComment() {
+        when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(makeRow(1L, null)));
+        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.countByArticle(any())).thenReturn(1);
+        when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
     }
 }

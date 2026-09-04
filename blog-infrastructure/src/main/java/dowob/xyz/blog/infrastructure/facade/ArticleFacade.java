@@ -8,8 +8,10 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -49,6 +51,24 @@ public interface ArticleFacade {
      * @return 所有已發布文章的索引資料列表
      */
     List<ArticleIndexData> findAllPublishedForIndex();
+
+    /**
+     * 在給定的文章 UUID 中，篩出「查詢當下確實是 PUBLISHED」的那些
+     *
+     * <p>
+     * 供搜尋模組清除幽靈 document（ES 有、DB 已非 PUBLISHED）使用。
+     * 與 {@link #findAllPublishedForIndex()} 的差別在於**時點**：後者是全量重建開始時的快照，
+     * 拿快照當清除判準會把「快照撈完之後才發布、由 MQ 寫進索引」的文章誤判為幽靈刪掉；
+     * 本方法是即時查證，因此並發發布的文章會被認出來而保留。
+     * </p>
+     *
+     * <p>{@code articles} 是業務 Data，跨模組不得直接查表（見 {@code ai-docs/architecture.md}），
+     * 故此查證由 article 模組提供。實作端會自行切批，caller 可一次傳入一整頁掃描結果。</p>
+     *
+     * @param uuids 待查證的文章公開 UUID；null 或空集合回傳空集合（不查 DB）
+     * @return 其中目前狀態為 PUBLISHED 的 UUID 集合
+     */
+    Set<UUID> filterPublishedUuids(Collection<UUID> uuids);
 
     /**
      * 取得已發布文章的基本資訊（標籤列表）

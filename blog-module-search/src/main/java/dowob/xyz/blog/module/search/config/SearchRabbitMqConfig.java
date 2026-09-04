@@ -14,8 +14,8 @@ import java.util.Map;
  *
  * <p>
  * 宣告搜尋索引 Queue，並綁定至文章事件 Exchange，
- * 接收 {@code article.published} 路由鍵的訊息，
- * 觸發 Elasticsearch 索引更新。
+ * 接收 {@code article.published} / {@code article.updated} / {@code article.deleted} /
+ * {@code article.archived} 路由鍵的訊息，觸發 Elasticsearch 索引更新或移除。
  * </p>
  *
  * @author Yuan
@@ -60,6 +60,23 @@ public class SearchRabbitMqConfig {
     public static final String QUEUE_SEARCH_INDEX_DELETE = "queue.search.index.delete";
 
     /**
+     * 文章下架 Routing Key
+     *
+     * <p>
+     * 與 {@link #ROUTING_KEY_DELETED} 分開訂閱是刻意的：{@code article.deleted}
+     * 另有 series 模組綁定並遞減 {@code series.article_count}，
+     * 下架若共用同一 routing key 會讓該計數被誤扣。對搜尋模組而言兩者處置相同
+     * （移除 document），故指向同一段處理邏輯但各自一條 queue。
+     * </p>
+     */
+    public static final String ROUTING_KEY_ARCHIVED = "article.archived";
+
+    /**
+     * 搜尋索引下架移除 Queue 名稱
+     */
+    public static final String QUEUE_SEARCH_INDEX_ARCHIVE = "queue.search.index.archive";
+
+    /**
      * 建立死信隊列（DLQ）參數
      *
      * @return 包含死信交換器與路由 Key 的 Map
@@ -98,6 +115,16 @@ public class SearchRabbitMqConfig {
     @Bean
     public Queue searchIndexDeleteQueue() {
         return new Queue(QUEUE_SEARCH_INDEX_DELETE, true, false, false, dlqArgs());
+    }
+
+    /**
+     * 宣告搜尋索引下架移除 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue searchIndexArchiveQueue() {
+        return new Queue(QUEUE_SEARCH_INDEX_ARCHIVE, true, false, false, dlqArgs());
     }
 
     /**
@@ -152,5 +179,18 @@ public class SearchRabbitMqConfig {
                 .bind(searchIndexDeleteQueue())
                 .to(searchArticleEventsExchange())
                 .with(ROUTING_KEY_DELETED);
+    }
+
+    /**
+     * 將搜尋索引下架移除 Queue 綁定至文章事件 Exchange（Archived）
+     *
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding searchIndexArchiveBinding() {
+        return BindingBuilder
+                .bind(searchIndexArchiveQueue())
+                .to(searchArticleEventsExchange())
+                .with(ROUTING_KEY_ARCHIVED);
     }
 }

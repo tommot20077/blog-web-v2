@@ -464,6 +464,123 @@ class ArticleCommandSubService {
     }
 
     /**
+     * 下架文章（PUBLISHED → ARCHIVED，僅 ADMIN）
+     *
+     * <p>
+     * 補上 {@link #VALID_TRANSITIONS} 裡 PUBLISHED → ARCHIVED 這條邊的入口。
+     * 在此之前已發布文章只剩硬刪（CASCADE、不可逆）一途，下架是可逆的替代路徑
+     * （復原見 {@link #unarchiveArticle}）。
+     * </p>
+     *
+     * <p>
+     * <b>權限刻意嚴於其他寫入操作：僅 ADMIN</b>，不走 {@link #checkWritePermission}
+     * 的作者放行。下架是把公開內容自站上撤下的編審決定，不該由作者自助執行；
+     * 作者要停止曝光自己的文章應走刪除。角色守衛刻意排在
+     * {@code entityFinder} 查詢<b>之前</b>（與 {@link #rejectArticle} 一致），
+     * 避免非 ADMIN 以「A0203 還是 A0201」的回應差異探測文章是否存在。
+     * </p>
+     *
+     * <p>
+     * <b>連鎖副作用</b>：下架後文章即非公開，發布時建立的 Elasticsearch 索引必須移除，
+     * 否則搜尋結果仍會曝光已下架文章的標題與內文摘要。此處以
+     * {@link ArticleEventPublisher#publishArchived} 發出 {@code article.archived}，
+     * 由 search 模組的 consumer 刪除該 document。其餘公開讀取路徑
+     * （文章列表 / 分類列表 / 歸檔投影 / series 詳情與列表 / 熱門排行回填）
+     * 一律以 {@code status = 'PUBLISHED'} 為條件即時查詢，改狀態即自動排除，無需額外連動。
+     * </p>
+     *
+     * <p>
+     * <b>刻意不標註 {@code @Transactional}</b>：本方法在 DB 寫入後發送 MQ，
+     * 若整段落在交易作用域內就會在 commit 前送出訊息（違反
+     * {@code code-standards.md §Transaction+MQ 時序}）。故改以
+     * {@link TransactionTemplate} 收斂 DB 操作，commit 成功後才 best-effort 發事件。
+     * </p>
+     *
+     * @param operatorId   操作者資料庫主鍵
+     * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
+     * @param articleUuid  文章公開 UUID
+     * @return 下架後的文章完整資訊
+     */
+    public ArticleResponse archiveArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+        if (operatorRole != Role.ADMIN) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則（SEC-02） */
+        validateStatusTransition(article.getStatus(), ArticleStatus.ARCHIVED, operatorRole);
+        article.setStatus(ArticleStatus.ARCHIVED);
+        /*
+         * 與其他狀態轉換點一致地清除過期駁回理由。今日 VALID_TRANSITIONS 只允許
+         * PUBLISHED → ARCHIVED，來源不可能是 REJECTED，故此處是縱深防禦（涵蓋修復前
+         * 就殘留 rejectReason 的舊資料），不是現行洩漏路徑；但不變量「不在 REJECTED
+         * 就不該帶著駁回理由」必須由每個轉換點共同維持，不能倚賴「表剛好不允許」。
+         */
+        clearRejectReasonIfNotRejected(article);
+
+        /** DB 寫入收斂在 transaction 內，確保發事件時已 commit */
+        Article updated = transactionTemplate.execute(status -> articleRepository.save(article));
+
+        /** DB 已 commit，best-effort 發送下架事件 MQ（供 search 模組移除 ES 索引） */
+        articleEventPublisher.publishArchived(updated);
+
+        return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
+     * 復原已下架文章（ARCHIVED → DRAFT，僅 ADMIN）
+     *
+     * <p>
+     * 補上 {@link #VALID_TRANSITIONS} 裡 ARCHIVED → DRAFT 這條邊的入口。
+     * 復原後文章回到可編輯的草稿狀態，要再次公開必須重新走
+     * {@link #submitForReview} / {@link #publishArticle} 流程——
+     * 刻意不直接回到 PUBLISHED，避免繞過既有的發布把關。
+     * </p>
+     *
+     * <p>
+     * <b>來源限制比狀態機更嚴是刻意的</b>（見 VALID_TRANSITIONS 的「表與入口的分工」）：
+     * 表裡 REJECTED → DRAFT、PENDING_REVIEW → DRAFT 都是合法轉換，但那兩條不屬於
+     * 「復原下架文章」語意，不從本端點放行；轉換本身是否合法仍交由
+     * {@link #validateStatusTransition} 判定，本方法不內嵌第二套規則。
+     * </p>
+     *
+     * <p>
+     * <b>刻意不發送任何 MQ 事件</b>：文章在下架時已從 Elasticsearch 索引移除，
+     * DRAFT 也不進索引（索引僅由 ArticlePublishedEvent / ArticleUpdatedEvent 建立，
+     * 兩者皆限 PUBLISHED），故無反向索引動作需求；此與同樣不發事件的
+     * {@link #submitForReview}、{@link #withdrawArticle} 對稱。
+     * </p>
+     *
+     * @param operatorId   操作者資料庫主鍵
+     * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
+     * @param articleUuid  文章公開 UUID
+     * @return 復原後的文章完整資訊
+     */
+    @Transactional
+    public ArticleResponse unarchiveArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+        if (operatorRole != Role.ADMIN) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        /*
+         * 入口語意守衛（比狀態機更嚴，見 VALID_TRANSITIONS 的「表與入口的分工」）：
+         * 復原專指「把已下架文章拉回可編輯狀態」，故來源必須是 ARCHIVED。
+         */
+        if (article.getStatus() != ArticleStatus.ARCHIVED) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
+        }
+        /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則（SEC-02） */
+        validateStatusTransition(article.getStatus(), ArticleStatus.DRAFT, operatorRole);
+        article.setStatus(ArticleStatus.DRAFT);
+        /* 同 archiveArticle：DRAFT 不是 REJECTED，且復原後文章會回到作者手上重新編輯送審 */
+        clearRejectReasonIfNotRejected(article);
+
+        Article updated = articleRepository.save(article);
+        return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
      * 清除已過期的駁回理由：文章只要不在 {@link ArticleStatus#REJECTED}，就不該帶著駁回理由。
      *
      * <p>
@@ -537,9 +654,11 @@ class ArticleCommandSubService {
      *
      * <p>
      * <b>可見性刻意放寬到 package-private</b>：狀態機的完整 5×5 轉換矩陣要由
-     * {@code ArticleCommandSubServiceTest} 直接驗證。表裡有數條邊（PUBLISHED → ARCHIVED、
-     * ARCHIVED → DRAFT）目前沒有任何公開端點可觸發，透過既有 public 方法無法覆蓋全矩陣；
+     * {@code ArticleCommandSubServiceTest} 直接驗證。矩陣中多數格子（含所有非法轉換）
+     * 沒有任何 public 方法可觸發，透過既有入口無法覆蓋全矩陣；
      * 本類別本身即 package-private，故此舉不擴大模組外的 API 面。
+     * （PUBLISHED → ARCHIVED、ARCHIVED → DRAFT 原本亦無入口，現已分別由
+     * {@link #archiveArticle}、{@link #unarchiveArticle} 補上。）
      * </p>
      *
      * @param from         目前狀態

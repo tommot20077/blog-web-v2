@@ -31,10 +31,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -108,6 +112,14 @@ public class ArticleFacadeImpl implements ArticleFacade {
     private final ArticleFileBinder articleFileBinder;
 
     /**
+     * {@link #filterPublishedUuids(Collection)} 單次 {@code IN (...)} 的最大 id 數
+     *
+     * <p>caller（搜尋模組的幽靈掃描）以每頁 1000 筆的節奏送進來，一次全塞進單一 SQL 會產生
+     * 上千個 bind 參數；切成 500 一批可讓 SQL 大小與 planner 成本維持在可預期範圍。</p>
+     */
+    private static final int PUBLISHED_FILTER_BATCH_SIZE = 500;
+
+    /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
      *
      * @return 已發布文章的索引資料列表
@@ -117,6 +129,33 @@ public class ArticleFacadeImpl implements ArticleFacade {
         return articleMapper.findAllPublished().stream()
                 .map(this::toIndexData)
                 .toList();
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>空輸入直接回空集合，避免產生 {@code IN ()}；輸入過大時切批查詢，
+     * 避免單一 SQL 塞進上千個 bind 參數。</p>
+     */
+    @Override
+    public Set<UUID> filterPublishedUuids(Collection<UUID> uuids) {
+        if (uuids == null || uuids.isEmpty()) {
+            return Set.of();
+        }
+        List<UUID> distinct = uuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (distinct.isEmpty()) {
+            return Set.of();
+        }
+        Set<UUID> published = new HashSet<>();
+        for (int from = 0; from < distinct.size(); from += PUBLISHED_FILTER_BATCH_SIZE) {
+            int to = Math.min(from + PUBLISHED_FILTER_BATCH_SIZE, distinct.size());
+            articleMapper.findPublishedUuidsIn(distinct.subList(from, to))
+                    .forEach(uuid -> published.add(UUID.fromString(uuid)));
+        }
+        return published;
     }
 
     /**
