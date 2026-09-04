@@ -281,13 +281,15 @@ public class VersioningService {
         /* HTML 與 TOC 必須出自同一次 render，兩者一起回填；只回填 HTML 會讓 article.toc
          * 停在還原前那版，章節導覽指向不存在的錨點。 */
         RenderResult rendered = markdownRenderer.render(v.getContent());
+        /* SEC-02：刻意不傳 v.getStatus()。還原只還原內容，文章狀態一律不動——
+         * 快照的 status 只作為「這份快照是哪個階段的內容」的紀錄（版本詳情 API 仍回傳），
+         * 不再被套回文章；狀態轉換的唯一真相是 ArticleCommandSubService.VALID_TRANSITIONS。 */
         ArticleRestoreData restoreData = new ArticleRestoreData(
             v.getTitle(),
             v.getSlug(),
             v.getContent(),
             v.getSummary(),
             v.getCoverImageUrl(),
-            v.getStatus(),
             rendered.html(),
             tocCodec.serialize(rendered.toc()),
             v.getTags() != null ? v.getTags() : List.of()

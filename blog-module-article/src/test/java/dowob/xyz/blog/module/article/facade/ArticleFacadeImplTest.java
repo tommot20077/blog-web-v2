@@ -674,7 +674,7 @@ class ArticleFacadeImplTest {
         void applyRestoreContent_articleNotFound_throws() {
             when(articleRepository.findById(999L)).thenReturn(Optional.empty());
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", "[]", List.of()
+                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
             );
 
             assertThatThrownBy(() -> facade.applyRestoreContent(999L, data))
@@ -689,9 +689,14 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("PUBLISHED article 還原 → publishContentChanged(RESTORED) + publishUpdated 都發")
         void applyRestoreContent_publishedArticle_publishesBoth() {
+            /*
+             * SEC-02 後：publishUpdated 的判準是「文章現在的狀態」，不再是快照當時的狀態
+             * （ArticleRestoreData 已無 status 欄位），因此本案例的前提改由文章本身是 PUBLISHED 表達。
+             */
+            existing.setStatus(ArticleStatus.PUBLISHED);
             ArticleRestoreData data = new ArticleRestoreData(
                 "New Title", "new-slug", "# New", "New summary", "https://cdn/new.jpg",
-                "PUBLISHED", "<p>New</p>", "[]", List.of(UUID.randomUUID(), UUID.randomUUID())
+                "<p>New</p>", "[]", List.of(UUID.randomUUID(), UUID.randomUUID())
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -714,7 +719,7 @@ class ArticleFacadeImplTest {
         @DisplayName("DRAFT article 還原 → 只發 publishContentChanged，不發 publishUpdated")
         void applyRestoreContent_draftArticle_publishesOnlyContentChanged() {
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", "[]", List.of()
+                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -725,11 +730,11 @@ class ArticleFacadeImplTest {
         }
 
         @Test
-        @DisplayName("status 為 null → 不更新 article.status")
-        void applyRestoreContent_statusNull_doesNotChangeStatus() {
+        @DisplayName("還原不改動 article.status（SEC-02：還原資料已不含 status）")
+        void applyRestoreContent_doesNotChangeStatus() {
             ArticleStatus before = existing.getStatus();
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, null, "<p>c</p>", "[]", List.of()
+                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -741,7 +746,7 @@ class ArticleFacadeImplTest {
         @DisplayName("tags 為 null → syncArticleTags 用空清單")
         void applyRestoreContent_tagsNull_syncWithEmptyList() {
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", "[]", null
+                "T", "s", "c", "sum", null, "<p>c</p>", "[]", null
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -755,7 +760,7 @@ class ArticleFacadeImplTest {
             existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
             String restoredToc = "[{\"id\":\"heading-新章節\",\"text\":\"新章節\",\"level\":2}]";
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "## 新章節", "sum", null, "PUBLISHED", "<h2 id=\"heading-新章節\">新章節</h2>",
+                "T", "s", "## 新章節", "sum", null, "<h2 id=\"heading-新章節\">新章節</h2>",
                 restoredToc, List.of()
             );
 
@@ -769,7 +774,7 @@ class ArticleFacadeImplTest {
         void applyRestoreContent_tocNull_storesEmptyJsonArray() {
             existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "DRAFT", "<p>c</p>", null, List.of()
+                "T", "s", "c", "sum", null, "<p>c</p>", null, List.of()
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -780,8 +785,10 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("invocation 順序：save → syncArticleTags → publishEvents")
         void applyRestoreContent_invocationOrder_saveThenSyncTagsThenPublish() {
+            /** publishUpdated 只在文章現況為 PUBLISHED 時發，故順序驗證需以 PUBLISHED 文章為前提 */
+            existing.setStatus(ArticleStatus.PUBLISHED);
             ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", "[]", List.of()
+                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
             );
 
             facade.applyRestoreContent(articleId, data);
@@ -821,7 +828,7 @@ class ArticleFacadeImplTest {
 
                 ArticleRestoreData data = new ArticleRestoreData(
                         "T", "s", "data.content() 不應被拿來掃描的內容", "sum", null,
-                        "DRAFT", "<p>c</p>", "[]", List.of());
+                        "<p>c</p>", "[]", List.of());
 
                 /**
                  * 模擬 repository.save() 回傳的 entity 內容與 data.content() 不同：
@@ -847,7 +854,7 @@ class ArticleFacadeImplTest {
             void applyRestoreContent_contentWithoutImages_bindsEmptyList() {
                 ArticleRestoreData data = new ArticleRestoreData(
                         "T", "s", "純文字內容，沒有任何圖片連結", "sum", null,
-                        "DRAFT", "<p>c</p>", "[]", List.of());
+                        "<p>c</p>", "[]", List.of());
 
                 facade.applyRestoreContent(articleId, data);
 
@@ -859,7 +866,7 @@ class ArticleFacadeImplTest {
             void applyRestoreContent_fileBindingThrows_restoreStillSucceeds() {
                 ArticleRestoreData data = new ArticleRestoreData(
                         "T", "s", "![img](/api/v1/files/" + UUID.randomUUID() + "/content)",
-                        "sum", null, "DRAFT", "<p>c</p>", "[]", List.of());
+                        "sum", null, "<p>c</p>", "[]", List.of());
                 doThrow(new RuntimeException("file service 掛了"))
                         .when(fileFacade).bindFilesToArticle(any(), any());
 
@@ -873,8 +880,10 @@ class ArticleFacadeImplTest {
             @Test
             @DisplayName("順序：save → publish events → bindFilesToArticleSafely（DB commit 後才對外呼叫綁定）")
             void applyRestoreContent_invocationOrder_saveThenPublishThenBind() {
+                /** publishUpdated 只在文章現況為 PUBLISHED 時發，故順序驗證需以 PUBLISHED 文章為前提 */
+                existing.setStatus(ArticleStatus.PUBLISHED);
                 ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "c", "sum", null, "PUBLISHED", "<p>c</p>", "[]", List.of());
+                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
 
                 facade.applyRestoreContent(articleId, data);
 
@@ -883,6 +892,103 @@ class ArticleFacadeImplTest {
                 inOrder.verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
                 inOrder.verify(articleEventPublisher).publishUpdated(existing);
                 inOrder.verify(fileFacade).bindFilesToArticle(eq(articleUuid), anyList());
+            }
+        }
+
+        /**
+         * SEC-02（HIGH）：版本還原路徑繞過文章狀態守衛。
+         *
+         * <p><strong>攻擊面（修復前）</strong>：{@code ArticleRestoreData} 帶著快照當時的 status，
+         * {@code applyRestoreContent} 直接 {@code setStatus} 套回去。作者拿一份舊的 PUBLISHED 快照
+         * 按「還原」，就能把被 ADMIN 駁回（REJECTED）或送審中（PENDING_REVIEW）的文章直接變回
+         * PUBLISHED，繞過 {@code ArticleCommandSubService.VALID_TRANSITIONS} 與
+         * 「PENDING_REVIEW → PUBLISHED 僅 ADMIN」的限制。</p>
+         *
+         * <p><strong>修法（Yuan 拍板）</strong>：還原只還原內容，狀態一律不動——不是把還原接進守衛，
+         * 而是移除還原改動狀態的能力：{@code ArticleRestoreData} 連 status 欄位都拿掉，讓這條路徑
+         * 在型別上就無法改狀態。</p>
+         *
+         * <p>下表以「文章現況」為變因（快照狀態已無從傳入，這正是修法的重點）：</p>
+         * <pre>
+         * # | 文章現況        | 預期
+         * 1 | REJECTED       | 仍為 REJECTED（不得繞過審核）
+         * 2 | PENDING_REVIEW | 仍為 PENDING_REVIEW
+         * 3 | ARCHIVED       | 仍為 ARCHIVED
+         * 4 | DRAFT          | 仍為 DRAFT，且不發 publishUpdated（非公開文章不得被重新索引）
+         * 5 | PUBLISHED      | 仍為 PUBLISHED，且照發 publishUpdated（事件判準看文章現況）
+         * </pre>
+         */
+        @Nested
+        @DisplayName("SEC-02 狀態守衛：還原只還原內容，不得改動文章狀態")
+        class RestoreNeverChangesStatus {
+
+            @Test
+            @DisplayName("REJECTED 文章還原 → 狀態仍為 REJECTED（不得繞過審核）")
+            void applyRestoreContent_rejectedArticle_keepsRejectedStatus() {
+                existing.setStatus(ArticleStatus.REJECTED);
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+
+                facade.applyRestoreContent(articleId, data);
+
+                assertThat(existing.getStatus())
+                        .as("還原不得改動文章狀態，否則可繞過 PENDING_REVIEW → PUBLISHED 僅 ADMIN 的限制")
+                        .isEqualTo(ArticleStatus.REJECTED);
+                assertThat(existing.getContent())
+                        .as("內容仍必須被還原")
+                        .isEqualTo("c");
+            }
+
+            @Test
+            @DisplayName("PENDING_REVIEW 文章還原 → 狀態仍為 PENDING_REVIEW")
+            void applyRestoreContent_pendingReviewArticle_keepsPendingReviewStatus() {
+                existing.setStatus(ArticleStatus.PENDING_REVIEW);
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+
+                facade.applyRestoreContent(articleId, data);
+
+                assertThat(existing.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
+            }
+
+            @Test
+            @DisplayName("ARCHIVED 文章還原 → 狀態仍為 ARCHIVED")
+            void applyRestoreContent_archivedArticle_keepsArchivedStatus() {
+                existing.setStatus(ArticleStatus.ARCHIVED);
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+
+                facade.applyRestoreContent(articleId, data);
+
+                assertThat(existing.getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
+            }
+
+            @Test
+            @DisplayName("DRAFT 文章還原 → 狀態仍為 DRAFT，且不發 publishUpdated（非公開文章不得被重新索引）")
+            void applyRestoreContent_draftArticle_keepsDraftAndDoesNotPublishUpdated() {
+                existing.setStatus(ArticleStatus.DRAFT);
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+
+                facade.applyRestoreContent(articleId, data);
+
+                assertThat(existing.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+                verify(articleEventPublisher).publishContentChanged(existing,
+                        ArticleContentChangedEvent.Action.RESTORED);
+                verify(articleEventPublisher, never()).publishUpdated(any());
+            }
+
+            @Test
+            @DisplayName("PUBLISHED 文章還原 → 狀態仍為 PUBLISHED 且照發 publishUpdated")
+            void applyRestoreContent_publishedArticle_keepsPublishedAndPublishesUpdated() {
+                existing.setStatus(ArticleStatus.PUBLISHED);
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+
+                facade.applyRestoreContent(articleId, data);
+
+                assertThat(existing.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
+                verify(articleEventPublisher).publishUpdated(existing);
             }
         }
     }
