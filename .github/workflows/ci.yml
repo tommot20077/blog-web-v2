@@ -2,9 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [ "**" ]
+    branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+
+# 同一分支/PR 連續推 commit 時取消尚未完成的舊 run，避免 runner 疊加。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -89,3 +94,35 @@ jobs:
           name: e2e-reports
           path: 'blog-start/target/surefire-reports/'
           retention-days: 7
+
+  # 匯總 job：main 分支 ruleset 的 required status check 指向這一個 job（context 為 `test`）。
+  # 之後增減 CI job 時只需改本檔的 needs，不必同步改 repo ruleset 設定
+  # ——ruleset 改動不進版控、不經 review，漏改會靜默失去一道防線。
+  # 有條件執行而被 skip 的 job 視為通過；其餘任何非 success 一律擋下。
+  all-checks:
+    name: test
+    runs-on: ubuntu-latest
+    needs: [test, e2e]
+    if: always()
+    steps:
+      - name: 檢查所有必要 job 是否通過
+        run: |
+          declare -A results=(
+            ["單元測試 + 整合測試"]="${{ needs.test.result }}"
+            ["E2E 測試"]="${{ needs.e2e.result }}"
+          )
+          failed=0
+          for job in "${!results[@]}"; do
+            result="${results[$job]}"
+            if [ "$result" = "success" ] || [ "$result" = "skipped" ]; then
+              echo "OK       $job: $result"
+            else
+              echo "FAILED   $job: $result"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::有必要的 job 未通過"
+            exit 1
+          fi
+          echo "所有必要 job 均已通過"
