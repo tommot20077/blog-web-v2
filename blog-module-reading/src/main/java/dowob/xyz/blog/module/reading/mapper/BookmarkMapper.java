@@ -32,22 +32,6 @@ public interface BookmarkMapper {
                                                 @Param("articleIds") List<Long> articleIds);
 
     /**
-     * 我的收藏文章 id 列表（分頁，最新優先）。
-     */
-    @Select("""
-            SELECT article_id FROM user_bookmarks
-             WHERE user_id = #{userId}
-             ORDER BY created_at DESC
-             LIMIT #{size} OFFSET #{offset}
-            """)
-    List<Long> findMyBookmarkedArticleIds(@Param("userId") Long userId,
-                                            @Param("size") int size,
-                                            @Param("offset") int offset);
-
-    @Select("SELECT COUNT(*) FROM user_bookmarks WHERE user_id = #{userId}")
-    long countByUser(@Param("userId") Long userId);
-
-    /**
      * 我的全部收藏文章 id（最新優先，不分頁）。
      *
      * <p>供 {@code BookmarkQueryService} 做「先過濾可見性、再分頁」用。

@@ -57,14 +57,6 @@ public class BookmarkService {
         return new HashSet<>(mapper.findBookmarkedArticleIdsByUser(userId, articleIds));
     }
 
-    public List<Long> findMyBookmarkedArticleIds(Long userId, int size, int offset) {
-        return mapper.findMyBookmarkedArticleIds(userId, size, offset);
-    }
-
-    public long countByUser(Long userId) {
-        return mapper.countByUser(userId);
-    }
-
     /**
      * 我的全部收藏文章 id（最新優先，不分頁）。
      *
