@@ -391,8 +391,18 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
-     * <p>flow：交易內（撈 article → mutate 7 欄位 → save → syncArticleTags）→ commit →
+     * <p>flow：交易內（撈 article → mutate 內容欄位 → save → syncArticleTags）→ commit →
      * best-effort publish events。</p>
+     *
+     * <p>
+     * <strong>SEC-02：還原只還原內容，文章狀態一律不動</strong>。舊實作會把快照當時的 status
+     * 套回文章，等於讓還原成為第三條、且完全不經
+     * {@code ArticleCommandSubService.VALID_TRANSITIONS} 守衛的狀態轉換路徑——作者拿一份舊的
+     * PUBLISHED 快照按還原，就能把被 ADMIN 駁回（REJECTED）或送審中（PENDING_REVIEW）的文章
+     * 直接變回 PUBLISHED，繞過「PENDING_REVIEW → PUBLISHED 僅 ADMIN」的限制。
+     * 狀態轉換的唯一入口是 {@code ArticleCommandSubService}（publish / reject / submit / withdraw / update），
+     * 還原不參與其中。
+     * </p>
      *
      * <p>DB 操作以 {@link TransactionTemplate} 收斂為單一交易，事件一律於 commit 後才發送：
      * 若在交易內發送，commit 失敗時 version/search 模組已收到事件但文章實際未還原，
@@ -424,9 +434,11 @@ public class ArticleFacadeImpl implements ArticleFacade {
             article.setContent(data.content());
             article.setSummary(data.summary());
             article.setCoverImageUrl(data.coverImageUrl());
-            if (data.status() != null) {
-                article.setStatus(ArticleStatus.valueOf(data.status()));
-            }
+            /*
+             * SEC-02：這裡刻意不碰 article.status。還原是「內容回溯」，不是狀態轉換；
+             * 狀態一律留給 ArticleCommandSubService 的 VALID_TRANSITIONS 守衛決定。
+             * ArticleRestoreData 也已移除 status 欄位，讓這條路徑在型別上就無法改狀態。
+             */
             article.setContentHtml(data.contentHtml());
             /*
              * TOC 必須與 contentHtml 一起回填：兩者出自 caller 的同一次 render。
@@ -447,6 +459,11 @@ public class ArticleFacadeImpl implements ArticleFacade {
 
         /** DB 已 commit，best-effort 發送事件 */
         articleEventPublisher.publishContentChanged(saved, ArticleContentChangedEvent.Action.RESTORED);
+        /*
+         * 判準是「文章現在的狀態」而非「快照當時的狀態」（SEC-02 後兩者已徹底分離）：
+         * 只有本來就公開的文章才需要重新索引；DRAFT / PENDING_REVIEW / REJECTED / ARCHIVED
+         * 的文章即使還原了一份 PUBLISHED 時期的內容，也不得被送進 Elasticsearch。
+         */
         if (saved.getStatus() == ArticleStatus.PUBLISHED) {
             articleEventPublisher.publishUpdated(saved);
         }

@@ -34,6 +34,13 @@ public class VersionDetailResponse {
     private String content;
     private String summary;
     private String coverImageUrl;
+    /**
+     * 快照建立當時的文章狀態（DRAFT / PENDING_REVIEW / PUBLISHED / ARCHIVED / REJECTED）。
+     *
+     * <p><strong>語意（SEC-02 後）</strong>：這是「這份快照是哪個階段的內容」的紀錄，供人判讀，
+     * <b>不代表還原後文章會變成此狀態</b>——還原只還原內容，文章狀態一律不動
+     * （見 {@code ArticleFacade#applyRestoreContent}）。</p>
+     */
     private String status;
     private List<UUID> tags;
 }
