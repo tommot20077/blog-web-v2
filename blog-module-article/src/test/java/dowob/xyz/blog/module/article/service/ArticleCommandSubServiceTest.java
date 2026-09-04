@@ -1395,6 +1395,30 @@ class ArticleCommandSubServiceTest {
             assertThat(captor.getValue().getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
         }
 
+        /**
+         * 合併 #69 後的一致性：rejectReason 的不變量是「文章只要不在 REJECTED 就不該帶著它」，
+         * 而該 PR 把清除放在<b>每一個</b>明確的狀態轉換點（含來源不可能是 REJECTED 的
+         * withdrawArticle / publishArticle）。下架是新增的轉換點，同樣要守這條不變量——
+         * 否則下次有人新增轉換時，會照著漏掉的那一個抄。
+         *
+         * <p>今日 VALID_TRANSITIONS 只允許 PUBLISHED → ARCHIVED，來源不可能是 REJECTED，
+         * 故此為縱深防禦（涵蓋 #69 之前就殘留 rejectReason 的舊資料），不是現行洩漏路徑。</p>
+         */
+        @Test
+        @DisplayName("正常：下架後不得殘留過期的 rejectReason（ARCHIVED 不是 REJECTED）")
+        void archiveArticle_clearsStaleRejectReason() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            article.setRejectReason("INTERNAL-REVIEW-NOTE");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isNull();
+        }
+
         @Test
         @DisplayName("異常：AUTHOR 本人下架自己的文章 → ARTICLE_ACCESS_DENIED（下架非作者自助操作）")
         void archiveArticle_byAuthor_denied() {
@@ -1514,6 +1538,25 @@ class ArticleCommandSubServiceTest {
             commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
 
             verifyNoInteractions(articleEventPublisher);
+        }
+
+        /**
+         * 同 archiveArticle：ARCHIVED → DRAFT 也是明確的狀態轉換點，DRAFT 不是 REJECTED。
+         * 復原後文章會回到作者手上重新編輯、送審、發布，過期評語不該一路跟著走。
+         */
+        @Test
+        @DisplayName("正常：復原後不得殘留過期的 rejectReason（DRAFT 不是 REJECTED）")
+        void unarchiveArticle_clearsStaleRejectReason() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            article.setRejectReason("INTERNAL-REVIEW-NOTE");
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getRejectReason()).isNull();
         }
 
         @Test

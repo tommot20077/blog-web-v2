@@ -510,6 +510,13 @@ class ArticleCommandSubService {
         /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則（SEC-02） */
         validateStatusTransition(article.getStatus(), ArticleStatus.ARCHIVED, operatorRole);
         article.setStatus(ArticleStatus.ARCHIVED);
+        /*
+         * 與其他狀態轉換點一致地清除過期駁回理由。今日 VALID_TRANSITIONS 只允許
+         * PUBLISHED → ARCHIVED，來源不可能是 REJECTED，故此處是縱深防禦（涵蓋修復前
+         * 就殘留 rejectReason 的舊資料），不是現行洩漏路徑；但不變量「不在 REJECTED
+         * 就不該帶著駁回理由」必須由每個轉換點共同維持，不能倚賴「表剛好不允許」。
+         */
+        clearRejectReasonIfNotRejected(article);
 
         /** DB 寫入收斂在 transaction 內，確保發事件時已 commit */
         Article updated = transactionTemplate.execute(status -> articleRepository.save(article));
@@ -566,6 +573,8 @@ class ArticleCommandSubService {
         /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則（SEC-02） */
         validateStatusTransition(article.getStatus(), ArticleStatus.DRAFT, operatorRole);
         article.setStatus(ArticleStatus.DRAFT);
+        /* 同 archiveArticle：DRAFT 不是 REJECTED，且復原後文章會回到作者手上重新編輯送審 */
+        clearRejectReasonIfNotRejected(article);
 
         Article updated = articleRepository.save(article);
         return articleResponseMapper.toResponse(updated);
