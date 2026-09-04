@@ -49,6 +49,7 @@ build/
 /.claude/settings.local.json
 /.claude/worktrees/
 /.claude/scheduled_tasks.lock
+/.codex/
 
 # 開發規劃文件
 plan.md

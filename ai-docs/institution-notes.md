@@ -29,3 +29,11 @@
 1. **agent-dispatch.md 的模型清單**(2026-07 快照)——型號與定位會過時,檔內已標註「用前查證」。
 2. **AGENTS.md/GEMINI.md 指標檔對 Codex/Gemini 的實效**——未實測這兩個工具是否會乖乖跟著指標去讀 CLAUDE.md;若實測發現不會,退路是恢復同步複製、但把「同步」寫成 skill 步驟。
 3. **task-briefs.md 的驗收條件粒度**——是否足以讓 Sonnet 級 subagent 穩定產出,需要 1-2 次實戰校準;收尾的使用測試只驗了一個場景。
+
+## 2026-09-02 分支整理紀錄(給下一個 session)
+
+- 2026-08-16 批次合併 #53–#59 後,本地所有 feature/fix 分支均已進 develop;本輪把它們(含 pr53/54/55 審查分支、空的 fix/minio-public-read、只剩三方合併殘留的 integration/local-e2e)本地與遠端一併刪除。develop 是唯一活的整合線。
+- `origin/claude/fullstack-review-architecture-fdmjbd`(2026-07 稽核)只有 docs 被移植(PR #60);其 `59c170d fix(auth)` 交由 2026-09-02 security review 判定 develop 是否已涵蓋;`a4651c5` CRLF→LF 正規化**未搬**——所以 fresh worktree 的 `git status` 會顯示上百個 CRLF「modified」噪音,根因是 .gitattributes 加入後從未 `git add --renormalize .`,要不要做一次由 Yuan 決定(會是一個 ~190 檔的純格式 commit)。
+- **main 落後 develop 467 commits**,這輪未動;後端 main 沒有獨立 hotfix,release 時直接開 develop → main PR。
+- repo 實際路徑已從 `D:\end\workspace\java\blog-web-v2` 搬到 `D:\backup\backup\程式\workspace\java\blog-web-v2`(前端同樣搬到 `D:\backup\backup\程式\workspace\vue\`);CLAUDE.md「External Repositories」與 agent-dispatch.md 的姊妹檔路徑仍是舊的,待 Yuan 確認新路徑是長期位置再一併改。
+- `.worktrees/` 內殘留的舊 checkout 目錄(admin-console、article-toc、context-smoke、minio、version-fix、merge-withdraw、qa-backlog)經 blob 比對確認內容全在 git 物件庫,已刪除。
