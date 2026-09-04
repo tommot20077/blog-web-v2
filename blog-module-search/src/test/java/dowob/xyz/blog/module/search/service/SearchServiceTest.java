@@ -515,6 +515,84 @@ class SearchServiceTest {
     class ReindexAllTests {
 
         /**
+         * 重建流程會掃描索引現況以找出幽靈 document；預設 stub 成「索引為空」，
+         * 個別測試需要幽靈情境時再自行覆寫。
+         */
+        @BeforeEach
+        void stubEmptyIndexScan() {
+            SearchHits<ArticleDocument> emptyHits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
+                    .thenReturn(emptyHits);
+        }
+
+        /**
+         * 幽靈 document ＝ ES 裡有、但 DB 已經不是 PUBLISHED（被刪除或下架）的文件。
+         *
+         * <p>原本 reindexAll 只做 saveAll，從不刪任何 document，所以
+         * 「MQ 失手也會被下次 reindexAll 清掉」這個安全網事實上不存在——
+         * 管理員點「重建索引」也修不好已下架文章仍搜尋得到的問題
+         * （見 ai-docs/backlog/2026-07-29-index-cache-rebuild-completeness.md）。</p>
+         */
+        @Test
+        @DisplayName("重建後應刪除「ES 有但 DB 已非 PUBLISHED」的幽靈 document")
+        void reindexAll_removesGhostDocumentsMissingFromDatabase() {
+            UUID liveUuid = UUID.randomUUID();
+            String ghostId = UUID.randomUUID().toString();
+            ArticleIndexData live = new ArticleIndexData(
+                    liveUuid, "仍公開的文章", "still-public",
+                    "summary", "content",
+                    1L, "yuan", "Yuan",
+                    LocalDateTime.now(), 0L, 0L, List.of());
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(live));
+            SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
+                    ArticleDocument.builder().id(liveUuid.toString()).build(),
+                    ArticleDocument.builder().id(ghostId).build()));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
+                    .thenReturn(indexedHits);
+
+            searchService.reindexAll();
+
+            verify(articleSearchRepository).saveAll(any());
+            verify(articleSearchRepository).deleteAllById(List.of(ghostId));
+        }
+
+        @Test
+        @DisplayName("索引與 DB 一致時，不應刪除任何 document")
+        void reindexAll_whenIndexMatchesDatabase_deletesNothing() {
+            UUID liveUuid = UUID.randomUUID();
+            ArticleIndexData live = new ArticleIndexData(
+                    liveUuid, "仍公開的文章", "still-public",
+                    "summary", "content",
+                    1L, "yuan", "Yuan",
+                    LocalDateTime.now(), 0L, 0L, List.of());
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(live));
+            SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
+                    ArticleDocument.builder().id(liveUuid.toString()).build()));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
+                    .thenReturn(indexedHits);
+
+            searchService.reindexAll();
+
+            verify(articleSearchRepository, never()).deleteAllById(any());
+        }
+
+        /**
+         * 幽靈清除是重建的附加保險，掃描失敗不該讓「索引其實已重建成功」對外報錯
+         * （與時間戳寫入同一套 best-effort 判準）。
+         */
+        @Test
+        @DisplayName("掃描索引失敗時，不應讓已完成的重建對外拋錯")
+        void reindexAll_whenGhostScanFails_doesNotThrow() {
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
+                    .thenThrow(new RuntimeException("ES down"));
+
+            assertThatCode(() -> searchService.reindexAll()).doesNotThrowAnyException();
+
+            verify(articleSearchRepository).saveAll(any());
+        }
+
+        /**
          * 應透過 ArticleFacade 取得所有文章並批次儲存至 ES
          */
         @Test

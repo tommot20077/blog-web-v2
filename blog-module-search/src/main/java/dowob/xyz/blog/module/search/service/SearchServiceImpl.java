@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -74,6 +75,19 @@ public class SearchServiceImpl implements SearchService {
      * 搜尋建議最大回傳筆數
      */
     private static final int SUGGEST_MAX_SIZE = 10;
+
+    /**
+     * 幽靈 document 掃描的每頁筆數
+     */
+    private static final int GHOST_SCAN_PAGE_SIZE = 1000;
+
+    /**
+     * 幽靈 document 掃描的最大頁數
+     *
+     * <p>from + size 分頁受 ES {@code index.max_result_window}（預設 10000）限制，
+     * 故 1000 × 10 為上限；超過時記 warn，本輪只清掃描範圍內的殘留。</p>
+     */
+    private static final int GHOST_SCAN_MAX_PAGES = 10;
 
     /**
      * {@inheritDoc}
@@ -207,6 +221,13 @@ public class SearchServiceImpl implements SearchService {
                 .collect(Collectors.toList());
         articleSearchRepository.saveAll(documents);
         /*
+         * 先寫入再清除：任何時點索引裡都不會少掉一篇仍公開的文章（若先 delete 整個索引，
+         * 重建期間搜尋會回空）。清除的對象是「ES 有但 DB 已非 PUBLISHED」的幽靈 document。
+         */
+        removeGhostDocuments(documents.stream()
+                .map(ArticleDocument::getId)
+                .collect(Collectors.toSet()));
+        /*
          * 時間戳只是給後台顯示用的附帶資訊，寫入失敗不可讓「索引其實已重建成功」的動作
          * 對外回報失敗（否則管理員會重複點擊，每次都真的重建一遍）。與專案內 MQ 發送
          * 一致採 best-effort。
@@ -236,6 +257,62 @@ public class SearchServiceImpl implements SearchService {
                 /* healthy 描述的是 Elasticsearch 可達性，不受 Redis 故障影響 */
                 .healthy(documentCount != null)
                 .build();
+    }
+
+    /**
+     * 清除幽靈 document —— 索引裡有、但 DB 已經不是 PUBLISHED 的文件。
+     *
+     * <p><b>為什麼需要</b>：文件寫入 ES 時 status 是硬寫的常數 {@code "PUBLISHED"}
+     * （見 {@code ArticleSearchListener#toDocument}），DB 改狀態不會反映到索引，
+     * 搜尋的 status filter 對殘留文件恆為 true。刪除／下架都靠 MQ 事件即時刪 document，
+     * 一旦那條路徑失手（MQ 不可用、consumer NACK 進 DLQ），文件就永久殘留。
+     * 原本的 {@code reindexAll} 只做 {@code saveAll}、從不刪任何文件，
+     * 所以「重建索引」修不好這件事——這正是
+     * {@code ai-docs/backlog/2026-07-29-index-cache-rebuild-completeness.md} 記載的缺口。</p>
+     *
+     * <p><b>為什麼不 drop 整個索引再重建</b>：重建期間搜尋會回空，對線上讀取是可見的退化。
+     * 改為掃描索引現況、只刪對不上 DB 的文件，重建全程搜尋結果都是完整的。
+     * （完整的 alias 切換方案仍在上述 backlog，本方法只解「幽靈文件」這一半。）</p>
+     *
+     * <p>清除是重建的附加保險：掃描或刪除失敗只記 log，不讓已成功的重建對外報錯
+     * （與時間戳寫入同一套 best-effort 判準）。</p>
+     *
+     * @param liveIds 本次重建寫入的文件 id 集合（即 DB 目前所有 PUBLISHED 文章的 uuid）
+     */
+    private void removeGhostDocuments(Set<String> liveIds) {
+        try {
+            List<String> ghostIds = new ArrayList<>();
+            boolean scanCompleted = false;
+            for (int page = 0; page < GHOST_SCAN_MAX_PAGES; page++) {
+                NativeQuery query = NativeQuery.builder()
+                        .withQuery(Query.of(q -> q.matchAll(m -> m)))
+                        .withPageable(PageRequest.of(page, GHOST_SCAN_PAGE_SIZE))
+                        .build();
+                List<SearchHit<ArticleDocument>> pageHits =
+                        elasticsearchOperations.search(query, ArticleDocument.class).getSearchHits();
+                pageHits.stream()
+                        .map(hit -> hit.getContent().getId())
+                        .filter(id -> id != null && !liveIds.contains(id))
+                        .forEach(ghostIds::add);
+                if (pageHits.size() < GHOST_SCAN_PAGE_SIZE) {
+                    scanCompleted = true;
+                    break;
+                }
+            }
+            if (!scanCompleted) {
+                log.warn("索引文件數超過幽靈掃描上限 {} 筆，本次僅清除掃描範圍內的殘留",
+                        GHOST_SCAN_MAX_PAGES * GHOST_SCAN_PAGE_SIZE);
+            }
+            if (ghostIds.isEmpty()) {
+                log.info("索引與資料庫一致，無幽靈 document 需清除");
+                return;
+            }
+            articleSearchRepository.deleteAllById(ghostIds);
+            log.warn("已清除 {} 筆幽靈 document（ES 有、DB 已非 PUBLISHED）：{}",
+                    ghostIds.size(), ghostIds);
+        } catch (Exception e) {
+            log.error("清除幽靈 document 失敗，索引可能仍殘留已刪除／已下架文章：{}", e.getMessage(), e);
+        }
     }
 
     /**
