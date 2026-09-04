@@ -3,7 +3,9 @@ package dowob.xyz.blog.module.comment.service;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
@@ -191,21 +193,33 @@ public class CommentService {
     /**
      * 列出文章留言（分頁，含 reply 與軟刪除佔位）。
      *
+     * <p><b>可見性前置判斷</b>：留言隸屬於文章，文章不對此檢視者公開時（DRAFT / PENDING_REVIEW /
+     * REJECTED / <b>ARCHIVED</b>），整串留言一律不得回傳——留言內容常引述文章原文，曝光等同內容外洩。
+     * 判斷委派 {@link ArticleVisibility#isReadableBy(String, Long, Long, boolean)}，與文章詳情端點
+     * （{@code ArticleQuerySubService#checkReadPermission}）同一套政策：作者本人與 ADMIN 仍看得到。</p>
+     *
+     * <p>不可讀時回傳 <b>200 + 空清單</b>（與「文章不存在」同形狀），而非 404：一來維持本端點
+     * 「匿名可讀、恆 200」的既有契約（{@code SecurityConfigTest.unauthenticatedListComments_shouldReturn200}），
+     * 二來不讓回應差異成為「這個 UUID 是否存在」的探測器。</p>
+     *
      * @param articleUuid    文章 UUID
      * @param currentUserId  當前使用者 id；null 代表未登入
+     * @param isAdmin        當前使用者是否為 ADMIN
      * @param sort           排序：newest / oldest（預設 newest）
      * @param page           頁碼（1-based）
      * @param size           每頁筆數（top-level 計數）
      */
-    public ArticleCommentListResponse listComments(UUID articleUuid, Long currentUserId,
+    public ArticleCommentListResponse listComments(UUID articleUuid, Long currentUserId, boolean isAdmin,
                                                      String sort, int page, int size) {
-        Long articleId = articleFacade.findIdByUuid(articleUuid);
-        if (articleId == null) {
+        ArticleData article = articleFacade.findByUuid(articleUuid).orElse(null);
+        if (article == null
+                || !ArticleVisibility.isReadableBy(article.status(), article.authorId(), currentUserId, isAdmin)) {
             return new ArticleCommentListResponse(
                     PageResult.of(page, size, 0L, Collections.emptyList()),
                     0
             );
         }
+        Long articleId = article.id();
 
         String sortKey = "oldest".equals(sort) ? "oldest" : "newest";
         int offset = Math.max(0, (page - 1) * size);

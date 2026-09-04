@@ -62,6 +62,10 @@ public class CommentController {
      *   <li>本 JavaDoc 即為所需的豁免標註。</li>
      * </ol>
      *
+     * <p>「匿名可到達」不等於「內容公開」：文章本身若非公開（含 <b>ARCHIVED 下架</b>），
+     * {@link CommentService#listComments} 會回 200 + 空清單，僅作者本人與 ADMIN 讀得到。
+     * {@code currentUserId} 與 {@code isAdmin} 即為該判斷的輸入。</p>
+     *
      * @param articleUuid   文章公開 UUID
      * @param page          頁碼（自 1 起）
      * @param size          每頁筆數
@@ -77,7 +81,9 @@ public class CommentController {
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "newest") String sort,
             @AuthenticationPrincipal Long currentUserId) {
-        return ApiResponse.success(commentService.listComments(articleUuid, currentUserId, sort, page, size));
+        boolean isAdmin = SecurityUtils.isAdmin();
+        return ApiResponse.success(
+                commentService.listComments(articleUuid, currentUserId, isAdmin, sort, page, size));
     }
 
     @PostMapping("/articles/{articleUuid}/comments")
