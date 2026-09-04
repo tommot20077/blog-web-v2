@@ -29,11 +29,22 @@
 
 部署本次變更後，對**每一個有跑過這支應用程式的環境**（至少：正式環境、以及任何長期存活的 staging／預發環境；本機 docker-compose 與 CI 用的 e2e 容器是一次性的，重建即清空，不需處理）執行：
 
+### 0. 前置條件：確認所有實例都已切到新版
+
+刪除 queue 前，**所有跑舊版程式的實例都必須先下線或完成滾動更新**。舊版的 `RabbitAdmin` 會在啟動時
+auto-declare 這個 queue——只要還有一個舊實例活著（或之後被重啟／擴容），queue 就會被重新建出來，
+刪除等於白做。
+
+```bash
+# 確認線上跑的版本已包含本次變更（依你的部署方式調整）
+kubectl -n <namespace> get pods -l app=blog-backend -o jsonpath='{.items[*].spec.containers[*].image}'
+```
+
 ### 1. 先確認 queue 內狀態，不要盲刪
 
 ```bash
 # 透過 management UI 或 rabbitmqctl 確認訊息數與 consumer 數
-rabbitmqctl list_queues name messages messages_ready messages_unacknowledged consumers -p <vhost>
+rabbitmqctl -p <vhost> list_queues name messages messages_ready messages_unacknowledged consumers
 ```
 
 預期會看到 `article.published` 的 `consumers` 欄位是 `0`（這正是孤兒 queue 的證據），`messages` 會是一個持續增長的正整數。
@@ -45,7 +56,7 @@ rabbitmqctl list_queues name messages messages_ready messages_unacknowledged con
 ### 3. 刪除 queue
 
 ```bash
-rabbitmqctl delete_queue article.published -p <vhost>
+rabbitmqctl -p <vhost> delete_queue article.published
 # 或 management UI：Queues → article.published → Delete Queue
 ```
 
@@ -66,7 +77,7 @@ rabbitmqctl delete_queue article.published -p <vhost>
 部署後：
 
 ```bash
-rabbitmqctl list_queues name consumers -p <vhost> | grep article.published
+rabbitmqctl -p <vhost> list_queues name consumers | grep article.published
 ```
 
 - 刪除前：預期看到一行 `article.published  0`（存在但 0 consumer）。
