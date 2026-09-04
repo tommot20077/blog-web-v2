@@ -198,4 +198,98 @@ class BookmarkControllerIT {
         mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", articleUuid))
                 .andExpect(status().isUnauthorized());
     }
+
+    // ─── 文章可見性（下架文章不得留在收藏列表）───
+
+    private static final Long OTHER_AUTHOR_ID = 2L;
+    private static final Long ADMIN_ID = 3L;
+
+    /**
+     * 建立指定作者與狀態的文章。
+     *
+     * @param authorId 作者資料庫主鍵
+     * @param status   文章狀態
+     * @return 已存檔的 Article
+     */
+    private Article createArticle(Long authorId, ArticleStatus status) {
+        Article a = new Article();
+        a.setUuid(UUID.randomUUID());
+        a.setAuthorId(authorId);
+        a.setTitle("Bookmark IT " + status);
+        a.setSlug("bookmark-it-" + UUID.randomUUID());
+        a.setContent("test");
+        a.setContentHtml("<p>test</p>");
+        a.setStatus(status);
+        a.setLikeCount(0);
+        a.setCommentCount(0);
+        a.setViewCount(0L);
+        a.setCreatedAt(LocalDateTime.now());
+        a.setUpdatedAt(LocalDateTime.now());
+        return articleRepo.save(a);
+    }
+
+    @Test
+    @DisplayName("GET /me/bookmarks - 他人文章下架後不再出現在收藏列表")
+    void myBookmarks_archivedArticleOfOtherAuthor_isExcluded() throws Exception {
+        Article archived = createArticle(OTHER_AUTHOR_ID, ArticleStatus.PUBLISHED);
+        mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", archived.getUuid())
+                .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", articleUuid)
+                .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+
+        archived.setStatus(ArticleStatus.ARCHIVED);
+        articleRepo.save(archived);
+
+        mockMvc.perform(get("/api/v1/users/me/bookmarks")
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records.length()").value(1))
+                .andExpect(jsonPath("$.data.records[0].uuid").value(articleUuid.toString()));
+    }
+
+    @Test
+    @DisplayName("GET /me/bookmarks - 收藏他人 DRAFT 文章同樣不出現在收藏列表")
+    void myBookmarks_draftArticleOfOtherAuthor_isExcluded() throws Exception {
+        Article draft = createArticle(OTHER_AUTHOR_ID, ArticleStatus.DRAFT);
+        mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", draft.getUuid())
+                .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/users/me/bookmarks")
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records.length()").value(0));
+    }
+
+    @Test
+    @DisplayName("GET /me/bookmarks - 作者本人收藏自己的下架文章仍看得到")
+    void myBookmarks_archivedOwnArticle_stillVisibleToAuthor() throws Exception {
+        Article own = createArticle(USER_ID, ArticleStatus.PUBLISHED);
+        mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", own.getUuid())
+                .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+
+        own.setStatus(ArticleStatus.ARCHIVED);
+        articleRepo.save(own);
+
+        mockMvc.perform(get("/api/v1/users/me/bookmarks")
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records.length()").value(1))
+                .andExpect(jsonPath("$.data.records[0].uuid").value(own.getUuid().toString()));
+    }
+
+    @Test
+    @DisplayName("GET /me/bookmarks - ADMIN 收藏的下架文章仍看得到")
+    void myBookmarks_archivedArticle_stillVisibleToAdmin() throws Exception {
+        Article archived = createArticle(OTHER_AUTHOR_ID, ArticleStatus.PUBLISHED);
+        mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", archived.getUuid())
+                .with(asUser(ADMIN_ID, Role.ADMIN))).andExpect(status().isOk());
+
+        archived.setStatus(ArticleStatus.ARCHIVED);
+        articleRepo.save(archived);
+
+        mockMvc.perform(get("/api/v1/users/me/bookmarks")
+                .with(asUser(ADMIN_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records.length()").value(1));
+    }
 }
