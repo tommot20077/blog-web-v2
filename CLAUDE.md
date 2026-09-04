@@ -71,4 +71,5 @@
 - Maintenance(學習晉升飛輪、檔案所有權表): [ai-docs/maintenance.md](ai-docs/maintenance.md)
 - Bug Post-mortems(踩雷紀錄,新任務前查同域舊坑): [ai-docs/bug-reports/INDEX.md](ai-docs/bug-reports/INDEX.md)
 - Backlog: [ai-docs/backlog/](ai-docs/backlog/)
+- Audits(稽核推導過程,動 findings.md 任何一條前先讀對應原始報告): [ai-docs/audits/](ai-docs/audits/)
 - Institution Notes(給未來 session 的信): [ai-docs/institution-notes.md](ai-docs/institution-notes.md)
