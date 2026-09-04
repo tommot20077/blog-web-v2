@@ -118,4 +118,19 @@ class BookmarkQueryServiceTest {
 
         verify(articleFacade).filterReadableIds(List.of(1L), userId, true);
     }
+
+    @Test
+    void page乘size溢位int時不拋例外且回空清單() {
+        when(bookmarkService.findAllMyBookmarkedArticleIds(userId)).thenReturn(List.of(1L, 2L));
+        when(articleFacade.filterReadableIds(List.of(1L, 2L), userId, false))
+                .thenReturn(List.of(1L, 2L));
+
+        // (page - 1) * size = 99_999_999 * 30 = 2_999_999_970，超過 Integer.MAX_VALUE，
+        // 若以 int 相乘會溢位成負數，繞過範圍守衛直接進 subList 炸 IndexOutOfBoundsException。
+        PageResult<ArticleSummaryResponse> result = service.listMyBookmarks(userId, false, 100_000_000, 30);
+
+        assertThat(result.getTotal()).isEqualTo(2L);
+        assertThat(result.getRecords()).isEmpty();
+        verify(articleQueryService, never()).getArticleSummariesByIds(anyList());
+    }
 }

@@ -59,11 +59,15 @@ public class BookmarkQueryService {
         List<Long> visibleIds = articleFacade.filterReadableIds(allIds, userId, isAdmin);
         long total = visibleIds.size();
 
-        int offset = (page - 1) * size;
+        // page 為 client 給的 int，(page - 1) * size 以 int 相乘在大 page 時會溢位成負數，
+        // 使負的 offset 繞過下面的範圍守衛而直接炸 subList 的 IndexOutOfBoundsException。
+        // (long) 必須放在第一個運算元上才能讓整個乘法以 long 運算，避免相乘當下就已溢位。
+        long offset = (long) (page - 1) * size;
         if (offset >= visibleIds.size()) {
             return PageResult.of(page, size, total, List.of());
         }
-        List<Long> pageIds = visibleIds.subList(offset, Math.min(offset + size, visibleIds.size()));
+        int from = (int) offset;
+        List<Long> pageIds = visibleIds.subList(from, Math.min(from + size, visibleIds.size()));
 
         return PageResult.of(page, size, total, articleQueryService.getArticleSummariesByIds(pageIds));
     }

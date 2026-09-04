@@ -40,10 +40,7 @@ public class BookmarkController {
     @Operation(summary = "收藏文章（idempotent）")
     public ApiResponse<Void> bookmark(@AuthenticationPrincipal Long userId,
                                         @PathVariable UUID articleUuid) {
-        Long articleId = articleFacade.findIdByUuid(articleUuid);
-        if (articleId == null) {
-            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
-        }
+        Long articleId = resolveArticleId(articleUuid);
         bookmarkService.bookmark(userId, articleId);
         return ApiResponse.success();
     }
@@ -53,10 +50,7 @@ public class BookmarkController {
     @Operation(summary = "取消收藏（idempotent）")
     public ApiResponse<Void> unbookmark(@AuthenticationPrincipal Long userId,
                                           @PathVariable UUID articleUuid) {
-        Long articleId = articleFacade.findIdByUuid(articleUuid);
-        if (articleId == null) {
-            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
-        }
+        Long articleId = resolveArticleId(articleUuid);
         bookmarkService.unbookmark(userId, articleId);
         return ApiResponse.success();
     }
@@ -84,5 +78,24 @@ public class BookmarkController {
             @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success(bookmarkQueryService.listMyBookmarks(
                 userId, SecurityUtils.isAdmin(authentication), page, size));
+    }
+
+    /**
+     * UUID → DB id，查無此文章時回 404（{@code A0201}）。
+     *
+     * <p>與 {@code ArticleLikeController.resolveArticleId} 同一套 idiom：
+     * {@code articleFacade.findIdByUuid} 查無時回 {@code null}，caller 必須自行判斷，
+     * 否則 null id 會一路傳進 {@code BookmarkService} 造成未預期的 500（AUTH-08）。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return 文章資料庫主鍵
+     * @throws BusinessException {@code ARTICLE_NOT_FOUND} 若查無此文章
+     */
+    private Long resolveArticleId(UUID articleUuid) {
+        Long articleId = articleFacade.findIdByUuid(articleUuid);
+        if (articleId == null) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
+        }
+        return articleId;
     }
 }
