@@ -19,6 +19,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -128,6 +130,11 @@ class VersionControllerIT {
 
     /** 建立並儲存測試文章（DRAFT 狀態）。 */
     private Article createArticle(Long authorId) {
+        return createArticle(authorId, ArticleStatus.DRAFT);
+    }
+
+    /** 建立並儲存指定狀態的測試文章（F-H1 內容凍結守衛測試用）。 */
+    private Article createArticle(Long authorId, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
         article.setAuthorId(authorId);
@@ -135,10 +142,13 @@ class VersionControllerIT {
         article.setSlug("test-article-" + UUID.randomUUID());
         article.setContent("This is test content for versioning.");
         article.setContentHtml("<p>This is test content for versioning.</p>");
-        article.setStatus(ArticleStatus.DRAFT);
+        article.setStatus(status);
         article.setLikeCount(0);
         article.setCommentCount(0);
         article.setViewCount(0L);
+        if (status == ArticleStatus.PUBLISHED) {
+            article.setPublishedAt(LocalDateTime.now());
+        }
         article.setCreatedAt(LocalDateTime.now());
         article.setUpdatedAt(LocalDateTime.now());
         return articleRepo.save(article);
@@ -281,6 +291,103 @@ class VersionControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
     }
+
+    /**
+     * F-H1（HIGH）：restore 繞過內容凍結守衛，構成審核 TOCTOU。
+     *
+     * <p><strong>攻擊情境</strong>：作者把文章送審（PENDING_REVIEW）→ admin 開始審 →
+     * 作者用 restore 把內容換成另一個版本 → admin 審的是 A、通過的是 B。
+     * SEC-02（PR #66）修完狀態面後 restore 不再改 status，換內容在狀態機上完全無痕，
+     * 反而讓這個攻擊更隱蔽。</p>
+     *
+     * <p>守衛與 {@code PUT /api/v1/articles/{uuid}} 共用同一套判斷
+     * （{@code ArticleContentFreezePolicy}），故錯誤碼一致為 A0209。</p>
+     */
+    @ParameterizedTest
+    @EnumSource(value = ArticleStatus.class, names = {"PENDING_REVIEW", "PUBLISHED", "ARCHIVED"})
+    @DisplayName("POST /versions/{versionUuid}/restore - 內容凍結狀態 → 400 A0209 且內容未被改寫")
+    void restore_frozenStatus_returnsA0209AndKeepsContent(ArticleStatus frozen) throws Exception {
+        Article article = createArticle(USER1_ID, frozen);
+        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "TOCTOU 用快照");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0209"));
+
+        Article after = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(after.getContent())
+                .as("凍結狀態下內容不得被還原改寫（admin 審的是 A，通過的就必須是 A）")
+                .isEqualTo("This is test content for versioning.");
+        assertThat(after.getStatus()).isEqualTo(frozen);
+    }
+
+    /**
+     * 避免修過頭：restore 在 DRAFT / REJECTED 下是正常功能（被駁回後改稿重送正是它的用途），
+     * 內容凍結守衛不得把這兩個狀態一併擋掉。
+     */
+    @ParameterizedTest
+    @EnumSource(value = ArticleStatus.class, names = {"DRAFT", "REJECTED"})
+    @DisplayName("POST /versions/{versionUuid}/restore - DRAFT / REJECTED → 200 且內容確實被還原")
+    void restore_editableStatus_returns200AndRestoresContent(ArticleStatus editable) throws Exception {
+        Article article = createArticle(USER1_ID, editable);
+        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+
+        Article after = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(after.getContent())
+                .as("DRAFT / REJECTED 是還原的正常用途，不得被守衛誤殺")
+                .isEqualTo("Version content body.");
+        assertThat(after.getStatus())
+                .as("還原只還原內容，狀態一律不動（SEC-02）")
+                .isEqualTo(editable);
+    }
+
+    /**
+     * F-M1（MEDIUM）：restore 端點原本只要求 {@code isAuthenticated()}，不需要 ARTICLE_EDIT，
+     * 導致被降級為 USER 的前作者仍能改寫自己的文章，且與 PUT 更新的權限標準不一致。
+     */
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/restore - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void restore_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+
+        Article after = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(after.getContent())
+                .as("權限不足時不得產生任何還原副作用")
+                .isEqualTo("This is test content for versioning.");
+    }
+
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/restore - 非作者（且非 ADMIN）→ 400 V0102")
+    void restore_byNonOwner_returnsV0102() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER2_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0102"));
+
+        Article after = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(after.getContent())
+                .as("非作者不得改寫他人文章內容")
+                .isEqualTo("This is test content for versioning.");
+    }
+
 
     // ─────────────────────────────── PROMOTE ────────────────────────────────
 

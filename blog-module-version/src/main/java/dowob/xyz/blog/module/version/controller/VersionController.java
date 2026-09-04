@@ -37,7 +37,11 @@ import java.util.UUID;
  *   <li>DELETE /api/v1/articles/{articleUuid}/versions/{versionUuid} — 刪除快照</li>
  * </ul>
  *
- * <p>所有端點皆需已認證（isAuthenticated），owner 與 admin 檢查在 service 層執行。</p>
+ * <p>所有端點皆需已認證（isAuthenticated），owner 與 admin 檢查在 service 層執行
+ * （security.md 原則 4：能力歸 {@code @PreAuthorize}，歸屬歸 service 層）。</p>
+ *
+ * <p>例外：restore 會改寫文章內容，等同一次編輯，因此比照
+ * {@code PUT /api/v1/articles/{uuid}} 要求 {@code ARTICLE_EDIT} 細粒度權限（F-M1）。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -106,9 +110,16 @@ public class VersionController {
     /**
      * POST /api/v1/articles/{articleUuid}/versions/{versionUuid}/restore
      * 將指定版本快照還原為文章當前狀態。
+     *
+     * <p>F-M1：還原是對文章內容的寫入，權限要求比照 {@code PUT /api/v1/articles/{uuid}} 的
+     * {@code ARTICLE_EDIT}——原本只要 {@code isAuthenticated()}，導致角色被降級為 USER 的前作者
+     * 仍能改寫自己的文章，與更新文章的標準不一致。</p>
+     *
+     * <p>owner 檢查仍在 {@code VersioningService.restore}（ADMIN 可繞過），
+     * 內容凍結檢查在 article 模組的 {@code ArticleFacade.applyRestoreContent}（F-H1）。</p>
      */
     @PostMapping("/{versionUuid}/restore")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "還原快照")
     public ApiResponse<Void> restore(
             @PathVariable UUID articleUuid,
