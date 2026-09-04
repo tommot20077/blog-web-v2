@@ -485,11 +485,18 @@ class ArticleCommandSubService {
      * 任何新的狀態改動路徑也必須經此（SEC-02：restore 曾完全繞過，已於同一 PR 移除改狀態的能力）。
      * </p>
      *
+     * <p>
+     * <b>可見性刻意放寬到 package-private</b>：狀態機的完整 5×5 轉換矩陣要由
+     * {@code ArticleCommandSubServiceTest} 直接驗證。表裡有數條邊（PUBLISHED → ARCHIVED、
+     * ARCHIVED → DRAFT）目前沒有任何公開端點可觸發，透過既有 public 方法無法覆蓋全矩陣；
+     * 本類別本身即 package-private，故此舉不擴大模組外的 API 面。
+     * </p>
+     *
      * @param from         目前狀態
      * @param to           目標狀態
      * @param operatorRole 操作者角色
      */
-    private void validateStatusTransition(ArticleStatus from, ArticleStatus to, Role operatorRole) {
+    void validateStatusTransition(ArticleStatus from, ArticleStatus to, Role operatorRole) {
         Set<ArticleStatus> allowed = VALID_TRANSITIONS.getOrDefault(from, Set.of());
         if (!allowed.contains(to)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
