@@ -98,3 +98,28 @@ curl -H "X-Forwarded-For: 6.6.6.6" https://90030.xyz/api/v1/articles
 ## 狀態
 
 **2026-09-04：Yuan 指示暫緩，先記錄。** 應用層（第 3 層 + 同批必做）可由本 repo 單獨完成；第 1、2 層需 `infrastructure` repo 與實際 CF IP 段。
+
+## 現成實作已存進版控（2026-09-04 補充）
+
+原本這份修補只存在未合併的遠端分支 `origin/claude/fullstack-review-architecture-fdmjbd`（commit `59c170d`）。為了讓該分支可以安全刪除，`ClientIpResolver` 的完整實作與測試已收進：
+
+```
+ai-docs/backlog/patches/2026-09-04-client-ip-resolver.patch
+```
+
+套用方式：
+
+```bash
+git apply --3way ai-docs/backlog/patches/2026-09-04-client-ip-resolver.patch
+```
+
+**只收了 `ClientIpResolver` 與其測試，沒有收整個 `59c170d`**，理由是 2026-09-04 security review 對該 commit 的四項逐一判定：
+
+| 項目 | develop 現況 |
+|------|-------------|
+| A1 `changePassword` 撤銷 refresh token | **已涵蓋**，且 develop 以 `SessionRevoker` + `afterCommit` 實作，優於原 commit |
+| A2 `resetPassword` 撤銷 refresh token | **已涵蓋**，同上 |
+| A3 `/auth/refresh` 驗證 token version | **部分涵蓋**——角色降級缺陷已消失，但權威來源仍是 Redis 快取而非 DB（見 SEC-03 與 triage §4 的 D6） |
+| A4 `ClientIpResolver` | **完全未涵蓋** ← 這份 patch |
+
+A1–A3 的原始寫法已被 develop 超越，收進來反而會誤導後人以為需要套用。

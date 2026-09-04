@@ -438,6 +438,9 @@ class VersioningServiceTest {
      * event 的條件判斷已移入 ArticleFacade.applyRestoreContent 內部。
      * VersioningService 層只需確認 applyRestoreContent 被呼叫，
      * event 條件由 ArticleFacadeImplTest 驗證。
+     *
+     * <p>SEC-02 後另加驗：交給 facade 的還原資料<b>只帶內容</b>，
+     * 快照的 status 不再隨行（原本 {@code rd.status()} 的斷言已無對應欄位）。</p>
      */
     @Test
     void restore_draftSnapshot_delegatesToFacadeApplyRestore() {
@@ -458,6 +461,22 @@ class VersioningServiceTest {
 
         ArgumentCaptor<ArticleRestoreData> rdCaptor = ArgumentCaptor.forClass(ArticleRestoreData.class);
         verify(articleFacade).applyRestoreContent(eq(articleId), rdCaptor.capture());
-        assertThat(rdCaptor.getValue().status()).isEqualTo("DRAFT");
+        assertThat(rdCaptor.getValue().title()).isEqualTo(draftSnapshot.getTitle());
+        assertThat(rdCaptor.getValue().content()).isEqualTo(draftSnapshot.getContent());
+    }
+
+    /**
+     * SEC-02（HIGH）契約層防線：還原資料不得攜帶文章狀態。
+     *
+     * <p>行為層的斷言（還原後文章狀態不變）在 {@code ArticleFacadeImplTest} 內；
+     * 這裡守的是<b>結構</b>——只要有人把 status 加回 {@link ArticleRestoreData}，
+     * 還原就重新具備改狀態的能力，本測試立刻紅，不必等到行為測試被一起改掉。</p>
+     */
+    @Test
+    void articleRestoreData_hasNoStatusComponent() {
+        assertThat(ArticleRestoreData.class.getRecordComponents())
+            .extracting(java.lang.reflect.RecordComponent::getName)
+            .as("還原只還原內容：帶 status 會讓還原成為繞過 VALID_TRANSITIONS 的狀態轉換路徑（SEC-02）")
+            .doesNotContain("status");
     }
 }

@@ -26,6 +26,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -36,12 +39,16 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -2086,6 +2093,141 @@ class ArticleCommandSubServiceTest {
             commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
 
             verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of(existingFileId));
+        }
+    }
+
+    /**
+     * 狀態轉換矩陣：{@code VALID_TRANSITIONS} 的完整 5×5 覆蓋（含 ADMIN 角色分支）。
+     *
+     * <p><strong>為什麼要有這組測試</strong>（SEC-02 收斂的配套）：守衛收斂成單一真相之後，
+     * 這張表就是整個文章狀態機的唯一規格。將來新增狀態、或有人「順手」增減一條邊，
+     * 漏改的路徑會在這裡立刻紅，而不是等到某個端點被線上使用者踩到。</p>
+     *
+     * <p><strong>覆蓋方式</strong>：測資由 {@code ArticleStatus.values()} 的笛卡兒積產生，
+     * 而非手寫 25 行——新增第 6 個狀態時測資自動長到 36 組，其中 11 組查不到期望值會直接紅
+     * （見 {@code EXPECTED} 的 assertion 訊息），逼人補齊，不會靜默漏測。</p>
+     *
+     * <p><strong>為何直接測 validateStatusTransition</strong>：表裡的 PUBLISHED → ARCHIVED、
+     * ARCHIVED → DRAFT 目前沒有任何公開端點可觸發（PUT 對這兩個狀態會先被
+     * ARTICLE_EDIT_NOT_ALLOWED 擋下），透過 public 方法無法覆蓋全矩陣。</p>
+     */
+    @Nested
+    @DisplayName("狀態轉換矩陣（VALID_TRANSITIONS 單一真相）")
+    class StatusTransitionMatrix {
+
+        /**
+         * 每組轉換的期望結果。
+         *
+         * <p>ALLOWED：任何角色皆可；ADMIN_ONLY：ADMIN 通過、非 ADMIN 拋 ARTICLE_ACCESS_DENIED；
+         * INVALID：任何角色皆拋 ARTICLE_STATUS_TRANSITION_INVALID。</p>
+         */
+        private enum Expectation {
+            ALLOWED, ADMIN_ONLY, INVALID
+        }
+
+        private static final Map<ArticleStatus, Map<ArticleStatus, Expectation>> EXPECTED = Map.of(
+                ArticleStatus.DRAFT, Map.of(
+                        ArticleStatus.DRAFT, Expectation.INVALID,
+                        ArticleStatus.PENDING_REVIEW, Expectation.ALLOWED,
+                        ArticleStatus.PUBLISHED, Expectation.ALLOWED,
+                        ArticleStatus.ARCHIVED, Expectation.INVALID,
+                        ArticleStatus.REJECTED, Expectation.INVALID),
+                ArticleStatus.PENDING_REVIEW, Map.of(
+                        ArticleStatus.DRAFT, Expectation.ALLOWED,
+                        ArticleStatus.PENDING_REVIEW, Expectation.INVALID,
+                        ArticleStatus.PUBLISHED, Expectation.ADMIN_ONLY,
+                        ArticleStatus.ARCHIVED, Expectation.INVALID,
+                        ArticleStatus.REJECTED, Expectation.ADMIN_ONLY),
+                ArticleStatus.PUBLISHED, Map.of(
+                        ArticleStatus.DRAFT, Expectation.INVALID,
+                        ArticleStatus.PENDING_REVIEW, Expectation.INVALID,
+                        ArticleStatus.PUBLISHED, Expectation.INVALID,
+                        ArticleStatus.ARCHIVED, Expectation.ALLOWED,
+                        ArticleStatus.REJECTED, Expectation.INVALID),
+                ArticleStatus.ARCHIVED, Map.of(
+                        ArticleStatus.DRAFT, Expectation.ALLOWED,
+                        ArticleStatus.PENDING_REVIEW, Expectation.INVALID,
+                        ArticleStatus.PUBLISHED, Expectation.INVALID,
+                        ArticleStatus.ARCHIVED, Expectation.INVALID,
+                        ArticleStatus.REJECTED, Expectation.INVALID),
+                ArticleStatus.REJECTED, Map.of(
+                        ArticleStatus.DRAFT, Expectation.ALLOWED,
+                        /* 被駁回後改一改重新送審，submitForReview 的既有行為（SEC-02 補進表） */
+                        ArticleStatus.PENDING_REVIEW, Expectation.ALLOWED,
+                        ArticleStatus.PUBLISHED, Expectation.INVALID,
+                        ArticleStatus.ARCHIVED, Expectation.INVALID,
+                        ArticleStatus.REJECTED, Expectation.INVALID));
+
+        /**
+         * 產生 5×5 全部組合的測資（新增狀態時自動擴張）。
+         *
+         * @return 每筆為 [from, to] 的 Arguments 串流
+         */
+        static Stream<Arguments> allTransitions() {
+            return Arrays.stream(ArticleStatus.values())
+                    .flatMap(from -> Arrays.stream(ArticleStatus.values())
+                            .map(to -> Arguments.of(from, to)));
+        }
+
+        @ParameterizedTest(name = "[{index}] {0} → {1}")
+        @MethodSource("allTransitions")
+        @DisplayName("以 AUTHOR 身分執行：ALLOWED 通過、ADMIN_ONLY 拒絕、INVALID 拒絕")
+        void validateStatusTransition_asAuthor_matchesMatrix(ArticleStatus from, ArticleStatus to) {
+            Expectation expectation = expectationOf(from, to);
+
+            switch (expectation) {
+                case ALLOWED -> assertThatCode(
+                        () -> commandSubService.validateStatusTransition(from, to, Role.AUTHOR))
+                        .as("%s → %s 應允許", from, to)
+                        .doesNotThrowAnyException();
+                case ADMIN_ONLY -> assertThatThrownBy(
+                        () -> commandSubService.validateStatusTransition(from, to, Role.AUTHOR))
+                        .as("%s → %s 僅 ADMIN 可執行", from, to)
+                        .isInstanceOf(BusinessException.class)
+                        .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+                case INVALID -> assertThatThrownBy(
+                        () -> commandSubService.validateStatusTransition(from, to, Role.AUTHOR))
+                        .as("%s → %s 為非法轉換", from, to)
+                        .isInstanceOf(BusinessException.class)
+                        .hasMessageContaining(
+                                ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+            }
+        }
+
+        @ParameterizedTest(name = "[{index}] {0} → {1}")
+        @MethodSource("allTransitions")
+        @DisplayName("以 ADMIN 身分執行：ALLOWED / ADMIN_ONLY 皆通過、INVALID 仍拒絕")
+        void validateStatusTransition_asAdmin_matchesMatrix(ArticleStatus from, ArticleStatus to) {
+            Expectation expectation = expectationOf(from, to);
+
+            if (expectation == Expectation.INVALID) {
+                assertThatThrownBy(
+                        () -> commandSubService.validateStatusTransition(from, to, Role.ADMIN))
+                        .as("%s → %s 為非法轉換，ADMIN 也不得執行", from, to)
+                        .isInstanceOf(BusinessException.class)
+                        .hasMessageContaining(
+                                ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+            } else {
+                assertThatCode(
+                        () -> commandSubService.validateStatusTransition(from, to, Role.ADMIN))
+                        .as("%s → %s 對 ADMIN 應允許", from, to)
+                        .doesNotThrowAnyException();
+            }
+        }
+
+        /**
+         * 取出期望值；查無代表新增了狀態卻沒補矩陣，直接讓該組紅掉。
+         *
+         * @param from 來源狀態
+         * @param to   目標狀態
+         * @return 該組轉換的期望結果
+         */
+        private Expectation expectationOf(ArticleStatus from, ArticleStatus to) {
+            Expectation expectation = EXPECTED.getOrDefault(from, Map.of()).get(to);
+            assertThat(expectation)
+                    .as("轉換矩陣未定義 %s → %s：新增狀態時必須同步補上 VALID_TRANSITIONS 與本矩陣", from, to)
+                    .isNotNull();
+            return expectation;
         }
     }
 

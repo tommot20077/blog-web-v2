@@ -53,12 +53,27 @@ class ArticleCommandSubService {
      */
     private final ArticleTocCodec articleTocCodec;
 
+    /**
+     * 文章狀態機的<b>唯一真相</b>：每個狀態允許轉往哪些狀態。
+     *
+     * <p>所有會改動 {@code article.status} 的路徑一律經 {@link #validateStatusTransition} 查此表，
+     * 不得各自內嵌判斷（SEC-02：內嵌判斷讓 submitForReview / withdraw / restore 各自長出一套規則，
+     * 其中 restore 那套等於沒有守衛）。新增狀態時只要漏改此表，
+     * {@code ArticleCommandSubServiceTest} 的轉換矩陣測試會立刻紅。</p>
+     *
+     * <p><b>表與入口的分工</b>：此表定義「狀態機上存在哪些邊」；個別入口可以更嚴
+     * （例如 withdraw 只走 PENDING_REVIEW → DRAFT 這一條，不因表裡也有
+     * ARCHIVED / REJECTED → DRAFT 就一併開放），但<b>不得更寬</b>。入口自己的限制屬於操作語意，
+     * 一律寫在該方法內並註明理由。</p>
+     */
     private static final Map<ArticleStatus, Set<ArticleStatus>> VALID_TRANSITIONS = Map.of(
             ArticleStatus.DRAFT, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.PENDING_REVIEW),
             ArticleStatus.PENDING_REVIEW, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.DRAFT, ArticleStatus.REJECTED),
             ArticleStatus.PUBLISHED, Set.of(ArticleStatus.ARCHIVED),
             ArticleStatus.ARCHIVED, Set.of(ArticleStatus.DRAFT),
-            ArticleStatus.REJECTED, Set.of(ArticleStatus.DRAFT));
+            /* REJECTED → PENDING_REVIEW：被駁回後改一改重新送審，submitForReview 一直支援，
+             * 只是原本沒被寫進表（表是規格、實作是真相，兩者對不上）。SEC-02 收斂時補齊。 */
+            ArticleStatus.REJECTED, Set.of(ArticleStatus.DRAFT, ArticleStatus.PENDING_REVIEW));
 
     /**
      * 建立文章
@@ -169,6 +184,23 @@ class ArticleCommandSubService {
             article.setSummary(extractSummary(baseContent, request.getSummary()));
         }
         if (request.getStatus() != null) {
+            /*
+             * 入口語意守衛（比狀態機更嚴，見 VALID_TRANSITIONS 的「表與入口的分工」）：
+             * PUT 不得把 REJECTED 文章直接送審。REJECTED → PENDING_REVIEW 是合法轉換，
+             * 但「被駁回後重新送審」是審核流程的動作，語意上屬於 submitForReview
+             * （POST /{uuid}/submit）；PUT 是內容編輯端點，不承載審核流程語意。
+             * 此限制是 SEC-02 收斂前就有的行為（REJECTED → PENDING_REVIEW 當時不在表裡），
+             * 補表後改以顯式守衛保留，不在安全修復裡夾帶行為放寬。
+             *
+             * 註：此守衛原本的理由是「只有 submitForReview 會清 rejectReason，從 PUT 轉過去
+             * 待審文章會帶著上一輪的駁回理由」。該前提已不成立——本方法下方的
+             * clearRejectReasonIfNotRejected 會在任何 PUT 狀態轉換後一併清空駁回理由。
+             * 守衛保留的是操作語意的分工，不再是 rejectReason 的殘留風險。
+             */
+            if (article.getStatus() == ArticleStatus.REJECTED
+                    && request.getStatus() == ArticleStatus.PENDING_REVIEW) {
+                throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
+            }
             validateStatusTransition(article.getStatus(), request.getStatus(), operatorRole);
             article.setStatus(request.getStatus());
             if (request.getStatus() == ArticleStatus.PUBLISHED && article.getPublishedAt() == null) {
@@ -346,7 +378,13 @@ class ArticleCommandSubService {
     }
 
     /**
-     * 提交文章審核（DRAFT → PENDING_REVIEW）
+     * 提交文章審核（DRAFT / REJECTED → PENDING_REVIEW）
+     *
+     * <p>
+     * 允許的來源狀態完全由 {@link #VALID_TRANSITIONS} 決定，本方法不內嵌第二套判斷
+     * （SEC-02 收斂）。REJECTED → PENDING_REVIEW 是「被駁回後改一改重新送審」，
+     * 送審成功時一併清空 rejectReason。
+     * </p>
      *
      * @param operatorId   操作者資料庫主鍵
      * @param operatorRole 操作者角色
@@ -357,10 +395,7 @@ class ArticleCommandSubService {
     public ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
         checkWritePermission(operatorId, operatorRole, article);
-        ArticleStatus currentStatus = article.getStatus();
-        if (currentStatus != ArticleStatus.DRAFT && currentStatus != ArticleStatus.REJECTED) {
-            throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
-        }
+        validateStatusTransition(article.getStatus(), ArticleStatus.PENDING_REVIEW, operatorRole);
         article.setStatus(ArticleStatus.PENDING_REVIEW);
         clearRejectReasonIfNotRejected(article);
         Article updated = articleRepository.save(article);
@@ -374,6 +409,13 @@ class ArticleCommandSubService {
      * 作者送審後在審核完成前反悔時使用，將文章退回草稿以便繼續編輯。
      * 僅允許 PENDING_REVIEW 狀態抽回，其餘狀態一律拋出
      * {@link ArticleErrorCode#ARTICLE_STATUS_TRANSITION_INVALID}。
+     * </p>
+     *
+     * <p>
+     * <b>來源限制比狀態機更嚴是刻意的</b>：{@link #VALID_TRANSITIONS} 裡
+     * ARCHIVED → DRAFT、REJECTED → DRAFT 都是合法轉換，但那兩條不屬於「抽回送審」語意，
+     * 不從本端點放行（見 VALID_TRANSITIONS 的「表與入口的分工」）。
+     * 轉換本身是否合法仍交由 {@link #validateStatusTransition} 判定，本方法不內嵌第二套規則。
      * </p>
      *
      * <p>
@@ -401,9 +443,17 @@ class ArticleCommandSubService {
     public ArticleResponse withdrawArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
         checkAuthorOnly(operatorId, article);
+        /*
+         * 入口語意守衛（比狀態機更嚴，見 VALID_TRANSITIONS 的「表與入口的分工」）：
+         * 抽回專指「收回自己送審中的文章」，故來源必須是 PENDING_REVIEW。
+         * 表裡的 ARCHIVED → DRAFT、REJECTED → DRAFT 是合法轉換，但不屬於抽回語意，
+         * 不得從這個端點放行。
+         */
         if (article.getStatus() != ArticleStatus.PENDING_REVIEW) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
         }
+        /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則 */
+        validateStatusTransition(article.getStatus(), ArticleStatus.DRAFT, operatorRole);
         article.setStatus(ArticleStatus.DRAFT);
         clearRejectReasonIfNotRejected(article);
         Article updated = articleRepository.save(article);
@@ -470,17 +520,26 @@ class ArticleCommandSubService {
     }
 
     /**
-     * 驗證狀態轉換是否合法
+     * 驗證狀態轉換是否合法（所有改狀態路徑的唯一守衛）
      *
      * <p>
-     * PENDING_REVIEW → PUBLISHED 僅 ADMIN 可執行。
+     * 合法轉換一律查 {@link #VALID_TRANSITIONS}；PENDING_REVIEW → PUBLISHED / REJECTED
+     * 另需 ADMIN 權限。update / publish / reject / submitForReview / withdraw 全部經此，
+     * 任何新的狀態改動路徑也必須經此（SEC-02：restore 曾完全繞過，已於同一 PR 移除改狀態的能力）。
+     * </p>
+     *
+     * <p>
+     * <b>可見性刻意放寬到 package-private</b>：狀態機的完整 5×5 轉換矩陣要由
+     * {@code ArticleCommandSubServiceTest} 直接驗證。表裡有數條邊（PUBLISHED → ARCHIVED、
+     * ARCHIVED → DRAFT）目前沒有任何公開端點可觸發，透過既有 public 方法無法覆蓋全矩陣；
+     * 本類別本身即 package-private，故此舉不擴大模組外的 API 面。
      * </p>
      *
      * @param from         目前狀態
      * @param to           目標狀態
      * @param operatorRole 操作者角色
      */
-    private void validateStatusTransition(ArticleStatus from, ArticleStatus to, Role operatorRole) {
+    void validateStatusTransition(ArticleStatus from, ArticleStatus to, Role operatorRole) {
         Set<ArticleStatus> allowed = VALID_TRANSITIONS.getOrDefault(from, Set.of());
         if (!allowed.contains(to)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);

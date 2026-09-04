@@ -196,12 +196,16 @@ public interface ArticleFacade {
      * <p>內部完整流程：</p>
      * <ol>
      *   <li>撈 Article entity（不存在 throw ARTICLE_NOT_FOUND）</li>
-     *   <li>mutate 7 個欄位（title / slug / content / summary / coverImageUrl / status / contentHtml）</li>
+     *   <li>mutate 7 個內容欄位（title / slug / content / summary / coverImageUrl / contentHtml / toc）</li>
      *   <li>save Article</li>
      *   <li>syncArticleTags — 必須在 publish events 之前</li>
      *   <li>publishContentChanged(article, RESTORED)</li>
      *   <li>若 article.status == PUBLISHED：publishUpdated(article)</li>
      * </ol>
+     *
+     * <p><strong>SEC-02：不會改動 article.status</strong>。還原只還原內容，狀態轉換的唯一真相是
+     * {@code ArticleCommandSubService.VALID_TRANSITIONS}；上述步驟 6 的判準是「文章現在的狀態」，
+     * 與快照當時的狀態無關。</p>
      *
      * <p>caller 不需要再 inject ArticleEventPublisher / TagFacade write methods，
      * 也不會看到 Article entity。</p>
