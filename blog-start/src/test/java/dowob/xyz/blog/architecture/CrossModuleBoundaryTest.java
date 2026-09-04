@@ -20,15 +20,24 @@ import static org.assertj.core.api.Assertions.assertThat;
  * reference data（{@code users} / {@code tags}）依規範可直接 JOIN，故不在此限——
  * 這條豁免是必要的，否則會誤判 PERF-01（reindex 改 JOIN users）為違規。</p>
  *
- * <p><b>陣列型 {@code @Select({...})} 的處理</b>：MyBatis 的動態 SQL
- * （{@code <script>} / {@code <foreach>}）慣用陣列型 annotation value，
- * ArchUnit 對這種成員回傳的是陣列物件而非單一字串——
- * 若只用 {@code String.valueOf(...)} 會拿到類似
- * {@code [Ljava.lang.String;@1b6d3586} 的字串，對陣列型 SQL 完全失明。
- * 本守衛因此把陣列攤平、以空白 join 回單一字串再比對，
+ * <p><b>annotation value 一律是陣列（重要更正）</b>：MyBatis 的 {@code @Select} /
+ * {@code @Update} 宣告的是 {@code String[] value()}——陣列型 annotation member。
+ * 依 JVMS §4.7.16.1，陣列型 annotation member 在 classfile 中<b>一律以陣列編碼</b>，
+ * 與原始碼寫成單一字串 {@code @Select("...")} 或陣列字面值 {@code @Select({...})}
+ * 這種來源語法無關——ArchUnit 讀到的 {@code value()} 因此永遠是 {@code String[]}，
+ * 不存在「單一字串」這種另一型態。早期草稿誤以為 {@code @Select("...")} 是純量、
+ * 只有 {@code @Select({...})} 才是陣列，因而只用
+ * {@code String.valueOf(a.get("value").orElse(""))} 讀值——這個假設是錯的，
+ * 後果也比原先認知的更嚴重：它讓本守衛對<b>本 repo 每一個</b>
+ * {@code @Select}/{@code @Update}（不分寫法，不只是陣列字面值那 11 處）都完全失明，
+ * 拿到的是 {@code [Ljava.lang.String;@1b6d3586} 這種物件位址字串，不含任何 SQL 內容。
+ * 本守衛因此改為偵測 {@code Object[]} 並把陣列攤平、以空白 join 回單一字串再比對，
  * 空白是必要的：{@code "... WHERE id IN"} 與 {@code "<foreach ...>"}
  * 若直接串接（不留分隔）可能黏成不含空白的 token，讓 "from articles" 這類
  * 關鍵字比對失真。</p>
+ *
+ * <p>給未來寫類似守衛的人的通用教訓：<b>任何宣告為陣列型別的 annotation member，
+ * 讀出來一律是陣列，與呼叫端語法（單一字串或陣列字面值）無關。</b></p>
  */
 class CrossModuleBoundaryTest {
 
@@ -64,9 +73,16 @@ class CrossModuleBoundaryTest {
     }
 
     /**
-     * 攤平 annotation value：{@code @Select("...")}（單一字串）與
-     * {@code @Select({"...", "...", ...})}（陣列，MyBatis 動態 SQL 慣用形式）
-     * 都要處理，陣列以空白 join 避免片段黏成單一 token。
+     * 攤平 annotation value：MyBatis {@code @Select}/{@code @Update} 的
+     * {@code value()} 宣告為陣列型別（{@code String[]}），依 JVMS §4.7.16.1，
+     * ArchUnit 讀出來的 {@code value()} 永遠是 {@code Object[]}（見上方 class
+     * javadoc「annotation value 一律是陣列」），不論原始碼寫成單一字串
+     * {@code @Select("...")} 還是陣列字面值 {@code @Select({"...", ...})}。
+     * 陣列以空白 join 避免片段黏成單一 token，讓多元素形式（MyBatis 動態 SQL
+     * {@code <script>}/{@code <foreach>} 慣用寫法）也能正確比對。
+     * {@code instanceof Object[]} 以外的 fallback 分支純屬防禦性寫法
+     * （供非陣列型 annotation member 誤用本 helper 時不至於丟例外），
+     * 在本守衛實際掃描的 {@code @Select}/{@code @Update} 場景下不會被觸發。
      */
     private static String flattenAnnotationValue(Object raw) {
         return (raw instanceof Object[] parts)
