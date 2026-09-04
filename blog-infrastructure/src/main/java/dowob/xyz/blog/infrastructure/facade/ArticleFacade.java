@@ -196,6 +196,7 @@ public interface ArticleFacade {
      * <p>內部完整流程：</p>
      * <ol>
      *   <li>撈 Article entity（不存在 throw ARTICLE_NOT_FOUND）</li>
+     *   <li>內容凍結守衛：PENDING_REVIEW / PUBLISHED / ARCHIVED 一律 throw ARTICLE_EDIT_NOT_ALLOWED</li>
      *   <li>mutate 7 個內容欄位（title / slug / content / summary / coverImageUrl / contentHtml / toc）</li>
      *   <li>save Article</li>
      *   <li>syncArticleTags — 必須在 publish events 之前</li>
@@ -207,12 +208,17 @@ public interface ArticleFacade {
      * {@code ArticleCommandSubService.VALID_TRANSITIONS}；上述步驟 6 的判準是「文章現在的狀態」，
      * 與快照當時的狀態無關。</p>
      *
+     * <p><strong>F-H1：內容凍結對還原一體適用</strong>。只有 DRAFT / REJECTED 允許改寫內容；
+     * PENDING_REVIEW / PUBLISHED / ARCHIVED 一律拒絕（A0209），與 {@code PUT /api/v1/articles/{uuid}}
+     * 同一套判斷。守衛由 article 模組在本方法內執行，caller 不需要（也不應該）自行判斷文章狀態。</p>
+     *
      * <p>caller 不需要再 inject ArticleEventPublisher / TagFacade write methods，
      * 也不會看到 Article entity。</p>
      *
      * @param articleId 文章資料庫主鍵
      * @param data      還原所需資料（含 tags）
-     * @throws dowob.xyz.blog.common.exception.BusinessException ARTICLE_NOT_FOUND 若 articleId 對應 article 不存在
+     * @throws dowob.xyz.blog.common.exception.BusinessException ARTICLE_NOT_FOUND 若 articleId 對應 article 不存在；
+     *                                                          ARTICLE_EDIT_NOT_ALLOWED 若文章目前狀態內容凍結
      */
     void applyRestoreContent(Long articleId, ArticleRestoreData data);
 }
