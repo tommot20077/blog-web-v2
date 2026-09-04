@@ -16,6 +16,7 @@ import dowob.xyz.blog.module.article.model.dto.response.CategoryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TocEntry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -23,6 +24,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -338,6 +344,129 @@ class ArticleResponseMapperTest {
 
             assertThat(mapper.resolveAuthorUuid(7L)).isNull();
             assertThat(mapper.resolveAuthorNickname(7L)).isNull();
+        }
+    }
+
+    /**
+     * rejectReason 為 admin 撰寫的「內部審核評語」，只能對作者本人與 ADMIN 揭露。
+     *
+     * <p>三個 DTO（ArticleResponse / ArticleSummaryResponse / EditorArticleResponse）
+     * 一律由本 mapper 填入，故遮蔽規則在此收斂為單一 choke point；觀看者身分取自
+     * 當前 SecurityContext（與 {@code SecurityUtils.isAdmin()} 無參版、
+     * {@code ArticleQueryService} 的 liked/bookmarked 填充同一慣例）。</p>
+     */
+    @Nested
+    @DisplayName("rejectReason 可見性（內部審核評語僅作者與 ADMIN 可見）")
+    class RejectReasonVisibility {
+
+        private static final Long ARTICLE_AUTHOR_ID = 5L;
+        private static final Long OTHER_USER_ID = 99L;
+
+        @AfterEach
+        void clearContext() {
+            SecurityContextHolder.clearContext();
+        }
+
+        private void authenticateAs(Long userId, String springSecurityRole) {
+            Authentication auth = new UsernamePasswordAuthenticationToken(
+                    userId, null, List.of(new SimpleGrantedAuthority(springSecurityRole)));
+            SecurityContextHolder.getContext().setAuthentication(auth);
+        }
+
+        private void authenticateAsAnonymousToken() {
+            Authentication auth = new AnonymousAuthenticationToken(
+                    "key", "anonymousUser", List.of(new SimpleGrantedAuthority("ROLE_ANONYMOUS")));
+            SecurityContextHolder.getContext().setAuthentication(auth);
+        }
+
+        @Test
+        @DisplayName("toResponse：無 SecurityContext（匿名）→ rejectReason 遮蔽為 null")
+        void toResponse_anonymousViewer_masksRejectReason() {
+            SecurityContextHolder.clearContext();
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toResponse(article).getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("toResponse：AnonymousAuthenticationToken → rejectReason 遮蔽為 null")
+        void toResponse_anonymousAuthenticationToken_masksRejectReason() {
+            authenticateAsAnonymousToken();
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toResponse(article).getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("toResponse：其他已登入的一般使用者 → rejectReason 遮蔽為 null")
+        void toResponse_otherAuthenticatedViewer_masksRejectReason() {
+            authenticateAs(OTHER_USER_ID, "ROLE_USER");
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toResponse(article).getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("toResponse：作者本人 → 看得到 rejectReason")
+        void toResponse_authorViewer_exposesRejectReason() {
+            authenticateAs(ARTICLE_AUTHOR_ID, "ROLE_AUTHOR");
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toResponse(article).getRejectReason()).isEqualTo("reason");
+        }
+
+        @Test
+        @DisplayName("toResponse：ADMIN（非作者）→ 看得到 rejectReason")
+        void toResponse_adminViewer_exposesRejectReason() {
+            authenticateAs(OTHER_USER_ID, "ROLE_ADMIN");
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toResponse(article).getRejectReason()).isEqualTo("reason");
+        }
+
+        @Test
+        @DisplayName("toSummaryResponse：匿名 → rejectReason 遮蔽為 null")
+        void toSummaryResponse_anonymousViewer_masksRejectReason() {
+            SecurityContextHolder.clearContext();
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toSummaryResponse(article, List.of()).getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("toSummaryResponse：作者本人 → 看得到 rejectReason（我的文章列表需要）")
+        void toSummaryResponse_authorViewer_exposesRejectReason() {
+            authenticateAs(ARTICLE_AUTHOR_ID, "ROLE_AUTHOR");
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toSummaryResponse(article, List.of()).getRejectReason()).isEqualTo("reason");
+        }
+
+        @Test
+        @DisplayName("toSummaryResponse：ADMIN → 看得到 rejectReason（待審列表需要）")
+        void toSummaryResponse_adminViewer_exposesRejectReason() {
+            authenticateAs(OTHER_USER_ID, "ROLE_ADMIN");
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toSummaryResponse(article, List.of()).getRejectReason()).isEqualTo("reason");
+        }
+
+        @Test
+        @DisplayName("toEditorResponse：匿名 → rejectReason 遮蔽為 null（縱深防禦，不倚賴上游守衛）")
+        void toEditorResponse_anonymousViewer_masksRejectReason() {
+            SecurityContextHolder.clearContext();
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toEditorResponse(article).getRejectReason()).isNull();
+        }
+
+        @Test
+        @DisplayName("toEditorResponse：作者本人 → 看得到 rejectReason（編輯器需顯示駁回理由）")
+        void toEditorResponse_authorViewer_exposesRejectReason() {
+            authenticateAs(ARTICLE_AUTHOR_ID, "ROLE_AUTHOR");
+            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+
+            assertThat(mapper.toEditorResponse(article).getRejectReason()).isEqualTo("reason");
         }
     }
 

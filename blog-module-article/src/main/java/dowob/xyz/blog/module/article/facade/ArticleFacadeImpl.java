@@ -21,6 +21,7 @@ import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.article.service.ArticleContentFreezePolicy;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleFileBinder;
 import dowob.xyz.blog.module.article.service.ArticleService;
@@ -451,6 +452,28 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * 確保 search index update consumer 拿到的 tags 已是最新狀態。</p>
      *
      * <p>
+     * <strong>F-H1：還原必須通過與 PUT 相同的內容凍結守衛</strong>。
+     * {@code ArticleCommandSubService#updateArticle} 規定 PENDING_REVIEW / PUBLISHED / ARCHIVED
+     * 內容凍結，但還原路徑原本完全不受約束：作者把文章送審後仍能用還原把內容換成另一個版本，
+     * admin 審的是 A、通過的是 B（審核 TOCTOU）。SEC-02 之後還原不再改 status，
+     * 這個換內容的動作在狀態機上完全無痕，反而更隱蔽。
+     * </p>
+     *
+     * <p>
+     * 守衛刻意放在<b>本方法內、mutate 之前</b>，而不是要求 version 模組先問一次：
+     * 凍結是 article 模組的業務規則，由擁有該資料的模組在自己的寫入點把關，
+     * 任何呼叫端（含未來新增的）都繞不過去，規則也不會洩漏到別的模組
+     * （見 {@code ai-docs/architecture.md} 跨模組邊界：業務 data 的寫必走 owner module 的 service）。
+     * 判斷共用 {@link ArticleContentFreezePolicy}，不複製第二套。
+     * </p>
+     *
+     * <p>
+     * 附帶效果：PUBLISHED 被守衛擋下後，下方
+     * {@code if (saved.getStatus() == PUBLISHED) publishUpdated} 分支已無呼叫端能到達，
+     * 作為防禦性程式碼保留（本次修復不動還原邏輯本身）。
+     * </p>
+     *
+     * <p>
      * <strong>檔案綁定回填（修復：還原後圖片破圖）</strong>：DB commit 後，比照
      * {@code ArticleCommandSubService}（Task B6）另呼叫 {@link ArticleFileBinder#bindFilesToArticleSafely}，
      * 掃描的是 {@code saved.getContent()}（DB 實際存下的那份），而非 {@code data.content()}——
@@ -467,6 +490,12 @@ public class ArticleFacadeImpl implements ArticleFacade {
         Article saved = transactionTemplate.execute(status -> {
             Article article = articleRepository.findById(articleId)
                     .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
+
+            /*
+             * F-H1 內容凍結守衛：與 PUT 更新共用同一套判斷（ArticleContentFreezePolicy）。
+             * 必須在任何 mutate 之前，凍結狀態下 entity 一個欄位都不得被動到。
+             */
+            ArticleContentFreezePolicy.assertContentEditable(article.getStatus());
 
             article.setTitle(data.title());
             article.setSlug(data.slug());
@@ -486,6 +515,16 @@ public class ArticleFacadeImpl implements ArticleFacade {
              * data.toc() 為 null 時存空陣列，維持 articles.toc 恆為合法 JSON 陣列的不變量。
              */
             article.setToc(data.toc() != null ? data.toc() : ArticleTocCodec.EMPTY_TOC_JSON);
+
+            /*
+             * 這裡刻意不處理 rejectReason：SEC-02 之後還原完全不改 status（見上方註解與
+             * ArticleRestoreData 已無 status 欄位），故還原無法把 REJECTED 文章推進公開狀態，
+             * 也就不存在「駁回理由隨文章公開而外流」的路徑。
+             * 「非 REJECTED 的文章不得帶駁回理由」這條不變量由
+             * ArticleCommandSubService#clearRejectReasonIfNotRejected 在各個真正的狀態轉換點維持；
+             * 在這條非轉換路徑上再清一次只是死碼。
+             * 守衛見 ArticleFacadeImplTest#applyRestoreContent_rejectedArticle_keepsStatusAndRejectReason。
+             */
 
             Article updated = articleRepository.save(article);
 

@@ -28,6 +28,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
@@ -744,13 +746,14 @@ class ArticleFacadeImplTest {
         }
 
         @Test
-        @DisplayName("PUBLISHED article 還原 → publishContentChanged(RESTORED) + publishUpdated 都發")
-        void applyRestoreContent_publishedArticle_publishesBoth() {
+        @DisplayName("DRAFT article 還原 → 7 個內容欄位全數寫回 + syncArticleTags + ContentChanged(RESTORED)")
+        void applyRestoreContent_draftArticle_restoresAllContentFields() {
             /*
-             * SEC-02 後：publishUpdated 的判準是「文章現在的狀態」，不再是快照當時的狀態
-             * （ArticleRestoreData 已無 status 欄位），因此本案例的前提改由文章本身是 PUBLISHED 表達。
+             * F-H1 後：PUBLISHED 已被內容凍結守衛擋在本方法之外（見 ContentFreezeGuard），
+             * 「完整欄位還原」的正常案例改以 DRAFT 表達，PUBLISHED 專屬的 publishUpdated 斷言隨之移除。
+             * 事件判準本身（文章現況為 PUBLISHED 才發 publishUpdated）維持不變，只是已無呼叫端能到達該分支。
              */
-            existing.setStatus(ArticleStatus.PUBLISHED);
+            existing.setStatus(ArticleStatus.DRAFT);
             ArticleRestoreData data = new ArticleRestoreData(
                 "New Title", "new-slug", "# New", "New summary", "https://cdn/new.jpg",
                 "<p>New</p>", "[]", List.of(UUID.randomUUID(), UUID.randomUUID())
@@ -763,13 +766,13 @@ class ArticleFacadeImplTest {
             assertThat(existing.getContent()).isEqualTo("# New");
             assertThat(existing.getSummary()).isEqualTo("New summary");
             assertThat(existing.getCoverImageUrl()).isEqualTo("https://cdn/new.jpg");
-            assertThat(existing.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
+            assertThat(existing.getStatus()).isEqualTo(ArticleStatus.DRAFT);
             assertThat(existing.getContentHtml()).isEqualTo("<p>New</p>");
 
             verify(articleRepository).save(existing);
             verify(tagFacade).syncArticleTags(eq(articleUuid), eq(data.tags()));
             verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
-            verify(articleEventPublisher).publishUpdated(existing);
+            verify(articleEventPublisher, never()).publishUpdated(any());
         }
 
         @Test
@@ -797,6 +800,28 @@ class ArticleFacadeImplTest {
             facade.applyRestoreContent(articleId, data);
 
             assertThat(existing.getStatus()).isEqualTo(before);
+        }
+
+        /**
+         * 版本還原曾是唯一繞過 {@code validateStatusTransition} 的狀態轉換路徑：REJECTED 的文章
+         * 只要還原一份舊的 PUBLISHED 快照就會直接變成 PUBLISHED，帶著 admin 寫的內部駁回評語
+         * 進入匿名可讀的公開狀態。SEC-02 已從 {@code ArticleRestoreData} 移除 status 欄位堵住此路，
+         * 本測試從「內部評語不得外流」的角度把該保證釘住：還原不得改狀態，rejectReason 也不受影響。
+         */
+        @Test
+        @DisplayName("REJECTED 文章還原 → 狀態與 rejectReason 皆不動（還原不得成為駁回文章洗白成公開的路徑）")
+        void applyRestoreContent_rejectedArticle_keepsStatusAndRejectReason() {
+            existing.setStatus(ArticleStatus.REJECTED);
+            existing.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getStatus()).isEqualTo(ArticleStatus.REJECTED);
+            assertThat(existing.getRejectReason()).isEqualTo("內部審核評語：抄襲疑慮，勿對外");
+            verify(articleEventPublisher, never()).publishUpdated(any());
         }
 
         @Test
@@ -842,8 +867,11 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("invocation 順序：save → syncArticleTags → publishEvents")
         void applyRestoreContent_invocationOrder_saveThenSyncTagsThenPublish() {
-            /** publishUpdated 只在文章現況為 PUBLISHED 時發，故順序驗證需以 PUBLISHED 文章為前提 */
-            existing.setStatus(ArticleStatus.PUBLISHED);
+            /*
+             * F-H1 後 PUBLISHED 已被內容凍結守衛擋下，順序驗證改以 DRAFT 為前提；
+             * publishUpdated 不再出現在此鏈上（該分支已無呼叫端能到達）。
+             */
+            existing.setStatus(ArticleStatus.DRAFT);
             ArticleRestoreData data = new ArticleRestoreData(
                 "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
             );
@@ -854,7 +882,6 @@ class ArticleFacadeImplTest {
             inOrder.verify(articleRepository).save(existing);
             inOrder.verify(tagFacade).syncArticleTags(eq(articleUuid), anyList());
             inOrder.verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
-            inOrder.verify(articleEventPublisher).publishUpdated(existing);
         }
 
         /**
@@ -937,8 +964,8 @@ class ArticleFacadeImplTest {
             @Test
             @DisplayName("順序：save → publish events → bindFilesToArticleSafely（DB commit 後才對外呼叫綁定）")
             void applyRestoreContent_invocationOrder_saveThenPublishThenBind() {
-                /** publishUpdated 只在文章現況為 PUBLISHED 時發，故順序驗證需以 PUBLISHED 文章為前提 */
-                existing.setStatus(ArticleStatus.PUBLISHED);
+                /* F-H1 後 PUBLISHED 已被內容凍結守衛擋下，順序驗證改以 DRAFT 為前提 */
+                existing.setStatus(ArticleStatus.DRAFT);
                 ArticleRestoreData data = new ArticleRestoreData(
                         "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
 
@@ -947,7 +974,6 @@ class ArticleFacadeImplTest {
                 InOrder inOrder = inOrder(articleRepository, articleEventPublisher, fileFacade);
                 inOrder.verify(articleRepository).save(existing);
                 inOrder.verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
-                inOrder.verify(articleEventPublisher).publishUpdated(existing);
                 inOrder.verify(fileFacade).bindFilesToArticle(eq(articleUuid), anyList());
             }
         }
@@ -965,14 +991,16 @@ class ArticleFacadeImplTest {
          * 而是移除還原改動狀態的能力：{@code ArticleRestoreData} 連 status 欄位都拿掉，讓這條路徑
          * 在型別上就無法改狀態。</p>
          *
+         * <p><strong>F-H1 後的涵蓋範圍</strong>：PENDING_REVIEW / PUBLISHED / ARCHIVED 三種狀態
+         * 已被內容凍結守衛擋在本方法之外，原本「狀態仍為 X」的三個案例升級為
+         * 「整個操作被拒絕、內容與狀態都不動」，移到 {@link ContentFreezeGuard}（斷言更強）。
+         * 本類別只保留仍能進到寫入路徑的 DRAFT / REJECTED。</p>
+         *
          * <p>下表以「文章現況」為變因（快照狀態已無從傳入，這正是修法的重點）：</p>
          * <pre>
-         * # | 文章現況        | 預期
-         * 1 | REJECTED       | 仍為 REJECTED（不得繞過審核）
-         * 2 | PENDING_REVIEW | 仍為 PENDING_REVIEW
-         * 3 | ARCHIVED       | 仍為 ARCHIVED
-         * 4 | DRAFT          | 仍為 DRAFT，且不發 publishUpdated（非公開文章不得被重新索引）
-         * 5 | PUBLISHED      | 仍為 PUBLISHED，且照發 publishUpdated（事件判準看文章現況）
+         * # | 文章現況  | 預期
+         * 1 | REJECTED | 仍為 REJECTED（不得繞過審核）
+         * 2 | DRAFT    | 仍為 DRAFT，且不發 publishUpdated（非公開文章不得被重新索引）
          * </pre>
          */
         @Nested
@@ -997,30 +1025,6 @@ class ArticleFacadeImplTest {
             }
 
             @Test
-            @DisplayName("PENDING_REVIEW 文章還原 → 狀態仍為 PENDING_REVIEW")
-            void applyRestoreContent_pendingReviewArticle_keepsPendingReviewStatus() {
-                existing.setStatus(ArticleStatus.PENDING_REVIEW);
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
-
-                facade.applyRestoreContent(articleId, data);
-
-                assertThat(existing.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
-            }
-
-            @Test
-            @DisplayName("ARCHIVED 文章還原 → 狀態仍為 ARCHIVED")
-            void applyRestoreContent_archivedArticle_keepsArchivedStatus() {
-                existing.setStatus(ArticleStatus.ARCHIVED);
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
-
-                facade.applyRestoreContent(articleId, data);
-
-                assertThat(existing.getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
-            }
-
-            @Test
             @DisplayName("DRAFT 文章還原 → 狀態仍為 DRAFT，且不發 publishUpdated（非公開文章不得被重新索引）")
             void applyRestoreContent_draftArticle_keepsDraftAndDoesNotPublishUpdated() {
                 existing.setStatus(ArticleStatus.DRAFT);
@@ -1034,18 +1038,77 @@ class ArticleFacadeImplTest {
                         ArticleContentChangedEvent.Action.RESTORED);
                 verify(articleEventPublisher, never()).publishUpdated(any());
             }
+        }
 
-            @Test
-            @DisplayName("PUBLISHED 文章還原 → 狀態仍為 PUBLISHED 且照發 publishUpdated")
-            void applyRestoreContent_publishedArticle_keepsPublishedAndPublishesUpdated() {
-                existing.setStatus(ArticleStatus.PUBLISHED);
+        /**
+         * F-H1（HIGH）：版本還原繞過內容凍結守衛，構成審核 TOCTOU。
+         *
+         * <p><strong>攻擊面（修復前）</strong>：{@code ArticleCommandSubService#updateArticle}
+         * 規定 PENDING_REVIEW / PUBLISHED / ARCHIVED 內容凍結（PUT 會被 A0209 擋下），
+         * 但還原路徑完全不受此約束——作者送審後仍能用還原把內容換成另一個版本，
+         * admin 審的是 A、通過的是 B。SEC-02（PR #66）把 status 從還原路徑移除後，
+         * 換內容在狀態機上完全無痕，反而更隱蔽。</p>
+         *
+         * <p><strong>修法</strong>：凍結判斷抽成 {@code ArticleContentFreezePolicy}（唯一真相），
+         * PUT 與還原兩條寫入路徑共用；守衛落在 article 模組自己的寫入方法內、mutate 之前，
+         * 任何呼叫端（含未來新增的）都繞不過去，而不是要求 version 模組記得先問。</p>
+         *
+         * <pre>
+         * # | 文章現況        | 預期
+         * 1 | PENDING_REVIEW | A0209，且完全不寫入、不同步標籤、不發事件、不動檔案綁定
+         * 2 | PUBLISHED      | 同上
+         * 3 | ARCHIVED       | 同上
+         * 4 | DRAFT          | 還原成功（正常用途，不得被守衛誤殺）
+         * 5 | REJECTED       | 還原成功（被駁回後改稿重送正是還原的用途）
+         * </pre>
+         */
+        @Nested
+        @DisplayName("F-H1 內容凍結守衛：審核中／已發布／已封存不得以還原改寫內容")
+        class ContentFreezeGuard {
+
+            @ParameterizedTest
+            @EnumSource(value = ArticleStatus.class, names = {"PENDING_REVIEW", "PUBLISHED", "ARCHIVED"})
+            @DisplayName("凍結狀態還原 → A0209，且無任何寫入／事件／標籤／檔案綁定副作用")
+            void applyRestoreContent_frozenStatus_throwsAndHasNoSideEffect(ArticleStatus frozen) {
+                existing.setStatus(frozen);
+                existing.setTitle("送審當下的內容 A");
+                existing.setContent("A");
                 ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+                        "偷換成的內容 B", "s", "B", "sum", null, "<p>B</p>", "[]", List.of());
+
+                assertThatThrownBy(() -> facade.applyRestoreContent(articleId, data))
+                        .isInstanceOf(BusinessException.class)
+                        .extracting(t -> ((BusinessException) t).getCode())
+                        .isEqualTo("A0209");
+
+                assertThat(existing.getTitle())
+                        .as("守衛必須在 mutate 之前擋下，entity 不得被改到")
+                        .isEqualTo("送審當下的內容 A");
+                assertThat(existing.getContent()).isEqualTo("A");
+                assertThat(existing.getStatus()).isEqualTo(frozen);
+                verify(articleRepository, never()).save(any(Article.class));
+                verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+            }
+
+            @ParameterizedTest
+            @EnumSource(value = ArticleStatus.class, names = {"DRAFT", "REJECTED"})
+            @DisplayName("DRAFT / REJECTED 還原 → 仍然成功（守住還原的正常用途，避免修過頭）")
+            void applyRestoreContent_editableStatus_stillRestores(ArticleStatus editable) {
+                existing.setStatus(editable);
+                existing.setContent("舊內容");
+                ArticleRestoreData data = new ArticleRestoreData(
+                        "還原後標題", "s", "還原後內容", "sum", null, "<p>c</p>", "[]", List.of());
 
                 facade.applyRestoreContent(articleId, data);
 
-                assertThat(existing.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
-                verify(articleEventPublisher).publishUpdated(existing);
+                assertThat(existing.getContent()).isEqualTo("還原後內容");
+                assertThat(existing.getTitle()).isEqualTo("還原後標題");
+                assertThat(existing.getStatus())
+                        .as("還原只還原內容，狀態一律不動（SEC-02）")
+                        .isEqualTo(editable);
+                verify(articleRepository).save(existing);
+                verify(articleEventPublisher).publishContentChanged(existing,
+                        ArticleContentChangedEvent.Action.RESTORED);
             }
         }
     }

@@ -190,5 +190,16 @@ public void changePassword(...) {
 > 「Static resources / css, js, images」列——本專案是純 API 後端,靜態資源由 nginx 供應,
 > `SecurityConfig` 只有 `/favicon.ico` 與 `/error` 兩條,以此二者取代之(**未改變任何端點的公開與否**)。)
 
+> (2026-09-04 內部駁回評語不再對匿名揭露。permitAll 面**不變**,僅收斂匿名可見內容:
+> `rejectReason` 是 admin 駁回文章時寫的內部審核評語,原本由 `ArticleResponseMapper` 無條件填入
+> `ArticleResponse` / `ArticleSummaryResponse` / `EditorArticleResponse`,且全 repo 無 `@JsonInclude`、
+> 公開端點無遮蔽,而只有 `submitForReview` 一處會清空 → 被駁回的文章一旦重新發布,評語就隨
+> `GET /api/v1/articles/{uuid}`(匿名可存取)外流。兩層防禦:(1) `ArticleResponseMapper#resolveRejectReason`
+> 依 `SecurityContext` 只對作者本人與 ADMIN 揭露,其餘一律 null(fail-closed,非 HTTP 執行緒亦然);
+> (2) `clearRejectReasonIfNotRejected` 在 6 個狀態離開 REJECTED 的轉換點清空。
+> 遮蔽層純看身分、不看 status,故線上既有的「非 REJECTED 卻帶 reject_reason」髒資料屬 DB 殘留而非洩漏面
+> (回填 migration 另案)。守衛 `ArticleResponseMapperTest` 的 anonymous / 非作者一般使用者 / 作者 / ADMIN
+> 四身分案例,與 `ArticleControllerIT` 的匿名整份 body `not(containsString(...))` 斷言。)
+
 All other endpoints require **authentication** (`authenticated()`).
 `/api/v1/admin/**` additionally requires the **ADMIN role**.
