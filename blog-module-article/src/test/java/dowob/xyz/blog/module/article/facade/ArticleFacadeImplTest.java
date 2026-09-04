@@ -745,6 +745,28 @@ class ArticleFacadeImplTest {
             assertThat(existing.getStatus()).isEqualTo(before);
         }
 
+        /**
+         * 版本還原曾是唯一繞過 {@code validateStatusTransition} 的狀態轉換路徑：REJECTED 的文章
+         * 只要還原一份舊的 PUBLISHED 快照就會直接變成 PUBLISHED，帶著 admin 寫的內部駁回評語
+         * 進入匿名可讀的公開狀態。SEC-02 已從 {@code ArticleRestoreData} 移除 status 欄位堵住此路，
+         * 本測試從「內部評語不得外流」的角度把該保證釘住：還原不得改狀態，rejectReason 也不受影響。
+         */
+        @Test
+        @DisplayName("REJECTED 文章還原 → 狀態與 rejectReason 皆不動（還原不得成為駁回文章洗白成公開的路徑）")
+        void applyRestoreContent_rejectedArticle_keepsStatusAndRejectReason() {
+            existing.setStatus(ArticleStatus.REJECTED);
+            existing.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
+            ArticleRestoreData data = new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
+            );
+
+            facade.applyRestoreContent(articleId, data);
+
+            assertThat(existing.getStatus()).isEqualTo(ArticleStatus.REJECTED);
+            assertThat(existing.getRejectReason()).isEqualTo("內部審核評語：抄襲疑慮，勿對外");
+            verify(articleEventPublisher, never()).publishUpdated(any());
+        }
+
         @Test
         @DisplayName("tags 為 null → syncArticleTags 用空清單")
         void applyRestoreContent_tagsNull_syncWithEmptyList() {

@@ -190,10 +190,15 @@ class ArticleCommandSubService {
             /*
              * 入口語意守衛（比狀態機更嚴，見 VALID_TRANSITIONS 的「表與入口的分工」）：
              * PUT 不得把 REJECTED 文章直接送審。REJECTED → PENDING_REVIEW 是合法轉換，
-             * 但只有 submitForReview 那條路徑會一併清掉 rejectReason；從 PUT 轉過去，
-             * 待審文章會帶著上一輪的駁回理由。此限制是 SEC-02 收斂前就有的行為
-             * （REJECTED → PENDING_REVIEW 當時不在表裡），補表後改以顯式守衛保留，
-             * 不在安全修復裡夾帶行為放寬。
+             * 但「被駁回後重新送審」是審核流程的動作，語意上屬於 submitForReview
+             * （POST /{uuid}/submit）；PUT 是內容編輯端點，不承載審核流程語意。
+             * 此限制是 SEC-02 收斂前就有的行為（REJECTED → PENDING_REVIEW 當時不在表裡），
+             * 補表後改以顯式守衛保留，不在安全修復裡夾帶行為放寬。
+             *
+             * 註：此守衛原本的理由是「只有 submitForReview 會清 rejectReason，從 PUT 轉過去
+             * 待審文章會帶著上一輪的駁回理由」。該前提已不成立——本方法下方的
+             * clearRejectReasonIfNotRejected 會在任何 PUT 狀態轉換後一併清空駁回理由。
+             * 守衛保留的是操作語意的分工，不再是 rejectReason 的殘留風險。
              */
             if (article.getStatus() == ArticleStatus.REJECTED
                     && request.getStatus() == ArticleStatus.PENDING_REVIEW) {
@@ -208,6 +213,13 @@ class ArticleCommandSubService {
         if (request.getCoverImageUrl() != null) {
             article.setCoverImageUrl(request.getCoverImageUrl());
         }
+
+        /**
+         * 狀態轉換後統一清除過期的駁回理由。
+         * 涵蓋 REJECTED →(PUT status=DRAFT)→ DRAFT 與其後的 DRAFT → PENDING_REVIEW / PUBLISHED
+         * ——這條「兩步走」路徑全程不經 submitForReview，若不清除，理由會一路殘留到公開回應。
+         */
+        clearRejectReasonIfNotRejected(article);
 
         /** DB 操作（save + syncCategories + syncTags）在同一個 transaction 內 */
         Object[] txResult = transactionTemplate.execute(status -> {
@@ -310,6 +322,12 @@ class ArticleCommandSubService {
             article.setPublishedAt(LocalDateTime.now());
         }
 
+        /**
+         * 發布前清除過期的駁回理由：曾被駁回的文章若殘留理由，發布後即成為
+         * 匿名可讀的公開內容（GET /api/v1/articles/{uuid} 與公開列表）。
+         */
+        clearRejectReasonIfNotRejected(article);
+
         /** DB 操作（save + 查詢 tags）在同一個 transaction 內 */
         Object[] txResult = transactionTemplate.execute(status -> {
             Article saved = articleRepository.save(article);
@@ -382,7 +400,7 @@ class ArticleCommandSubService {
         checkWritePermission(operatorId, operatorRole, article);
         validateStatusTransition(article.getStatus(), ArticleStatus.PENDING_REVIEW, operatorRole);
         article.setStatus(ArticleStatus.PENDING_REVIEW);
-        article.setRejectReason(null);
+        clearRejectReasonIfNotRejected(article);
         Article updated = articleRepository.save(article);
         return articleResponseMapper.toResponse(updated);
     }
@@ -440,8 +458,37 @@ class ArticleCommandSubService {
         /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則 */
         validateStatusTransition(article.getStatus(), ArticleStatus.DRAFT, operatorRole);
         article.setStatus(ArticleStatus.DRAFT);
+        clearRejectReasonIfNotRejected(article);
         Article updated = articleRepository.save(article);
         return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
+     * 清除已過期的駁回理由：文章只要不在 {@link ArticleStatus#REJECTED}，就不該帶著駁回理由。
+     *
+     * <p>
+     * {@code rejectReason} 的語意是「<b>這次</b>駁回的理由」，文章一旦離開 REJECTED 即失效。
+     * 過期理由若殘留，會隨文章進入公開狀態而外流給匿名讀者
+     * （遮蔽層見 {@code ArticleResponseMapper#resolveRejectReason}，本方法為縱深防禦的第二層）。
+     * </p>
+     *
+     * <p>
+     * 刻意放在各個「明確的狀態轉換點」而非 {@link #validateStatusTransition} 內部：
+     * 守衛只負責判斷合法性、不應有副作用。
+     * </p>
+     *
+     * <p>
+     * 版本還原（{@code ArticleFacadeImpl#applyRestoreContent}）不在此列——它自 PR #66
+     * 起完全不改動文章狀態（{@code ArticleRestoreData} 已無 status 欄位，型別層即封閉），
+     * 因此不是狀態轉換點，也就不需要清除。
+     * </p>
+     *
+     * @param article 目標文章（狀態必須已設定為轉換後的目標狀態）
+     */
+    private void clearRejectReasonIfNotRejected(Article article) {
+        if (article.getStatus() != ArticleStatus.REJECTED) {
+            article.setRejectReason(null);
+        }
     }
 
     /**

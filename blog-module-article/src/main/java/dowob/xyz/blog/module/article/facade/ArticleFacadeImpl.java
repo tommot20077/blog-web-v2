@@ -477,6 +477,16 @@ public class ArticleFacadeImpl implements ArticleFacade {
              */
             article.setToc(data.toc() != null ? data.toc() : ArticleTocCodec.EMPTY_TOC_JSON);
 
+            /*
+             * 這裡刻意不處理 rejectReason：SEC-02 之後還原完全不改 status（見上方註解與
+             * ArticleRestoreData 已無 status 欄位），故還原無法把 REJECTED 文章推進公開狀態，
+             * 也就不存在「駁回理由隨文章公開而外流」的路徑。
+             * 「非 REJECTED 的文章不得帶駁回理由」這條不變量由
+             * ArticleCommandSubService#clearRejectReasonIfNotRejected 在各個真正的狀態轉換點維持；
+             * 在這條非轉換路徑上再清一次只是死碼。
+             * 守衛見 ArticleFacadeImplTest#applyRestoreContent_rejectedArticle_keepsStatusAndRejectReason。
+             */
+
             Article updated = articleRepository.save(article);
 
             /** IMPORTANT: syncArticleTags 必須在 publish events 之前發 — search index update 需拿到正確 tags */

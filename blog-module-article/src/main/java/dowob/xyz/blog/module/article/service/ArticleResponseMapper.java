@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.service;
 
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
@@ -15,11 +16,15 @@ import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -71,7 +76,7 @@ class ArticleResponseMapper {
                 .commentCount(article.getCommentCount())
                 .publishedAt(article.getPublishedAt())
                 .tags(tags)
-                .rejectReason(article.getRejectReason())
+                .rejectReason(resolveRejectReason(article))
                 .liked(liked)
                 .bookmarked(bookmarked)
                 .lastReadProgress(lastReadProgress)
@@ -96,7 +101,7 @@ class ArticleResponseMapper {
                 .status(article.getStatus())
                 .categories(categories)
                 .tags(tags)
-                .rejectReason(article.getRejectReason())
+                .rejectReason(resolveRejectReason(article))
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
                 .toc(articleTocCodec.deserialize(article.getToc()))
@@ -124,7 +129,7 @@ class ArticleResponseMapper {
                 .commentCount(article.getCommentCount())
                 .publishedAt(article.getPublishedAt())
                 .tags(tags)
-                .rejectReason(article.getRejectReason())
+                .rejectReason(resolveRejectReason(article))
                 .seriesPosition(article.getSeriesPosition())
                 .build();
     }
@@ -186,6 +191,61 @@ class ArticleResponseMapper {
                                 .sortOrder(c.getSortOrder())
                                 .build(),
                         Collectors.toList())));
+    }
+
+    /**
+     * 解析當前觀看者可見的 {@code rejectReason}（管理員撰寫的內部審核評語）。
+     *
+     * <p>
+     * {@code rejectReason} 是 <b>admin 撰寫的內部審核評語</b>，屬 {@code ai-docs/security.md}「資料最小揭露」的範疇，
+     * 只應對<b>文章作者本人</b>與 <b>ADMIN</b> 揭露；其餘觀看者（含匿名讀者與其他已登入使用者）
+     * 一律得到 {@code null}。三個回應 DTO（{@code ArticleResponse} / {@code ArticleSummaryResponse} /
+     * {@code EditorArticleResponse}）的 {@code rejectReason} 全部由本 mapper 填入，
+     * 故遮蔽規則在此收斂為單一 choke point，涵蓋所有現有與未來的呼叫端
+     * （包含 series 詳情、收藏列表等跨模組讀取路徑）。
+     * </p>
+     *
+     * <p>
+     * 觀看者身分取自當前 {@code SecurityContext}，與 {@code SecurityUtils.isAdmin()} 無參版
+     * （comment / series / version 模組既有用法）以及 {@code ArticleQueryService} 填充
+     * liked / bookmarked 的方式為同一慣例。無法識別觀看者（無認證、MQ consumer、排程等
+     * 非請求執行緒）時一律遮蔽，確保 fail-closed。
+     * </p>
+     *
+     * @param article 文章實體
+     * @return 觀看者為作者本人或 ADMIN 時回傳原始評語，其餘一律回傳 {@code null}
+     */
+    private String resolveRejectReason(Article article) {
+        if (article == null || article.getRejectReason() == null) {
+            return null;
+        }
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (SecurityUtils.isAdmin(authentication)) {
+            return article.getRejectReason();
+        }
+        Long viewerId = resolveViewerId(authentication);
+        if (viewerId != null && Objects.equals(article.getAuthorId(), viewerId)) {
+            return article.getRejectReason();
+        }
+        return null;
+    }
+
+    /**
+     * 從認證物件取出觀看者的資料庫主鍵。
+     *
+     * <p>Principal 由 {@code JwtAuthenticationFilter} 寫入為 {@link Long}（userId），
+     * 與 {@code ArticleQueryService} 判斷 liked / bookmarked 的取值方式一致。
+     * 未登入 / 匿名 / principal 非 Long 一律回傳 {@code null}，代表「無法識別的觀看者」。</p>
+     *
+     * @param authentication 當前認證物件（可為 null）
+     * @return 觀看者 DB 主鍵，無法識別時回傳 {@code null}
+     */
+    private Long resolveViewerId(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || authentication instanceof AnonymousAuthenticationToken) {
+            return null;
+        }
+        return authentication.getPrincipal() instanceof Long viewerId ? viewerId : null;
     }
 
     UUID resolveAuthorUuid(Long authorId) {
