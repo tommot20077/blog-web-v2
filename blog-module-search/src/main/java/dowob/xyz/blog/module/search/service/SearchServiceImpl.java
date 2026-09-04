@@ -289,6 +289,11 @@ public class SearchServiceImpl implements SearchService {
      * 「已清除 N 筆幽靈」，看不出是誤刪。故改為反向判定：拿掃到的 id 回 DB 問「現在還是 PUBLISHED 嗎」
      * （{@code ArticleFacade#filterPublishedUuids}），只有回查說不是的才刪。</p>
      *
+     * <p><b>殘留窗口</b>：回查是逐頁做的，刪除則在整輪掃描結束後一次執行，
+     * 因此「回查之後、刪除之前」被發布的文章理論上仍可能被刪。這個窗口是掃描本身的長度
+     * （幾次 ES 查詢），已遠小於原本的「整輪重建長度」；要完全消除需要帶版本條件的
+     * conditional delete 或 alias 切換，屬上述 backlog 的範圍。</p>
+     *
      * <p>清除是重建的附加保險：掃描或刪除失敗只記 log，不讓已成功的重建對外報錯
      * （與時間戳寫入同一套 best-effort 判準）。</p>
      *
