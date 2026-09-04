@@ -277,6 +277,32 @@ class VersionControllerIT {
                 .andExpect(status().isUnauthorized());
     }
 
+    /**
+     * M-1（MEDIUM，PR #68 review）：手動快照建立會寫入完整內容複本，
+     * 與 restore（F-M1）同一威脅模型——被降級為 Role.USER 的前作者不該還能寫入。
+     * 比照 restore 收斂為 {@code ARTICLE_EDIT}。
+     */
+    @Test
+    @DisplayName("POST /versions/manual - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void createManual_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        Map<String, String> payload = Map.of("note", "手動存檔 v1");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", article.getUuid())
+                        .with(asUser(USER1_ID, Role.USER))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(payload)))
+                .andExpect(status().isForbidden());
+
+        long count = 0;
+        for (ArticleVersion v : versionRepo.findAll()) {
+            if (v.getArticleId().equals(article.getId())) count++;
+        }
+        assertThat(count)
+                .as("權限不足時不得產生任何快照寫入副作用")
+                .isEqualTo(0);
+    }
+
     // ─────────────────────────────── RESTORE ────────────────────────────────
 
     @Test
@@ -424,6 +450,27 @@ class VersionControllerIT {
                 .andExpect(jsonPath("$.code").value("V0104"));
     }
 
+    /**
+     * M-1（MEDIUM，PR #68 review）：promote 把可被 {@code retainAuto} 汰除的 AUTO 快照
+     * 升級為永久保留的 MANUAL，與 restore（F-M1）同一威脅模型，比照收斂為 {@code ARTICLE_EDIT}。
+     */
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/promote - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void promote_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+
+        ArticleVersion after = versionRepo.findByUuid(v.getUuid()).orElseThrow();
+        assertThat(after.getType())
+                .as("權限不足時不得產生任何升級副作用")
+                .isEqualTo(VersioningService.TYPE_AUTO);
+    }
+
     // ─────────────────────────────── DELETE ─────────────────────────────────
 
     @Test
@@ -452,6 +499,27 @@ class VersionControllerIT {
                         .with(asUser(USER1_ID, Role.AUTHOR)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("V0103"));
+    }
+
+    /**
+     * M-1（MEDIUM，PR #68 review）：刪除快照是破壞性且不可逆的操作，與 restore（F-M1）
+     * 同一威脅模型——被降級為 Role.USER 的前作者不該還能清掉自己文章的版本證據，
+     * 比照收斂為 {@code ARTICLE_EDIT}。
+     */
+    @Test
+    @DisplayName("DELETE /versions/{versionUuid} - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void delete_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "to delete");
+
+        mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+
+        assertThat(versionRepo.findByUuid(v.getUuid()))
+                .as("權限不足時不得產生任何刪除副作用")
+                .isPresent();
     }
 
     // ─────────────────── ARTICLE-VERSION MISMATCH（巢狀 URL 一致性） ───────────────
