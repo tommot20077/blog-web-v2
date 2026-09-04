@@ -45,7 +45,8 @@
     走 `ArticleFacade.countPublishedBySeriesIds()`，不得 `EXISTS (SELECT 1 FROM articles ...)`
   - 若該 facade 方法的傳輸量與內容量成正比（而非與頁大小成正比），
     **必須在 JavaDoc 標註界限與重新評估的門檻**
-    （例：`ArticleFacade.java:266,275,284,301` 四個集合述詞方法皆已標註「重評門檻」）
+    （例：`countPublishedBySeriesIds` / `filterReadableIds`；回傳單一物件的
+    `findPrevPublishedInSeries` / `findNextPublishedInSeries` 傳輸量不隨內容量成長，不適用本款）
   - 這條規則存在的原因：service interface 回傳的是**物件**、不是還能再加條件的 relation，
     所以跨邊界的集合述詞在舊規範下**無路可走**——這正是 `findings.md` **ARCH-13** 從 4 處
     惡化到 7 處的真因
@@ -56,8 +57,7 @@
   由 caller 自行判斷可見性
 - **集合述詞方法**：可見性**直接內建**，且必須寫進方法名
   （`filterReadableIds`、`countPublishedBySeriesIds`），使契約在呼叫端一眼可辨
-  （實作見 `ArticleFacade.java:266-301`，可見性委派 `ArticleVisibility.isReadableBy`，
-  單一真相，不重寫一份 SQL 版本）
+  （可見性委派 `ArticleVisibility.isReadableBy` 這份單一真相，不重寫一份 SQL 版本）
 
 ### 邊界判斷速查
 
