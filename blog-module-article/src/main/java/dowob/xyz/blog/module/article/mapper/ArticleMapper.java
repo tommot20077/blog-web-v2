@@ -337,4 +337,25 @@ public interface ArticleMapper {
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")
     List<Article> findIdsByUuids(@Param("list") List<UUID> uuids);
+
+    /**
+     * 在給定的 UUID 中篩出「目前確實是 PUBLISHED」的文章
+     *
+     * <p>
+     * 供搜尋模組清除幽靈 document 用：判準必須是**查詢當下的 DB 狀態**，
+     * 不能是全量重建開始時的快照，否則快照之後才發布的文章會被誤判為幽靈而刪除。
+     * 回傳型別採 {@code String}（{@code uuid::text}），與
+     * {@code ArticleRecommendMapper#findTagIdsByArticleUuid} 一致，
+     * 由 caller 轉回 {@link UUID}。
+     * </p>
+     *
+     * @param uuids 待查證的文章公開 UUID（caller 須保證非空，避免 {@code IN ()} 語法錯誤）
+     * @return 其中狀態為 PUBLISHED 的文章 UUID 字串列表
+     */
+    @Select("<script>" +
+            "SELECT uuid::text AS uuid FROM articles " +
+            "WHERE status = 'PUBLISHED' AND uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<String> findPublishedUuidsIn(@Param("list") List<UUID> uuids);
 }

@@ -7,6 +7,12 @@ import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.repository.ArticleSearchRepository;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -27,6 +33,7 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -137,6 +144,61 @@ class SearchServiceTest {
         when(hits.getSearchHits()).thenReturn(searchHitList);
         when(hits.getTotalHits()).thenReturn((long) documents.size());
         return hits;
+    }
+
+    /**
+     * 建立測試用 ArticleIndexData（全量重建的 DB 快照元素）
+     *
+     * @param uuid 文章公開 UUID
+     * @return 索引資料
+     */
+    private ArticleIndexData indexData(UUID uuid) {
+        return new ArticleIndexData(
+                uuid, "仍公開的文章", "still-public",
+                "summary", "content",
+                1L, "yuan", "Yuan",
+                LocalDateTime.now(), 0L, 0L, List.of());
+    }
+
+    /**
+     * 掛上捕捉用 appender 以取得 {@link SearchServiceImpl} 的日誌事件。
+     *
+     * @return 已啟動並掛載的 appender
+     */
+    private CapturingAppender attachAppender() {
+        CapturingAppender appender = new CapturingAppender();
+        appender.start();
+        ((Logger) LogManager.getLogger(SearchServiceImpl.class)).addAppender(appender);
+        return appender;
+    }
+
+    /**
+     * 卸載測試用 appender，避免污染其他測試。
+     *
+     * @param appender 先前掛上的 appender
+     */
+    private void detachAppender(CapturingAppender appender) {
+        ((Logger) LogManager.getLogger(SearchServiceImpl.class)).removeAppender(appender);
+        appender.stop();
+    }
+
+    /**
+     * 捕捉日誌事件的測試用 appender（log4j2 為本專案的日誌實作，見 root pom 排除
+     * spring-boot-starter-logging 並改用 log4j-slf4j2-impl）。
+     */
+    private static final class CapturingAppender extends AbstractAppender {
+
+        /** 捕捉到的日誌事件 */
+        private final List<LogEvent> events = new ArrayList<>();
+
+        private CapturingAppender() {
+            super("search-test-capture", null, null, true, Property.EMPTY_ARRAY);
+        }
+
+        @Override
+        public void append(LogEvent event) {
+            events.add(event.toImmutable());
+        }
     }
 
     /**
@@ -549,6 +611,8 @@ class SearchServiceTest {
                     ArticleDocument.builder().id(ghostId).build()));
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
                     .thenReturn(indexedHits);
+            /* 即時回查 DB：只有 liveUuid 還是 PUBLISHED，ghostId 不是 */
+            when(articleFacade.filterPublishedUuids(any())).thenReturn(Set.of(liveUuid));
 
             searchService.reindexAll();
 
@@ -570,10 +634,71 @@ class SearchServiceTest {
                     ArticleDocument.builder().id(liveUuid.toString()).build()));
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
                     .thenReturn(indexedHits);
+            when(articleFacade.filterPublishedUuids(any())).thenReturn(Set.of(liveUuid));
 
             searchService.reindexAll();
 
             verify(articleSearchRepository, never()).deleteAllById(any());
+        }
+
+        /**
+         * N1（本輪引入的缺陷）：清除的判準若是「重建開始時的快照」，
+         * 在 saveAll 與掃描之間被發布、由 MQ consumer 寫進 ES 的文章就不在快照裡，
+         * 會被當成幽靈刪掉——文章是 PUBLISHED 卻搜尋不到，而日誌只會說「已清除 1 筆幽靈」。
+         *
+         * <p>判準必須改成即時查證：拿掃到的 id 回 DB 問「現在還是 PUBLISHED 嗎」，
+         * 不在回查結果裡的才是真幽靈。</p>
+         */
+        @Test
+        @DisplayName("快照撈完之後才發布的文章，不得被當成幽靈刪除")
+        void reindexAll_whenArticlePublishedAfterSnapshot_doesNotDeleteIt() {
+            UUID snapshotUuid = UUID.randomUUID();
+            /* 快照撈完之後才發布；MQ consumer 已把它寫進 ES，但它不在本次快照裡 */
+            UUID racingUuid = UUID.randomUUID();
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(indexData(snapshotUuid)));
+            SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
+                    ArticleDocument.builder().id(snapshotUuid.toString()).build(),
+                    ArticleDocument.builder().id(racingUuid.toString()).build()));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
+                    .thenReturn(indexedHits);
+            /* 即時回查 DB：兩篇現在都確實是 PUBLISHED */
+            when(articleFacade.filterPublishedUuids(any()))
+                    .thenReturn(Set.of(snapshotUuid, racingUuid));
+
+            searchService.reindexAll();
+
+            verify(articleSearchRepository, never()).deleteAllById(any());
+        }
+
+        /**
+         * N2：{@code findAllPublishedForIndex()} 因上游故障回空時，
+         * 「索引裡每一筆都對不上 DB」在語意上成立，於是整個索引會被清空——
+         * 把一次讀取失敗放大成破壞性動作。
+         *
+         * <p>守衛判準：DB 回報 0 篇 PUBLISHED、而索引仍有 document ＝ 不可信的輸入，
+         * 中止清除並記 ERROR（寧可留下幽靈，也不要清空索引）。</p>
+         */
+        @Test
+        @DisplayName("DB 回報 0 篇 PUBLISHED 但索引非空時，應中止清除並記 ERROR，而非清空索引")
+        void reindexAll_whenDatabaseReportsNoPublishedButIndexNotEmpty_abortsCleanup() {
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
+            SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
+                    ArticleDocument.builder().id(UUID.randomUUID().toString()).build(),
+                    ArticleDocument.builder().id(UUID.randomUUID().toString()).build()));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
+                    .thenReturn(indexedHits);
+
+            CapturingAppender appender = attachAppender();
+            try {
+                searchService.reindexAll();
+            } finally {
+                detachAppender(appender);
+            }
+
+            verify(articleSearchRepository, never()).deleteAllById(any());
+            assertThat(appender.events)
+                    .as("中止清除必須是需要人介入的狀態，warn 不足以告警")
+                    .anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
         }
 
         /**
