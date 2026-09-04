@@ -26,33 +26,43 @@ import java.util.List;
 public interface SeriesMapper {
 
     /**
-     * 列表（公開）：只列「實際含至少一篇 PUBLISHED 文章」的 series，最新優先。
+     * 取回全部 series 主鍵，最新優先。
      *
-     * <p>可見性與 article_count 反正規化欄位<b>解耦</b>——以 EXISTS 子查詢判斷真實公開內容，
-     * 避免文章 unpublish 後計數漂移導致「只含草稿」的 series 曝光給匿名訪客；
-     * article_count 投影亦改為即時 PUBLISHED 計數，與詳情端點口徑一致。</p>
+     * <p>公開列表的第一段：series 為低基數實體（部落格量級為數十），
+     * 全量取主鍵後，由 {@code ArticleFacade.countPublishedBySeriesIds} 完成
+     * 「有無公開文章」的過濾（原本是直讀 articles 的 EXISTS 子查詢，ARCH-13）。</p>
+     *
+     * @return 全部 series 主鍵，依建立時間新到舊
      */
-    @Select("""
-            SELECT s.id, s.uuid, s.title, s.slug, s.description, s.cover_image_url,
-                   s.author_id,
-                   (SELECT COUNT(*) FROM articles a
-                     WHERE a.series_id = s.id AND a.status = 'PUBLISHED') AS article_count,
-                   s.created_at, s.updated_at,
-                   u.uuid AS author_uuid, u.nickname AS author_nickname, u.avatar_url AS author_avatar_url
-              FROM series s LEFT JOIN users u ON s.author_id = u.id
-             WHERE EXISTS (SELECT 1 FROM articles a
-                            WHERE a.series_id = s.id AND a.status = 'PUBLISHED')
-             ORDER BY s.created_at DESC
-             LIMIT #{size} OFFSET #{offset}
-            """)
-    List<SeriesWithAuthor> findPublic(@Param("size") int size, @Param("offset") int offset);
+    @Select("SELECT id FROM series ORDER BY created_at DESC")
+    List<Long> findAllIdsOrderByCreatedAtDesc();
 
-    @Select("""
-            SELECT COUNT(*) FROM series s
-             WHERE EXISTS (SELECT 1 FROM articles a
-                            WHERE a.series_id = s.id AND a.status = 'PUBLISHED')
-            """)
-    long countPublic();
+    /**
+     * 依主鍵批次取回 series 明細（含作者）。
+     *
+     * <p>公開列表的第三段：只查該頁的 id。{@code users} 為 reference data，
+     * 依 {@code architecture.md} 可直接 JOIN。</p>
+     *
+     * <p>注意：本查詢<b>不投影 article_count</b>——列表的計數改用
+     * {@code ArticleFacade.countPublishedBySeriesIds} 的即時值，
+     * 不沿用 {@code series.article_count} 這個含非公開文章的反正規化欄位。</p>
+     *
+     * @param ids series 主鍵集合
+     * @return series 明細列（順序不保證，由 caller 依輸入順序重排）
+     */
+    @Select({
+        "<script>",
+        "SELECT s.id, s.uuid, s.title, s.slug, s.description, s.cover_image_url,",
+        "       s.author_id, s.created_at, s.updated_at,",
+        "       u.uuid AS author_uuid, u.nickname AS author_nickname, u.avatar_url AS author_avatar_url",
+        "  FROM series s LEFT JOIN users u ON s.author_id = u.id",
+        " WHERE s.id IN",
+        "<foreach collection='ids' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        "</script>"
+    })
+    List<SeriesWithAuthor> findByIdsWithAuthor(@Param("ids") List<Long> ids);
 
     /** 單篇 by slug（公開） */
     @Select("""
@@ -75,7 +85,7 @@ public interface SeriesMapper {
     /**
      * 批次取得 series 基本資訊（給 ArticleQueryService.enrich 用，避免 N+1）。
      *
-     * <p>原版本以 articleIds 為入參並 JOIN articles 取 series_id（ARCH-13 第 7 處）。
+     * <p>原版本以 articleIds 為入參並跨表取 series_id（ARCH-13 第 7 處）。
      * 但呼叫端在 article 模組內、手上已有 {@code ArticleData.seriesId}，
      * 故改為直接收 seriesIds，本查詢不再碰 articles。</p>
      *

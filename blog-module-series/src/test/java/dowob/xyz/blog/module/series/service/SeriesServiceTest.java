@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
@@ -31,6 +32,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -526,6 +528,76 @@ class SeriesServiceTest {
         assertThat(resp.getArticles()).isEmpty();
         // 仍不得對未公開內容做任何 enrich 查詢
         verify(articleQueryService, never()).getArticleSummariesByIds(any());
+    }
+
+    // ── G: listPublic 三段式（Task 5）─────────────────────────────────────
+
+    @Test
+    void listPublic只列出有公開文章的series且articleCount為即時計數() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
+                .thenReturn(Map.of(10L, 3, 30L, 1));
+
+        SeriesWithAuthor row10 = new SeriesWithAuthor();
+        row10.setId(10L);
+        row10.setUuid(UUID.randomUUID());
+        row10.setSlug("s10");
+        row10.setAuthorUuid(UUID.randomUUID());
+        SeriesWithAuthor row30 = new SeriesWithAuthor();
+        row30.setId(30L);
+        row30.setUuid(UUID.randomUUID());
+        row30.setSlug("s30");
+        row30.setAuthorUuid(UUID.randomUUID());
+        when(mapper.findByIdsWithAuthor(List.of(10L, 30L))).thenReturn(List.of(row10, row30));
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
+
+        assertThat(result.getTotal()).isEqualTo(2L);
+        assertThat(result.getRecords()).hasSize(2);
+        assertThat(result.getRecords().get(0).getArticleCount()).isEqualTo(3);
+        assertThat(result.getRecords().get(1).getArticleCount()).isEqualTo(1);
+    }
+
+    @Test
+    void listPublic第二頁只取該頁的id() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
+                .thenReturn(Map.of(10L, 1, 20L, 1, 30L, 1));
+
+        SeriesWithAuthor row30 = new SeriesWithAuthor();
+        row30.setId(30L);
+        row30.setUuid(UUID.randomUUID());
+        row30.setSlug("s30");
+        row30.setAuthorUuid(UUID.randomUUID());
+        when(mapper.findByIdsWithAuthor(List.of(30L))).thenReturn(List.of(row30));
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(2, 2);
+
+        assertThat(result.getTotal()).isEqualTo(3L);
+        assertThat(result.getRecords()).hasSize(1);
+    }
+
+    @Test
+    void listPublic全無公開文章時回空頁且不查明細() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L))).thenReturn(Map.of());
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
+
+        assertThat(result.getTotal()).isZero();
+        assertThat(result.getRecords()).isEmpty();
+        verify(mapper, never()).findByIdsWithAuthor(anyList());
+    }
+
+    @Test
+    void listPublic超出範圍的頁回空清單但total不變() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L))).thenReturn(Map.of(10L, 1));
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(5, 20);
+
+        assertThat(result.getTotal()).isEqualTo(1L);
+        assertThat(result.getRecords()).isEmpty();
     }
 }
 
