@@ -1251,6 +1251,219 @@ class ArticleCommandSubServiceTest {
         }
     }
 
+
+    @Nested
+    @DisplayName("archiveArticle")
+    class ArchiveArticleTests {
+
+        @Test
+        @DisplayName("正常：ADMIN 將 PUBLISHED 文章下架 → ARCHIVED")
+        void archiveArticle_publishedToArchived_byAdmin_success() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
+        }
+
+        @Test
+        @DisplayName("正常：下架成功後應發送 ArticleArchivedEvent（供 search 模組移除 ES 索引）")
+        void archiveArticle_shouldPublishArchivedEvent() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleEventPublisher).publishArchived(captor.capture());
+            assertThat(captor.getValue().getUuid()).isEqualTo(ARTICLE_UUID);
+            assertThat(captor.getValue().getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
+        }
+
+        @Test
+        @DisplayName("異常：AUTHOR 本人下架自己的文章 → ARTICLE_ACCESS_DENIED（下架非作者自助操作）")
+        void archiveArticle_byAuthor_denied() {
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+
+            /** 角色守衛先於實體查詢，避免非 ADMIN 藉回應差異探測文章是否存在（與 rejectArticle 一致） */
+            verifyNoInteractions(entityFinder);
+            verifyNoInteractions(articleRepository);
+            verifyNoInteractions(articleEventPublisher);
+        }
+
+        @Test
+        @DisplayName("異常：operatorRole 為 null（未解析出角色）→ ARTICLE_ACCESS_DENIED")
+        void archiveArticle_nullRole_denied() {
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, null, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：DRAFT → ARCHIVED（非法轉換）→ ARTICLE_STATUS_TRANSITION_INVALID")
+        void archiveArticle_draftStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：PENDING_REVIEW → ARCHIVED（非法轉換）→ ARTICLE_STATUS_TRANSITION_INVALID")
+        void archiveArticle_pendingReviewStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：REJECTED → ARCHIVED（非法轉換）→ ARTICLE_STATUS_TRANSITION_INVALID")
+        void archiveArticle_rejectedStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：ARCHIVED → ARCHIVED（重複下架）→ ARTICLE_STATUS_TRANSITION_INVALID")
+        void archiveArticle_alreadyArchived_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：非法轉換被守衛擋下時，不得寫入 DB 也不得發送 MQ 事件")
+        void archiveArticle_invalidTransition_noSaveNoEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class);
+
+            verify(articleRepository, never()).save(any(Article.class));
+            verify(articleEventPublisher, never()).publishArchived(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("異常：文章不存在 → ARTICLE_NOT_FOUND")
+        void archiveArticle_articleNotFound() {
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID))
+                    .thenThrow(new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
+
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+        }
+    }
+
+    @Nested
+    @DisplayName("unarchiveArticle")
+    class UnarchiveArticleTests {
+
+        @Test
+        @DisplayName("正常：ADMIN 將 ARCHIVED 文章復原 → DRAFT")
+        void unarchiveArticle_archivedToDraft_byAdmin_success() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            ArticleResponse response = commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+
+            assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
+            ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
+            verify(articleRepository).save(captor.capture());
+            assertThat(captor.getValue().getStatus()).isEqualTo(ArticleStatus.DRAFT);
+        }
+
+        @Test
+        @DisplayName("正常：復原不發送任何 MQ 事件（DRAFT 不進索引，與 submitForReview / withdraw 對稱）")
+        void unarchiveArticle_publishesNoEvent() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+
+            verifyNoInteractions(articleEventPublisher);
+        }
+
+        @Test
+        @DisplayName("異常：AUTHOR 本人復原自己的文章 → ARTICLE_ACCESS_DENIED")
+        void unarchiveArticle_byAuthor_denied() {
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+
+            verifyNoInteractions(entityFinder);
+            verifyNoInteractions(articleRepository);
+        }
+
+        @Test
+        @DisplayName("異常：PUBLISHED → DRAFT（非法轉換）→ ARTICLE_STATUS_TRANSITION_INVALID")
+        void unarchiveArticle_publishedStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+            verify(articleRepository, never()).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("異常：DRAFT 文章復原（來源非 ARCHIVED）→ ARTICLE_STATUS_TRANSITION_INVALID")
+        void unarchiveArticle_draftStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+        }
+
+        @Test
+        @DisplayName("異常：REJECTED 文章復原（表中 REJECTED → DRAFT 合法，但不屬復原語意）→ ARTICLE_STATUS_TRANSITION_INVALID")
+        void unarchiveArticle_rejectedStatus_invalidTransition() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
+            verify(articleRepository, never()).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("異常：文章不存在 → ARTICLE_NOT_FOUND")
+        void unarchiveArticle_articleNotFound() {
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID))
+                    .thenThrow(new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
+
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+        }
+    }
     @Nested
     @DisplayName("updateArticle - Search Sync")
     class UpdateArticleSearchSyncTests {

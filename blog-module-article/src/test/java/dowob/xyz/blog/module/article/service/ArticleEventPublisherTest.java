@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.service;
 
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
+import dowob.xyz.blog.module.article.event.ArticleArchivedEvent;
 import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -20,6 +21,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -119,6 +123,57 @@ class ArticleEventPublisherTest {
             ArticleDeletedEvent event = captor.getValue();
             assertThat(event.categoryIds()).isEmpty();
             assertThat(event.tagIds()).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("publishArchived")
+    class PublishArchived {
+
+        @Test
+        @DisplayName("正常：publishArchived 應送往 article.events / article.archived，payload 帶 uuid 與 eventId")
+        void publishArchived_sendsToArchivedRoutingKey() {
+            Article article = new Article();
+            article.setId(300L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(7L);
+
+            publisher.publishArchived(article);
+
+            ArgumentCaptor<ArticleArchivedEvent> captor = ArgumentCaptor.forClass(ArticleArchivedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                    captor.capture()
+            );
+            ArticleArchivedEvent event = captor.getValue();
+            assertThat(event.eventId()).isNotNull();
+            assertThat(event.articleUuid()).isEqualTo(article.getUuid());
+            assertThat(event.occurredAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("契約：下架事件不得共用 article.deleted（該 key 另有 series 訂閱並遞減 article_count）")
+        void publishArchived_doesNotReuseDeletedRoutingKey() {
+            assertThat(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED)
+                    .isEqualTo("article.archived")
+                    .isNotEqualTo(ArticleRabbitMqConfig.ROUTING_KEY_DELETED);
+        }
+
+        @Test
+        @DisplayName("穩健性：MQ 發送失敗時僅 log warn，不往外拋（best-effort）")
+        void publishArchived_whenMqThrows_doesNotPropagate() {
+            Article article = new Article();
+            article.setId(301L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(7L);
+
+            doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
+                    .convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                            eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                            any(Object.class));
+
+            assertThatCode(() -> publisher.publishArchived(article)).doesNotThrowAnyException();
         }
     }
 }

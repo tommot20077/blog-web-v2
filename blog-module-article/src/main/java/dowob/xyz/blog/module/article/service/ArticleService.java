@@ -182,6 +182,39 @@ public interface ArticleService {
     ArticleResponse withdrawArticle(Long operatorId, Role operatorRole, UUID articleUuid);
 
     /**
+     * 下架文章（PUBLISHED → ARCHIVED，僅 ADMIN）
+     *
+     * <p>
+     * 把已發布文章自公開面撤下，並移除其 Elasticsearch 索引；文章列、留言、按讚、
+     * 版本快照全部保留，可再以 {@link #unarchiveArticle} 復原——是硬刪之外的可逆替代路徑。
+     * <b>權限僅限 ADMIN</b>（下架是編審決定，作者不可自助執行，一律回 A0203）。
+     * 來源狀態非 PUBLISHED 一律回 A0204。
+     * </p>
+     *
+     * @param operatorId   操作者資料庫主鍵
+     * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
+     * @param articleUuid  文章公開 UUID
+     * @return 下架後的文章完整資訊
+     */
+    ArticleResponse archiveArticle(Long operatorId, Role operatorRole, UUID articleUuid);
+
+    /**
+     * 復原已下架文章（ARCHIVED → DRAFT，僅 ADMIN）
+     *
+     * <p>
+     * 復原後文章回到草稿狀態、可再次編輯；要重新公開必須走既有的
+     * {@link #submitForReview} / {@link #publishArticle} 流程，刻意不直接回到 PUBLISHED。
+     * <b>權限僅限 ADMIN</b>；來源狀態非 ARCHIVED 一律回 A0204。
+     * </p>
+     *
+     * @param operatorId   操作者資料庫主鍵
+     * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
+     * @param articleUuid  文章公開 UUID
+     * @return 復原後的文章完整資訊
+     */
+    ArticleResponse unarchiveArticle(Long operatorId, Role operatorRole, UUID articleUuid);
+
+    /**
      * 根據 slug 取得文章詳情
      *
      * @param slug       文章 URL slug

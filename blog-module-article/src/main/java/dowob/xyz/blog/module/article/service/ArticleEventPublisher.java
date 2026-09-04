@@ -5,6 +5,7 @@ import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
+import dowob.xyz.blog.module.article.event.ArticleArchivedEvent;
 import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
@@ -165,6 +166,33 @@ public class ArticleEventPublisher {
                     event);
         } catch (Exception e) {
             log.warn("ArticleDeletedEvent 發送失敗（best-effort）: {}", e.getMessage(), e);
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // Archived（文章下架，PUBLISHED → ARCHIVED）
+    // ──────────────────────────────────────────────
+
+    /**
+     * 發送文章下架事件至 RabbitMQ（供搜尋模組移除 Elasticsearch 索引）。
+     *
+     * <p>僅在文章狀態已轉為 ARCHIVED 且 DB 已 commit 後才應呼叫；
+     * 與其他事件一致採 best-effort，失敗僅 log warn 不影響下架結果。</p>
+     *
+     * @param article 已下架的文章實體
+     */
+    public void publishArchived(Article article) {
+        try {
+            ArticleArchivedEvent event = new ArticleArchivedEvent(
+                    UUID.randomUUID(),
+                    article.getUuid(),
+                    Instant.now());
+            rabbitTemplate.convertAndSend(
+                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED,
+                    event);
+        } catch (Exception e) {
+            log.warn("ArticleArchivedEvent MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
     }
 

@@ -100,6 +100,25 @@ public class ArticleServiceImpl implements ArticleService {
         return commandSubService.rejectArticle(operatorId, operatorRole, articleUuid, reason);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>刻意不標註 @Transactional：下架在 DB 寫入後會發送 article.archived 事件，
+     * 交易作用域沿呼叫鏈傳遞，若在此開啟交易，事件會在 commit 前送出
+     * （違反 code-standards §Transaction+MQ 時序）。交易由
+     * {@code ArticleCommandSubService} 內的 TransactionTemplate 自行收斂。</p>
+     */
+    @Override
+    public ArticleResponse archiveArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+        return commandSubService.archiveArticle(operatorId, operatorRole, articleUuid);
+    }
+
+    @Override
+    @Transactional
+    public ArticleResponse unarchiveArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+        return commandSubService.unarchiveArticle(operatorId, operatorRole, articleUuid);
+    }
+
     @Override
     public PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size) {
         return querySubService.getPendingArticles(page, size);

@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.config.ArticleTestApplication;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest;
@@ -46,7 +47,12 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.matchesPattern;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -1320,5 +1326,273 @@ class ArticleControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.toc").isArray())
                 .andExpect(jsonPath("$.data.toc", hasSize(0)));
+    }
+
+    // =========================================================================
+    // 下架 / 復原（POST /api/v1/admin/articles/{uuid}/archive 與 /unarchive）
+    //
+    // 端點在 AdminArticleController（/api/v1/admin/** 前綴），故同時受 URL 層
+    // hasRole("ADMIN") 與方法層 @PreAuthorize 雙重把關；以下用完整過濾器鏈驗證。
+    // =========================================================================
+
+    /**
+     * 建立一篇文章並發布，回傳其 UUID（archive 測試輔助方法）
+     *
+     * @param title 文章標題
+     * @return 已進入 PUBLISHED 狀態的文章公開 UUID 字串
+     * @throws Exception MockMvc 執行例外
+     */
+    private String createPublishedArticle(String title) throws Exception {
+        String uuid = createArticle(title, "內容");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+        return uuid;
+    }
+
+    /**
+     * 準備 UserFacade stub（作者資訊，供事件與回應組裝）
+     */
+    private void stubUserFacade() {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - ADMIN 下架已發布文章 → ARCHIVED，且自所有公開讀取路徑消失")
+    void archiveArticle_adminArchivesPublished_removedFromAllPublicReadPaths() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("即將下架的文章");
+
+        /** 前置斷言：下架前，文章確實出現在各公開讀取路徑 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)));
+        String slug = objectMapper.readTree(
+                mockMvc.perform(get("/api/v1/articles/" + uuid))
+                        .andExpect(status().isOk())
+                        .andReturn().getResponse().getContentAsString())
+                .path("data").path("slug").asText();
+        mockMvc.perform(get("/api/v1/articles/slug/" + slug))
+                .andExpect(status().isOk());
+
+        /** 下架 */
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("ARCHIVED"));
+
+        /** 連鎖副作用 1：公開列表不再包含此文章 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(0));
+
+        /** 連鎖副作用 2：公開歸檔投影（GET /articles/archive）不再包含此文章 */
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(0)));
+
+        /** 連鎖副作用 3：匿名以 uuid / slug 取詳情皆回 A0201（非公開內容不可讀） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+        mockMvc.perform(get("/api/v1/articles/slug/" + slug))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+
+        /** 連鎖副作用 4：發出 article.archived 事件（search 模組據此移除 ES 索引） */
+        verify(rabbitTemplate).convertAndSend(
+                eq(ArticleRabbitMqConfig.EXCHANGE),
+                eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                any(Object.class));
+
+        /** 作者本人仍可看到自己的已下架文章（與其他非公開狀態一致） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("ARCHIVED"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - AUTHOR 下架自己的文章 → 403（下架非作者自助操作）")
+    void archiveArticle_authorForbidden_returns403() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("作者想自己下架的文章");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isForbidden());
+
+        /** 狀態未被改動，也不得發出下架事件 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+        verify(rabbitTemplate, never()).convertAndSend(
+                eq(ArticleRabbitMqConfig.EXCHANGE),
+                eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                any(Object.class));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - 未認證 → 401")
+    void archiveArticle_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - DRAFT 文章下架 → A0204（守衛未被繞過）")
+    void archiveArticle_draftArticle_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createArticle("草稿文章", "內容");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - PENDING_REVIEW 文章下架 → A0204")
+    void archiveArticle_pendingReviewArticle_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createPendingReviewArticle("待審文章");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - REJECTED 文章下架 → A0204")
+    void archiveArticle_rejectedArticle_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createPendingReviewArticle("待駁回文章");
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("內容不符合規範");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - 已下架文章再次下架 → A0204")
+    void archiveArticle_alreadyArchived_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("重複下架測試");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/unarchive - ADMIN 復原已下架文章 → DRAFT 且可再次編輯")
+    void unarchiveArticle_adminRestoresArchived_backToDraftAndEditable() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("待復原文章");
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        /** 復原後回到可編輯狀態（PUT 守衛只放行 DRAFT / REJECTED） */
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("復原後改標題");
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("復原後改標題"));
+
+        /** 仍未公開：DRAFT 不進公開列表 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/unarchive - PUBLISHED 文章復原 → A0204")
+    void unarchiveArticle_publishedArticle_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("已發布文章");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/unarchive - AUTHOR → 403")
+    void unarchiveArticle_authorForbidden_returns403() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("他人想復原的文章");
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("下架 → 復原 → 重新發布：文章回到公開面，並重新發出建立索引的 published 事件")
+    void archiveThenUnarchiveThenRepublish_articlePublicAgain() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("走完整輪迴的文章");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        /** 重新公開必須重走 publish 流程（不由 unarchive 直接回 PUBLISHED） */
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        /** ES 索引由 published 事件重建（下架時移除、重新發布時重新建立） */
+        verify(rabbitTemplate, times(2)).convertAndSend(
+                eq(ArticleRabbitMqConfig.EXCHANGE),
+                eq(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED),
+                any(Object.class));
     }
 }
