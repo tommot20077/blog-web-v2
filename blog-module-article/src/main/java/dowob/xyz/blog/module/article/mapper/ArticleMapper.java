@@ -291,6 +291,9 @@ public interface ArticleMapper {
      * （ARCH-13 / PERF-34）。GROUP BY 天然只回傳有資料的 series，
      * 故 count = 0 者不出現在結果中，caller 可直接以 key 集合當作過濾條件。</p>
      *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（seriesId, publishedCount）必須與 {@link SeriesPublishedCountRow} 的元件順序一致，不可調整。</p>
+     *
      * @param seriesIds series 主鍵集合（不得為空，由 caller 保證）
      * @return 每個有公開文章的 series 及其計數
      */
@@ -359,6 +362,9 @@ public interface ArticleMapper {
      * （避免把 content / content_html 等 TEXT 欄位拉進記憶體）。
      * 政策判斷本身在 {@code ArticleFacadeImpl} 委派 {@code ArticleVisibility}，
      * <b>不在 SQL 內重寫</b>——可見性政策必須維持單一真相。</p>
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（id, status, authorId）必須與 {@link ArticleVisibilityRow} 的元件順序一致，不可調整。</p>
      *
      * @param articleIds 文章主鍵集合（不得為空，由 caller 保證）
      * @return 可見性判斷所需的欄位列
