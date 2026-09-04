@@ -142,6 +142,13 @@ public class ArticleEventPublisher {
     /**
      * 發 ArticleDeletedEvent — rich payload，因文章已刪 consumer 撈不到 entity。
      *
+     * <p><b>失敗一律 ERROR（與 {@link #publishArchived(Article)} 同一判準）</b>：
+     * 這條事件是「把文章從 ES 索引移除」的唯一觸發（另有 series 模組訂閱以遞減 article_count）。
+     * 送不出去就會留下一筆搜尋得到、點進去 404 的幽靈 document，而該 document 本身
+     * 還帶著 title / summary / content。「端點回 200 刪除成功」與「文章仍搜尋得到」
+     * 同時成立而無人察覺，正是 warn 蓋不住的狀態；訊息帶 eventId 與 articleUuid，
+     * 讓維運可告警並人工補送。</p>
+     *
      * @param article      文章 entity（提供 id / uuid / authorId）
      * @param seriesId     文章所屬 series id（nullable）
      * @param categoryIds  文章 categories（caller 在 delete 前讀取；空 list 不可 null）
@@ -149,9 +156,10 @@ public class ArticleEventPublisher {
      */
     public void publishDeleted(Article article, Long seriesId,
                                List<UUID> categoryIds, List<UUID> tagIds) {
+        UUID eventId = UUID.randomUUID();
         try {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
-                UUID.randomUUID(),
+                eventId,
                 article.getId(),
                 article.getUuid(),
                 article.getAuthorId(),
@@ -165,7 +173,9 @@ public class ArticleEventPublisher {
                     ArticleRabbitMqConfig.ROUTING_KEY_DELETED,
                     event);
         } catch (Exception e) {
-            log.warn("ArticleDeletedEvent 發送失敗（best-effort）: {}", e.getMessage(), e);
+            log.error("文章刪除事件發送失敗，Elasticsearch 索引可能未移除、series 計數可能未遞減，"
+                            + "需人工補送：articleUuid={}, eventId={}, error={}",
+                    article.getUuid(), eventId, e.getMessage(), e);
         }
     }
 

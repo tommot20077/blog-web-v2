@@ -88,9 +88,17 @@ public class SearchServiceImpl implements SearchService {
      * 幽靈 document 掃描的最大頁數
      *
      * <p>from + size 分頁受 ES {@code index.max_result_window}（預設 10000）限制，
-     * 故 1000 × 10 為上限；超過時記 warn，本輪只清掃描範圍內的殘留。</p>
+     * 故 1000 × 10 為上限；超過時記 ERROR，本輪只清掃描範圍內的殘留。</p>
      */
     private static final int GHOST_SCAN_MAX_PAGES = 10;
+
+    /**
+     * 幽靈清除日誌中列出的 id 樣本數上限
+     *
+     * <p>只記數量與前幾筆即可定位；把整份 id 塞進單行日誌，索引長期漂移後會是
+     * 數千個 UUID 擠成一行，反而讓日誌難讀（也可能被 log pipeline 截斷）。</p>
+     */
+    private static final int GHOST_LOG_SAMPLE_SIZE = 10;
 
     /**
      * {@inheritDoc}
@@ -321,8 +329,13 @@ public class SearchServiceImpl implements SearchService {
                     break;
                 }
             }
+            /*
+             * 這是「幽靈在重建之後仍存活」的唯一分支，需要人介入（擴大掃描範圍或改走
+             * alias 重建），與下架事件發送失敗同一種需告警狀態，故用 ERROR 而非 warn。
+             */
             if (!scanCompleted) {
-                log.warn("索引文件數超過幽靈掃描上限 {} 筆，本次僅清除掃描範圍內的殘留",
+                log.error("索引文件數超過幽靈掃描上限 {} 筆，本次僅清除掃描範圍內的殘留，"
+                                + "掃描範圍外的已下架／已刪除文章仍可能被搜尋到",
                         GHOST_SCAN_MAX_PAGES * GHOST_SCAN_PAGE_SIZE);
             }
             if (ghostIds.isEmpty()) {
@@ -330,8 +343,9 @@ public class SearchServiceImpl implements SearchService {
                 return;
             }
             articleSearchRepository.deleteAllById(ghostIds);
-            log.warn("已清除 {} 筆幽靈 document（ES 有、DB 已非 PUBLISHED）：{}",
-                    ghostIds.size(), ghostIds);
+            int sampleSize = Math.min(GHOST_LOG_SAMPLE_SIZE, ghostIds.size());
+            log.warn("已清除 {} 筆幽靈 document（ES 有、DB 已非 PUBLISHED），前 {} 筆樣本：{}",
+                    ghostIds.size(), sampleSize, ghostIds.subList(0, sampleSize));
         } catch (Exception e) {
             log.error("清除幽靈 document 失敗，索引可能仍殘留已刪除／已下架文章：{}", e.getMessage(), e);
         }

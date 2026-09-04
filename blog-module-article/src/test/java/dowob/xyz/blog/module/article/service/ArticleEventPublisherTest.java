@@ -131,6 +131,56 @@ class ArticleEventPublisherTest {
             assertThat(event.categoryIds()).isEmpty();
             assertThat(event.tagIds()).isEmpty();
         }
+
+        /**
+         * 與 publishArchived 同一條判準：刪除事件是「把文章從 ES 索引移除」的唯一觸發，
+         * 送不出去就會留下一筆搜尋得到、點進去 404 的幽靈 document，且 document 本身
+         * 還帶著 title / summary / content。這種「端點回 200 刪除成功」與「文章仍搜尋得到」
+         * 並存的狀態需要人介入補送，warn 不足以告警。
+         */
+        @Test
+        @DisplayName("可觀測性：MQ 發送失敗必須以 ERROR 記錄並帶 articleUuid")
+        void publishDeleted_whenMqThrows_logsErrorWithArticleUuid() {
+            Article article = new Article();
+            article.setId(21L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(3L);
+
+            doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
+                    .convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                            eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
+                            any(Object.class));
+
+            CapturingAppender appender = attachAppender();
+            try {
+                publisher.publishDeleted(article, null, null, null);
+            } finally {
+                detachAppender(appender);
+            }
+
+            assertThat(appender.events).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(event.getMessage().getFormattedMessage())
+                        .contains(article.getUuid().toString());
+            });
+        }
+
+        @Test
+        @DisplayName("穩健性：MQ 發送失敗時不往外拋（best-effort，刪除結果本身已 commit）")
+        void publishDeleted_whenMqThrows_doesNotPropagate() {
+            Article article = new Article();
+            article.setId(22L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(3L);
+
+            doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
+                    .convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                            eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
+                            any(Object.class));
+
+            assertThatCode(() -> publisher.publishDeleted(article, null, null, null))
+                    .doesNotThrowAnyException();
+        }
     }
 
     @Nested
