@@ -23,9 +23,9 @@ PUBLISHED 全公開；非 PUBLISHED 只有**作者本人與 ADMIN**。
 | 收藏列表 total 高估／每頁筆數不一致 | （本 PR） | `BookmarkQueryService` 先過濾再分頁；前端 `BookmarksView.vue:25` 以 `pages` 畫分頁器，高估會產生空尾頁 |
 
 > 註：`CLAUDE.md` 記載的前端路徑（`D:\end\workspace\vue\blog-web-v2-front-end`）已過期，
-> 實際路徑為 `D:\backup\backup\程式\workspace\vue\blog-web-v2-front-end`。「以 `pages` 畫分頁器」
-> 這個行為已於實際路徑複核屬實（`totalPages.value = result.pages`），但 `:25` 這個精確行號
-> 未逐一核對，待 `CLAUDE.md` 路徑修正後複查。
+> 實際路徑為 `D:\backup\backup\程式\workspace\vue\blog-web-v2-front-end`（此為獨立問題，
+> 已另行回報 repo owner 修正，不在本 backlog 處理範圍）。`BookmarksView.vue:25` 已於實際
+> 路徑複核屬實：該行即為 `totalPages.value = result.pages`，引用無誤。
 
 ## 仍開放
 

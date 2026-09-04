@@ -58,6 +58,11 @@
 - **集合述詞方法**：可見性**直接內建**，且必須寫進方法名
   （`filterReadableIds`、`countPublishedBySeriesIds`），使契約在呼叫端一眼可辨
   （可見性委派 `ArticleVisibility.isReadableBy` 這份單一真相，不重寫一份 SQL 版本）
+- **`Published*` 與 `Readable*` 不是同義詞**：`Published*`（`countPublishedBySeriesIds`、
+  `findPrevPublishedInSeries`）是**狀態字面量**，與是誰在問無關；`Readable*`
+  （`filterReadableIds`）是**依觀看者身分而定的可見性政策**（PUBLISHED，或作者本人，或
+  ADMIN），方法簽章必須帶 viewer identity。混淆兩者是草稿外洩或內容誤藏的成因，命名前先問
+  方法實際做的是哪一種，選對應的字。
 
 ### 邊界判斷速查
 
