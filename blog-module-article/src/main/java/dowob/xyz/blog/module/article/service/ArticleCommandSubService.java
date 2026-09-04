@@ -471,9 +471,13 @@ class ArticleCommandSubService {
      *
      * <p>
      * 刻意放在各個「明確的狀態轉換點」而非 {@link #validateStatusTransition} 內部：
-     * 守衛只負責判斷合法性、不應有副作用，且版本還原
-     * （{@code ArticleFacadeImpl#applyRestoreContent}）本來就繞過守衛，
-     * 靠守衛清除會漏掉那條路徑。
+     * 守衛只負責判斷合法性、不應有副作用。
+     * </p>
+     *
+     * <p>
+     * 版本還原（{@code ArticleFacadeImpl#applyRestoreContent}）不在此列——它自 PR #66
+     * 起完全不改動文章狀態（{@code ArticleRestoreData} 已無 status 欄位，型別層即封閉），
+     * 因此不是狀態轉換點，也就不需要清除。
      * </p>
      *
      * @param article 目標文章（狀態必須已設定為轉換後的目標狀態）
