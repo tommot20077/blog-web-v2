@@ -64,4 +64,14 @@ public class BookmarkService {
     public long countByUser(Long userId) {
         return mapper.countByUser(userId);
     }
+
+    /**
+     * 我的全部收藏文章 id（最新優先，不分頁）。
+     *
+     * @param userId 使用者主鍵
+     * @return 全部收藏文章主鍵
+     */
+    public List<Long> findAllMyBookmarkedArticleIds(Long userId) {
+        return mapper.findAllMyBookmarkedArticleIds(userId);
+    }
 }

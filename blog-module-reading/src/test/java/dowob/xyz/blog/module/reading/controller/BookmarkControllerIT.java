@@ -244,7 +244,8 @@ class BookmarkControllerIT {
                 .with(asUser(USER_ID, Role.USER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.records.length()").value(1))
-                .andExpect(jsonPath("$.data.records[0].uuid").value(articleUuid.toString()));
+                .andExpect(jsonPath("$.data.records[0].uuid").value(articleUuid.toString()))
+                .andExpect(jsonPath("$.data.total").value(1));
     }
 
     @Test
@@ -257,7 +258,8 @@ class BookmarkControllerIT {
         mockMvc.perform(get("/api/v1/users/me/bookmarks")
                 .with(asUser(USER_ID, Role.USER)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.records.length()").value(0));
+                .andExpect(jsonPath("$.data.records.length()").value(0))
+                .andExpect(jsonPath("$.data.total").value(0));
     }
 
     @Test
