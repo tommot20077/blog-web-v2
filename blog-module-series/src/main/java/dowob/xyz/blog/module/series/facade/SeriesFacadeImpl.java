@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.series.facade;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
@@ -50,9 +51,13 @@ public class SeriesFacadeImpl implements SeriesFacade {
         if (seriesOpt.isEmpty()) return Optional.empty();
         Series series = seriesOpt.get();
 
-        SeriesMapper.NavRow prev = seriesMapper.findPrevNav(series.getId(), article.seriesPosition());
-        SeriesMapper.NavRow next = seriesMapper.findNextNav(series.getId(), article.seriesPosition());
-        int totalCount = seriesMapper.countPublishedInSeries(series.getId());
+        Optional<ArticleNavRef> prev =
+                articleFacade.findPrevPublishedInSeries(series.getId(), article.seriesPosition());
+        Optional<ArticleNavRef> next =
+                articleFacade.findNextPublishedInSeries(series.getId(), article.seriesPosition());
+        int totalCount = articleFacade
+                .countPublishedBySeriesIds(List.of(series.getId()))
+                .getOrDefault(series.getId(), 0);
 
         SeriesNavigation nav = new SeriesNavigation();
         nav.setSeriesUuid(series.getUuid());
@@ -61,12 +66,10 @@ public class SeriesFacadeImpl implements SeriesFacade {
         nav.setPosition(article.seriesPosition());
         nav.setTotalCount(totalCount);
 
-        if (prev != null) {
-            nav.setPrev(new SeriesNavigation.SeriesArticleRef(prev.getUuid(), prev.getTitle(), prev.getSlug()));
-        }
-        if (next != null) {
-            nav.setNext(new SeriesNavigation.SeriesArticleRef(next.getUuid(), next.getTitle(), next.getSlug()));
-        }
+        prev.ifPresent(p -> nav.setPrev(
+                new SeriesNavigation.SeriesArticleRef(p.uuid(), p.title(), p.slug())));
+        next.ifPresent(n -> nav.setNext(
+                new SeriesNavigation.SeriesArticleRef(n.uuid(), n.title(), n.slug())));
         return Optional.of(nav);
     }
 

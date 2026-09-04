@@ -13,7 +13,10 @@ import java.util.List;
 /**
  * Series MyBatis Mapper。
  *
- * <p>負責複雜 JOIN（series + users）、反正規化計數 update、以及 nav 查詢。</p>
+ * <p>負責複雜 JOIN（series + users）、反正規化計數 update。
+ * prev/next 導覽與 PUBLISHED 計數查詢已移至 {@code ArticleFacade}
+ * （見 {@code dowob.xyz.blog.infrastructure.facade.ArticleFacade}）——
+ * 那 3 條查詢零個 series 欄位，是純 articles 查詢，本來就不該放在這個 Mapper。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -69,44 +72,6 @@ public interface SeriesMapper {
     int decrementArticleCount(@Param("id") Long id);
 
     /**
-     * 找 prev：series 內 PUBLISHED 且 series_position 比 current 小的最大一筆。
-     * 若無（第一篇）回傳 null。
-     */
-    @Select("""
-            SELECT id, uuid, title, slug, series_position
-              FROM articles
-             WHERE series_id = #{seriesId}
-               AND status = 'PUBLISHED'
-               AND series_position < #{currentPosition}
-             ORDER BY series_position DESC
-             LIMIT 1
-            """)
-    NavRow findPrevNav(@Param("seriesId") Long seriesId,
-                       @Param("currentPosition") Integer currentPosition);
-
-    /**
-     * 找 next：series 內 PUBLISHED 且 series_position 比 current 大的最小一筆。
-     * 若無（最後一篇）回傳 null。
-     */
-    @Select("""
-            SELECT id, uuid, title, slug, series_position
-              FROM articles
-             WHERE series_id = #{seriesId}
-               AND status = 'PUBLISHED'
-               AND series_position > #{currentPosition}
-             ORDER BY series_position ASC
-             LIMIT 1
-            """)
-    NavRow findNextNav(@Param("seriesId") Long seriesId,
-                       @Param("currentPosition") Integer currentPosition);
-
-    /**
-     * 計算 series 內 PUBLISHED 文章總數（避免依賴 article_count 反正規化漂移）。
-     */
-    @Select("SELECT COUNT(*) FROM articles WHERE series_id = #{seriesId} AND status = 'PUBLISHED'")
-    int countPublishedInSeries(@Param("seriesId") Long seriesId);
-
-    /**
      * 批次取得 articles 對應的 series 基本資訊（給 ArticleQueryService.enrich 用，避免 N+1）。
      */
     @Select({
@@ -127,14 +92,5 @@ public interface SeriesMapper {
         private Long articleId;
         private java.util.UUID seriesUuid;
         private String seriesTitle;
-    }
-
-    @lombok.Data
-    class NavRow {
-        private Long id;
-        private java.util.UUID uuid;
-        private String title;
-        private String slug;
-        private Integer seriesPosition;
     }
 }

@@ -6,8 +6,10 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.model.Article;
@@ -103,6 +105,7 @@ class CrossModuleSeriesIT {
     @Autowired private ArticleRepository articleRepo;
     @Autowired private SeriesArticleDeletedConsumer seriesArticleDeletedConsumer;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private SeriesFacade seriesFacade;
 
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
@@ -173,6 +176,11 @@ class CrossModuleSeriesIT {
 
     /** 直接透過 repository 建立一篇 PUBLISHED 測試文章。 */
     private Article createPublishedArticle(Long authorId) {
+        return createArticle(authorId, ArticleStatus.PUBLISHED);
+    }
+
+    /** 直接透過 repository 建立一篇指定狀態的測試文章（給 nav 查詢的 DRAFT 跳過測試用）。 */
+    private Article createArticle(Long authorId, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
         article.setAuthorId(authorId);
@@ -180,12 +188,19 @@ class CrossModuleSeriesIT {
         article.setSlug("series-it-" + UUID.randomUUID());
         article.setContent("test content");
         article.setContentHtml("<p>test content</p>");
-        article.setStatus(ArticleStatus.PUBLISHED);
+        article.setStatus(status);
         article.setLikeCount(0);
         article.setCommentCount(0);
         article.setViewCount(0L);
         article.setCreatedAt(LocalDateTime.now());
         article.setUpdatedAt(LocalDateTime.now());
+        return articleRepo.save(article);
+    }
+
+    /** 直接透過 repository 將文章加入 series 指定位置（繞過 API，因 API 僅允許 PUBLISHED 文章加入）。 */
+    private Article assignToSeries(Article article, Long seriesId, int position) {
+        article.setSeriesId(seriesId);
+        article.setSeriesPosition(position);
         return articleRepo.save(article);
     }
 
@@ -393,5 +408,68 @@ class CrossModuleSeriesIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.seriesNav").doesNotExist());
+    }
+
+    // ─── Test F: nav 查詢對真實 DB 執行，prev/next 跳過 DRAFT，且 uuid 欄位對應正確 ──
+
+    /**
+     * 驗證 Task 3 新走的 {@code ArticleFacade.findPrevPublishedInSeries} /
+     * {@code findNextPublishedInSeries} 對真實 Postgres 執行的行為。
+     *
+     * <p><b>為什麼需要這個 IT（Ruling F2）</b>：這兩條查詢是全案唯一沒有 IT 覆蓋、
+     * 且唯一回傳「含 UUID 欄位」record 的新 SQL。MyBatis 對 record 建構子採<b>位置對應</b>
+     * （見 {@code ArticleMapper} 上的 Ruling F1 註解），SELECT 欄位順序一旦與
+     * {@code ArticleNavRef(uuid, title, slug)} 的元件順序不一致，不會編譯失敗、也不會拋例外，
+     * 只會把欄位值悄悄塞進錯的欄位——純 Mockito 單元測試（{@code SeriesFacadeImplTest}）
+     * 完全不執行 SQL，抓不到這種錯誤，只有跑真實 DB 的 IT 才能驗證。</p>
+     *
+     * <p><b>資料佈局</b>：series 內 4 篇文章依 series_position 排列——
+     * pubFirst(1, PUBLISHED) → draftMiddle(2, DRAFT) → pubMiddle(3, PUBLISHED) → pubLast(4, PUBLISHED)。
+     * DRAFT 卡在 pubFirst 與 pubMiddle 之間，故兩個方向的「跳過 DRAFT」都被覆蓋到：</p>
+     * <ul>
+     *     <li>pubFirst 的 next：直接下一位是 DRAFT，必須跳過取到 pubMiddle。</li>
+     *     <li>pubMiddle 的 prev：直接上一位是 DRAFT，必須跳過取到 pubFirst。</li>
+     *     <li>pubMiddle 的 next／pubLast 的 prev：兩篇皆 PUBLISHED，驗證正常相鄰情形不受影響。</li>
+     *     <li>邊界：pubFirst 無 prev、pubLast 無 next。</li>
+     * </ul>
+     */
+    @Test
+    @DisplayName("series 導覽（prev/next）對真實 DB 執行：跳過 DRAFT，且 uuid 對應到正確文章")
+    void getSeriesNavigation_skipsDraft_andMapsUuidPositionallyCorrect() {
+        // 1. 建立 series + 4 篇文章（3 PUBLISHED + 1 DRAFT），直接寫 DB 決定位置
+        //    （DRAFT 無法透過 addArticleToSeries API 加入，見 SeriesService#addArticleToSeries 的
+        //    ARTICLE_NOT_PUBLISHED 守衛，故本測試全程繞過 API，直接操作 repository）
+        Series series = createSeries("Nav Skip Draft Series", "nav-skip-draft-series-it", AUTHOR_ID);
+
+        Article pubFirst = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getId(), 1);
+        Article draftMiddle = assignToSeries(createArticle(AUTHOR_ID, ArticleStatus.DRAFT), series.getId(), 2);
+        Article pubMiddle = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getId(), 3);
+        Article pubLast = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getId(), 4);
+
+        // 2. pubFirst：首篇，prev 應為 empty；next 跳過 draftMiddle，直接拿到 pubMiddle
+        SeriesNavigation firstNav = seriesFacade.getSeriesNavigation(pubFirst.getId()).orElseThrow();
+        assertThat(firstNav.getPrev()).isNull();
+        assertThat(firstNav.getNext()).isNotNull();
+        assertThat(firstNav.getNext().getUuid()).isNotNull().isEqualTo(pubMiddle.getUuid());
+        assertThat(firstNav.getNext().getTitle()).isEqualTo(pubMiddle.getTitle());
+        assertThat(firstNav.getNext().getSlug()).isEqualTo(pubMiddle.getSlug());
+
+        // 3. pubMiddle：中間篇，prev 跳過 draftMiddle 拿到 pubFirst；next 正常拿到 pubLast
+        SeriesNavigation middleNav = seriesFacade.getSeriesNavigation(pubMiddle.getId()).orElseThrow();
+        assertThat(middleNav.getPrev()).isNotNull();
+        assertThat(middleNav.getPrev().getUuid()).isNotNull().isEqualTo(pubFirst.getUuid());
+        assertThat(middleNav.getNext()).isNotNull();
+        assertThat(middleNav.getNext().getUuid()).isNotNull().isEqualTo(pubLast.getUuid());
+
+        // 4. pubLast：末篇，prev 正常拿到 pubMiddle；next 應為 empty
+        SeriesNavigation lastNav = seriesFacade.getSeriesNavigation(pubLast.getId()).orElseThrow();
+        assertThat(lastNav.getPrev()).isNotNull();
+        assertThat(lastNav.getPrev().getUuid()).isNotNull().isEqualTo(pubMiddle.getUuid());
+        assertThat(lastNav.getNext()).isNull();
+
+        // 5. totalCount 三篇 PUBLISHED 皆一致為 3（DRAFT 不計入）
+        assertThat(firstNav.getTotalCount()).isEqualTo(3);
+        assertThat(middleNav.getTotalCount()).isEqualTo(3);
+        assertThat(lastNav.getTotalCount()).isEqualTo(3);
     }
 }
