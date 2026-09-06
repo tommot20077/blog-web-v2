@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.reading.service;
 
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.reading.mapper.ArticleLikeMapper;
 import dowob.xyz.blog.module.reading.model.ArticleLike;
 import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
@@ -92,6 +93,7 @@ public class ArticleLikeService {
         if (userId == null || articleIds == null || articleIds.isEmpty()) {
             return Collections.emptySet();
         }
-        return new HashSet<>(articleLikeMapper.findLikedArticleIdsByUser(userId, articleIds));
+        return new HashSet<>(BatchedQuery.queryInBatches(articleIds,
+                batch -> articleLikeMapper.findLikedArticleIdsByUser(userId, batch)));
     }
 }

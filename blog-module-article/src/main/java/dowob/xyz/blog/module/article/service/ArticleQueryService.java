@@ -6,6 +6,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
@@ -214,7 +215,7 @@ public class ArticleQueryService {
         List<UUID> uuids = records.stream()
                 .map(ArticleSummaryResponse::getUuid)
                 .collect(Collectors.toList());
-        List<Article> idRows = articleMapper.findIdsByUuids(uuids);
+        List<Article> idRows = BatchedQuery.queryInBatches(uuids, articleMapper::findIdsByUuids);
         Map<UUID, Long> uuidToId = idRows.stream()
                 .collect(Collectors.toMap(Article::getUuid, Article::getId));
 

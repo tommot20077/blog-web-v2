@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.service;
 
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.reading.mapper.BookmarkMapper;
 import dowob.xyz.blog.module.reading.model.UserBookmark;
 import dowob.xyz.blog.module.reading.repository.UserBookmarkRepository;
@@ -54,7 +55,8 @@ public class BookmarkService {
         if (userId == null || articleIds == null || articleIds.isEmpty()) {
             return Collections.emptySet();
         }
-        return new HashSet<>(mapper.findBookmarkedArticleIdsByUser(userId, articleIds));
+        return new HashSet<>(BatchedQuery.queryInBatches(articleIds,
+                batch -> mapper.findBookmarkedArticleIdsByUser(userId, batch)));
     }
 
     /**

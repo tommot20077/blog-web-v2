@@ -6,6 +6,7 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
@@ -230,9 +231,8 @@ public class CommentService {
         List<Long> topLevelIds = topLevels.stream().map(CommentWithAuthor::getId).toList();
 
         // 2. replies 一次撈完（已過濾 deleted leaf at SQL level）
-        List<CommentWithAuthor> replies = topLevelIds.isEmpty()
-                ? List.of()
-                : commentMapper.findRepliesByParentIds(topLevelIds);
+        List<CommentWithAuthor> replies =
+                BatchedQuery.queryInBatches(topLevelIds, commentMapper::findRepliesByParentIds);
 
         // 3. 當前使用者的 liked 集合（一次 batch；未登入跳過）
         List<Long> allCommentIds = java.util.stream.Stream.concat(
@@ -240,9 +240,10 @@ public class CommentService {
                 replies.stream().map(CommentWithAuthor::getId)
         ).toList();
 
-        Set<Long> likedIds = (currentUserId == null || allCommentIds.isEmpty())
+        Set<Long> likedIds = currentUserId == null
                 ? Collections.emptySet()
-                : new HashSet<>(commentMapper.findLikedCommentIdsByUser(currentUserId, allCommentIds));
+                : new HashSet<>(BatchedQuery.queryInBatches(allCommentIds,
+                        batch -> commentMapper.findLikedCommentIdsByUser(currentUserId, batch)));
 
         // 4. group replies by parent id
         Map<Long, List<CommentResponse>> repliesByParent = replies.stream()

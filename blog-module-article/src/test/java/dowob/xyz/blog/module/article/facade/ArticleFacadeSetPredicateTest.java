@@ -10,12 +10,19 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -46,6 +53,30 @@ class ArticleFacadeSetPredicateTest {
             assertThat(result).containsOnlyKeys(1L, 3L);
             assertThat(result.get(1L)).isEqualTo(3);
             assertThat(result.get(3L)).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("輸入超過批次上限時切批查詢，各批結果合併為單一 map")
+        void whenInputExceedsBatchLimit_splitsIntoBatchesAndMergesResult() {
+            int total = BatchedQuery.BATCH_SIZE + 100;
+            List<Long> seriesIds = IntStream.rangeClosed(1, total)
+                    .mapToObj(Long::valueOf)
+                    .toList();
+            List<Integer> observedBatchSizes = new ArrayList<>();
+            when(articleMapper.countPublishedBySeriesIds(anyCollection())).thenAnswer(invocation -> {
+                Collection<Long> batch = invocation.getArgument(0);
+                observedBatchSizes.add(batch.size());
+                return batch.stream()
+                        .map(id -> new ArticleMapper.SeriesPublishedCountRow(id, 1))
+                        .toList();
+            });
+
+            Map<Long, Integer> result = facade.countPublishedBySeriesIds(seriesIds);
+
+            assertThat(observedBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
+            assertThat(result).hasSize(total);
+            assertThat(result.get(1L)).isEqualTo(1);
+            assertThat(result.get((long) total)).isEqualTo(1);
         }
     }
 
@@ -140,6 +171,29 @@ class ArticleFacadeSetPredicateTest {
 
             assertThat(facade.filterReadableIds(List.of(1L, 404L), null, false))
                     .containsExactly(1L);
+        }
+
+        @Test
+        @DisplayName("輸入超過批次上限時切批查詢，且結果仍維持輸入順序")
+        void whenInputExceedsBatchLimit_splitsIntoBatchesAndKeepsInputOrder() {
+            int total = BatchedQuery.BATCH_SIZE + 100;
+            List<Long> descendingIds = new ArrayList<>(IntStream.rangeClosed(1, total)
+                    .mapToObj(Long::valueOf)
+                    .toList());
+            Collections.reverse(descendingIds);
+            List<Integer> observedBatchSizes = new ArrayList<>();
+            when(articleMapper.findVisibilityRowsByIds(anyCollection())).thenAnswer(invocation -> {
+                Collection<Long> batch = invocation.getArgument(0);
+                observedBatchSizes.add(batch.size());
+                return batch.stream()
+                        .map(id -> new ArticleMapper.ArticleVisibilityRow(id, "PUBLISHED", 99L))
+                        .toList();
+            });
+
+            List<Long> result = facade.filterReadableIds(descendingIds, null, false);
+
+            assertThat(observedBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
+            assertThat(result).containsExactlyElementsOf(descendingIds);
         }
     }
 }

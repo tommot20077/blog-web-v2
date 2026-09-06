@@ -102,6 +102,9 @@ public class SeriesService {
         int from = (int) offset;
         List<Long> pageIds = visibleIds.subList(from, Math.min(from + size, visibleIds.size()));
 
+        // pageIds 的大小以本方法開頭的 MAX_PAGE_SIZE 為界（100），低於
+        // BatchedQuery.BATCH_SIZE（500），故此處的 IN (...) 不需切批——
+        // 界限由該常數保證，不是靠呼叫端自律。
         Map<Long, SeriesWithAuthor> rowById = mapper.findByIdsWithAuthor(pageIds).stream()
                 .collect(Collectors.toMap(SeriesWithAuthor::getId, r -> r));
         List<SeriesSummaryResponse> records = pageIds.stream()

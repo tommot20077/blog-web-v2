@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
@@ -82,7 +83,7 @@ public class SeriesFacadeImpl implements SeriesFacade {
         if (seriesIds == null || seriesIds.isEmpty()) {
             return Collections.emptyMap();
         }
-        return seriesMapper.findBasicInfoBySeriesIds(seriesIds).stream()
+        return BatchedQuery.queryInBatches(seriesIds, seriesMapper::findBasicInfoBySeriesIds).stream()
                 .collect(Collectors.toMap(
                         SeriesMapper.SeriesBasicRow::seriesId,
                         row -> new SeriesBasicInfo(row.seriesUuid(), row.seriesTitle())));
