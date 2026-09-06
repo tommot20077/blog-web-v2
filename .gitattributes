@@ -1,3 +1,8 @@
+# 預設：所有文字檔自動偵測並統一為 LF。
+# text=auto 以有無 NUL byte 判斷 binary，binary 不受影響。
+# 下方的具體規則排在本行之後，故會覆蓋它（例如 *.cmd 仍為 CRLF）。
+* text=auto eol=lf
+
 /.gitattributes text eol=lf
 /mvnw text eol=lf
 *.java text eol=lf
