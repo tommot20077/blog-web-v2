@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.version.controller;
 
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -69,11 +70,10 @@ public class VersionController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal Long currentUserId,
             @RequestParam(required = false) String type,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            PageQuery pageQuery) {
         boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(
-            versioningService.listByArticle(articleUuid, type, page, size, currentUserId, isAdmin));
+            versioningService.listByArticle(articleUuid, type, pageQuery.page(), pageQuery.sizeOrDefault(20), currentUserId, isAdmin));
     }
 
     /**

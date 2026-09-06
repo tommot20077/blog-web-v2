@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.controller;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -67,20 +68,19 @@ public class ArticleController {
      * categorySlug 為 null 或空白時，回傳所有已發布文章。
      * </p>
      *
-     * @param page         頁碼，預設 1
-     * @param size         每頁筆數，預設 10
+     * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @param categorySlug 分類 slug（可選）
      * @return 分頁文章摘要列表
      */
     @GetMapping
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPublishedArticles(
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size,
+            PageQuery pageQuery,
             @RequestParam(required = false) String categorySlug) {
         if (categorySlug != null && !categorySlug.isBlank()) {
-            return ApiResponse.success(articleQueryService.getPublishedArticlesByCategorySlug(categorySlug, page, size));
+            return ApiResponse.success(articleQueryService.getPublishedArticlesByCategorySlug(categorySlug, pageQuery.page(), pageQuery.sizeOrDefault(10)));
         }
-        return ApiResponse.success(articleQueryService.getPublishedArticles(page, size));
+        return ApiResponse.success(articleQueryService.getPublishedArticles(pageQuery.page(), pageQuery.sizeOrDefault(10)));
     }
 
     /**
@@ -215,8 +215,8 @@ public class ArticleController {
     /**
      * 取得我的文章列表（需登入）
      *
-     * @param page     頁碼，預設 1
-     * @param size     每頁筆數，預設 10
+     * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @param status   文章狀態篩選（可選）
      * @param authorId 當前登入用戶的資料庫主鍵（作者 ID）
      * @return 分頁文章摘要列表
@@ -224,11 +224,10 @@ public class ArticleController {
     @PreAuthorize("isAuthenticated()")
     @GetMapping("/me")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getMyArticles(
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size,
+            PageQuery pageQuery,
             @RequestParam(required = false) ArticleStatus status,
             @AuthenticationPrincipal Long authorId) {
-        return ApiResponse.success(articleQueryService.getMyArticles(authorId, page, size, status));
+        return ApiResponse.success(articleQueryService.getMyArticles(authorId, pageQuery.page(), pageQuery.sizeOrDefault(10), status));
     }
 
     /**

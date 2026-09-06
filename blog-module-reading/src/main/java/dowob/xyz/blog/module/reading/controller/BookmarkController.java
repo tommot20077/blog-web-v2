@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.reading.controller;
 
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
@@ -64,8 +65,8 @@ public class BookmarkController {
      *
      * @param userId         當前登入用戶的資料庫主鍵
      * @param authentication 當前認證資訊（用於判斷是否為 ADMIN）
-     * @param page           頁碼（自 1 起）
-     * @param size           每頁筆數
+     * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @return 收藏文章摘要分頁列表（已濾除對本人不可見的文章）
      */
     @GetMapping("/users/me/bookmarks")
@@ -74,10 +75,9 @@ public class BookmarkController {
     public ApiResponse<PageResult<ArticleSummaryResponse>> myBookmarks(
             @AuthenticationPrincipal Long userId,
             Authentication authentication,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            PageQuery pageQuery) {
         return ApiResponse.success(bookmarkQueryService.listMyBookmarks(
-                userId, SecurityUtils.isAdmin(authentication), page, size));
+                userId, SecurityUtils.isAdmin(authentication), pageQuery.page(), pageQuery.sizeOrDefault(20)));
     }
 
     /**

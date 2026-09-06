@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.search.controller;
 
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
@@ -48,8 +49,8 @@ public class SearchController {
      * @param q    搜尋關鍵字
      * @param tag  標籤 slug 過濾（可選）
      * @param sort 排序：{@code relevance}（預設）/ {@code latest} / {@code hot}
-     * @param page   頁碼（從 1 開始，預設 1）
-     * @param size   每頁筆數（預設 10）
+     * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @param userId 當前登入用戶的資料庫主鍵（匿名為 null，用於記錄搜尋歷史）
      * @return 分頁搜尋結果
      */
@@ -58,10 +59,9 @@ public class SearchController {
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String tag,
             @RequestParam(defaultValue = "relevance") String sort,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size,
+            PageQuery pageQuery,
             @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success(searchService.search(q, tag, sort, page, size, userId));
+        return ApiResponse.success(searchService.search(q, tag, sort, pageQuery.page(), pageQuery.sizeOrDefault(10), userId));
     }
 
     /**

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.comment.controller;
 
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
@@ -67,8 +68,8 @@ public class CommentController {
      * {@code currentUserId} 與 {@code isAdmin} 即為該判斷的輸入。</p>
      *
      * @param articleUuid   文章公開 UUID
-     * @param page          頁碼（自 1 起）
-     * @param size          每頁筆數
+     * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @param sort          排序方式（newest / oldest 等）
      * @param currentUserId 當前使用者 ID（未登入為 null，僅供個人化）
      * @return 留言列表（含軟刪除佔位）
@@ -77,13 +78,12 @@ public class CommentController {
     @Operation(summary = "列出文章留言（匿名可存取，含軟刪除佔位）")
     public ApiResponse<ArticleCommentListResponse> list(
             @PathVariable UUID articleUuid,
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size,
+            PageQuery pageQuery,
             @RequestParam(defaultValue = "newest") String sort,
             @AuthenticationPrincipal Long currentUserId) {
         boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(
-                commentService.listComments(articleUuid, currentUserId, isAdmin, sort, page, size));
+                commentService.listComments(articleUuid, currentUserId, isAdmin, sort, pageQuery.page(), pageQuery.sizeOrDefault(20)));
     }
 
     @PostMapping("/articles/{articleUuid}/comments")
