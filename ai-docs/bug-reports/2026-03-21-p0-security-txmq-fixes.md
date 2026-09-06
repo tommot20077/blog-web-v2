@@ -129,8 +129,8 @@ public void register(...) {
 |---------|--------|
 | 更新 `ai-docs/code-standards.md` 加入 TransactionTemplate + best-effort MQ 模式為必遵規範 | DONE（2026-07-07，`ai-docs/code-standards.md` §「Transaction + MQ 時序」） |
 | 更新 `ai-docs/security.md` 明確規定所有使用 `@AuthenticationPrincipal` 的端點必須加 `@PreAuthorize` | DONE（2026-07-07，`ai-docs/security.md` 原則 7、8） |
-| 新增 ArchUnit 測試：驗證所有 `@Transactional` 方法不含 `rabbitTemplate.convertAndSend()` 呼叫 | TODO（程式類，待排入 backlog） |
-| 新增 ArchUnit 測試：驗證所有 Controller 非公開端點都有 `@PreAuthorize` | TODO（程式類，待排入 backlog） |
+| 新增 ArchUnit 測試：驗證所有 `@Transactional` 方法不含 `rabbitTemplate.convertAndSend()` 呼叫 | **DONE**（2026-09-06，守衛 #6 `TransactionMqBoundaryTest`）。當初標 TODO 的理由是本 repo 無 ArchUnit 依賴，該理由自守衛 #5 上線後即不成立；本次 `/review-bugs` 發現此 TODO 已懸置近 6 個月 |
+| 新增 ArchUnit 測試：驗證所有 Controller 非公開端點都有 `@PreAuthorize` | **DONE**（2026-09-06，守衛 #7 `EndpointAuthorizationTest`）。原則 7 的 8 個豁免端點以白名單記錄，每項綁定 `security.md` Public Endpoints 表的對應路徑，並有防腐測試禁止死條目 |
 | Code review checklist 加入 Producer/Consumer 配對檢查 | DONE（2026-07-07，併入 `ai-docs/code-standards.md` §「Transaction + MQ 時序」的配對規則） |
 
 ## Lesson Learned

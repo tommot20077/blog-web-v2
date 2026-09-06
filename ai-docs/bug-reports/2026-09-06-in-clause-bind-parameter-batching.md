@@ -166,7 +166,7 @@ public List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, bool
 | `BatchedQuery` JavaDoc 寫死「跨批可合併」的適用範圍與禁用條件，使下一個使用者不會把 `ORDER BY`+`LIMIT` 查詢套進去 | **DONE**（`7e70b5d`）|
 | 分頁 `size` 上界改為型別保證（`PageQuery` record compact constructor），消除 8 處「假上界」 | **DONE**（`815fa85`）|
 | `architecture.md` 補條文：無上界輸入必須切批（不得只標 JavaDoc）、切批僅限跨批可合併形狀、「以頁大小為界」不等於有上界、`NOT EXISTS` 優於 `NOT IN`、述詞三格分類與方案 B 否決範圍的限定 | **DONE**（2026-09-06，`ai-docs/architecture.md`）|
-| 機械化守衛（防止新端點再度手寫無上界 IN） | **TODO**（backlog: `ai-docs/backlog/2026-09-06-in-clause-batching-and-page-bounds.md` §5）——已評估 ArchUnit 不可行：現行寫法為 `@RequestParam(defaultValue = "10") int size`，**參數名不在 annotation 內**，ArchUnit 讀 bytecode 取不到，無法比照守衛 #5 的做法 |
+| 機械化守衛（防止新的呼叫端再度手寫無上界 IN） | **TODO**（backlog: `ai-docs/backlog/2026-09-06-in-clause-batching-and-page-bounds.md` §5）。**2026-09-06 `/review-bugs` 修正原評估**：不可行的只有「controller 不得手寫分頁 `@RequestParam`」那條（參數名不在 annotation 內，ArchUnit 讀 bytecode 取不到）；「呼叫收集合參數的 mapper 必須經 `BatchedQuery`」則很可能可行——同日落地的守衛 #6 已實證 ArchUnit 1.3.0 的 method-call 分析可用 |
 
 ## Lesson Learned
 

@@ -120,7 +120,7 @@ public record PageQuery(Integer page, Integer size) {
 | 可觀測性打點 | `spring-boot-starter-actuator` 已在 `blog-start/pom.xml:31`，**micrometer-core 1.15.7 已在 compile classpath**（`dependency:tree` 實測，ARCH-16 記載的「無依賴」僅指直接宣告）。要讓門檻自己叫，最小成本是 `exposure.include` 加 `metrics` ＋ 在集合述詞方法打 `DistributionSummary`。**主動告警**另需 prometheus registry ＋ k3s scrape |
 | `= ANY(?)` 陣列參數 | 可一併解掉 bind 上限、planning time、prepared statement cache 失效（MyBatis `<foreach>` 讓每個長度都是不同 SQL 文本，配合 PG JDBC 預設 `prepareThreshold=5` 幾乎永遠湊不滿）。需 array TypeHandler（`UUIDTypeHandler` 可為範例）。**門檻觸發時的退路，現在不做** |
 | SEC-04 夾到 100 | 前置依賴前端改真分頁，未動 |
-| ArchUnit 守衛 | 想加「controller 不得手寫分頁 `@RequestParam`」，但現行 8 處都寫成 `@RequestParam(defaultValue="10") int size`——**參數名不在 annotation 裡，ArchUnit 讀 bytecode 看不到**，故無法機械化。只能靠上述規範文字 |
+| ArchUnit 守衛 | **原記載「無法機械化」涵蓋過寬，2026-09-06 `/review-bugs` 修正**：不可行的只有「controller 不得手寫分頁 `@RequestParam`」這條——現行寫法 `@RequestParam(defaultValue="10") int size` 未指定 `value`，參數名不在 annotation 內，ArchUnit 讀 bytecode 取不到。但另一條**很可能可行且未評估過**：「呼叫收集合參數的 mapper 方法時，呼叫端方法內必須出現 `BatchedQuery.queryInBatches`」——ArchUnit 1.3.0 有 method-call 層級分析（守衛 #6 已實證可用）。需搭配 `BOUNDED_INPUT` 白名單（`findByTagIds`／`findByIdsWithAuthor`），而白名單本身即價值：強迫豁免時寫下理由。**待辦：實作該守衛** |
 
 ## 6. 踩到的既有地雷：`SearchController` 的 CRLF blob
 
