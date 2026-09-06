@@ -1,0 +1,11 @@
+# 對 git blame 隱藏純格式 commit。
+#
+# 用法（每位開發者在 clone 後執行一次）：
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# 只收錄「零內容變更」的 commit——收錄前請以
+#   git diff <sha>^ <sha> --ignore-cr-at-eol --stat
+# 確認輸出為空，否則會把真實變更也一併藏起來。
+
+# style: 對全 repo 執行 git add --renormalize，統一行尾至 .gitattributes 宣告
+ca18aafff4ce6c1ae7b731473d490b924f36fe1f
