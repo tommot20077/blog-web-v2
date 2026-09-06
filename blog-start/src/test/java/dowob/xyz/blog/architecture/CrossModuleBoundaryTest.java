@@ -5,10 +5,17 @@ import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -133,5 +140,117 @@ class CrossModuleBoundaryTest {
             boolean isOwner = OWNER_PACKAGE_PATTERNS.get(e.getValue()).matcher(packageName).find();
             return touches && !isOwner;
         });
+    }
+
+    // ─── XML mapper 掃描（PR #71 review 補洞）───
+
+    /** MyBatis XML mapper 的 namespace 宣告，其值即該 mapper 的所屬型別全名 */
+    private static final Pattern XML_NAMESPACE = Pattern.compile("namespace\s*=\s*\"([^\"]+)\"");
+
+    /** 正式碼 XML mapper 的 classpath 位置 */
+    private static final String PRODUCTION_MAPPER_XML = "classpath*:mapper/*.xml";
+
+    @Test
+    @DisplayName("守衛 #5（XML）：XML mapper 不得在 SQL 中存取他模組的業務表")
+    void xmlMapperMustNotAccessForeignModuleBusinessTable() {
+        assertThat(findXmlViolations(PRODUCTION_MAPPER_XML))
+                .as("XML mapper 與註解式 mapper 受同一條規則約束。"
+                  + "本項存在的原因：註解式掃描讀的是 bytecode 的 @Select/@Update，"
+                  + "對 XML 完全失明，使 XML 成為繞過本守衛的合法路徑（PR #71 review 指出）。")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("防假陰性：正式碼 XML mapper 掃描必須實際掃到檔案，否則本守衛是空轉的")
+    void productionXmlScanMustActuallyFindResources() {
+        List<String> scanned = listScannedMappers(PRODUCTION_MAPPER_XML);
+
+        assertThat(scanned)
+                .as("若 classpath 上掃不到任何 mapper XML，上面那條「無違規」的斷言就毫無意義——"
+                  + "它會因為什麼都沒掃而恆綠。build 配置變動導致 XML 不進 classpath 時，"
+                  + "本項會先失敗，而不是讓守衛靜默失效。"
+                  + "目前已知至少有 ArticleRecommendMapper.xml。")
+                .isNotEmpty()
+                .anySatisfy(name -> assertThat(name).endsWith(".xml"));
+    }
+
+    @Test
+    @DisplayName("反向驗證：XML 掃描抓得到違規，且不誤判 owner 自查與 reference data")
+    void xmlScanDetectsViolationWithoutFalsePositive() {
+        List<String> violations = findXmlViolations("classpath*:archunit-fixture/mapper/*.xml");
+
+        assertThat(violations)
+                .as("守衛若抓不到已知違規，正向掃描為空就沒有意義——"
+                  + "這正是 29a1000 修過的靜默假陰性形態")
+                .anySatisfy(v -> assertThat(v).contains("ViolatingSeriesMapper"));
+        assertThat(violations)
+                .as("article 模組的 XML 查自己的 articles、JOIN reference data（users/tags）皆合規")
+                .noneMatch(v -> v.contains("CompliantArticleMapper"));
+    }
+
+    /**
+     * 列出指定位置實際掃到的 XML mapper 檔名。
+     *
+     * <p>供防假陰性測試使用：{@link #findXmlViolations(String)} 回傳空清單有兩種可能——
+     * 真的沒有違規，或根本沒掃到檔案。分開這兩者才能讓守衛的「綠」有意義。</p>
+     *
+     * @param locationPattern classpath 位置樣式
+     * @return 掃到的檔名清單
+     */
+    private static List<String> listScannedMappers(String locationPattern) {
+        try {
+            return Arrays.stream(new PathMatchingResourcePatternResolver().getResources(locationPattern))
+                    .map(Resource::getFilename)
+                    .filter(java.util.Objects::nonNull)
+                    .sorted()
+                    .toList();
+        } catch (IOException e) {
+            throw new UncheckedIOException("無法掃描 XML mapper: " + locationPattern, e);
+        }
+    }
+
+    /**
+     * 掃描 XML mapper，找出存取他模組業務表者。
+     *
+     * <p>owner 模組由 {@code <mapper namespace="...">} 解析而得——namespace 的值即該
+     * mapper 介面的型別全名，其 package 與註解式 mapper 的 package 同構，故可直接
+     * 複用 {@link #hasForeignBusinessTable(String, String)} 這份判定邏輯，
+     * 兩種來源共用同一組表名 pattern 與 owner 豁免規則。</p>
+     *
+     * <p>比對對象為整份 XML 的內容而非逐個 {@code <select>} 元素：表名 pattern 要求
+     * {@code from}／{@code join}／{@code update} 前綴，故 namespace 宣告本身不會被誤判；
+     * 這個取捨換來的是不必在測試裡引入 XML 解析。</p>
+     *
+     * @param locationPattern classpath 位置樣式
+     * @return 違規的 {@code 檔名#namespace} 描述，無違規則為空清單
+     */
+    private static List<String> findXmlViolations(String locationPattern) {
+        Resource[] resources;
+        try {
+            resources = new PathMatchingResourcePatternResolver().getResources(locationPattern);
+        } catch (IOException e) {
+            throw new UncheckedIOException("無法掃描 XML mapper: " + locationPattern, e);
+        }
+
+        List<String> violations = new ArrayList<>();
+        for (Resource resource : resources) {
+            String content;
+            try {
+                content = new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new UncheckedIOException("無法讀取 " + resource.getFilename(), e);
+            }
+            Matcher matcher = XML_NAMESPACE.matcher(content);
+            if (!matcher.find()) {
+                continue;
+            }
+            String namespace = matcher.group(1);
+            int lastDot = namespace.lastIndexOf('.');
+            String packageName = lastDot < 0 ? namespace : namespace.substring(0, lastDot);
+            if (hasForeignBusinessTable(content, packageName)) {
+                violations.add(resource.getFilename() + "#" + namespace);
+            }
+        }
+        return violations.stream().distinct().sorted().toList();
     }
 }
