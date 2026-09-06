@@ -9,3 +9,6 @@
 
 # style: 對全 repo 執行 git add --renormalize，統一行尾至 .gitattributes 宣告
 ca18aafff4ce6c1ae7b731473d490b924f36fe1f
+
+# style: renormalize 前次規則未涵蓋的 48 檔（md／sql／xml／yaml／properties）
+3d1c2f3665b25486ae4823dfca2d9427b196bdc5
