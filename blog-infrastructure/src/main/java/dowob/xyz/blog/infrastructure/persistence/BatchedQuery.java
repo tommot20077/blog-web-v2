@@ -1,5 +1,8 @@
 package dowob.xyz.blog.infrastructure.persistence;
 
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Metrics;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -37,6 +40,19 @@ public final class BatchedQuery {
     public static final int BATCH_SIZE = 500;
 
     /**
+     * 輸入集合大小的分佈指標名稱。
+     *
+     * <p>切批解決的是「不會炸」，不是「知道發生什麼」——沒有這個指標，
+     * 輸入是 300 筆還是 3,000 筆無從分辨，重評門檻只能靠人記得去看 JavaDoc。
+     * 打在本類一處即涵蓋全部呼叫端，是把切批抽成共用原語的附帶紅利。</p>
+     *
+     * <p>以呼叫端類別為 {@code caller} tag，使分佈偏高時查得出是哪條路徑。
+     * 全域 registry 未掛任何子 registry 時（單元測試、未啟用 actuator）整段跳過，
+     * 不付出 {@link StackWalker} 的成本。</p>
+     */
+    public static final String INPUT_SIZE_METRIC = "blog.batched.query.input.size";
+
+    /**
      * 靜態原語類別，不提供實例化。
      */
     private BatchedQuery() {
@@ -60,9 +76,10 @@ public final class BatchedQuery {
      */
     public static <I, O> List<O> queryInBatches(Collection<I> inputs,
                                                 Function<List<I>, List<O>> query) {
-        if (inputs == null) {
+        if (inputs == null || inputs.isEmpty()) {
             return List.of();
         }
+        recordInputSize(inputs.size());
         List<I> materialized = new ArrayList<>(inputs);
         List<O> results = new ArrayList<>();
         for (int from = 0; from < materialized.size(); from += BATCH_SIZE) {
@@ -70,5 +87,43 @@ public final class BatchedQuery {
             results.addAll(query.apply(materialized.subList(from, to)));
         }
         return results;
+    }
+
+    /**
+     * 記錄本次輸入的總大小。
+     *
+     * <p>記的是<b>輸入總量</b>而非批次大小——批次大小恆為 {@link #BATCH_SIZE} 或餘數，
+     * 沒有資訊量；輸入總量才是重評門檻要看的數字。</p>
+     *
+     * @param size 本次輸入的元素數
+     */
+    private static void recordInputSize(int size) {
+        if (Metrics.globalRegistry.getRegistries().isEmpty()) {
+            return;
+        }
+        DistributionSummary.builder(INPUT_SIZE_METRIC)
+                .description("跨模組批次查詢的輸入集合大小；用於判斷是否逼近切批與 bind parameter 的界限")
+                .baseUnit("rows")
+                .tag("caller", callerClassName())
+                .register(Metrics.globalRegistry)
+                .record(size);
+    }
+
+    /**
+     * 取得呼叫端的類別簡單名稱。
+     *
+     * <p>跳過本類自身的 frame，取第一個外部呼叫者。使用 {@link StackWalker} 而非
+     * 完整 stack trace，成本相對本方法必然伴隨的 DB 查詢可忽略。</p>
+     *
+     * @return 呼叫端類別簡單名稱；解析不出時回傳 {@code unknown}
+     */
+    private static String callerClassName() {
+        return StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
+                .walk(frames -> frames
+                        .map(StackWalker.StackFrame::getDeclaringClass)
+                        .filter(c -> c != BatchedQuery.class)
+                        .findFirst()
+                        .map(Class::getSimpleName)
+                        .orElse("unknown"));
     }
 }
