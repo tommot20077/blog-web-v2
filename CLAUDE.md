@@ -35,8 +35,8 @@
 
 ## External Repositories
 
-- Infrastructure (Docker, k3s, deployment configs): `D:\end\workspace\infrastructure`
-- Frontend (Vue 3 SPA, API contract counterpart): `D:\end\workspace\vue\blog-web-v2-front-end`
+- Infrastructure (Docker, k3s, deployment configs): `D:\backup\backup\程式\workspace\infrastructure`
+- Frontend (Vue 3 SPA, API contract counterpart): `D:\backup\backup\程式\workspace\vue\blog-web-v2-front-end`
 
 ## Rules File Convention
 

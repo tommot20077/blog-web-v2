@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.article.controller;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -50,16 +51,15 @@ public class AdminArticleController {
     /**
      * 分頁取得待審文章列表（僅 ADMIN）
      *
-     * @param page 頁碼，預設 1
-     * @param size 每頁筆數，預設 10
+     * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @return 分頁待審文章摘要列表
      */
     @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
     @GetMapping("/pending")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPendingArticles(
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "10") int size) {
-        return ApiResponse.success(articleQueryService.getPendingArticles(page, size));
+            PageQuery pageQuery) {
+        return ApiResponse.success(articleQueryService.getPendingArticles(pageQuery.page(), pageQuery.sizeOrDefault(10)));
     }
 
     /**

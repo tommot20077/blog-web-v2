@@ -1,7 +1,7 @@
 # Agent 調度守則(Model Dispatch)
 
 > 讀者:在此 repo 工作的任何 AI session(含較小模型)。目標:把貴的 context 花在判斷上,把便宜的 context 花在廣度上。
-> 姊妹檔:前端 repo `D:\end\workspace\vue\blog-web-v2-front-end\ai-docs\agent-dispatch.md`(獨立維護,不要求逐字同步)。
+> 姊妹檔:前端 repo `D:\backup\backup\程式\workspace\vue\blog-web-v2-front-end\ai-docs\agent-dispatch.md`(獨立維護,不要求逐字同步)。
 
 ## 現役模型速查(2026-07 查證;會過時,調度前先確認實際可用型號,查不到就寫「待查」,不要憑記憶編)
 

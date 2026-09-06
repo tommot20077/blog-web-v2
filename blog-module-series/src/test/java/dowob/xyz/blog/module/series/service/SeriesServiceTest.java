@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
@@ -15,6 +16,7 @@ import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesSummaryResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -31,6 +33,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -526,6 +529,169 @@ class SeriesServiceTest {
         assertThat(resp.getArticles()).isEmpty();
         // 仍不得對未公開內容做任何 enrich 查詢
         verify(articleQueryService, never()).getArticleSummariesByIds(any());
+    }
+
+    // ── G: listPublic 三段式（Task 5）─────────────────────────────────────
+
+    @Test
+    @DisplayName("listPublic 只列出有公開文章的 series，且 articleCount 為即時計數")
+    void listPublicOnlyListsSeriesWithPublishedArticlesAndArticleCountIsLive() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
+                .thenReturn(Map.of(10L, 3, 30L, 1));
+
+        SeriesWithAuthor row10 = new SeriesWithAuthor();
+        row10.setId(10L);
+        row10.setUuid(UUID.randomUUID());
+        row10.setSlug("s10");
+        row10.setAuthorUuid(UUID.randomUUID());
+        SeriesWithAuthor row30 = new SeriesWithAuthor();
+        row30.setId(30L);
+        row30.setUuid(UUID.randomUUID());
+        row30.setSlug("s30");
+        row30.setAuthorUuid(UUID.randomUUID());
+        when(mapper.findByIdsWithAuthor(List.of(10L, 30L))).thenReturn(List.of(row10, row30));
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
+
+        assertThat(result.getTotal()).isEqualTo(2L);
+        assertThat(result.getRecords()).hasSize(2);
+        assertThat(result.getRecords().get(0).getArticleCount()).isEqualTo(3);
+        assertThat(result.getRecords().get(1).getArticleCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("listPublic 第二頁只取該頁的 id")
+    void listPublicSecondPageOnlyTakesIdsOfThatPage() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
+                .thenReturn(Map.of(10L, 1, 20L, 1, 30L, 1));
+
+        SeriesWithAuthor row30 = new SeriesWithAuthor();
+        row30.setId(30L);
+        row30.setUuid(UUID.randomUUID());
+        row30.setSlug("s30");
+        row30.setAuthorUuid(UUID.randomUUID());
+        when(mapper.findByIdsWithAuthor(List.of(30L))).thenReturn(List.of(row30));
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(2, 2);
+
+        assertThat(result.getTotal()).isEqualTo(3L);
+        assertThat(result.getRecords()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("listPublic 全無公開文章時回空頁，且不查明細")
+    void listPublicWhenNoPublishedArticles_returnsEmptyPageWithoutDetailQuery() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L))).thenReturn(Map.of());
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
+
+        assertThat(result.getTotal()).isZero();
+        assertThat(result.getRecords()).isEmpty();
+        verify(mapper, never()).findByIdsWithAuthor(anyList());
+    }
+
+    @Test
+    @DisplayName("listPublic 超出範圍的頁回空清單，但 total 不變")
+    void listPublicOutOfRangePageReturnsEmptyListButTotalUnchanged() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L))).thenReturn(Map.of(10L, 1));
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(5, 20);
+
+        assertThat(result.getTotal()).isEqualTo(1L);
+        assertThat(result.getRecords()).isEmpty();
+    }
+
+    /**
+     * 鎖住「newest first」的排序契約。
+     *
+     * <p>{@code SeriesMapper.findByIdsWithAuthor} 的 JavaDoc 明言回傳順序不保證，SQL 也沒有
+     * ORDER BY；listPublic 之所以仍能保證「最新優先」，全靠依 pageIds 走訪、以
+     * {@code rowById::get} 查表重組順序這個寫法。若改成直接疊代 {@code rowById.values()}，
+     * 順序會退化成 HashMap 的內部疊代順序而非 pageIds 順序。本測試刻意讓 mapper 回傳與
+     * pageIds 相反的順序，若 production code 改用 values()，本測試會抓到（見
+     * fix-wave 報告中的 RED 佐證）。</p>
+     */
+    @Test
+    @DisplayName("listPublic 回傳順序鎖定在 pageIds，即使 mapper 回傳順序相反也不受影響")
+    void listPublicOrdersRecordsByPageIdsRegardlessOfMapperReturnOrder() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
+                .thenReturn(Map.of(10L, 1, 20L, 1, 30L, 1));
+
+        SeriesWithAuthor row10 = new SeriesWithAuthor();
+        row10.setId(10L);
+        row10.setUuid(UUID.randomUUID());
+        row10.setSlug("s10");
+        row10.setAuthorUuid(UUID.randomUUID());
+        SeriesWithAuthor row20 = new SeriesWithAuthor();
+        row20.setId(20L);
+        row20.setUuid(UUID.randomUUID());
+        row20.setSlug("s20");
+        row20.setAuthorUuid(UUID.randomUUID());
+        SeriesWithAuthor row30 = new SeriesWithAuthor();
+        row30.setId(30L);
+        row30.setUuid(UUID.randomUUID());
+        row30.setSlug("s30");
+        row30.setAuthorUuid(UUID.randomUUID());
+
+        // mapper 刻意回傳與 pageIds（10, 20, 30）相反的順序，模擬「順序不保證」的真實情境。
+        when(mapper.findByIdsWithAuthor(List.of(10L, 20L, 30L)))
+                .thenReturn(List.of(row30, row20, row10));
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
+
+        // 回應順序必須依 pageIds（10 → 20 → 30），不是 mapper 回傳順序（30 → 20 → 10），
+        // 也不是任何 Map 的內部疊代順序。
+        assertThat(result.getRecords())
+                .extracting(SeriesSummaryResponse::getSlug)
+                .containsExactly("s10", "s20", "s30");
+    }
+
+    /**
+     * 鎖住 offset 運算不溢位。
+     *
+     * <p>{@code (page - 1) * size} 若以 int 相乘，在 page 夠大時會溢位成負數；舊寫法
+     * {@code Math.max(0, …)} 會把溢位的負值吞成 0，等於靜默地把 offset 當成 0——之後
+     * {@code subList(0, …)} 仍會撈出「第 1 頁」的內容並正常組出 records，只是回報給呼叫端的
+     * 仍是它送來的巨大 page 號。這裡刻意 stub {@code findByIdsWithAuthor} 回傳第 1 頁的兩筆
+     * row：若 production code 仍是 int 溢位版本，offset 會被吞成 0，records 就會非空
+     * （撈到這兩筆）；long 版本則會讓 offset 正確落在 visibleIds 範圍外，直接回空清單、
+     * 連 {@code findByIdsWithAuthor} 都不會呼叫——這與姊妹端點 {@code BookmarkQueryService}
+     * 對同樣輸入的行為一致。size 固定在 {@code MAX_PAGE_SIZE}（100）之上界時，
+     * page ≈ 21,474,838 即可讓 {@code (page - 1) * size} 以 int 運算溢位；此處取更大的 page
+     * 以確保穩定觸發。</p>
+     */
+    @Test
+    @DisplayName("listPublic 給超大 page 時 offset 以 long 運算不溢位，回空清單而非誤回第一頁")
+    void listPublicHugePageDoesNotOverflowOffsetArithmetic() {
+        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L));
+        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L)))
+                .thenReturn(Map.of(10L, 1, 20L, 1));
+
+        // 若 production code 仍是 int 溢位版本，offset 會被 Math.max(0, …) 吞成 0，
+        // 進而以「頁 1」的 id 呼叫這支 mapper 方法；stub 讓那個誤判有真實資料可撈，
+        // 使該分支的錯誤行為在斷言上「看得見」而非被 Mockito 預設空回傳蓋掉。
+        SeriesWithAuthor row10 = new SeriesWithAuthor();
+        row10.setId(10L);
+        row10.setUuid(UUID.randomUUID());
+        row10.setSlug("s10");
+        row10.setAuthorUuid(UUID.randomUUID());
+        SeriesWithAuthor row20 = new SeriesWithAuthor();
+        row20.setId(20L);
+        row20.setUuid(UUID.randomUUID());
+        row20.setSlug("s20");
+        row20.setAuthorUuid(UUID.randomUUID());
+        lenient().when(mapper.findByIdsWithAuthor(List.of(10L, 20L)))
+                .thenReturn(List.of(row10, row20));
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(30_000_000, 100);
+
+        assertThat(result.getTotal()).isEqualTo(2L);
+        assertThat(result.getRecords()).isEmpty();
     }
 }
 

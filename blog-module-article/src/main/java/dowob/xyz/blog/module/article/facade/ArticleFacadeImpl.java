@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.facade;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
@@ -10,10 +11,12 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
@@ -33,7 +36,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -112,14 +114,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
     private final ArticleFileBinder articleFileBinder;
 
     /**
-     * {@link #filterPublishedUuids(Collection)} 單次 {@code IN (...)} 的最大 id 數
-     *
-     * <p>caller（搜尋模組的幽靈掃描）以每頁 1000 筆的節奏送進來，一次全塞進單一 SQL 會產生
-     * 上千個 bind 參數；切成 500 一批可讓 SQL 大小與 planner 成本維持在可預期範圍。</p>
-     */
-    private static final int PUBLISHED_FILTER_BATCH_SIZE = 500;
-
-    /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
      *
      * @return 已發布文章的索引資料列表
@@ -134,28 +128,22 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
-     * <p>空輸入直接回空集合，避免產生 {@code IN ()}；輸入過大時切批查詢，
-     * 避免單一 SQL 塞進上千個 bind 參數。</p>
+     * <p>caller（搜尋模組的幽靈掃描）以每頁 1000 筆的節奏送進來，輸入無上界，
+     * 故經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
+     * 結果為集合聯集，屬跨批可合併形狀。</p>
      */
     @Override
     public Set<UUID> filterPublishedUuids(Collection<UUID> uuids) {
-        if (uuids == null || uuids.isEmpty()) {
+        if (uuids == null) {
             return Set.of();
         }
         List<UUID> distinct = uuids.stream()
                 .filter(Objects::nonNull)
                 .distinct()
                 .toList();
-        if (distinct.isEmpty()) {
-            return Set.of();
-        }
-        Set<UUID> published = new HashSet<>();
-        for (int from = 0; from < distinct.size(); from += PUBLISHED_FILTER_BATCH_SIZE) {
-            int to = Math.min(from + PUBLISHED_FILTER_BATCH_SIZE, distinct.size());
-            articleMapper.findPublishedUuidsIn(distinct.subList(from, to))
-                    .forEach(uuid -> published.add(UUID.fromString(uuid)));
-        }
-        return published;
+        return BatchedQuery.queryInBatches(distinct, articleMapper::findPublishedUuidsIn).stream()
+                .map(UUID::fromString)
+                .collect(Collectors.toSet());
     }
 
     /**
@@ -208,7 +196,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
         if (uuids == null || uuids.isEmpty()) {
             return Collections.emptyList();
         }
-        List<ArticleSummaryRow> rows = recommendMapper.findByUuids(uuids);
+        List<ArticleSummaryRow> rows = BatchedQuery.queryInBatches(uuids, recommendMapper::findByUuids);
         return assembleSummaryInfoList(rows);
     }
 
@@ -286,7 +274,8 @@ public class ArticleFacadeImpl implements ArticleFacade {
 
         List<String> articleUuidStrings = rows.stream()
                 .map(ArticleSummaryRow::getUuid).collect(Collectors.toList());
-        List<ArticleTagRow> tagRows = recommendMapper.findTagsByArticleUuids(articleUuidStrings);
+        List<ArticleTagRow> tagRows = BatchedQuery.queryInBatches(articleUuidStrings,
+                recommendMapper::findTagsByArticleUuids);
 
         Map<String, List<String>> tagNamesByArticleUuid = tagRows.stream()
                 .collect(Collectors.groupingBy(
@@ -571,5 +560,59 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 article.getCoverImageUrl(),
                 article.getStatus() != null ? article.getStatus().name() : null
         );
+    }
+
+    // ─── 集合述詞實作 ───
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>輸入為 caller 的全量 series 主鍵，無上界，故經 {@link BatchedQuery} 切批。
+     * 各批回傳的 key 不重疊（一個 series 只屬於一批），屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Map<Long, Integer> countPublishedBySeriesIds(Collection<Long> seriesIds) {
+        return BatchedQuery.queryInBatches(seriesIds, articleMapper::countPublishedBySeriesIds)
+                .stream()
+                .collect(Collectors.toMap(
+                        ArticleMapper.SeriesPublishedCountRow::seriesId,
+                        ArticleMapper.SeriesPublishedCountRow::publishedCount));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<ArticleNavRef> findPrevPublishedInSeries(Long seriesId, Integer currentPosition) {
+        return Optional.ofNullable(articleMapper.findPrevPublishedInSeries(seriesId, currentPosition));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<ArticleNavRef> findNextPublishedInSeries(Long seriesId, Integer currentPosition) {
+        return Optional.ofNullable(articleMapper.findNextPublishedInSeries(seriesId, currentPosition));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>輸入為 caller 的全量候選集（例如某使用者的全部收藏），無上界，
+     * 故經 {@link BatchedQuery} 切批。可見性過濾在各批獨立成立，屬跨批可合併形狀；
+     * 回傳順序由最後對 {@code candidateIds} 的重排保證，不依賴各批查詢的回傳順序。</p>
+     */
+    @Override
+    public List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, boolean isAdmin) {
+        if (candidateIds == null) {
+            return List.of();
+        }
+        Set<Long> readable = BatchedQuery
+                .queryInBatches(candidateIds, articleMapper::findVisibilityRowsByIds).stream()
+                .filter(row -> ArticleVisibility.isReadableBy(
+                        row.status(), row.authorId(), viewerId, isAdmin))
+                .map(ArticleMapper.ArticleVisibilityRow::id)
+                .collect(Collectors.toSet());
+        return candidateIds.stream().filter(readable::contains).toList();
     }
 }

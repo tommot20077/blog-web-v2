@@ -26,7 +26,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Series Service — CRUD（create / update / delete）與詳情查詢。
@@ -52,6 +54,23 @@ public class SeriesService {
      *
      * <p>page 最小 1、size 夾在 [1, {@value #MAX_PAGE_SIZE}]，避免匿名端點被超大 size 放大查詢。</p>
      *
+     * <p>
+     * 三段式流程（消除最後 3 處直讀 articles，ARCH-13）：
+     * <ol>
+     *   <li>{@code mapper.findAllIdsOrderByCreatedAtDesc()} 取全部 series 主鍵（自己的表，series
+     *       為低基數實體），最新優先；</li>
+     *   <li>{@code articleFacade.countPublishedBySeriesIds} 一次取得可見性過濾條件（key 集合，
+     *       只含 count &gt; 0 者）與即時 PUBLISHED 計數（value）——集合述詞，見
+     *       {@code architecture.md}；原本對同一條件跑 COUNT 子查詢 ＋ EXISTS 子查詢的
+     *       PERF-34 因此免費消失；</li>
+     *   <li>對已過濾且已排序的 id 取該頁 sublist，才呼叫 {@code mapper.findByIdsWithAuthor}
+     *       查明細（{@code series LEFT JOIN users}，users 為 reference data，合規）。</li>
+     * </ol>
+     * {@code total} 即第 2 步過濾後的可見集合大小，不再需要獨立 COUNT 查詢；
+     * {@code articleCount} 為即時 PUBLISHED 計數，不沿用 {@code series.article_count}
+     * 這個含非公開文章的反正規化欄位。
+     * </p>
+     *
      * @param page 當前頁碼（1-based）
      * @param size 每頁筆數
      * @return 分頁結果
@@ -60,10 +79,44 @@ public class SeriesService {
     public PageResult<SeriesSummaryResponse> listPublic(int page, int size) {
         page = Math.max(page, 1);
         size = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
-        int offset = Math.max(0, (page - 1) * size);
-        List<SeriesWithAuthor> rows = mapper.findPublic(size, offset);
-        long total = mapper.countPublic();
-        List<SeriesSummaryResponse> records = rows.stream().map(this::toSummaryResponse).toList();
+
+        List<Long> allIds = mapper.findAllIdsOrderByCreatedAtDesc();
+        if (allIds.isEmpty()) {
+            return PageResult.of(page, size, 0L, List.of());
+        }
+
+        Map<Long, Integer> publishedCounts = articleFacade.countPublishedBySeriesIds(allIds);
+        List<Long> visibleIds = allIds.stream()
+                .filter(publishedCounts::containsKey)
+                .toList();
+
+        long total = visibleIds.size();
+        // page 為 client 給的 int，(page - 1) * size 以 int 相乘在大 page 時會溢位成負數；
+        // 舊寫法 Math.max(0, …) 會把溢位的負值吞成 0，等於靜默地回第 1 頁內容，卻仍回報呼叫端
+        // 給的巨大 page 號，與姊妹端點 BookmarkQueryService 對同樣輸入的行為（回空清單）不一致。
+        // (long) 必須放在第一個運算元上，讓整個乘法以 long 運算，避免相乘當下就已溢位。
+        long offset = (long) (page - 1) * size;
+        if (offset >= visibleIds.size()) {
+            return PageResult.of(page, size, total, List.of());
+        }
+        int from = (int) offset;
+        List<Long> pageIds = visibleIds.subList(from, Math.min(from + size, visibleIds.size()));
+
+        // pageIds 的大小以本方法開頭的 MAX_PAGE_SIZE 為界（100），低於
+        // BatchedQuery.BATCH_SIZE（500），故此處的 IN (...) 不需切批——
+        // 界限由該常數保證，不是靠呼叫端自律。
+        Map<Long, SeriesWithAuthor> rowById = mapper.findByIdsWithAuthor(pageIds).stream()
+                .collect(Collectors.toMap(SeriesWithAuthor::getId, r -> r));
+        List<SeriesSummaryResponse> records = pageIds.stream()
+                .map(rowById::get)
+                .filter(Objects::nonNull)
+                .map(row -> {
+                    SeriesSummaryResponse r = toSummaryResponse(row);
+                    r.setArticleCount(publishedCounts.getOrDefault(row.getId(), 0));
+                    return r;
+                })
+                .toList();
+
         return PageResult.of(page, size, total, records);
     }
 
@@ -256,7 +309,7 @@ public class SeriesService {
      *
      * <p>
      * series 一旦存在即為公開實體：即使目前<b>無任何 PUBLISHED 文章</b>，仍正常回應且 articles 為空清單、
-     * articleCount 為 0。公開列表 {@code findPublic} 則另以「有無 PUBLISHED」策展，故此類 series 不進列表
+     * articleCount 為 0。公開列表 {@code listPublic} 則另以「有無 PUBLISHED」策展，故此類 series 不進列表
      * （列表策展與詳情存在性刻意分離）。
      * </p>
      *

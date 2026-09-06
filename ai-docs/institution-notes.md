@@ -35,5 +35,37 @@
 - 2026-08-16 批次合併 #53–#59 後,本地所有 feature/fix 分支均已進 develop;本輪把它們(含 pr53/54/55 審查分支、空的 fix/minio-public-read、只剩三方合併殘留的 integration/local-e2e)本地與遠端一併刪除。develop 是唯一活的整合線。
 - `origin/claude/fullstack-review-architecture-fdmjbd`(2026-07 稽核)只有 docs 被移植(PR #60);其 `59c170d fix(auth)` 交由 2026-09-02 security review 判定 develop 是否已涵蓋;`a4651c5` CRLF→LF 正規化**未搬**——所以 fresh worktree 的 `git status` 會顯示上百個 CRLF「modified」噪音,根因是 .gitattributes 加入後從未 `git add --renormalize .`,要不要做一次由 Yuan 決定(會是一個 ~190 檔的純格式 commit)。
 - **main 落後 develop 467 commits**,這輪未動;後端 main 沒有獨立 hotfix,release 時直接開 develop → main PR。
-- repo 實際路徑已從 `D:\end\workspace\java\blog-web-v2` 搬到 `D:\backup\backup\程式\workspace\java\blog-web-v2`(前端同樣搬到 `D:\backup\backup\程式\workspace\vue\`);CLAUDE.md「External Repositories」與 agent-dispatch.md 的姊妹檔路徑仍是舊的,待 Yuan 確認新路徑是長期位置再一併改。
+- repo 實際路徑已從 `D:\end\workspace\java\blog-web-v2` 搬到 `D:\backup\backup\程式\workspace\java\blog-web-v2`(前端同樣搬到 `D:\backup\backup\程式\workspace\vue\`);CLAUDE.md「External Repositories」與 agent-dispatch.md 的姊妹檔路徑仍是舊的,待 Yuan 確認新路徑是長期位置再一併改。 → **2026-09-05 已由 Yuan 確認並修正**(見下節)。稽核報告與 findings.md 內的舊路徑**刻意未改**——那些是當時事實的紀錄,改動等於竄改推導過程。
 - `.worktrees/` 內殘留的舊 checkout 目錄(admin-console、article-toc、context-smoke、minio、version-fix、merge-withdraw、qa-backlog)經 blob 比對確認內容全在 git 物件庫,已刪除。
+
+## 2026-09-05 紀錄(集合述詞規範分支的收尾)
+
+### 已解決:姊妹 repo 路徑
+
+2026-09-02 掛著等確認的那條已由 Yuan 拍板。`CLAUDE.md`「External Repositories」與
+`agent-dispatch.md:4` 的姊妹檔路徑已更新為 `D:\backup\backup\程式\workspace\...`。
+**這條過期路徑不是理論問題**:本輪一個 subagent 依它去找前端 repo、找不到,只好把一條
+本來查得到的宣稱標記為「無法驗證」,由控制端補查才發現引用其實正確。
+教訓:**常載層的路徑錯誤不會報錯,只會讓下游默默降級成「查不到」**。
+
+### 新增判斷條文:同批 commit 內的文件不得前向引用尚未落地的程式碼
+
+**踩雷經過**:一批三個 commit(A 改測試命名 / B 更正文件結論 / D 修守衛程式碼),
+要求「每個 commit 可獨立審查」。B 的 backlog 編輯寫了「三形式反向驗證已完成」,
+但那個驗證是 D 才落地的 —— 單獨 checkout B 時,文件描述了程式碼裡不存在的事實。
+
+**為什麼值得立條文**:這個錯誤在**寫的當下**成本是零(換個時態即可),
+在 **review 時**才發現則補救成本極高——要在一個有明文 CRLF 正規化危害的 repo 上
+對多個 commit 動歷史手術。本次判定 park(最終樹正確、分支未推送、且會以 merge commit
+進 develop 故中間狀態不出現在 first-parent 歷史),但那是**權衡後接受瑕疵**,不是沒事。
+
+**條文**:拆分 commit 時,每個 commit 內的文件敘述只能描述**該 commit 當下為真**的事。
+需要引用後續 commit 的成果時,改用前瞻語氣("將於…"),或把該句留到成果落地的那個 commit。
+
+### 另一個值得記的模式:自我驗證矩陣會系統性漏掉最難的那一格
+
+本輪一位實作者為 regex 假陽性做了驗證矩陣,測了 `my_articles_archive`(前綴變體)
+卻**漏了** `articles_archive`(尾綴變體)。前者因字面不符而失敗,根本沒觸及
+`\b` 與底線的邊界邏輯——也就是整條 regex 安全性的真正機制。程式碼是對的,
+但**自述證據恰好在最難的那一點上有缺口**。
+對 reviewer 的意涵:看到自我驗證矩陣時,先問「最容易寫錯的那一格在不在裡面」。

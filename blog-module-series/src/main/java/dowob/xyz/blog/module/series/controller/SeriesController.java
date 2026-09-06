@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.series.controller;
 
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -55,9 +56,8 @@ public class SeriesController {
     @GetMapping
     @Operation(summary = "Series 列表（公開）")
     public ApiResponse<PageResult<SeriesSummaryResponse>> list(
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.success(seriesService.listPublic(page, size));
+            PageQuery pageQuery) {
+        return ApiResponse.success(seriesService.listPublic(pageQuery.page(), pageQuery.sizeOrDefault(20)));
     }
 
     /**

@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -158,7 +159,8 @@ class ArticleResponseMapper {
         if (articleUuids == null || articleUuids.isEmpty()) {
             return Map.of();
         }
-        List<TagWithArticleUuid> all = articleMapper.findTagsByArticleUuids(articleUuids);
+        List<TagWithArticleUuid> all = BatchedQuery.queryInBatches(articleUuids,
+                articleMapper::findTagsByArticleUuids);
         return all.stream().collect(Collectors.groupingBy(
                 TagWithArticleUuid::getArticleUuid,
                 Collectors.mapping(t -> TagSummaryResponse.builder()
@@ -180,7 +182,8 @@ class ArticleResponseMapper {
         if (articleIds == null || articleIds.isEmpty()) {
             return Map.of();
         }
-        List<CategoryWithArticleId> all = categoryMapper.findCategoriesByArticleIds(articleIds);
+        List<CategoryWithArticleId> all = BatchedQuery.queryInBatches(articleIds,
+                categoryMapper::findCategoriesByArticleIds);
         return all.stream().collect(Collectors.groupingBy(
                 CategoryWithArticleId::getArticleId,
                 Collectors.mapping(c -> CategoryResponse.builder()

@@ -327,6 +327,47 @@ class SecurityConfigTest {
                 .andExpect(status().isOk());
     }
 
+    // ── actuator：暴露 metrics 後的授權面（只有 health/info 是公開的）──
+
+    @Test
+    @DisplayName("未認證 GET /actuator/metrics 應回傳 401")
+    void unauthenticatedGetActuatorMetrics_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/metrics"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /actuator/health 仍應可達（K3s probe 依賴）")
+    void unauthenticatedGetActuatorHealth_shouldNotBeUnauthorized() throws Exception {
+        mockMvc.perform(get("/actuator/health"))
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    if (status == 401) {
+                        throw new AssertionError("/actuator/health 不得需要認證——K3s liveness/readiness "
+                                + "probe 依賴它（security.md 公開端點表）");
+                    }
+                });
+    }
+
+    @Test
+    @DisplayName("一般登入使用者 GET /actuator/metrics 應回傳 403——運維資訊限 ADMIN")
+    void authenticatedNonAdminGetActuatorMetrics_shouldReturn403() throws Exception {
+        mockMvc.perform(get("/actuator/metrics").with(asUser()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("ADMIN GET /actuator/metrics 應通過授權（本測試不載入 actuator endpoint，故只驗非 401／403）")
+    void adminGetActuatorMetrics_shouldPassAuthorization() throws Exception {
+        mockMvc.perform(get("/actuator/metrics").with(asAdmin()))
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    if (status == 401 || status == 403) {
+                        throw new AssertionError("ADMIN 應通過 /actuator/** 的授權，實得 " + status);
+                    }
+                });
+    }
+
     // ── SEC-09：已收窄的 articles 子端點（URL 層兒底，不再只靠方法層 @PreAuthorize）──
 
     @Test

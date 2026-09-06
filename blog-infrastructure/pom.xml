@@ -113,6 +113,14 @@
             <artifactId>spring-retry</artifactId>
         </dependency>
 
+        <!-- Metrics facade：供 BatchedQuery 對無上界輸入的實際大小打點。
+             actuator 只在 blog-start，故此處顯式宣告 micrometer-core；
+             版本由 spring-boot-dependencies 管理。無 registry 時為 no-op。 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+
         <!-- Test Dependencies -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

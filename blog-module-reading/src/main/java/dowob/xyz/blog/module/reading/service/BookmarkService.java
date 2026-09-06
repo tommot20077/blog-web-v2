@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.service;
 
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.reading.mapper.BookmarkMapper;
 import dowob.xyz.blog.module.reading.model.UserBookmark;
 import dowob.xyz.blog.module.reading.repository.UserBookmarkRepository;
@@ -54,14 +55,17 @@ public class BookmarkService {
         if (userId == null || articleIds == null || articleIds.isEmpty()) {
             return Collections.emptySet();
         }
-        return new HashSet<>(mapper.findBookmarkedArticleIdsByUser(userId, articleIds));
+        return new HashSet<>(BatchedQuery.queryInBatches(articleIds,
+                batch -> mapper.findBookmarkedArticleIdsByUser(userId, batch)));
     }
 
-    public List<Long> findMyBookmarkedArticleIds(Long userId, int size, int offset) {
-        return mapper.findMyBookmarkedArticleIds(userId, size, offset);
-    }
-
-    public long countByUser(Long userId) {
-        return mapper.countByUser(userId);
+    /**
+     * 我的全部收藏文章 id（最新優先，不分頁）。
+     *
+     * @param userId 使用者主鍵
+     * @return 全部收藏文章主鍵
+     */
+    public List<Long> findAllMyBookmarkedArticleIds(Long userId) {
+        return mapper.findAllMyBookmarkedArticleIds(userId);
     }
 }

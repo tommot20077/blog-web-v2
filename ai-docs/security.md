@@ -152,6 +152,19 @@ public void changePassword(...) {
 | GET | `/api/v1/search` | Search |
 | GET | `/api/v1/search/suggest` | Search suggestions |
 
+> **Actuator 只有上表兩條是公開的，其餘限 ADMIN**（2026-09-06）：
+> `management.endpoints.web.exposure.include` 自 `health,info` 增為 `health,info,metrics`
+> （用於觀察 `BatchedQuery` 的輸入分佈，是 `findings.md` **ARCH-16** 的第一步）。
+> `SecurityConfig` 於 actuator 的 permitAll 之後緊接
+> `.requestMatchers("/actuator/**").hasRole("ADMIN")`，故 `/actuator/metrics`
+> 未認證回 401、一般登入使用者回 403。**少了這條，暴露 metrics 等於讓任何已登入使用者
+> 讀到端點清單與呼叫量**——這正是 BUG-2026-001 FIN-3+4「新端點沒順手確認授權面」的形態。
+> 守衛：`SecurityConfigTest` 的 `unauthenticatedGetActuatorMetrics_shouldReturn401`、
+> `authenticatedNonAdminGetActuatorMetrics_shouldReturn403`、
+> `adminGetActuatorMetrics_shouldPassAuthorization`，
+> 以及 `unauthenticatedGetActuatorHealth_shouldNotBeUnauthorized`
+> （最後一條防止日後收緊時誤傷 K3s probe，那會讓 pod 反覆重啟）。
+
 **`/api/v1/articles/**` 底下明確「不公開」的端點**(SEC-09 收窄後由 URL 層 + 方法層雙重把關):
 
 | Method | Path | 方法層守衛 |

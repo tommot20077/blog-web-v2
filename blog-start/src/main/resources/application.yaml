@@ -92,7 +92,11 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        # metrics 用於觀察 BatchedQuery 的輸入分佈（ARCH-16 的第一步）。
+        # 授權面：SecurityConfig 只 permitAll /actuator/health/** 與 /actuator/info，
+        # /actuator/metrics 落入 anyRequest().authenticated()（fail-closed），
+        # 守衛見 SecurityConfigTest#unauthenticatedGetActuatorMetrics_shouldReturn401。
+        include: health,info,metrics
   endpoint:
     health:
       show-details: never

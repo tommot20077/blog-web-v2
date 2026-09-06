@@ -3,7 +3,7 @@ package dowob.xyz.blog.infrastructure.facade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 
-import java.util.List;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
 
@@ -27,10 +27,10 @@ public interface SeriesFacade {
     Optional<SeriesNavigation> getSeriesNavigation(Long articleId);
 
     /**
-     * 批次取得 articles 對應的 series 基本資訊（避免 N+1）。
+     * 批次取得多個 series 的基本資訊。
      *
-     * @param articleIds 候選 article id list
-     * @return Map(articleId -> SeriesBasicInfo)；若 article 沒在 series 中則不在 Map 內
+     * @param seriesIds series 主鍵集合；空集合回傳空 Map
+     * @return series 主鍵 → 基本資訊
      */
-    Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(List<Long> articleIds);
+    Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(Collection<Long> seriesIds);
 }

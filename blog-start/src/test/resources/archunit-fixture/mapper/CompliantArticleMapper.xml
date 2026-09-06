@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  守衛 #5 XML 掃描的合規對照 fixture。
+
+  namespace 宣告 owner 為 article 模組，查自己的 articles 表與 reference data
+  （users / tags），皆合規。被抓到即為假陽性。
+-->
+<mapper namespace="dowob.xyz.blog.module.article.mapper.CompliantArticleMapper">
+
+    <select id="findWithAuthor" resultType="map">
+        SELECT a.id, u.nickname
+          FROM articles a
+          JOIN users u ON a.author_id = u.id
+          JOIN tags t ON t.id = a.id
+    </select>
+
+</mapper>

@@ -91,6 +91,11 @@ public class SecurityConfig {
                         // Actuator Health（K3s liveness/readiness probe）
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
 
+                        // Actuator 其餘端點（metrics 等運維資訊）限 ADMIN。
+                        // 必須排在上面 permitAll 之後（health/info 仍公開）、anyRequest 之前；
+                        // 少了這條，暴露 metrics 等於讓任何已登入使用者讀到端點清單與呼叫量。
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+
                         // 靜態資源與 Swagger
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/favicon.ico", "/error").permitAll()

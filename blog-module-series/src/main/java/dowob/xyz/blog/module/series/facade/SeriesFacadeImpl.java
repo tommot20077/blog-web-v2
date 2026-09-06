@@ -3,14 +3,17 @@ package dowob.xyz.blog.module.series.facade;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -50,9 +53,13 @@ public class SeriesFacadeImpl implements SeriesFacade {
         if (seriesOpt.isEmpty()) return Optional.empty();
         Series series = seriesOpt.get();
 
-        SeriesMapper.NavRow prev = seriesMapper.findPrevNav(series.getId(), article.seriesPosition());
-        SeriesMapper.NavRow next = seriesMapper.findNextNav(series.getId(), article.seriesPosition());
-        int totalCount = seriesMapper.countPublishedInSeries(series.getId());
+        Optional<ArticleNavRef> prev =
+                articleFacade.findPrevPublishedInSeries(series.getId(), article.seriesPosition());
+        Optional<ArticleNavRef> next =
+                articleFacade.findNextPublishedInSeries(series.getId(), article.seriesPosition());
+        int totalCount = articleFacade
+                .countPublishedBySeriesIds(List.of(series.getId()))
+                .getOrDefault(series.getId(), 0);
 
         SeriesNavigation nav = new SeriesNavigation();
         nav.setSeriesUuid(series.getUuid());
@@ -61,24 +68,24 @@ public class SeriesFacadeImpl implements SeriesFacade {
         nav.setPosition(article.seriesPosition());
         nav.setTotalCount(totalCount);
 
-        if (prev != null) {
-            nav.setPrev(new SeriesNavigation.SeriesArticleRef(prev.getUuid(), prev.getTitle(), prev.getSlug()));
-        }
-        if (next != null) {
-            nav.setNext(new SeriesNavigation.SeriesArticleRef(next.getUuid(), next.getTitle(), next.getSlug()));
-        }
+        prev.ifPresent(p -> nav.setPrev(
+                new SeriesNavigation.SeriesArticleRef(p.uuid(), p.title(), p.slug())));
+        next.ifPresent(n -> nav.setNext(
+                new SeriesNavigation.SeriesArticleRef(n.uuid(), n.title(), n.slug())));
         return Optional.of(nav);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
-    public Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(List<Long> articleIds) {
-        if (articleIds == null || articleIds.isEmpty()) {
+    public Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(Collection<Long> seriesIds) {
+        if (seriesIds == null || seriesIds.isEmpty()) {
             return Collections.emptyMap();
         }
-        return seriesMapper.findSeriesByArticleIds(articleIds).stream()
+        return BatchedQuery.queryInBatches(seriesIds, seriesMapper::findBasicInfoBySeriesIds).stream()
                 .collect(Collectors.toMap(
-                        SeriesMapper.ArticleSeriesRow::getArticleId,
-                        row -> new SeriesBasicInfo(row.getSeriesUuid(), row.getSeriesTitle())
-                ));
+                        SeriesMapper.SeriesBasicRow::seriesId,
+                        row -> new SeriesBasicInfo(row.seriesUuid(), row.seriesTitle())));
     }
 }
