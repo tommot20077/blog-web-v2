@@ -22,11 +22,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h2>外部依賴策略（為何直接繼承 {@link AbstractE2ETest}）</h2>
  * <p>專案既有的 {@code -Pe2e} profile（見 {@link dowob.xyz.blog.e2e.SmokeE2E}）已證明
- * 「PostgreSQL + Redis + RabbitMQ + MinIO + Elasticsearch 五個真容器 + 完整
+ * 「PostgreSQL + Redis + RabbitMQ + S3 相容儲存（2026-09-27 起為 SeaweedFS）+ Elasticsearch 五個真容器 + 完整
  * {@code BlogWebV2Application}」是啟動全模組 context 最穩定的組合（曾踩過並修好 RabbitMQ
  * vhost 等坑）。13 個模組中有 7 個各自宣告 {@code RabbitMqConfig}（Queue/Exchange/Binding
  * Bean，RabbitAdmin 在 {@code ContextRefreshedEvent} 時會 auto-declare），若把
- * RabbitMQ/Elasticsearch/MinIO mock 掉或用屬性關閉，這些模組的組裝路徑就測不到——而這正是
+ * RabbitMQ/Elasticsearch/S3 儲存 mock 掉或用屬性關閉，這些模組的組裝路徑就測不到——而這正是
  * 「mock 越多、漏測越多」的風險，與本測試存在的目的相違背。因此選擇重用已驗證過的
  * {@link AbstractE2ETest} 容器設定，只是換一個獨立的啟用開關（{@code context.smoke}
  * system property），不與 {@code -Pe2e} 的完整測試套件綁在一起。

@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.file.TestFileApplication;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
+import dowob.xyz.blog.module.file.support.SeaweedFsContainer;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
@@ -30,7 +31,6 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
-import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -75,8 +75,9 @@ class FileUploadQuotaIT {
     static com.redis.testcontainers.RedisContainer redis =
             new com.redis.testcontainers.RedisContainer("redis:7-alpine");
 
+    /** S3 相容儲存 TestContainer（SeaweedFS；應用程式仍以 MinIO Java SDK 連線） */
     @Container
-    static MinIOContainer minio = new MinIOContainer("minio/minio:latest");
+    static SeaweedFsContainer s3Storage = new SeaweedFsContainer();
 
     @DynamicPropertySource
     static void configure(DynamicPropertyRegistry registry) {
@@ -85,9 +86,9 @@ class FileUploadQuotaIT {
         registry.add("spring.datasource.password", postgres::getPassword);
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
-        registry.add("minio.endpoint", minio::getS3URL);
-        registry.add("minio.access-key", minio::getUserName);
-        registry.add("minio.secret-key", minio::getPassword);
+        registry.add("minio.endpoint", s3Storage::getS3Url);
+        registry.add("minio.access-key", s3Storage::getAccessKey);
+        registry.add("minio.secret-key", s3Storage::getSecretKey);
         registry.add("minio.bucket-name", () -> "blog-files");
     }
 
