@@ -123,7 +123,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 | id | BIGSERIAL | PRIMARY KEY | |
 | uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | |
 | name | VARCHAR(50) | NOT NULL UNIQUE | |
-| slug | VARCHAR(60) | NOT NULL UNIQUE | |
+| slug | VARCHAR(60) | NOT NULL UNIQUE | V23 起受 CHECK 約束：小寫英數字以單一連字號分隔 |
 | description | VARCHAR(200) | | |
 | sort_order | INT | NOT NULL DEFAULT 0 | 排序用 |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
@@ -133,6 +133,9 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `categories_uuid_key`（auto, UNIQUE）on uuid
 - `categories_name_key`（auto, UNIQUE）on name
 - `categories_slug_key`（auto, UNIQUE）on slug
+
+**Constraints:**
+- `ck_categories_slug_format`（V23）CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$')——須與 `Category.SLUG_PATTERN`（API 層 `@Pattern`）一致
 
 **Foreign keys:** 無
 
@@ -577,6 +580,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V20** | `file_metadata` 新增 `article_uuid UUID`（nullable，未綁定=私有）+ `idx_file_metadata_article_uuid`；刻意不設 FK（跨模組邊界，檔案存取控制地基） |
 | **V21** | 資料遷移（無 schema 變更）：把 `articles.content_md` / `content_html` 內殘留的 MinIO 絕對網址改寫為 `/api/v1/files/{id}/content`，並依「上傳者==作者」回填 `file_metadata.article_uuid`；解決 V20 之前寫入的內容繞過 `canRead` 授權（bucket 私有時破圖、公開時等同無授權）的問題。冪等 |
 | **V22** | `articles` 新增 partial index `idx_articles_published_latest` on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'（公開列表改伺服器端排序的預設排序；兼供 PERF-08 的 `findPublishedAfter` 範圍掃描）；刻意不為 view_count / comment_count 建排序索引 |
+| **V23** | 資料遷移＋約束：正規化 `categories.slug`（轉小寫、非 [a-z0-9] 連續字元→`-`、去頭尾 `-`；空→`category-{id}`；撞名附加 `-{id}`；≤ 60 字，逐筆 RAISE NOTICE 記錄），**會改變不合格分類的網址且不留轉址**（Yuan 決定）；新增 CHECK `ck_categories_slug_format` |
 
 ---
 

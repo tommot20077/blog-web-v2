@@ -1953,17 +1953,15 @@ class ArticleControllerIT {
     }
 
     @Test
-    @DisplayName("GET /api/v1/articles?categorySlug= - 分類 slug 大小寫精確比對（與改版前的單值查詢一致）")
-    void listArticles_categorySlug_matchesCaseExactly() throws Exception {
+    @DisplayName("GET /api/v1/articles?categorySlug= - 大寫輸入轉小寫後比對（V23 起分類 slug 由 CHECK 保證全小寫）")
+    void listArticles_categorySlug_uppercaseInputMatchesLowercaseSlug() throws Exception {
         stubUserFacade();
-        long mixedCase = insertCategory("it-list-Mixed");
-        String article = createPublishedArticle("大小寫混合的分類");
-        categorizeArticle(article, mixedCase);
+        long category = insertCategory("it-list-case");
+        String article = createPublishedArticle("大寫輸入的分類篩選");
+        categorizeArticle(article, category);
 
-        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "it-list-Mixed")))
+        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "IT-LIST-CASE")))
                 .containsExactly(article);
-        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "it-list-mixed")))
-                .isEmpty();
     }
 
     /**
