@@ -1,7 +1,7 @@
 # ARCH-30 第 2 段計畫：跨模組的文章識別由 Long 主鍵改為 UUID
 
 - **建立日期**: 2026-09-28
-- **狀態**: 計畫待 Yuan 拍板（§5 的三個決定），尚未動任何程式碼或 migration
+- **狀態**: Yuan 已於 2026-09-28 拍板（見 §5），可開工；依 §4 順序由 comment 起
 - **上游**: `2026-09-06-handoff-sec04-arch30.md` §2；`findings.md` ARCH-30
 - **範圍**: 只做 §2.3 的**第 2 段**。第 1 段（ARCH-16 可觀測性）與第 3 段（拆 CASCADE、改事件驅動刪除）**不在範圍內**
 
@@ -99,15 +99,21 @@ series 的主鍵（Long）同樣跨模組流通（`ArticleData.seriesId`、`upda
 2. **reading**：4 張表、呼叫點最多，並一併拿掉 `BookmarkQueryService` 對 `ArticleQueryService` 的直接依賴與 `batchGetProgress` 的來回轉換
 3. **version**：1 張表，但依賴 `ArticleContentChangedEvent.articleId`，事件要先加 `articleUuid`
 4. **article 自身的 facade 收尾**：刪除 Long 版本的方法、`ArticleData.id`
-5. **P4**：全部模組切換完成、穩定後，一次提出所有 DROP 請 Yuan 授權
+5. **P4**：依 §5 決定，每個模組的 P3 合併且驗證後即可接著寫該模組的 P4，不必等全部模組完成
 
 每個模組一個 PR，本機 Docker 跑完 IT 再開。
 
 ---
 
-## 5. 需要 Yuan 拍板
+## 5. Yuan 的決定（2026-09-28）
 
-1. **採用「儲存層一起換」的 expand–contract 做法**（相對於只改介面，理由見 §2）
-2. **授權 P1 migration**：對既有表新增 `article_uuid`、回填、設 NOT NULL、加新 FK——屬 `judgment.md` §5 的「NOT NULL 回填」。可先只授權試點的 `comments`
-3. **試點模組**：建議 comment
-4. **P4 的 DROP 另行授權**，本計畫現在不寫任何 DROP
+| # | 問題 | 決定 |
+|---|---|---|
+| 1 | 做法 | **儲存層一起換**（expand → dual-write → switch → contract），不採「只改介面」 |
+| 2 | P1 授權範圍 | **6 張表一次授權**：`comments`、`user_article_likes`、`user_bookmarks`、`user_highlights`、`user_reading_progress`、`article_versions` 的 P1（新增 `article_uuid`、回填、`SET NOT NULL`、新 FK → `articles(uuid)` ON DELETE CASCADE、對應索引／UNIQUE）皆已授權。仍是每個模組一個 PR |
+| 3 | 試點 | 未另指定，沿用 §4 順序由 comment 起 |
+| 4 | P4 DROP | **每個模組切換完就能 DROP**：該模組的 P3 合併、IT 驗證通過後，可直接寫該模組的 P4（DROP 舊 `article_id` 欄位、舊 FK、舊索引），不必再逐次詢問 |
+
+授權邊界（避免被延伸解讀）：
+- 第 4 點**只涵蓋**上表 6 張表的舊 `article_id` 欄位及其 FK／索引，且前提是該表的讀寫已全部切到 `article_uuid`。其他任何 DROP（含 series 的 Long 主鍵，§1.6）仍須另外取得明確授權
+- 每個 P4 PR 必須附上證據：該表已無任何程式碼讀寫 `article_id`（grep 結果）與 IT 通過紀錄
