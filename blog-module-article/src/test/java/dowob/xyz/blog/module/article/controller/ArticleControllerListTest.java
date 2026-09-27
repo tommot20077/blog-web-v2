@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.JwtService;
@@ -28,6 +29,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -108,6 +110,26 @@ class ArticleControllerListTest {
 
         ArticleListQuery expected = new ArticleListQuery(null, List.of("tech"), null, null, null);
         verify(articleQueryService).getPublishedArticles(expected, 1, 10);
+    }
+
+    @Test
+    @DisplayName("size 超過上限 → 400（PageQueryArgumentResolver 經元件掃描註冊於真實 context），且不觸發查詢")
+    void getPublishedArticles_sizeAboveMax_returns400() throws Exception {
+        mockMvc.perform(get("/api/v1/articles").param("size", String.valueOf(PageQuery.MAX_SIZE + 1)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0001"));
+
+        verifyNoInteractions(articleQueryService);
+    }
+
+    @Test
+    @DisplayName("page=0 → 400，且不觸發查詢")
+    void getPublishedArticles_pageZero_returns400() throws Exception {
+        mockMvc.perform(get("/api/v1/articles").param("page", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0001"));
+
+        verifyNoInteractions(articleQueryService);
     }
 
     @Test
