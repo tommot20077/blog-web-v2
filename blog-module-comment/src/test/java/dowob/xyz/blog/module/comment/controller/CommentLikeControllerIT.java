@@ -113,6 +113,7 @@ class CommentLikeControllerIT {
         Comment c = new Comment();
         c.setUuid(UUID.randomUUID());
         c.setArticleId(articleId);
+        c.setArticleUuid(articleUuid);
         c.setUserId(USER_ID);
         c.setContent("seed comment");
         c.setContentHtml("<p>seed comment</p>");

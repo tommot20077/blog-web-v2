@@ -214,6 +214,7 @@ class CrossModuleCommentIT {
         Comment c = new Comment();
         c.setUuid(UUID.randomUUID());
         c.setArticleId(articleId);
+        c.setArticleUuid(articleUuid);
         c.setUserId(USER_ID);
         c.setContent("cascade test");
         c.setContentHtml("<p>cascade test</p>");
@@ -247,6 +248,7 @@ class CrossModuleCommentIT {
         Comment c = new Comment();
         c.setUuid(UUID.randomUUID());
         c.setArticleId(articleId);
+        c.setArticleUuid(articleUuid);
         c.setUserId(USER_ID);
         c.setContent("cl cascade");
         c.setContentHtml("<p>cl cascade</p>");

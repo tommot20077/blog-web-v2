@@ -87,6 +87,10 @@ series 的主鍵（Long）同樣跨模組流通（`ArticleData.seriesId`、`upda
 | **P3 Switch** | 讀寫改走 `article_uuid`；facade 簽章改 UUID、刪除 `findIdByUuid` 的寫入用法；事件加上 `articleUuid`；兩條繞過 facade 的路徑改走 facade | 否（內部介面） |
 | **P4 Contract** | `DROP` 舊的 `article_id` 欄位、舊 FK、舊索引 | **DROP → §5 必問，且與 P1 分開授權** |
 
+**鎖與資料量**（comment 試點審查 2026-09-28）：P1 的 `UPDATE` 回填、`SET NOT NULL`、立即驗證的 FK、非 CONCURRENTLY 的索引都會長時間鎖表。2026-09-28 查證：dev k3s 的 postgres 沒有 blog 表，本機 fullstack（V20）6 張表皆 0 筆，prod 未上線——故試點採單一 migration 直接做。之後任何一張表要套用到**有實際資料量**的環境前，先查列數；量大時改為 `ADD CONSTRAINT ... NOT VALID` + 另一個 migration `VALIDATE CONSTRAINT`、`CREATE INDEX CONCURRENTLY`（需拆出非交易 migration），並以 `CHECK (article_uuid IS NOT NULL) NOT VALID` 驗證後再 `SET NOT NULL`。
+
+**索引**：PostgreSQL 不會替 FK 參照端自動建索引。每張表除了對應既有查詢的索引外，都要有一個**涵蓋所有列**的 `article_uuid` 索引（或以它為前綴的 UNIQUE／複合索引），否則刪文章時 CASCADE 會全表掃描。comment 試點的 V24 因此另建 `idx_comments_article_uuid`。
+
 刪除語意在整個過程中**不變**：P1 起新 FK 就是 CASCADE，P4 只是拿掉重複的舊 FK。所以 ARCH-16（可觀測性）不是本計畫的前置——它是第 3 段（拆 CASCADE、改事件補償）的前置。
 
 防線（`judgment.md` §8／§9）：P3 完成時加一條 ArchUnit 守衛——非 article 模組的 facade 簽章不得以 `Long` 表示文章、不得 import `dowob.xyz.blog.module.article..` 的類別（附反向驗證 fixture）。
