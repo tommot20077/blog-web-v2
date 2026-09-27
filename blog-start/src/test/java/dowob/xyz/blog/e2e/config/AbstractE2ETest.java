@@ -19,7 +19,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.elasticsearch.ElasticsearchContainer;
-import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -49,8 +48,8 @@ public abstract class AbstractE2ETest {
             new RabbitMQContainer("rabbitmq:3-management-alpine")
                     .withVhost("blog");
 
-    static final MinIOContainer MINIO =
-            new MinIOContainer("minio/minio:latest");
+    /** S3 相容儲存（SeaweedFS；應用程式仍以 MinIO Java SDK 連線，見 {@link SeaweedFsContainer}） */
+    static final SeaweedFsContainer S3_STORAGE = new SeaweedFsContainer();
 
     static final ElasticsearchContainer ELASTICSEARCH =
             new ElasticsearchContainer("docker.elastic.co/elasticsearch/elasticsearch:8.11.0")
@@ -62,7 +61,7 @@ public abstract class AbstractE2ETest {
         POSTGRES.start();
         REDIS.start();
         RABBITMQ.start();
-        MINIO.start();
+        S3_STORAGE.start();
         ELASTICSEARCH.start();
     }
 
@@ -83,10 +82,10 @@ public abstract class AbstractE2ETest {
         registry.add("spring.rabbitmq.username", RABBITMQ::getAdminUsername);
         registry.add("spring.rabbitmq.password", RABBITMQ::getAdminPassword);
         registry.add("spring.rabbitmq.virtual-host", () -> "blog");
-        // MinIO
-        registry.add("minio.endpoint", MINIO::getS3URL);
-        registry.add("minio.access-key", MINIO::getUserName);
-        registry.add("minio.secret-key", MINIO::getPassword);
+        // S3 相容儲存（屬性鍵沿用 minio.*：描述的是 MinIO Java SDK 的連線設定）
+        registry.add("minio.endpoint", S3_STORAGE::getS3Url);
+        registry.add("minio.access-key", S3_STORAGE::getAccessKey);
+        registry.add("minio.secret-key", S3_STORAGE::getSecretKey);
         registry.add("minio.bucket-name", () -> "blog-e2e-test");
         // Elasticsearch
         registry.add("spring.elasticsearch.uris",
