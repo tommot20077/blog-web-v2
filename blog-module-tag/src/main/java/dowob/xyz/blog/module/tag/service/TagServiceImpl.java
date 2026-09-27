@@ -67,13 +67,37 @@ public class TagServiceImpl implements TagService {
      */
     private static final long TAG_DETAIL_TTL_HOURS = 24L;
 
+    /**
+     * 熱門標籤單次回傳筆數上限（SEC-04）。
+     *
+     * <p>{@code GET /api/v1/tags/hot} 為匿名端點，而快取命中路徑對每一筆各發一次
+     * {@code findById}；熱門 ZSet 又會隨 {@code TagUsageConsumer} 的 {@code incrementScore}
+     * 長到全站標籤數，未夾界時 {@code limit=999999} 即為匿名可觸發的 N 條查詢。
+     * 取 20 是對齊快取未命中路徑的 {@code findTop20ByOrderByUsageCountDesc}——兩條路徑的
+     * 上限原本就該一致；現行前端三個呼叫點亦皆傳 20。</p>
+     */
+    private static final int MAX_HOT_TAGS_LIMIT = 20;
+
+    /**
+     * 標籤自動補全單次回傳筆數上限（SEC-04）。
+     *
+     * <p>{@code GET /api/v1/tags/suggest} 為匿名端點，筆數直接成為 Redis
+     * {@code ZRANGEBYLEX ... LIMIT} 的 count，未夾界時可一次拉出整個自動補全 ZSet。
+     * 前端預設傳 10，取 20 保留一倍餘裕。</p>
+     */
+    private static final int MAX_SUGGEST_LIMIT = 20;
+
     @Override
     public List<String> suggest(String prefix, int limit) {
+        /* Redis 的負 count 代表「不限筆數」，故非正數必須在此攔下，不能交給 Redis */
+        if (limit <= 0) {
+            return Collections.emptyList();
+        }
         Range<String> range = Range.of(
                 Range.Bound.inclusive(prefix),
                 Range.Bound.inclusive(prefix + "\uffff")
         );
-        Limit redisLimit = Limit.limit().count(limit);
+        Limit redisLimit = Limit.limit().count(Math.min(limit, MAX_SUGGEST_LIMIT));
         Set<String> results = stringRedisTemplate.opsForZSet().rangeByLex(RedisKeyConstant.TAG_AUTOCOMPLETE_KEY, range, redisLimit);
         if (results == null) {
             return List.of();
@@ -86,8 +110,9 @@ public class TagServiceImpl implements TagService {
         if (limit <= 0) {
             return Collections.emptyList();
         }
+        int boundedLimit = Math.min(limit, MAX_HOT_TAGS_LIMIT);
         Set<ZSetOperations.TypedTuple<String>> cached = stringRedisTemplate.opsForZSet()
-                .reverseRangeWithScores(RedisKeyConstant.TAG_HOT_KEY, 0L, (long) limit - 1);
+                .reverseRangeWithScores(RedisKeyConstant.TAG_HOT_KEY, 0L, (long) boundedLimit - 1);
 
         if (cached != null && !cached.isEmpty()) {
             return cached.stream()
@@ -103,7 +128,7 @@ public class TagServiceImpl implements TagService {
         tags.forEach(tag -> stringRedisTemplate.opsForZSet()
                 .add(RedisKeyConstant.TAG_HOT_KEY, tag.getId().toString(), tag.getUsageCount()));
         stringRedisTemplate.expire(RedisKeyConstant.TAG_HOT_KEY, HOT_TAGS_TTL_HOURS, TimeUnit.HOURS);
-        return tags.subList(0, Math.min(limit, tags.size()));
+        return tags.subList(0, Math.min(boundedLimit, tags.size()));
     }
 
     @Override

@@ -6,8 +6,11 @@ import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.util.ArticleVisibility;
+import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.PublishedArticleCriteria;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
@@ -18,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -57,20 +61,23 @@ class ArticleQuerySubService {
         return responseMapper.toEditorResponse(article);
     }
 
-    PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int size) {
+    /**
+     * 依篩選條件分頁取得已發布文章。
+     *
+     * <p>列表與 count 使用同一個 {@link PublishedArticleCriteria} 實例，
+     * 確保 total 與篩選結果一致。</p>
+     *
+     * @param query 已正規化的篩選與排序參數
+     * @param page  頁碼（從 1 開始）
+     * @param size  每頁筆數
+     * @return 分頁文章摘要
+     */
+    PageResult<ArticleSummaryResponse> getPublishedArticles(ArticleListQuery query, int page, int size) {
+        PublishedArticleCriteria criteria = PublishedArticleCriteria.of(query, LocalDateTime.now());
         long offset = (long) (page - 1) * size;
-        List<Article> articles = articleMapper.findPublishedPage(offset, size);
-        long total = articleMapper.countPublished();
-        List<ArticleSummaryResponse> list = toSummaryResponses(articles);
-        return PageResult.of(page, size, total, list);
-    }
-
-    PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(String categorySlug, int page, int size) {
-        long offset = (long) (page - 1) * size;
-        List<Article> articles = articleMapper.findPublishedPageByCategorySlug(categorySlug, offset, size);
-        long total = articleMapper.countPublishedByCategorySlug(categorySlug);
-        List<ArticleSummaryResponse> list = toSummaryResponses(articles);
-        return PageResult.of(page, size, total, list);
+        List<Article> articles = articleMapper.findPublishedPageByCriteria(criteria, offset, size);
+        long total = articleMapper.countPublishedByCriteria(criteria);
+        return PageResult.of(page, size, total, toSummaryResponses(articles));
     }
 
     PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int page, int size, ArticleStatus status) {
@@ -136,11 +143,7 @@ class ArticleQuerySubService {
         if (ordered.isEmpty()) {
             return List.of();
         }
-        List<UUID> uuids = ordered.stream().map(Article::getUuid).toList();
-        Map<UUID, List<TagSummaryResponse>> tagMap = responseMapper.batchToTagResponsesMap(uuids);
-        return ordered.stream()
-                .map(article -> responseMapper.toSummaryResponse(article, tagMap))
-                .collect(Collectors.toList());
+        return toSummaryResponses(ordered);
     }
 
     List<Article> findByIds(List<Long> ids) {
@@ -165,11 +168,27 @@ class ArticleQuerySubService {
         return articleRepository.findById(id);
     }
 
+    /**
+     * 文章列表 → 摘要列表的唯一轉換路徑。
+     *
+     * <p>標籤與作者各以一次批次查詢解析整頁，不得逐筆查詢。所有列表端點
+     * （公開列表、分類、我的文章、待審、收藏／系列的 id 清單）都必須經由本方法，
+     * 以免某條路徑自行組裝時漏掉其中一項批次化（PERF-02 即作者漏網）。</p>
+     *
+     * @param articles 文章列表，輸出順序與之一致
+     * @return 文章摘要列表
+     */
     private List<ArticleSummaryResponse> toSummaryResponses(List<Article> articles) {
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
         Map<UUID, List<TagSummaryResponse>> tagMap = responseMapper.batchToTagResponsesMap(uuids);
+        List<Long> authorIds = articles.stream()
+                .map(Article::getAuthorId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<Long, AuthorInfo> authorMap = responseMapper.batchToAuthorInfoMap(authorIds);
         return articles.stream()
-                .map(article -> responseMapper.toSummaryResponse(article, tagMap))
+                .map(article -> responseMapper.toSummaryResponse(article, tagMap, authorMap))
                 .collect(Collectors.toList());
     }
 

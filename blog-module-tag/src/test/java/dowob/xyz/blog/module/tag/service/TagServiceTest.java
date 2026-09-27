@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -185,6 +186,18 @@ class TagServiceTest {
     }
 
     @Test
+    @DisplayName("getHotTags: limit 超過上限時，Redis 讀取範圍夾在上限（SEC-04，每筆各一條 findById）")
+    @SuppressWarnings("unchecked")
+    void getHotTags_limitAboveMax_clampsRedisRangeToMax() {
+        when(zSetOps.reverseRangeWithScores(anyString(), anyLong(), anyLong())).thenReturn(Set.of());
+        when(tagRepository.findTop20ByOrderByUsageCountDesc()).thenReturn(List.of());
+
+        tagService.getHotTags(999_999);
+
+        verify(zSetOps).reverseRangeWithScores(eq("tag:hot"), eq(0L), eq(19L));
+    }
+
+    @Test
     @DisplayName("getTagDetail: cache hit returns from Hash")
     @SuppressWarnings("unchecked")
     void getTagDetail_cacheHit_returnsFromHash() {
@@ -311,6 +324,52 @@ class TagServiceTest {
         List<String> result = tagService.suggest("ja", 10);
 
         assertThat(result).isEmpty();
+    }
+
+    @Test
+    @DisplayName("suggest: limit 超過上限時，傳給 Redis 的筆數夾在上限（SEC-04，匿名端點）")
+    @SuppressWarnings("unchecked")
+    void suggest_limitAboveMax_clampsRedisLimitToMax() {
+        when(zSetOps.rangeByLex(anyString(), any(Range.class), any(Limit.class))).thenReturn(Set.of());
+
+        tagService.suggest("ja", 999_999);
+
+        ArgumentCaptor<Limit> limitCaptor = ArgumentCaptor.forClass(Limit.class);
+        verify(zSetOps).rangeByLex(eq("tag:autocomplete"), any(Range.class), limitCaptor.capture());
+        assertThat(limitCaptor.getValue().getCount()).isEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("suggest: limit 在合法範圍內時原值傳給 Redis")
+    @SuppressWarnings("unchecked")
+    void suggest_limitWithinRange_passesThroughUnchanged() {
+        when(zSetOps.rangeByLex(anyString(), any(Range.class), any(Limit.class))).thenReturn(Set.of());
+
+        tagService.suggest("ja", 10);
+
+        ArgumentCaptor<Limit> limitCaptor = ArgumentCaptor.forClass(Limit.class);
+        verify(zSetOps).rangeByLex(eq("tag:autocomplete"), any(Range.class), limitCaptor.capture());
+        assertThat(limitCaptor.getValue().getCount()).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("suggest: limit 為負數時回傳空列表且不查 Redis（Redis 的負 count 代表「全部」）")
+    @SuppressWarnings("unchecked")
+    void suggest_limitNegative_returnsEmptyWithoutQueryingRedis() {
+        List<String> result = tagService.suggest("ja", -1);
+
+        assertThat(result).isEmpty();
+        verify(zSetOps, never()).rangeByLex(anyString(), any(Range.class), any(Limit.class));
+    }
+
+    @Test
+    @DisplayName("suggest: limit 為 0 時回傳空列表且不查 Redis，與 getHotTags 的慣例一致")
+    @SuppressWarnings("unchecked")
+    void suggest_limitZero_returnsEmptyWithoutQueryingRedis() {
+        List<String> result = tagService.suggest("ja", 0);
+
+        assertThat(result).isEmpty();
+        verify(zSetOps, never()).rangeByLex(anyString(), any(Range.class), any(Limit.class));
     }
 
     /** ─── getHotTags ───────────────────────────────────────────────────────────── */

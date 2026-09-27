@@ -56,7 +56,15 @@ public enum ArticleErrorCode implements IErrorCode {
     /**
      * 目前文章狀態不允許編輯（PENDING_REVIEW / PUBLISHED / ARCHIVED）
      */
-    ARTICLE_EDIT_NOT_ALLOWED("A0209", "目前狀態不允許編輯");
+    ARTICLE_EDIT_NOT_ALLOWED("A0209", "目前狀態不允許編輯"),
+
+    /**
+     * 文章列表的多值篩選參數（tags / categorySlug / authorUuids）超過上限。
+     *
+     * <p>採拒絕而非截斷：截斷後的結果不符合請求——OR 條件會靜默少回文章，
+     * AND 條件會靜默多回文章。</p>
+     */
+    ARTICLE_LIST_FILTER_TOO_MANY_VALUES("A0210", "文章列表篩選條件的值過多");
 
     /**
      * 錯誤碼

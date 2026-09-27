@@ -51,7 +51,7 @@ public class TagController {
      * 取得標籤自動補全建議（公開）
      *
      * @param prefix 搜尋前綴
-     * @param limit  最大返回數量，預設 10
+     * @param limit  最大返回數量，預設 10；上限 20，超過者夾為 20，非正數回傳空列表（見 {@code TagServiceImpl}）
      * @return 建議的 Slug 列表
      */
     @GetMapping("/suggest")
@@ -64,7 +64,7 @@ public class TagController {
     /**
      * 取得熱門標籤列表（公開）
      *
-     * @param limit 最大返回數量，預設 20
+     * @param limit 最大返回數量，預設 20；上限 20，超過者夾為 20，非正數回傳空列表（見 {@code TagServiceImpl}）
      * @return 熱門標籤列表
      */
     @GetMapping("/hot")

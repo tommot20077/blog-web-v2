@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
@@ -7,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.config.ArticleTestApplication;
@@ -25,6 +27,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
@@ -32,13 +35,16 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -51,8 +57,10 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
@@ -132,6 +140,12 @@ class ArticleControllerIT {
     private ArticleRepository articleRepository;
 
     /**
+     * 直接操作資料庫（公開列表篩選情境：標籤、分類、第二位作者與可控的排序鍵）
+     */
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    /**
      * Mock RabbitMQ ConnectionFactory（避免啟動時找不到 Bean）
      */
     @MockitoBean
@@ -190,11 +204,21 @@ class ArticleControllerIT {
     private static final UUID AUTHOR_UUID = UUID.randomUUID();
 
     /**
+     * 第二位測試作者 ID（公開列表作者篩選情境；由 {@code ensureSecondAuthor} 冪等建立）
+     */
+    private static final Long SECOND_AUTHOR_ID = 2L;
+
+    /**
      * 每次測試後清理文章資料
+     *
+     * <p>先刪文章（article_tags / article_categories 隨 CASCADE 清除），再刪列表篩選情境建立的
+     * 標籤與分類——article_tags.tag_id 無 CASCADE，順序不可顛倒。</p>
      */
     @AfterEach
     void cleanUp() {
         articleRepository.deleteAll();
+        jdbcTemplate.update("DELETE FROM tags WHERE slug LIKE 'it-list-%'");
+        jdbcTemplate.update("DELETE FROM categories WHERE slug LIKE 'it-list-%'");
     }
 
     /**
@@ -281,6 +305,36 @@ class ArticleControllerIT {
         mockMvc.perform(get("/api/v1/articles"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles - 列表作者欄位由單次批次查詢填入，不逐筆查詢（PERF-02）")
+    void getPublishedArticles_authorResolvedByBatchLookup() throws Exception {
+        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
+        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
+        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+        /** 批次路徑回傳不同暱稱，藉此分辨欄位是由哪條路徑填入 */
+        when(userFacade.getAuthorInfoByIds(anyCollection()))
+                .thenReturn(Map.of(AUTHOR_ID, new AuthorInfo(AUTHOR_UUID, "BatchAuthor")));
+
+        for (int i = 0; i < 3; i++) {
+            String uuid = createArticle("批次作者文章 " + i, "內容 " + i);
+            mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                    .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                    .andExpect(status().isOk());
+        }
+        /** 建立與發布過程的呼叫不計入，只驗證列表請求本身 */
+        clearInvocations(userFacade);
+
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records", hasSize(3)))
+                .andExpect(jsonPath("$.data.records[0].authorNickname").value("BatchAuthor"))
+                .andExpect(jsonPath("$.data.records[0].authorUuid").value(AUTHOR_UUID.toString()));
+
+        verify(userFacade, times(1)).getAuthorInfoByIds(anyCollection());
+        verify(userFacade, never()).getUserUuidById(anyLong());
+        verify(userFacade, never()).getUserNicknameById(anyLong());
     }
 
     @Test
@@ -1751,5 +1805,293 @@ class ArticleControllerIT {
                 eq(ArticleRabbitMqConfig.EXCHANGE),
                 eq(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED),
                 any(Object.class));
+    }
+
+    /* =========================================================================
+       公開列表伺服器端篩選／排序（SEC-04 前置：前端改伺服器端分頁前的後端契約）
+       以下斷言的是 SQL 語意本身——單元測試 mock 了 mapper，渲染測試不連資料庫，
+       AND／OR 結果、排序與 tie-breaker 的確定性只能在真實 PostgreSQL 上驗證。
+       ========================================================================= */
+
+    @Test
+    @DisplayName("GET /api/v1/articles - 預設依 published_at 由新到舊，而非 created_at")
+    void listArticles_defaultOrder_isPublishedAtNotCreatedAt() throws Exception {
+        stubUserFacade();
+        String createdFirst = createPublishedArticle("先建立、較晚發布");
+        String createdSecond = createPublishedArticle("後建立、較早發布");
+        LocalDateTime now = LocalDateTime.now();
+        setPublishedAt(createdFirst, now);
+        setPublishedAt(createdSecond, now.minusDays(1));
+
+        assertThat(listUuids(get("/api/v1/articles"))).containsExactly(createdFirst, createdSecond);
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?tags= - 多個標籤為 AND：文章須帶有全部標籤")
+    void listArticles_tagsFilter_requiresAllTags() throws Exception {
+        stubUserFacade();
+        UUID java = insertTag("it-list-java");
+        UUID spring = insertTag("it-list-spring");
+        String both = createPublishedArticle("Java + Spring");
+        String javaOnly = createPublishedArticle("只有 Java");
+        String springOnly = createPublishedArticle("只有 Spring");
+        tagArticle(both, java);
+        tagArticle(both, spring);
+        tagArticle(javaOnly, java);
+        tagArticle(springOnly, spring);
+
+        assertThat(listUuids(get("/api/v1/articles").param("tags", "it-list-java,it-list-spring")))
+                .containsExactly(both);
+        assertThat(listUuids(get("/api/v1/articles").param("tags", "it-list-java")))
+                .containsExactlyInAnyOrder(both, javaOnly);
+        mockMvc.perform(get("/api/v1/articles").param("tags", "it-list-java,it-list-spring"))
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?categorySlug= - 多個分類為 OR 且不重複；舊的單值呼叫仍有效")
+    void listArticles_categoryFilter_isOrWithoutDuplicatesAndLegacySingleValueWorks() throws Exception {
+        stubUserFacade();
+        long categoryA = insertCategory("it-list-a");
+        long categoryB = insertCategory("it-list-b");
+        String inA = createPublishedArticle("分類 A");
+        String inB = createPublishedArticle("分類 B");
+        String inBoth = createPublishedArticle("分類 A 與 B");
+        createPublishedArticle("無分類");
+        categorizeArticle(inA, categoryA);
+        categorizeArticle(inB, categoryB);
+        categorizeArticle(inBoth, categoryA);
+        categorizeArticle(inBoth, categoryB);
+
+        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "it-list-a")))
+                .containsExactlyInAnyOrder(inA, inBoth);
+        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "it-list-a,it-list-b")))
+                .containsExactlyInAnyOrder(inA, inB, inBoth);
+        mockMvc.perform(get("/api/v1/articles").param("categorySlug", "it-list-a,it-list-b"))
+                .andExpect(jsonPath("$.data.total").value(3));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?authorUuids= - 以作者公開 UUID 篩選")
+    void listArticles_authorFilter_matchesByAuthorUuid() throws Exception {
+        stubUserFacade();
+        UUID secondAuthorUuid = ensureSecondAuthor();
+        createPublishedArticle("作者一的文章");
+        String bySecond = createPublishedArticleAs("作者二的文章", SECOND_AUTHOR_ID);
+
+        assertThat(listUuids(get("/api/v1/articles").param("authorUuids", secondAuthorUuid.toString())))
+                .containsExactly(bySecond);
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?publishedWithinDays= - 排除早於區間的文章，total 同步")
+    void listArticles_publishedWithinDays_excludesOlderArticles() throws Exception {
+        stubUserFacade();
+        String recent = createPublishedArticle("五天前發布");
+        String old = createPublishedArticle("一百天前發布");
+        LocalDateTime now = LocalDateTime.now();
+        setPublishedAt(recent, now.minusDays(5));
+        setPublishedAt(old, now.minusDays(100));
+
+        assertThat(listUuids(get("/api/v1/articles").param("publishedWithinDays", "30")))
+                .containsExactly(recent);
+        mockMvc.perform(get("/api/v1/articles").param("publishedWithinDays", "30"))
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?sort=popular|commented - 依瀏覽數／留言數由多到少（兩組數字互不相關，欄位對調或方向顛倒都會失敗）")
+    void listArticles_popularAndCommentedSort_orderByCounters() throws Exception {
+        stubUserFacade();
+        String a = createPublishedArticle("瀏覽 10、留言 2");
+        String b = createPublishedArticle("瀏覽 30、留言 1");
+        String c = createPublishedArticle("瀏覽 20、留言 3");
+        setCounters(a, 10, 2);
+        setCounters(b, 30, 1);
+        setCounters(c, 20, 3);
+
+        assertThat(listUuids(get("/api/v1/articles").param("sort", "popular")))
+                .containsExactly(b, c, a);
+        assertThat(listUuids(get("/api/v1/articles").param("sort", "commented")))
+                .containsExactly(c, a, b);
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles - 排序鍵全部相同時，依 id tie-breaker 得到確定順序，逐頁走完不重複、不遺漏")
+    void listArticles_paginationWithTiedSortKeys_isDeterministicAcrossPages() throws Exception {
+        stubUserFacade();
+        LocalDateTime sameMoment = LocalDateTime.now().minusHours(1);
+        List<String> created = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            String uuid = createPublishedArticle("同一時刻發布 " + i);
+            setPublishedAt(uuid, sameMoment);
+            created.add(uuid);
+        }
+
+        List<String> walked = new ArrayList<>();
+        for (int page = 1; page <= 3; page++) {
+            walked.addAll(listUuids(get("/api/v1/articles")
+                    .param("page", String.valueOf(page))
+                    .param("size", "2")));
+        }
+
+        /** 後建立者 id 較大，tie-breaker 為 id DESC，故預期順序恰為建立順序的反向 */
+        assertThat(walked).containsExactlyElementsOf(created.reversed());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?authorUuids= - 超過 20 個 → 400（A0210），不截斷後照查")
+    void listArticles_tooManyFilterValues_returns400() throws Exception {
+        StringBuilder authors = new StringBuilder();
+        for (int i = 0; i < 21; i++) {
+            authors.append(i == 0 ? "" : ",").append(UUID.randomUUID());
+        }
+
+        mockMvc.perform(get("/api/v1/articles").param("authorUuids", authors.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0210"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?categorySlug= - 分類 slug 大小寫精確比對（與改版前的單值查詢一致）")
+    void listArticles_categorySlug_matchesCaseExactly() throws Exception {
+        stubUserFacade();
+        long mixedCase = insertCategory("it-list-Mixed");
+        String article = createPublishedArticle("大小寫混合的分類");
+        categorizeArticle(article, mixedCase);
+
+        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "it-list-Mixed")))
+                .containsExactly(article);
+        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "it-list-mixed")))
+                .isEmpty();
+    }
+
+    /**
+     * 呼叫列表端點並取出 records 的 uuid（依回傳順序）。
+     *
+     * @param request 列表請求
+     * @return 文章 UUID 字串清單
+     * @throws Exception MockMvc 執行例外
+     */
+    private List<String> listUuids(MockHttpServletRequestBuilder request) throws Exception {
+        String body = mockMvc.perform(request)
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        List<String> uuids = new ArrayList<>();
+        for (JsonNode record : objectMapper.readTree(body).path("data").path("records")) {
+            uuids.add(record.path("uuid").asText());
+        }
+        return uuids;
+    }
+
+    /**
+     * 以指定作者建立並發布一篇文章。
+     *
+     * @param title    文章標題
+     * @param authorId 作者資料庫主鍵
+     * @return 已發布文章的公開 UUID 字串
+     * @throws Exception MockMvc 執行例外
+     */
+    private String createPublishedArticleAs(String title, Long authorId) throws Exception {
+        CreateArticleRequest req = new CreateArticleRequest();
+        req.setTitle(title);
+        req.setContent("內容");
+        String response = mockMvc.perform(post("/api/v1/articles")
+                        .with(asUser(authorId, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String uuid = objectMapper.readTree(response).path("data").path("uuid").asText();
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                        .with(asUser(authorId, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+        return uuid;
+    }
+
+    /**
+     * 確保第二位作者存在（冪等），回傳其公開 UUID。
+     *
+     * <p>{@code username} 須明確給值：欄位為 UNIQUE 且預設空字串，種子作者已占用空字串。</p>
+     *
+     * @return 第二位作者的公開 UUID
+     */
+    private UUID ensureSecondAuthor() {
+        jdbcTemplate.update("INSERT INTO users (id, uuid, email, username, password_hash, nickname, role, status, email_verified) "
+                        + "VALUES (?, ?, 'author2@test.com', 'it-author-2', '$2a$10$dummy', 'SecondAuthor', 'AUTHOR', 'ACTIVE', TRUE) "
+                        + "ON CONFLICT (id) DO NOTHING",
+                SECOND_AUTHOR_ID, UUID.randomUUID());
+        return jdbcTemplate.queryForObject("SELECT uuid FROM users WHERE id = ?", UUID.class, SECOND_AUTHOR_ID);
+    }
+
+    /**
+     * 插入一個測試標籤（slug 須以 {@code it-list-} 開頭，供清理辨識）。
+     *
+     * @param slug 標籤 slug
+     * @return 標籤 id
+     */
+    private UUID insertTag(String slug) {
+        UUID id = UUID.randomUUID();
+        jdbcTemplate.update("INSERT INTO tags (id, name, slug) VALUES (?, ?, ?)", id, slug, slug);
+        return id;
+    }
+
+    /**
+     * 為文章加上標籤（article_tags.article_id 為文章 UUID）。
+     *
+     * @param articleUuid 文章公開 UUID 字串
+     * @param tagId       標籤 id
+     */
+    private void tagArticle(String articleUuid, UUID tagId) {
+        jdbcTemplate.update("INSERT INTO article_tags (article_id, tag_id) VALUES (?, ?)",
+                UUID.fromString(articleUuid), tagId);
+    }
+
+    /**
+     * 插入一個測試分類（slug 須以 {@code it-list-} 開頭，供清理辨識）。
+     *
+     * @param slug 分類 slug
+     * @return 分類主鍵
+     */
+    private long insertCategory(String slug) {
+        Long id = jdbcTemplate.queryForObject(
+                "INSERT INTO categories (name, slug) VALUES (?, ?) RETURNING id", Long.class, slug, slug);
+        return id;
+    }
+
+    /**
+     * 將文章歸入分類（article_categories.article_id 為文章主鍵）。
+     *
+     * @param articleUuid 文章公開 UUID 字串
+     * @param categoryId  分類主鍵
+     */
+    private void categorizeArticle(String articleUuid, long categoryId) {
+        jdbcTemplate.update("INSERT INTO article_categories (article_id, category_id) "
+                        + "SELECT id, ? FROM articles WHERE uuid = ?",
+                categoryId, UUID.fromString(articleUuid));
+    }
+
+    /**
+     * 直接設定文章的發布時間（API 發布時一律寫入「現在」，排序情境需要可控的值）。
+     *
+     * @param articleUuid 文章公開 UUID 字串
+     * @param publishedAt 發布時間
+     */
+    private void setPublishedAt(String articleUuid, LocalDateTime publishedAt) {
+        jdbcTemplate.update("UPDATE articles SET published_at = ? WHERE uuid = ?",
+                publishedAt, UUID.fromString(articleUuid));
+    }
+
+    /**
+     * 直接設定文章的瀏覽數與留言數（反正規化計數，排序情境需要可控的值）。
+     *
+     * @param articleUuid  文章公開 UUID 字串
+     * @param viewCount    瀏覽數
+     * @param commentCount 留言數
+     */
+    private void setCounters(String articleUuid, long viewCount, int commentCount) {
+        jdbcTemplate.update("UPDATE articles SET view_count = ?, comment_count = ? WHERE uuid = ?",
+                viewCount, commentCount, UUID.fromString(articleUuid));
     }
 }

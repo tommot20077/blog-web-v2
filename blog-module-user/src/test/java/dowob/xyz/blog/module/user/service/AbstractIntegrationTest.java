@@ -12,8 +12,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -35,7 +33,6 @@ import org.testcontainers.utility.DockerImageName;
  */
 @SpringBootTest(classes = TestUserModuleApplication.class)
 @ActiveProfiles("test")
-@Testcontainers
 public abstract class AbstractIntegrationTest {
 
     /**
@@ -85,18 +82,31 @@ public abstract class AbstractIntegrationTest {
     protected JavaMailSender mailSender;
 
     /**
-     * PostgreSQL 測試容器（所有子測試類別共用同一實例以提升效率）
+     * PostgreSQL 測試容器（singleton：整個測試 JVM 只啟動一次，所有子類別共用）
+     *
+     * <p><b>不可改回 {@code @Container}</b>：JUnit 的 Testcontainers extension 會在<b>每個測試類別結束時</b>
+     * 停掉 static 容器、下一個類別再啟動一個新的（新的隨機 port）；但所有子類別的 Spring 設定相同，
+     * context 會被快取重用，第二個子類別拿到的 DataSource 仍指向已停止容器的舊 port，
+     * 每個測試都等滿連線逾時後失敗。2026-09-27 PR #72 的 CI 即為此：新增第二個子類別
+     * {@code UserFacadeIntegrationTest} 後，{@code AuthServiceIntegrationTest} 11 個案例全數
+     * {@code Connection to localhost:<舊 port> refused}。先前只有一個子類別，問題不會浮現。</p>
+     *
+     * <p>改由 static initializer 啟動、不手動停止，JVM 結束時由 Testcontainers 的 Ryuk 回收
+     * （Testcontainers 官方的 singleton container 模式）。</p>
      */
-    @Container
     static final PostgreSQLContainer<?> POSTGRES =
             new PostgreSQLContainer<>("postgres:16-alpine");
 
     /**
-     * Redis 測試容器
+     * Redis 測試容器（singleton，理由同 {@link #POSTGRES}）
      */
-    @Container
     static final RedisContainer REDIS =
             new RedisContainer(DockerImageName.parse("redis:7-alpine"));
+
+    static {
+        POSTGRES.start();
+        REDIS.start();
+    }
 
     /**
      * 動態注入容器的連線屬性到 Spring Context。

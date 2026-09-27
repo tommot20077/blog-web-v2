@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -138,10 +139,10 @@ class ArticleQueryServiceTest {
         void anonymous_likedFalse() {
             ArticleSummaryResponse summary = buildSummary();
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
-            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
 
-            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
             assertThat(result.getRecords()).hasSize(1);
             assertThat(result.getRecords().get(0).getLiked()).isFalse();
@@ -152,7 +153,7 @@ class ArticleQueryServiceTest {
         void loggedIn_likedTrue() {
             ArticleSummaryResponse summary = buildSummary();
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
-            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
             when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Set.of(ARTICLE_DB_ID));
 
@@ -160,7 +161,7 @@ class ArticleQueryServiceTest {
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
 
-            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
             assertThat(result.getRecords()).hasSize(1);
             assertThat(result.getRecords().get(0).getLiked()).isTrue();
@@ -171,14 +172,14 @@ class ArticleQueryServiceTest {
         void loggedIn_notLiked() {
             ArticleSummaryResponse summary = buildSummary();
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
-            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
             when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Collections.emptySet());
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
 
-            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
             assertThat(result.getRecords()).hasSize(1);
             assertThat(result.getRecords().get(0).getLiked()).isFalse();
@@ -188,9 +189,9 @@ class ArticleQueryServiceTest {
         @DisplayName("正常：空列表時不出錯，直接回傳空結果")
         void emptyList_noError() {
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 0L, Collections.emptyList());
-            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
 
-            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
             assertThat(result.getRecords()).isEmpty();
         }
@@ -337,7 +338,7 @@ class ArticleQueryServiceTest {
         void enrich_includesBookmarkedFlag() {
             ArticleSummaryResponse summary = buildSummary();
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
-            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
             when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
                     .thenReturn(Collections.emptySet());
@@ -349,7 +350,7 @@ class ArticleQueryServiceTest {
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
 
-            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
             assertThat(result.getRecords().get(0).getBookmarked()).isTrue();
         }
@@ -360,7 +361,7 @@ class ArticleQueryServiceTest {
             BigDecimal progress = new BigDecimal("0.45");
             ArticleSummaryResponse summary = buildSummary();
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
-            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
             when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
                     .thenReturn(Collections.emptySet());
@@ -372,7 +373,7 @@ class ArticleQueryServiceTest {
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
 
-            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
             assertThat(result.getRecords().get(0).getLastReadProgress())
                     .isEqualByComparingTo(progress);
@@ -383,11 +384,11 @@ class ArticleQueryServiceTest {
         void enrich_unauthenticated_allFlagsAreFalseOrNull() {
             ArticleSummaryResponse summary = buildSummary();
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
-            when(articleService.getPublishedArticles(1, 10)).thenReturn(page);
+            when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
 
             // 不設 SecurityContext，模擬匿名
-            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
             assertThat(result.getRecords().get(0).getLiked()).isFalse();
             assertThat(result.getRecords().get(0).getBookmarked()).isFalse();

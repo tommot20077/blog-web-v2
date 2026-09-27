@@ -17,6 +17,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ArticleErrorCodeTest {
 
     @Test
+    @DisplayName("ARTICLE_LIST_FILTER_TOO_MANY_VALUES 錯誤碼應為 A0210，訊息不為空")
+    void articleListFilterTooManyValues_codeIsA0210() {
+        assertThat(ArticleErrorCode.ARTICLE_LIST_FILTER_TOO_MANY_VALUES.getCode()).isEqualTo("A0210");
+        assertThat(ArticleErrorCode.ARTICLE_LIST_FILTER_TOO_MANY_VALUES.getMessage()).isNotBlank();
+    }
+
+    @Test
     @DisplayName("ARTICLE_NOT_FOUND 錯誤碼應為 A0201，訊息不為空")
     void articleNotFound_codeIsA0201() {
         assertThat(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode()).isEqualTo("A0201");

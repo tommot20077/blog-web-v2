@@ -217,6 +217,52 @@ class TagControllerIT {
     }
 
     @Test
+    @DisplayName("GET /api/v1/tags/hot?limit=999999 - 匿名請求，熱門 ZSet 長到 25 筆時仍只回 20 筆（SEC-04）")
+    void getHotTags_anonymousWithHugeLimit_returnsAtMostTwenty() throws Exception {
+        /* 模擬 TagUsageConsumer 的 incrementScore 讓熱門 ZSet 長過 20 筆 */
+        for (int i = 0; i < 25; i++) {
+            UUID id = insertTestTag("Tag" + i, "tag-" + i, 100 - i);
+            stringRedisTemplate.opsForZSet().add("tag:hot", id.toString(), 100.0 - i);
+        }
+
+        mockMvc.perform(get("/api/v1/tags/hot")
+                        .param("limit", "999999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.length()").value(20));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/tags/suggest?limit=999999 - 匿名請求，自動補全 ZSet 有 25 筆時仍只回 20 筆（SEC-04）")
+    void suggest_anonymousWithHugeLimit_returnsAtMostTwenty() throws Exception {
+        for (int i = 0; i < 25; i++) {
+            stringRedisTemplate.opsForZSet().add("tag:autocomplete", String.format("tag-%02d", i), 0.0);
+        }
+
+        mockMvc.perform(get("/api/v1/tags/suggest")
+                        .param("q", "tag")
+                        .param("limit", "999999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.length()").value(20));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/tags/suggest?limit=-1 - 匿名請求，負數 limit 回傳空陣列而非整個 ZSet（SEC-04）")
+    void suggest_anonymousWithNegativeLimit_returnsEmpty() throws Exception {
+        for (int i = 0; i < 25; i++) {
+            stringRedisTemplate.opsForZSet().add("tag:autocomplete", String.format("tag-%02d", i), 0.0);
+        }
+
+        mockMvc.perform(get("/api/v1/tags/suggest")
+                        .param("q", "tag")
+                        .param("limit", "-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.length()").value(0));
+    }
+
+    @Test
     @DisplayName("GET /api/v1/tags/all - 取得全部標籤（公開、未認證），回傳 200、含全部標籤、依 usageCount 遞減，且 /all 不被當成 slug")
     void getAllTags_returns200WithAllTags() throws Exception {
         // 以非排序順序插入，驗證回傳確實依 usageCount 遞減重排

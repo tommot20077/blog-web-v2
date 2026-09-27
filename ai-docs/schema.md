@@ -108,6 +108,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `idx_articles_created_at`（V2）on created_at DESC
 - ~~`idx_articles_uuid`~~ V13 已 DROP（與 UNIQUE constraint 重複）
 - `idx_articles_series_position`（V15, partial）on (series_id, series_position) WHERE series_id IS NOT NULL
+- `idx_articles_published_latest`（V22, partial）on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'——公開列表預設排序；`view_count` / `comment_count` 刻意不建排序索引（頻繁回寫，避免失去 HOT update）
 
 **Foreign keys:**
 - `author_id` → `users(id)`（NO ACTION）
@@ -575,6 +576,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V19** | `articles` 新增 `toc TEXT`（nullable，無 DEFAULT；章節導覽 JSON，由渲染器於 create/update 重算） |
 | **V20** | `file_metadata` 新增 `article_uuid UUID`（nullable，未綁定=私有）+ `idx_file_metadata_article_uuid`；刻意不設 FK（跨模組邊界，檔案存取控制地基） |
 | **V21** | 資料遷移（無 schema 變更）：把 `articles.content_md` / `content_html` 內殘留的 MinIO 絕對網址改寫為 `/api/v1/files/{id}/content`，並依「上傳者==作者」回填 `file_metadata.article_uuid`；解決 V20 之前寫入的內容繞過 `canRead` 授權（bucket 私有時破圖、公開時等同無授權）的問題。冪等 |
+| **V22** | `articles` 新增 partial index `idx_articles_published_latest` on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'（公開列表改伺服器端排序的預設排序；兼供 PERF-08 的 `findPublishedAfter` 範圍掃描）；刻意不為 view_count / comment_count 建排序索引 |
 
 ---
 
