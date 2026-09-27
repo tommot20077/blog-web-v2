@@ -51,8 +51,9 @@ public enum ArticleListSort {
      * 由 query string 的值解析排序方式。
      *
      * <p>不分大小寫、容許前後空白；{@code null} 或未知值一律退回 {@link #LATEST}。
-     * 採正規化而非拒絕，理由同 {@code PageQuery}：此參數只影響順序、不影響授權或資料範圍，
-     * 拼錯的代價是「看到預設排序」而不是 500。</p>
+     * 採正規化而非拒絕——與 {@code PageQuery}（超出範圍即 400）刻意不同：分頁與多值篩選一旦被修正，
+     * client 拿到的資料範圍就與請求不符；本參數只影響順序、不影響回傳哪些文章，
+     * 拼錯的代價只是「看到預設排序」。</p>
      *
      * @param key query string 的 sort 值，可為 {@code null}
      * @return 排序方式，永不為 {@code null}

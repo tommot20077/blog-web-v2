@@ -124,7 +124,7 @@ class ArticleListQueryTest {
         }
 
         @Test
-        @DisplayName("sort 為未知值時退回 latest，不因拼錯而 500（與 PageQuery 正規化而非拒絕的取向一致）")
+        @DisplayName("sort 為未知值時退回 latest（只影響順序、不影響回傳範圍，故正規化而非拒絕）")
         void sort_unknown_fallsBackToLatest() {
             ArticleListQuery query = new ArticleListQuery(null, null, null, null, "popularr");
 

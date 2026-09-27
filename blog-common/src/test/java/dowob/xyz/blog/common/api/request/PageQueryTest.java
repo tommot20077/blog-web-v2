@@ -1,5 +1,6 @@
 package dowob.xyz.blog.common.api.request;
 
+import dowob.xyz.blog.common.exception.GlobalExceptionHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -9,17 +10,20 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * PageQuery 單元測試
  *
  * <p>
- * 驗證分頁參數的正規化（夾界）在 compact constructor 生效，
- * 以及 Spring MVC 的 constructor binding 確實會觸發該 constructor——
- * 後者是本設計「不可能漏」的前提，屬推論不可取代的實測項。
+ * 驗證分頁參數超出合法範圍時一律拒絕（而非靜默修正），以及
+ * {@link PageQueryArgumentResolver} 確實在 controller 取得參數前完成解析與驗證，
+ * 並經 {@link GlobalExceptionHandler} 回 400——後者是「超出範圍回 400」這個契約
+ * 在 HTTP 層成立的前提，屬推論不可取代的實測項。
  * </p>
  *
  * @author Yuan
@@ -29,25 +33,43 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class PageQueryTest {
 
     @Nested
-    @DisplayName("compact constructor 正規化")
-    class Normalization {
+    @DisplayName("compact constructor 驗證")
+    class Validation {
 
         @Test
-        @DisplayName("size 超過上限時夾成上限")
-        void whenSizeExceedsMax_clampsToMax() {
-            assertThat(new PageQuery(1, 99999).size()).isEqualTo(PageQuery.MAX_SIZE);
+        @DisplayName("size 超過上限時拒絕，不再靜默夾成上限")
+        void whenSizeExceedsMax_rejected() {
+            assertThatThrownBy(() -> new PageQuery(1, PageQuery.MAX_SIZE + 1))
+                    .isInstanceOf(IllegalArgumentException.class);
         }
 
         @Test
-        @DisplayName("size 剛好等於上限時原值保留，不被多夾一次")
-        void whenSizeExactlyMax_keepsValue() {
+        @DisplayName("size 剛好等於上限時接受")
+        void whenSizeExactlyMax_accepted() {
             assertThat(new PageQuery(1, PageQuery.MAX_SIZE).size()).isEqualTo(PageQuery.MAX_SIZE);
         }
 
         @Test
-        @DisplayName("size 未提供時保持 null，預設值不由本型別決定")
-        void whenSizeAbsent_staysNull() {
-            assertThat(new PageQuery(1, null).size()).isNull();
+        @DisplayName("size 為 0 或負數時拒絕")
+        void whenSizeNotPositive_rejected() {
+            assertThatThrownBy(() -> new PageQuery(1, 0)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new PageQuery(1, -5)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("page 為 0 或負數時拒絕")
+        void whenPageBelowOne_rejected() {
+            assertThatThrownBy(() -> new PageQuery(0, 10)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new PageQuery(-3, 10)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("page 未提供時為 1；size 未提供時保持 null（預設值由端點決定）")
+        void whenAbsent_pageDefaultsToOneAndSizeStaysNull() {
+            PageQuery query = new PageQuery(null, null);
+
+            assertThat(query.page()).isEqualTo(1);
+            assertThat(query.size()).isNull();
         }
 
         @Test
@@ -63,24 +85,9 @@ class PageQueryTest {
         }
 
         @Test
-        @DisplayName("端點傳入超過上限的預設值時同樣被夾界，不得繞過上限")
+        @DisplayName("端點傳入超過上限的預設值時被夾界，不得繞過上限（預設值由程式碼決定，不是 client 輸入）")
         void sizeOrDefaultClampsOversizedFallback() {
             assertThat(new PageQuery(1, null).sizeOrDefault(99999)).isEqualTo(PageQuery.MAX_SIZE);
-        }
-
-        @Test
-        @DisplayName("size 為 0 或負數時夾成 1，不與「未提供」混淆")
-        void whenSizeNotPositive_clampsToOne() {
-            assertThat(new PageQuery(1, 0).size()).isEqualTo(1);
-            assertThat(new PageQuery(1, -5).size()).isEqualTo(1);
-        }
-
-        @Test
-        @DisplayName("page 未提供或小於 1 時夾成 1")
-        void whenPageAbsentOrBelowOne_clampsToOne() {
-            assertThat(new PageQuery(null, 10).page()).isEqualTo(1);
-            assertThat(new PageQuery(0, 10).page()).isEqualTo(1);
-            assertThat(new PageQuery(-3, 10).page()).isEqualTo(1);
         }
 
         @Test
@@ -100,17 +107,17 @@ class PageQueryTest {
     }
 
     @Nested
-    @DisplayName("Spring MVC constructor binding")
-    class ConstructorBinding {
+    @DisplayName("PageQueryArgumentResolver（HTTP 層）")
+    class ResolverBinding {
 
         /** 僅供綁定驗證用的最小 controller */
         @RestController
         static class EchoController {
 
             /**
-             * 回顯綁定後的分頁參數。
+             * 回顯解析後的分頁參數。
              *
-             * @param pageQuery 由 Spring 依 query string 建構的分頁參數
+             * @param pageQuery 由 resolver 依 query string 建構的分頁參數
              * @return "page:size" 字串
              */
             @GetMapping("/echo-page")
@@ -121,20 +128,49 @@ class PageQueryTest {
 
         private final MockMvc mockMvc = MockMvcBuilders
                 .standaloneSetup(new EchoController())
+                .setCustomArgumentResolvers(new PageQueryArgumentResolver())
+                .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
 
         @Test
-        @DisplayName("query string 超限時，controller 收到的已是夾界後的值")
-        void whenQueryStringExceedsMax_controllerReceivesClampedValue() throws Exception {
-            mockMvc.perform(get("/echo-page").param("page", "-5").param("size", "99999"))
-                    .andExpect(status().isOk())
-                    .andExpect(content().string("1:" + PageQuery.MAX_SIZE));
+        @DisplayName("size 超過上限 → 400（A0001），不再靜默夾界")
+        void whenSizeExceedsMax_returns400() throws Exception {
+            mockMvc.perform(get("/echo-page").param("size", String.valueOf(PageQuery.MAX_SIZE + 1)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0001"));
         }
 
         @Test
-        @DisplayName("query string 未帶參數時，採端點自訂預設值而非 0")
-        void whenQueryStringAbsent_controllerReceivesEndpointDefault() throws Exception {
+        @DisplayName("page=0 → 400")
+        void whenPageIsZero_returns400() throws Exception {
+            mockMvc.perform(get("/echo-page").param("page", "0"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0001"));
+        }
+
+        @Test
+        @DisplayName("size=0 → 400")
+        void whenSizeIsZero_returns400() throws Exception {
+            mockMvc.perform(get("/echo-page").param("size", "0"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0001"));
+        }
+
+        @Test
+        @DisplayName("非整數 → 400")
+        void whenNotInteger_returns400() throws Exception {
+            mockMvc.perform(get("/echo-page").param("page", "abc"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0001"));
+        }
+
+        @Test
+        @DisplayName("query string 未帶參數或為空字串時，採端點預設值")
+        void whenAbsentOrBlank_controllerReceivesEndpointDefault() throws Exception {
             mockMvc.perform(get("/echo-page"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().string("1:20"));
+            mockMvc.perform(get("/echo-page").param("page", "").param("size", " "))
                     .andExpect(status().isOk())
                     .andExpect(content().string("1:20"));
         }
@@ -142,9 +178,9 @@ class PageQueryTest {
         @Test
         @DisplayName("query string 合法時原值傳入")
         void whenQueryStringLegal_controllerReceivesSameValue() throws Exception {
-            mockMvc.perform(get("/echo-page").param("page", "3").param("size", "20"))
+            mockMvc.perform(get("/echo-page").param("page", "3").param("size", String.valueOf(PageQuery.MAX_SIZE)))
                     .andExpect(status().isOk())
-                    .andExpect(content().string("3:20"));
+                    .andExpect(content().string("3:" + PageQuery.MAX_SIZE));
         }
     }
 }
