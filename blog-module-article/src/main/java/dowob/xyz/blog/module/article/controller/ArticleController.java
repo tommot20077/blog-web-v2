@@ -6,6 +6,7 @@ import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.util.SecurityUtils;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
@@ -64,23 +65,24 @@ public class ArticleController {
      * 分頁取得已發布文章列表（公開）
      *
      * <p>
-     * 支援以 categorySlug 篩選特定分類下的文章。
-     * categorySlug 為 null 或空白時，回傳所有已發布文章。
+     * 篩選、排序與分頁皆在伺服器端完成（見 {@link ArticleListQuery}）：
+     * {@code tags}（AND）、{@code categorySlug}（OR，沿用既有參數名，單值呼叫仍有效）、
+     * {@code authorUuids}（OR）、{@code publishedWithinDays}、{@code sort}
+     * （{@code latest} / {@code popular} / {@code commented}）。
+     * 不帶任何篩選參數時回傳全部已發布文章，依發布時間由新到舊。
      * </p>
      *
-     * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
-     *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
-     * @param categorySlug 分類 slug（可選）
-     * @return 分頁文章摘要列表
+     * @param pageQuery 分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                  {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
+     * @param listQuery 篩選與排序參數（已由 compact constructor 正規化）
+     * @return 分頁文章摘要列表；total 為符合篩選條件的總數
      */
     @GetMapping
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPublishedArticles(
             PageQuery pageQuery,
-            @RequestParam(required = false) String categorySlug) {
-        if (categorySlug != null && !categorySlug.isBlank()) {
-            return ApiResponse.success(articleQueryService.getPublishedArticlesByCategorySlug(categorySlug, pageQuery.page(), pageQuery.sizeOrDefault(10)));
-        }
-        return ApiResponse.success(articleQueryService.getPublishedArticles(pageQuery.page(), pageQuery.sizeOrDefault(10)));
+            ArticleListQuery listQuery) {
+        return ApiResponse.success(articleQueryService.getPublishedArticles(
+                listQuery, pageQuery.page(), pageQuery.sizeOrDefault(10)));
     }
 
     /**

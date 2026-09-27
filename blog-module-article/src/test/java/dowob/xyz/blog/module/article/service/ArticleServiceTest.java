@@ -6,6 +6,7 @@ import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
@@ -147,28 +148,16 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("getPublishedArticles delegates to querySubService")
+        @DisplayName("getPublishedArticles delegates to querySubService with the filter query")
         void getPublishedArticles_delegatesToQuerySubService() {
+            ArticleListQuery query = new ArticleListQuery(null, List.of("tech"), null, null, "popular");
             PageResult<ArticleSummaryResponse> expected = PageResult.of(1, 10, 0L, List.of());
-            when(querySubService.getPublishedArticles(1, 10)).thenReturn(expected);
+            when(querySubService.getPublishedArticles(query, 1, 10)).thenReturn(expected);
 
-            PageResult<ArticleSummaryResponse> actual = articleService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> actual = articleService.getPublishedArticles(query, 1, 10);
 
             assertThat(actual).isSameAs(expected);
-            verify(querySubService).getPublishedArticles(1, 10);
-        }
-
-        @Test
-        @DisplayName("getPublishedArticlesByCategorySlug delegates to querySubService")
-        void getPublishedArticlesByCategorySlug_delegatesToQuerySubService() {
-            PageResult<ArticleSummaryResponse> expected = PageResult.of(1, 10, 0L, List.of());
-            when(querySubService.getPublishedArticlesByCategorySlug("tech", 1, 10)).thenReturn(expected);
-
-            PageResult<ArticleSummaryResponse> actual =
-                    articleService.getPublishedArticlesByCategorySlug("tech", 1, 10);
-
-            assertThat(actual).isSameAs(expected);
-            verify(querySubService).getPublishedArticlesByCategorySlug("tech", 1, 10);
+            verify(querySubService).getPublishedArticles(query, 1, 10);
         }
 
         @Test

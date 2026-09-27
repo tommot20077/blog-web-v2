@@ -9,6 +9,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
@@ -53,30 +54,15 @@ public class ArticleQueryService {
     // ─── 列表查詢（帶 liked 填充）───
 
     /**
-     * 分頁取得已發布文章列表（含 liked 狀態）。
+     * 依篩選條件分頁取得已發布文章列表（含 liked 狀態）。
      *
-     * @param page 頁碼（從 1 開始）
-     * @param size 每頁筆數
+     * @param query 篩選與排序參數（已正規化）
+     * @param page  頁碼（從 1 開始）
+     * @param size  每頁筆數
      * @return 分頁文章摘要列表（liked 已填充）
      */
-    public PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int size) {
-        PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(page, size);
-        enrich(result.getRecords());
-        return result;
-    }
-
-    /**
-     * 根據分類 slug 分頁取得已發布文章列表（含 liked 狀態）。
-     *
-     * @param categorySlug 分類 slug
-     * @param page         頁碼（從 1 開始）
-     * @param size         每頁筆數
-     * @return 分頁文章摘要列表（liked 已填充）
-     */
-    public PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(
-            String categorySlug, int page, int size) {
-        PageResult<ArticleSummaryResponse> result =
-                articleService.getPublishedArticlesByCategorySlug(categorySlug, page, size);
+    public PageResult<ArticleSummaryResponse> getPublishedArticles(ArticleListQuery query, int page, int size) {
+        PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(query, page, size);
         enrich(result.getRecords());
         return result;
     }

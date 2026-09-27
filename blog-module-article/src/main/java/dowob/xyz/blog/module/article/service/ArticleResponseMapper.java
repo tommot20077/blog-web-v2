@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.service;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
@@ -23,6 +24,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -109,18 +111,41 @@ class ArticleResponseMapper {
                 .build();
     }
 
-    ArticleSummaryResponse toSummaryResponse(Article article, Map<UUID, List<TagSummaryResponse>> tagMap) {
-        return toSummaryResponse(article, tagMap.getOrDefault(article.getUuid(), List.of()));
+    /**
+     * 以整頁批次查好的標籤與作者，組出單篇文章摘要。
+     *
+     * <p>作者<b>必須</b>由呼叫端先以 {@link #batchToAuthorInfoMap} 整頁解析一次再傳入；
+     * 本方法刻意不接受「自己去查作者」的用法——原本逐筆各查 uuid 與 nickname，
+     * 一頁 N 篇即 2N 條 {@code SELECT * FROM users}（PERF-02）。</p>
+     *
+     * @param article   文章實體
+     * @param tagMap    文章 UUID → 標籤列表（整頁批次查詢結果）
+     * @param authorMap 作者主鍵 → 作者投影（整頁批次查詢結果）
+     * @return 文章摘要
+     */
+    ArticleSummaryResponse toSummaryResponse(Article article,
+                                             Map<UUID, List<TagSummaryResponse>> tagMap,
+                                             Map<Long, AuthorInfo> authorMap) {
+        AuthorInfo author = article.getAuthorId() == null ? null : authorMap.get(article.getAuthorId());
+        return toSummaryResponse(article, tagMap.getOrDefault(article.getUuid(), List.of()), author);
     }
 
-    ArticleSummaryResponse toSummaryResponse(Article article, List<TagSummaryResponse> tags) {
+    /**
+     * 組出單篇文章摘要。
+     *
+     * @param article 文章實體
+     * @param tags    該文章的標籤列表
+     * @param author  作者投影；查無作者時為 {@code null}，此時 authorUuid / authorNickname 皆為 {@code null}
+     * @return 文章摘要
+     */
+    ArticleSummaryResponse toSummaryResponse(Article article, List<TagSummaryResponse> tags, AuthorInfo author) {
         return ArticleSummaryResponse.builder()
                 .uuid(article.getUuid())
                 .title(article.getTitle())
                 .summary(article.getSummary())
                 .coverImageUrl(article.getCoverImageUrl())
-                .authorUuid(resolveAuthorUuid(article.getAuthorId()))
-                .authorNickname(resolveAuthorNickname(article.getAuthorId()))
+                .authorUuid(author == null ? null : author.uuid())
+                .authorNickname(author == null ? null : author.nickname())
                 .status(article.getStatus())
                 .viewCount(article.getViewCount())
                 .createdAt(article.getCreatedAt())
@@ -153,6 +178,18 @@ class ArticleResponseMapper {
                         .slug(tag.slug())
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * 整頁批次解析作者投影。
+     *
+     * <p>去重與切批由 owner 模組（{@code UserFacade} 實作）負責，本方法只負責委派。</p>
+     *
+     * @param authorIds 作者主鍵集合（可含重複）
+     * @return 作者主鍵 → 作者投影；查無者不在結果中
+     */
+    Map<Long, AuthorInfo> batchToAuthorInfoMap(Collection<Long> authorIds) {
+        return userFacade.getAuthorInfoByIds(authorIds);
     }
 
     Map<UUID, List<TagSummaryResponse>> batchToTagResponsesMap(List<UUID> articleUuids) {

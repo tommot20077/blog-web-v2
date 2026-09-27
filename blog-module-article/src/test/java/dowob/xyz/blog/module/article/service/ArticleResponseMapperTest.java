@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
@@ -39,6 +40,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -237,12 +239,11 @@ class ArticleResponseMapperTest {
             UUID authorUuid = UUID.randomUUID();
             Article article = article(uuid, 3L);
             article.setViewCount(50L);
-            when(userFacade.getUserUuidById(3L)).thenReturn(Optional.of(authorUuid));
-            when(userFacade.getUserNicknameById(3L)).thenReturn(Optional.of("Author"));
 
             ArticleSummaryResponse resp = mapper.toSummaryResponse(
                     article,
-                    Map.of(uuid, List.of(TagSummaryResponse.builder().name("Java").build())));
+                    Map.of(uuid, List.of(TagSummaryResponse.builder().name("Java").build())),
+                    Map.of(3L, new AuthorInfo(authorUuid, "Author")));
 
             assertThat(resp.getTitle()).isEqualTo("Title");
             assertThat(resp.getSummary()).isEqualTo("summary");
@@ -265,7 +266,48 @@ class ArticleResponseMapperTest {
                     .doesNotContain("toc");
 
             // 即便來源 article 帶有合法 toc JSON，toSummaryResponse 仍不應嘗試處理它、也不應丟出例外
-            assertThat(assertDoesNotThrow(() -> mapper.toSummaryResponse(article, List.of()))).isNotNull();
+            assertThat(assertDoesNotThrow(() -> mapper.toSummaryResponse(article, List.of(), null))).isNotNull();
+        }
+
+        @Test
+        @DisplayName("作者取自呼叫端批次解析的結果，不得逐筆查 UserFacade（PERF-02）")
+        void toSummaryResponse_withAuthorMap_doesNotLookUpAuthorPerRow() {
+            UUID uuid = UUID.randomUUID();
+            UUID authorUuid = UUID.randomUUID();
+            Article article = article(uuid, 3L);
+
+            ArticleSummaryResponse resp = mapper.toSummaryResponse(
+                    article, Map.of(), Map.of(3L, new AuthorInfo(authorUuid, "Author")));
+
+            assertThat(resp.getAuthorUuid()).isEqualTo(authorUuid);
+            assertThat(resp.getAuthorNickname()).isEqualTo("Author");
+            verify(userFacade, never()).getUserUuidById(anyLong());
+            verify(userFacade, never()).getUserNicknameById(anyLong());
+        }
+
+        @Test
+        @DisplayName("批次結果查無作者時，authorUuid / authorNickname 為 null（與原本 Optional.empty 的呈現一致）")
+        void toSummaryResponse_authorMissingFromMap_leavesAuthorFieldsNull() {
+            UUID uuid = UUID.randomUUID();
+            Article article = article(uuid, 3L);
+
+            ArticleSummaryResponse resp = mapper.toSummaryResponse(article, Map.of(), Map.of());
+
+            assertThat(resp.getAuthorUuid()).isNull();
+            assertThat(resp.getAuthorNickname()).isNull();
+        }
+
+        @Test
+        @DisplayName("batchToAuthorInfoMap 以單次 facade 呼叫解析整批作者")
+        void batchToAuthorInfoMap_delegatesToFacadeInSingleCall() {
+            Map<Long, AuthorInfo> expected = Map.of(3L, new AuthorInfo(UUID.randomUUID(), "Author"));
+            when(userFacade.getAuthorInfoByIds(List.of(3L, 4L))).thenReturn(expected);
+
+            Map<Long, AuthorInfo> result = mapper.batchToAuthorInfoMap(List.of(3L, 4L));
+
+            assertThat(result).isSameAs(expected);
+            verify(userFacade, never()).getUserUuidById(anyLong());
+            verify(userFacade, never()).getUserNicknameById(anyLong());
         }
     }
 
@@ -430,7 +472,7 @@ class ArticleResponseMapperTest {
             SecurityContextHolder.clearContext();
             Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
 
-            assertThat(mapper.toSummaryResponse(article, List.of()).getRejectReason()).isNull();
+            assertThat(mapper.toSummaryResponse(article, List.of(), null).getRejectReason()).isNull();
         }
 
         @Test
@@ -439,7 +481,7 @@ class ArticleResponseMapperTest {
             authenticateAs(ARTICLE_AUTHOR_ID, "ROLE_AUTHOR");
             Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
 
-            assertThat(mapper.toSummaryResponse(article, List.of()).getRejectReason()).isEqualTo("reason");
+            assertThat(mapper.toSummaryResponse(article, List.of(), null).getRejectReason()).isEqualTo("reason");
         }
 
         @Test
@@ -448,7 +490,7 @@ class ArticleResponseMapperTest {
             authenticateAs(OTHER_USER_ID, "ROLE_ADMIN");
             Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
 
-            assertThat(mapper.toSummaryResponse(article, List.of()).getRejectReason()).isEqualTo("reason");
+            assertThat(mapper.toSummaryResponse(article, List.of(), null).getRejectReason()).isEqualTo("reason");
         }
 
         @Test

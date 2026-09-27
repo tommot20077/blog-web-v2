@@ -5,6 +5,7 @@ import dowob.xyz.blog.infrastructure.config.UUIDTypeHandler;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.PublishedArticleCriteria;
 import dowob.xyz.blog.module.article.model.TagWithArticleUuid;
 import org.apache.ibatis.annotations.Arg;
 import org.apache.ibatis.annotations.ConstructorArgs;
@@ -34,22 +35,90 @@ import java.util.UUID;
 public interface ArticleMapper {
 
     /**
-     * 分頁查詢已發布文章（公開列表）
+     * 公開列表的篩選條件（WHERE 子句），由列表查詢與 count 查詢共用。
      *
-     * @param offset 偏移量
-     * @param size   每頁筆數
-     * @return 文章列表
+     * <p>抽成常數是為了讓兩條查詢<b>不可能</b>篩選條件不一致——不一致時 total 與實際筆數對不上，
+     * 前端分頁器會多出空頁或少掉最後幾頁。annotation 值須為編譯期常數，
+     * 介面常數的字串串接符合此要求。</p>
+     *
+     * <ul>
+     *   <li>分類（OR）：{@code EXISTS} 子查詢而非 JOIN，文章同時屬於多個被選分類時不會重複出現。</li>
+     *   <li>標籤（AND）：{@code HAVING COUNT(DISTINCT t.id) = tagCount}，文章須帶有全部被選標籤；
+     *       任一 slug 不存在即無結果，符合 AND 語意。屬跨批聚合，故參數數量不切批，
+     *       而由 {@code PublishedArticleCriteria#of} 以 {@code ArticleListQuery.MAX_VALUES_PER_FILTER} 為上限、超過即拒絕。</li>
+     *   <li>作者（OR）：以 {@code users.uuid} 反查主鍵；{@code users} 為 reference data，
+     *       依 {@code architecture.md} 可直接讀取。</li>
+     *   <li>日期：{@code published_at >= publishedAfter}，時間點由呼叫端以 JVM 時區換算
+     *       （見 {@link PublishedArticleCriteria}）。</li>
+     * </ul>
      */
-    @Select("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
-    List<Article> findPublishedPage(@Param("offset") long offset, @Param("size") int size);
+    String PUBLISHED_CRITERIA_WHERE =
+            "WHERE a.status = 'PUBLISHED' " +
+            "<if test='criteria.categorySlugs.size() > 0'>" +
+            "AND EXISTS (SELECT 1 FROM article_categories ac " +
+            "INNER JOIN categories c ON c.id = ac.category_id " +
+            "WHERE ac.article_id = a.id AND c.slug IN " +
+            "<foreach collection='criteria.categorySlugs' item='slug' open='(' separator=',' close=')'>#{slug}</foreach>" +
+            ") " +
+            "</if>" +
+            "<if test='criteria.tagCount > 0'>" +
+            "AND a.uuid IN (SELECT art.article_id FROM article_tags art " +
+            "INNER JOIN tags t ON t.id = art.tag_id " +
+            "WHERE t.slug IN " +
+            "<foreach collection='criteria.tagSlugs' item='slug' open='(' separator=',' close=')'>#{slug}</foreach> " +
+            "GROUP BY art.article_id HAVING COUNT(DISTINCT t.id) = #{criteria.tagCount}) " +
+            "</if>" +
+            "<if test='criteria.authorUuids.size() > 0'>" +
+            "AND a.author_id IN (SELECT u.id FROM users u WHERE u.uuid IN " +
+            "<foreach collection='criteria.authorUuids' item='authorUuid' open='(' separator=',' close=')'>#{authorUuid}::uuid</foreach>" +
+            ") " +
+            "</if>" +
+            "<if test='criteria.publishedAfter != null'>" +
+            "AND a.published_at >= #{criteria.publishedAfter} " +
+            "</if>";
 
     /**
-     * 計算已發布文章總筆數
+     * 公開列表的排序子句。
      *
-     * @return 總筆數
+     * <p>每種排序都以 {@code a.id DESC} 收尾作為 tie-breaker：排序鍵相同時若無 tie-breaker，
+     * PostgreSQL 不保證 {@code LIMIT/OFFSET} 跨頁穩定，同一篇可能在兩頁重複出現或整篇消失。
+     * tie-breaker 保證的是「同一份資料快照下順序完全確定」；資料若在翻頁之間變動
+     * （新文章發布、{@code ViewCountFlushJob} 回寫瀏覽數、留言增減），OFFSET 分頁仍可能重複或遺漏，
+     * 要消除需改為 keyset 分頁。</p>
+     *
+     * <p>以 {@code <choose>} 選擇固定字面值而非 {@code ${}} 字串替換，排序鍵無從注入 SQL。
+     * {@code latest} 用 {@code NULLS LAST}，與 V22 的 partial index 定義一致。</p>
      */
-    @Select("SELECT COUNT(*) FROM articles WHERE status = 'PUBLISHED'")
-    long countPublished();
+    String PUBLISHED_CRITERIA_ORDER_BY =
+            "ORDER BY " +
+            "<choose>" +
+            "<when test=\"criteria.sortKey == 'popular'\">a.view_count DESC, a.id DESC</when>" +
+            "<when test=\"criteria.sortKey == 'commented'\">a.comment_count DESC, a.id DESC</when>" +
+            "<otherwise>a.published_at DESC NULLS LAST, a.id DESC</otherwise>" +
+            "</choose> ";
+
+    /**
+     * 依篩選條件分頁查詢已發布文章（公開列表）
+     *
+     * @param criteria 篩選與排序條件
+     * @param offset   偏移量
+     * @param size     每頁筆數
+     * @return 文章列表，依條件指定的排序
+     */
+    @Select("<script>SELECT a.* FROM articles a " + PUBLISHED_CRITERIA_WHERE + PUBLISHED_CRITERIA_ORDER_BY +
+            "LIMIT #{size} OFFSET #{offset}</script>")
+    List<Article> findPublishedPageByCriteria(@Param("criteria") PublishedArticleCriteria criteria,
+                                              @Param("offset") long offset,
+                                              @Param("size") int size);
+
+    /**
+     * 依篩選條件計算已發布文章總筆數（與 {@link #findPublishedPageByCriteria} 共用同一 WHERE 子句）
+     *
+     * @param criteria 篩選條件（排序鍵不影響本查詢）
+     * @return 符合條件的總筆數
+     */
+    @Select("<script>SELECT COUNT(*) FROM articles a " + PUBLISHED_CRITERIA_WHERE + "</script>")
+    long countPublishedByCriteria(@Param("criteria") PublishedArticleCriteria criteria);
 
     /**
      * 根據作者 ID 與狀態篩選文章
@@ -168,36 +237,6 @@ public interface ArticleMapper {
      */
     @Update("UPDATE articles SET view_count = view_count + #{delta} WHERE uuid = #{uuid}::uuid")
     void incrementViewCountBatch(@Param("uuid") UUID uuid, @Param("delta") long delta);
-
-    /**
-     * 根據分類 slug 分頁查詢已發布文章
-     *
-     * @param categorySlug 分類 slug
-     * @param offset       偏移量
-     * @param size         每頁筆數
-     * @return 文章列表
-     */
-    @Select("SELECT a.* FROM articles a " +
-            "INNER JOIN article_categories ac ON a.id = ac.article_id " +
-            "INNER JOIN categories c ON ac.category_id = c.id " +
-            "WHERE a.status = 'PUBLISHED' AND c.slug = #{categorySlug} " +
-            "ORDER BY a.created_at DESC LIMIT #{size} OFFSET #{offset}")
-    List<Article> findPublishedPageByCategorySlug(
-            @Param("categorySlug") String categorySlug,
-            @Param("offset") long offset,
-            @Param("size") int size);
-
-    /**
-     * 根據分類 slug 計算已發布文章總筆數
-     *
-     * @param categorySlug 分類 slug
-     * @return 總筆數
-     */
-    @Select("SELECT COUNT(DISTINCT a.id) FROM articles a " +
-            "INNER JOIN article_categories ac ON a.id = ac.article_id " +
-            "INNER JOIN categories c ON ac.category_id = c.id " +
-            "WHERE a.status = 'PUBLISHED' AND c.slug = #{categorySlug}")
-    long countPublishedByCategorySlug(@Param("categorySlug") String categorySlug);
 
     /**
      * 批次查詢多篇文章的標籤（含所屬文章 UUID）

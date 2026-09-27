@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.service;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
@@ -84,23 +85,14 @@ public interface ArticleService {
     ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp);
 
     /**
-     * 分頁取得已發布文章列表（公開）
+     * 依篩選條件分頁取得已發布文章列表（公開）
      *
-     * @param page 頁碼（從 1 開始）
-     * @param size 每頁筆數
-     * @return 分頁文章摘要列表
+     * @param query 篩選與排序參數（已正規化；不篩選時用 {@link ArticleListQuery#unfiltered()}）
+     * @param page  頁碼（從 1 開始）
+     * @param size  每頁筆數
+     * @return 分頁文章摘要列表；total 為符合篩選條件的總數
      */
-    PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int size);
-
-    /**
-     * 根據分類 slug 分頁取得已發布文章列表
-     *
-     * @param categorySlug 分類 slug
-     * @param page         頁碼
-     * @param size         每頁筆數
-     * @return 分頁文章摘要列表
-     */
-    PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(String categorySlug, int page, int size);
+    PageResult<ArticleSummaryResponse> getPublishedArticles(ArticleListQuery query, int page, int size);
 
     /**
      * 分頁取得當前登入用戶的文章列表

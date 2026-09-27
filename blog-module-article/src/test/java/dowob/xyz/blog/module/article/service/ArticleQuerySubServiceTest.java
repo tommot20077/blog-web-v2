@@ -5,8 +5,11 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.PublishedArticleCriteria;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
@@ -17,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -36,6 +40,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -358,17 +363,19 @@ class ArticleQuerySubServiceTest {
     class GetPublishedArticlesTests {
 
         @Test
-        @DisplayName("returns mapped published page")
-        void getPublishedArticles_success() {
+        @DisplayName("不篩選時回傳映射後的分頁，total 取自同一組條件的 count")
+        void getPublishedArticles_unfiltered_returnsMappedPage() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             ArticleSummaryResponse summary = summaryResponse(article);
             Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
-            when(articleMapper.findPublishedPage(0L, 10)).thenReturn(List.of(article));
-            when(articleMapper.countPublished()).thenReturn(1L);
+            when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(0L), eq(10)))
+                    .thenReturn(List.of(article));
+            when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(1L);
             when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
-            when(responseMapper.toSummaryResponse(article, tagMap)).thenReturn(summary);
+            when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
 
-            PageResult<ArticleSummaryResponse> result = querySubService.getPublishedArticles(1, 10);
+            PageResult<ArticleSummaryResponse> result =
+                    querySubService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
             assertThat(result.getRecords()).containsExactly(summary);
             assertThat(result.getTotal()).isEqualTo(1L);
@@ -376,57 +383,95 @@ class ArticleQuerySubServiceTest {
         }
 
         @Test
-        @DisplayName("second page uses calculated offset")
-        void getPublishedArticles_secondPage() {
-            when(articleMapper.findPublishedPage(10L, 10)).thenReturn(List.of());
-            when(articleMapper.countPublished()).thenReturn(5L);
-            when(responseMapper.batchToTagResponsesMap(List.of())).thenReturn(Map.of());
-
-            PageResult<ArticleSummaryResponse> result = querySubService.getPublishedArticles(2, 10);
-
-            assertThat(result.getRecords()).isEmpty();
-            verify(articleMapper).findPublishedPage(10L, 10);
-        }
-    }
-
-    @Nested
-    @DisplayName("getPublishedArticlesByCategorySlug")
-    class GetPublishedArticlesByCategorySlugTests {
-
-        @Test
-        @DisplayName("returns mapped category page")
-        void getPublishedArticlesByCategorySlug_success() {
-            Article article = buildArticle(ArticleStatus.PUBLISHED);
-            ArticleSummaryResponse summary = summaryResponse(article);
-            String categorySlug = "tech";
-            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
-            when(articleMapper.findPublishedPageByCategorySlug(categorySlug, 0L, 10)).thenReturn(List.of(article));
-            when(articleMapper.countPublishedByCategorySlug(categorySlug)).thenReturn(1L);
-            when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
-            when(responseMapper.toSummaryResponse(article, tagMap)).thenReturn(summary);
-
-            PageResult<ArticleSummaryResponse> result =
-                    querySubService.getPublishedArticlesByCategorySlug(categorySlug, 1, 10);
-
-            assertThat(result.getRecords()).containsExactly(summary);
-            assertThat(result.getTotal()).isEqualTo(1L);
-            verify(articleMapper).findPublishedPageByCategorySlug(categorySlug, 0L, 10);
-            verify(articleMapper).countPublishedByCategorySlug(categorySlug);
-        }
-
-        @Test
-        @DisplayName("second category page uses calculated offset")
-        void getPublishedArticlesByCategorySlug_secondPage_correctOffset() {
-            String categorySlug = "java";
-            when(articleMapper.findPublishedPageByCategorySlug(categorySlug, 10L, 10)).thenReturn(List.of());
-            when(articleMapper.countPublishedByCategorySlug(categorySlug)).thenReturn(3L);
+        @DisplayName("第二頁以 (page - 1) * size 計算 offset")
+        void getPublishedArticles_secondPage_usesCalculatedOffset() {
+            when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(10L), eq(10)))
+                    .thenReturn(List.of());
+            when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(5L);
             when(responseMapper.batchToTagResponsesMap(List.of())).thenReturn(Map.of());
 
             PageResult<ArticleSummaryResponse> result =
-                    querySubService.getPublishedArticlesByCategorySlug(categorySlug, 2, 10);
+                    querySubService.getPublishedArticles(ArticleListQuery.unfiltered(), 2, 10);
 
             assertThat(result.getRecords()).isEmpty();
-            verify(articleMapper).findPublishedPageByCategorySlug(categorySlug, 10L, 10);
+            verify(articleMapper).findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(10L), eq(10));
+        }
+
+        @Test
+        @DisplayName("篩選參數轉成查詢條件傳給 mapper，列表與 count 用同一組條件（total 才會與篩選結果一致）")
+        void getPublishedArticles_filtered_passesSameCriteriaToPageAndCount() {
+            UUID author = UUID.randomUUID();
+            ArticleListQuery query = new ArticleListQuery(
+                    List.of("java", "spring"), List.of("tech"), List.of(author), 30, "commented");
+            when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(0L), eq(10)))
+                    .thenReturn(List.of());
+            when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(7L);
+            when(responseMapper.batchToTagResponsesMap(List.of())).thenReturn(Map.of());
+
+            LocalDateTime before = LocalDateTime.now();
+            PageResult<ArticleSummaryResponse> result = querySubService.getPublishedArticles(query, 1, 10);
+            LocalDateTime after = LocalDateTime.now();
+
+            ArgumentCaptor<PublishedArticleCriteria> pageCriteria = ArgumentCaptor.forClass(PublishedArticleCriteria.class);
+            ArgumentCaptor<PublishedArticleCriteria> countCriteria = ArgumentCaptor.forClass(PublishedArticleCriteria.class);
+            verify(articleMapper).findPublishedPageByCriteria(pageCriteria.capture(), eq(0L), eq(10));
+            verify(articleMapper).countPublishedByCriteria(countCriteria.capture());
+            assertThat(countCriteria.getValue()).isSameAs(pageCriteria.getValue());
+
+            PublishedArticleCriteria criteria = pageCriteria.getValue();
+            assertThat(criteria.getTagSlugs()).containsExactly("java", "spring");
+            assertThat(criteria.getTagCount()).isEqualTo(2);
+            assertThat(criteria.getCategorySlugs()).containsExactly("tech");
+            assertThat(criteria.getAuthorUuids()).containsExactly(author);
+            assertThat(criteria.getSortKey()).isEqualTo("commented");
+            assertThat(criteria.getPublishedAfter()).isBetween(before.minusDays(30), after.minusDays(30));
+            assertThat(result.getTotal()).isEqualTo(7L);
+        }
+
+        @Test
+        @DisplayName("整頁作者只解析一次：同一作者去重，且不逐筆查詢（PERF-02）")
+        void getPublishedArticles_resolvesAuthorsInSingleBatch() {
+            Article first = publishedArticle(101L, 1L);
+            Article second = publishedArticle(102L, 1L);
+            Article third = publishedArticle(103L, 2L);
+            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of();
+            Map<Long, AuthorInfo> authorMap = Map.of(
+                    1L, new AuthorInfo(UUID.randomUUID(), "Alice"),
+                    2L, new AuthorInfo(UUID.randomUUID(), "Bob"));
+            when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(0L), eq(10)))
+                    .thenReturn(List.of(first, second, third));
+            when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(3L);
+            when(responseMapper.batchToTagResponsesMap(anyList())).thenReturn(tagMap);
+            when(responseMapper.batchToAuthorInfoMap(List.of(1L, 2L))).thenReturn(authorMap);
+            ArticleSummaryResponse s1 = ArticleSummaryResponse.builder().uuid(first.getUuid()).build();
+            ArticleSummaryResponse s2 = ArticleSummaryResponse.builder().uuid(second.getUuid()).build();
+            ArticleSummaryResponse s3 = ArticleSummaryResponse.builder().uuid(third.getUuid()).build();
+            when(responseMapper.toSummaryResponse(first, tagMap, authorMap)).thenReturn(s1);
+            when(responseMapper.toSummaryResponse(second, tagMap, authorMap)).thenReturn(s2);
+            when(responseMapper.toSummaryResponse(third, tagMap, authorMap)).thenReturn(s3);
+
+            PageResult<ArticleSummaryResponse> result =
+                    querySubService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
+
+            assertThat(result.getRecords()).containsExactly(s1, s2, s3);
+            verify(responseMapper, times(1)).batchToAuthorInfoMap(anyList());
+            verify(responseMapper).batchToAuthorInfoMap(List.of(1L, 2L));
+        }
+
+        /**
+         * 建立一篇已發布文章（各自獨立的 id / uuid），供多作者分頁情境使用。
+         *
+         * @param id       文章主鍵
+         * @param authorId 作者主鍵
+         * @return 已發布文章
+         */
+        private Article publishedArticle(Long id, Long authorId) {
+            Article article = new Article();
+            article.setId(id);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(authorId);
+            article.setStatus(ArticleStatus.PUBLISHED);
+            return article;
         }
     }
 
@@ -443,7 +488,7 @@ class ArticleQuerySubServiceTest {
             when(articleMapper.findByAuthorIdPaged(AUTHOR_ID, 0L, 10)).thenReturn(List.of(article));
             when(articleMapper.countByAuthorId(AUTHOR_ID)).thenReturn(1L);
             when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
-            when(responseMapper.toSummaryResponse(article, tagMap)).thenReturn(summary);
+            when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
 
             PageResult<ArticleSummaryResponse> result =
                     querySubService.getMyArticles(AUTHOR_ID, 1, 10, null);
@@ -464,7 +509,7 @@ class ArticleQuerySubServiceTest {
                     .thenReturn(List.of(article));
             when(articleMapper.countByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT)).thenReturn(1L);
             when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
-            when(responseMapper.toSummaryResponse(article, tagMap)).thenReturn(summary);
+            when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
 
             PageResult<ArticleSummaryResponse> result =
                     querySubService.getMyArticles(AUTHOR_ID, 1, 10, ArticleStatus.DRAFT);
@@ -490,7 +535,7 @@ class ArticleQuerySubServiceTest {
             when(articleMapper.findPendingReviewPage(0L, 10)).thenReturn(List.of(article));
             when(articleMapper.countPendingReview()).thenReturn(1L);
             when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
-            when(responseMapper.toSummaryResponse(article, tagMap)).thenReturn(summary);
+            when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
 
             PageResult<ArticleSummaryResponse> result = querySubService.getPendingArticles(1, 10);
 
@@ -597,8 +642,8 @@ class ArticleQuerySubServiceTest {
             when(articleRepository.findAllById(List.of(ARTICLE_ID, 22L))).thenReturn(List.of(a2, a1));
             Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of(), uuid2, List.of());
             when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID, uuid2))).thenReturn(tagMap);
-            when(responseMapper.toSummaryResponse(a1, tagMap)).thenReturn(s1);
-            when(responseMapper.toSummaryResponse(a2, tagMap)).thenReturn(s2);
+            when(responseMapper.toSummaryResponse(a1, tagMap, Map.of())).thenReturn(s1);
+            when(responseMapper.toSummaryResponse(a2, tagMap, Map.of())).thenReturn(s2);
 
             List<ArticleSummaryResponse> result =
                     querySubService.getArticleSummariesByIds(List.of(ARTICLE_ID, 22L));
@@ -609,6 +654,8 @@ class ArticleQuerySubServiceTest {
             verify(articleRepository).findAllById(List.of(ARTICLE_ID, 22L));
             verify(articleRepository, never()).findById(any());
             verify(responseMapper).batchToTagResponsesMap(List.of(ARTICLE_UUID, uuid2));
+            /* 作者同樣整批解析一次（a2 未設作者，不得把 null 送進批次查詢） */
+            verify(responseMapper).batchToAuthorInfoMap(List.of(AUTHOR_ID));
         }
 
         @Test

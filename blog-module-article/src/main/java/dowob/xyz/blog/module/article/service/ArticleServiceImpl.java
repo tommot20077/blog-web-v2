@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
@@ -74,14 +75,8 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     @Override
-    public PageResult<ArticleSummaryResponse> getPublishedArticles(int page, int size) {
-        return querySubService.getPublishedArticles(page, size);
-    }
-
-    @Override
-    public PageResult<ArticleSummaryResponse> getPublishedArticlesByCategorySlug(String categorySlug, int page,
-            int size) {
-        return querySubService.getPublishedArticlesByCategorySlug(categorySlug, page, size);
+    public PageResult<ArticleSummaryResponse> getPublishedArticles(ArticleListQuery query, int page, int size) {
+        return querySubService.getPublishedArticles(query, page, size);
     }
 
     @Override
