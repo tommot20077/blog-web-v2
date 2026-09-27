@@ -23,7 +23,7 @@ public interface TagService {
      * 根據前綴返回標籤自動補全建議
      *
      * @param prefix 搜尋前綴
-     * @param limit  最大返回數量
+     * @param limit  最大返回數量；實作須夾上界，非正數回傳空列表
      * @return Slug 列表
      */
     List<String> suggest(String prefix, int limit);
@@ -31,7 +31,7 @@ public interface TagService {
     /**
      * 取得熱門標籤列表
      *
-     * @param limit 最大返回數量
+     * @param limit 最大返回數量；實作須夾上界，非正數回傳空列表
      * @return 熱門標籤列表
      */
     List<Tag> getHotTags(int limit);
