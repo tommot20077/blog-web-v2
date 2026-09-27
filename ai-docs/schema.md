@@ -303,6 +303,7 @@ PRIMARY KEY (user_id, tag_id)
 - `comments_uuid_key`（auto, UNIQUE）on uuid
 - `idx_comments_article_top_level`（V13, partial）on (article_id, created_at DESC) WHERE parent_id IS NULL
 - `idx_comments_article_uuid_top_level`（V24, partial）on (article_uuid, created_at DESC) WHERE parent_id IS NULL
+- `idx_comments_article_uuid`（V24）on (article_uuid)——涵蓋含回覆的所有列，供 FK CASCADE 與 `countByArticle`；舊 article_id 無對應索引（既有缺口，P4 隨舊欄位移除）
 - `idx_comments_replies`（V13, partial）on (parent_id, created_at) WHERE parent_id IS NOT NULL
 - `idx_comments_user_created`（V13）on (user_id, created_at DESC)
 
@@ -584,7 +585,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V21** | 資料遷移（無 schema 變更）：把 `articles.content_md` / `content_html` 內殘留的 MinIO 絕對網址改寫為 `/api/v1/files/{id}/content`，並依「上傳者==作者」回填 `file_metadata.article_uuid`；解決 V20 之前寫入的內容繞過 `canRead` 授權（bucket 私有時破圖、公開時等同無授權）的問題。冪等 |
 | **V22** | `articles` 新增 partial index `idx_articles_published_latest` on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'（公開列表改伺服器端排序的預設排序；兼供 PERF-08 的 `findPublishedAfter` 範圍掃描）；刻意不為 view_count / comment_count 建排序索引 |
 | **V23** | 資料遷移＋約束：正規化 `categories.slug`（轉小寫、非 [a-z0-9] 連續字元→`-`、去頭尾 `-`；空→`category-{id}`；撞名附加 `-{id}`；≤ 60 字，逐筆 RAISE NOTICE 記錄），**會改變不合格分類的網址且不留轉址**（Yuan 決定）；新增 CHECK `ck_categories_slug_format` |
-| **V24** | ARCH-30 第 2 段 P1（Expand）：`comments` 新增 `article_uuid UUID`，由 `article_id` 回填後 `SET NOT NULL`；新 FK `comments_article_uuid_fkey` → `articles(uuid)` ON DELETE CASCADE；新 partial index `idx_comments_article_uuid_top_level`。舊 `article_id` 欄位／FK／索引保留（P4 移除） |
+| **V24** | ARCH-30 第 2 段 P1（Expand）：`comments` 新增 `article_uuid UUID`，由 `article_id` 回填後 `SET NOT NULL`；新 FK `comments_article_uuid_fkey` → `articles(uuid)` ON DELETE CASCADE；新 partial index `idx_comments_article_uuid_top_level`，以及涵蓋所有列的 `idx_comments_article_uuid`（FK CASCADE／含回覆計數）。舊 `article_id` 欄位／FK／索引保留（P4 移除） |
 
 ---
 

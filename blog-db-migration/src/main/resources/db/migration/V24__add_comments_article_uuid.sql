@@ -26,3 +26,10 @@ ALTER TABLE comments
 CREATE INDEX idx_comments_article_uuid_top_level
     ON comments (article_uuid, created_at DESC)
     WHERE parent_id IS NULL;
+
+-- 涵蓋所有留言（含回覆）：上面的 partial index 只含頂層列，無法支援
+--   1. 刪除文章時 FK CASCADE 找出該文所有留言（PostgreSQL 不會自動替 FK 的參照端建索引）
+--   2. CommentMapper.countByArticle 的含回覆計數
+-- 舊的 article_id 同樣缺這個索引（既有問題）；P1～P3 新舊 FK 並存期間若新欄位也缺，刪文章要全表掃兩次。
+CREATE INDEX idx_comments_article_uuid
+    ON comments (article_uuid);

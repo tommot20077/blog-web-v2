@@ -144,6 +144,19 @@ class CommentArticleUuidMigrationIT {
     }
 
     @Test
+    @DisplayName("建立涵蓋所有留言（含回覆）的 article_uuid 索引，供 FK CASCADE 與含回覆的計數查詢使用")
+    void fullIndexOnArticleUuid_isCreatedForCascadeAndCounts() throws SQLException {
+        runV24();
+
+        String definition = queryString(
+                "SELECT indexdef FROM pg_indexes "
+                        + "WHERE tablename = 'comments' AND indexname = 'idx_comments_article_uuid'");
+
+        assertThat(definition)
+                .isEqualTo("CREATE INDEX idx_comments_article_uuid ON public.comments USING btree (article_uuid)");
+    }
+
+    @Test
     @DisplayName("舊的 article_id 欄位、FK 與索引在 P1 保持不變")
     void legacyArticleIdColumn_isKept() throws SQLException {
         runV24();
