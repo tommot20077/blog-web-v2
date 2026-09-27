@@ -11,7 +11,7 @@
 *   **Security**:
     *   **ECDSA (ES256)** for JWT (Never use RSA).
     *   **Stateful JWT**: Redis `user:auth:{id}` stores Token Version. Validation requires strictly checking this version.
-*   **Infrastructure**: K3s (Kubernetes), MinIO (S3 compatible), PostgreSQL, Redis, RabbitMQ, Elasticsearch.
+*   **Infrastructure**: K3s (Kubernetes), SeaweedFS (S3 compatible; replaced the discontinued MinIO community edition on 2026-09-27 — the backend still connects through the MinIO Java SDK, which is a generic S3 client, and keeps the `minio.*` config keys), PostgreSQL, Redis, RabbitMQ, Elasticsearch.
 *   **API**: Always return `ApiResponse<T>`. All external IDs must be **UUIDs**.
 
 ---
