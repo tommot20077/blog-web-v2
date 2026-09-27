@@ -21,7 +21,7 @@
 |---|---|---|
 | `page` / `size` | 既有，`PageQuery` | size ∈ [1, 1000]，預設 10 |
 | `tags` | 標籤 **slug**，**AND**（須同時帶有全部） | 逗號分隔或重複參數皆可；去空白、轉小寫、去重 |
-| `categorySlug` | 分類 **slug**，**OR**；沿用既有參數名，單值呼叫語意不變 | 去空白、去重，**保留大小寫**（精確比對，同改版前） |
+| `categorySlug` | 分類 **slug**，**OR**；沿用既有參數名，單值呼叫語意不變 | 去空白、轉小寫、去重（V23 起分類 slug 由 DB CHECK 保證全小寫；PR #72 時為保留大小寫，本分支恢復轉小寫） |
 | `authorUuids` | 作者公開 UUID，OR | 去重；**格式錯誤回 400** |
 | `publishedWithinDays` | 只取最近 N 天發布者 | ≤ 0 視為不篩選；上限 36500 |
 | `sort` | `latest`（預設）/ `popular`（view_count）/ `commented`（comment_count） | 不分大小寫；未知值退回 `latest` |
@@ -95,7 +95,7 @@
 
 | 測試 | 驗證什麼 |
 |---|---|
-| `ArticleControllerIT` 新增 9 個 `listArticles_*` | tags AND、分類 OR 不重複、分類 slug 大小寫精確比對、作者篩選、日期區間、兩種計數排序、預設排序為 published_at、同鍵值依 id 的確定順序、超過上限回 400 |
+| `ArticleControllerIT` 新增 9 個 `listArticles_*` | tags AND、分類 OR 不重複、大寫分類 slug 輸入轉小寫後比對、作者篩選、日期區間、兩種計數排序、預設排序為 published_at、同鍵值依 id 的確定順序、超過上限回 400 |
 | `ArticleControllerIT#getPublishedArticles_authorResolvedByBatchLookup` | 列表作者由單次批次查詢填入（PERF-02） |
 | `UserFacadeIntegrationTest`（2 個） | 批次作者投影的真實 SQL、UUID 映射、不讀 password_hash |
 | `TagControllerIT` 新增 3 個 | 匿名大 limit 只回 20、負 limit 回空 |
@@ -113,5 +113,5 @@
 - OFFSET 分頁在資料變動時的重複／遺漏：需 keyset 分頁才能根除
 - `article_tags.tag_id` 無索引（PERF-07），帶 `tags` 篩選時會掃 `article_tags` 全表；部落格量級下不成問題，與 PERF-07 一併處理
 - 「我的文章」與待審列表仍是 `ORDER BY created_at DESC`、無 tie-breaker；第 3 段降上限後這兩個列表才真正分頁，屆時一併補 `, id DESC`
-- 分類 slug 無格式限制（`CreateCategoryRequest` 只有 `@NotBlank` / `@Size`）：含逗號的 slug 無法以多值參數篩選（逗號為分隔符），含大寫者前端（會先轉小寫）篩不到。是否對分類 slug 加格式驗證、以及現有資料是否有此類 slug（`SELECT slug FROM categories WHERE slug <> lower(slug) OR slug LIKE '%,%'`），**待 Yuan 決定**——屬 admin API 契約變更
+- ~~分類 slug 無格式限制~~ → **Yuan 2026-09-27 選 C**（分支 `feat/category-slug-format`）：`@Pattern` 限定小寫英數字＋單一連字號；V23 正規化既有不合格 slug（**會改變這些分類的網址、不留轉址**，每筆改寫記錄於 migration log 的 NOTICE）並加 CHECK 約束；`categorySlug` 查詢參數恢復轉小寫。**前端跟進**：`AdminCategoriesView.vue` 的 slug 輸入框目前只 `trim()`（`:79`），應加上同一條 regex 的即時驗證，否則管理員只會在送出後看到 400
 - `flyway-convention.md` 的 Core Rule 寫 migration 放 `blog-start`，但實際（與同檔 Test Migrations 段）是 `blog-db-migration`——文件自相矛盾，本分支照實際位置放
