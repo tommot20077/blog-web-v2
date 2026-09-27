@@ -71,12 +71,12 @@ class ArticleListQueryTest {
         }
 
         @Test
-        @DisplayName("categorySlug 去空白、去空值與重複，但保留大小寫（分類 slug 由管理員自由輸入，舊 API 為精確比對）")
-        void categorySlug_trimmedAndDeduplicated_caseKept() {
+        @DisplayName("categorySlug 與 tags 採相同正規化（V23 起分類 slug 由 DB CHECK 保證全小寫，轉小寫不會錯過任何分類）")
+        void categorySlug_normalizedLikeTags() {
             ArticleListQuery query = new ArticleListQuery(
                     null, Arrays.asList("Tech", " tech", "life", null, " Tech "), null, null, null);
 
-            assertThat(query.categorySlug()).containsExactly("Tech", "tech", "life");
+            assertThat(query.categorySlug()).containsExactly("tech", "life");
         }
 
         @Test
@@ -197,11 +197,11 @@ class ArticleListQueryTest {
         }
 
         @Test
-        @DisplayName("舊的單值 categorySlug 呼叫方式仍被接受，且大小寫原樣保留（向下相容）")
-        void legacySingleCategorySlug_stillAcceptedWithCaseKept() throws Exception {
+        @DisplayName("舊的單值 categorySlug 呼叫方式仍被接受（向下相容），並轉為小寫")
+        void legacySingleCategorySlug_stillAcceptedAndLowercased() throws Exception {
             mockMvc.perform(get("/echo-list").param("categorySlug", "Backend"))
                     .andExpect(status().isOk())
-                    .andExpect(content().string("|Backend|0|null|latest"));
+                    .andExpect(content().string("|backend|0|null|latest"));
         }
 
         @Test

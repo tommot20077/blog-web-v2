@@ -19,9 +19,9 @@ import java.util.UUID;
  *
  * <p><b>正規化規則</b>（經 compact constructor 後保證成立，呼叫端無須再檢查）：</p>
  * <ul>
- *   <li>字串清單：去前後空白、去除空值與重複（保留首次出現順序）；回傳不可變清單，永不為 {@code null}。
- *       {@code tags} 另轉小寫（標籤 slug 由 {@code SlugUtils} 產生，恆為小寫）；
- *       {@code categorySlug} <b>保留大小寫</b>——分類 slug 由管理員自由輸入，舊 API 為精確比對。</li>
+ *   <li>字串清單：去前後空白、轉小寫、去除空值與重複（保留首次出現順序）；回傳不可變清單，永不為 {@code null}。
+ *       轉小寫不會錯過任何資料：標籤 slug 由 {@code SlugUtils} 產生、恆為小寫；分類 slug 自 V23 起
+ *       由 DB CHECK 約束保證為小寫（見 {@code Category#SLUG_PATTERN}）。</li>
  *   <li>{@code authorUuids}：去除 {@code null} 與重複。
  *       格式錯誤的 UUID 在綁定階段即回 400——型別錯誤不屬於可正規化的範圍。</li>
  *   <li>三個多值清單<b>不在此截斷</b>：超過 {@link #MAX_VALUES_PER_FILTER} 時由
@@ -73,8 +73,8 @@ public record ArticleListQuery(List<String> tags,
      * {@code this.x = x} 採用，因此此處的正規化即為最終存入欄位的值。</p>
      */
     public ArticleListQuery {
-        tags = normalizeValues(tags, true);
-        categorySlug = normalizeValues(categorySlug, false);
+        tags = normalizeSlugs(tags);
+        categorySlug = normalizeSlugs(categorySlug);
         authorUuids = authorUuids == null
                 ? List.of()
                 : authorUuids.stream()
@@ -108,13 +108,12 @@ public record ArticleListQuery(List<String> tags,
     }
 
     /**
-     * 正規化 slug 清單：去空白、去空值與重複，可選擇轉小寫。
+     * 正規化 slug 清單：去空白、轉小寫、去空值與重複（去重在轉小寫之後進行）。
      *
-     * @param values    原始清單，可為 {@code null} 或含 {@code null} 元素
-     * @param lowercase 是否轉小寫（去重在轉換之後進行）
+     * @param values 原始清單，可為 {@code null} 或含 {@code null} 元素
      * @return 不可變的正規化清單，永不為 {@code null}
      */
-    private static List<String> normalizeValues(List<String> values, boolean lowercase) {
+    private static List<String> normalizeSlugs(List<String> values) {
         if (values == null) {
             return List.of();
         }
@@ -123,8 +122,7 @@ public record ArticleListQuery(List<String> tags,
             if (value == null || value.isBlank()) {
                 continue;
             }
-            String trimmed = value.trim();
-            normalized.add(lowercase ? trimmed.toLowerCase(Locale.ROOT) : trimmed);
+            normalized.add(value.trim().toLowerCase(Locale.ROOT));
         }
         return List.copyOf(normalized);
     }

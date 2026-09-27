@@ -2,22 +2,28 @@
 
 ## Core Rule
 
-**All production migration scripts MUST be placed in `blog-start/src/main/resources/db/migration/` only.**
+**All migration scripts MUST be placed in `blog-db-migration/src/main/resources/db/migration/` only.**
 
-Other modules MUST NOT place any migration files under `src/main/resources/db/migration/`.
+Production (`blog-start`) and every module's IT consume this single location through a Maven dependency
+(see "Test Migrations" below). No other module may place migration files under `src/main/resources/db/migration/`
+or `src/test/resources/db/migration/`.
+
+> 2026-09-27 更正：本節原寫「放在 `blog-start`」，與下方「Test Migrations」段落及實際檔案位置（V1–V23 皆在
+> `blog-db-migration`）矛盾。以實際位置為準。
 
 ---
 
 ## Directory Structure
 
 ```
-blog-start/
+blog-db-migration/
   src/
-    main/resources/db/migration/     ← ALL production migrations go here
+    main/resources/db/migration/     ← ALL migrations (V1..V{N}) go here
 
-blog-module-*/
+blog-start/                          ← compile-scope dependency on blog-db-migration
+blog-module-*/                       ← test-scope dependency on blog-db-migration
   src/
-    test/resources/db/migration/     ← Module IT test migrations only (isolated)
+    test/resources/db/testdata/      ← optional repeatable seed data (R__*.sql) for module IT only
 ```
 
 ---
@@ -36,7 +42,7 @@ blog-module-*/
 V{N}__{description}.sql
 ```
 
-- `{N}` = next available integer (check blog-start migrations before choosing)
+- `{N}` = next available integer (check `blog-db-migration/src/main/resources/db/migration/` before choosing)
 - `{description}` = English snake_case description
 - Double underscore (`__`) between version and description
 
@@ -55,6 +61,7 @@ V{N}__{description}.sql
 |------|---------|-----|
 | Primary Key | `{table}_pkey` | PG 自動產生 |
 | Unique Constraint | `uq_{table}_{purpose}` | `uq_article_likes_user_article` |
+| Check Constraint | `ck_{table}_{purpose}` | `ck_categories_slug_format` |
 | Foreign Key | `{table}_{col}_fkey` | PG 自動產生 |
 | B-tree Index | `idx_{table}_{purpose}` | `idx_articles_author_id` |
 | Partial Index | `idx_{table}_{purpose}` | `idx_comments_article_top_level` |
@@ -79,8 +86,8 @@ V{N}__{description}.sql
 
 ## Adding Schema for a New Module
 
-1. Check the current highest version in `blog-start/src/main/resources/db/migration/`
-2. Create `V{N+1}__{module_name}_schema.sql` in blog-start
+1. Check the current highest version in `blog-db-migration/src/main/resources/db/migration/`
+2. Create `V{N+1}__{module_name}_schema.sql` in `blog-db-migration`
 3. Write the DDL matching the module's Model classes exactly
 4. Do NOT create any file under the module's `src/main/resources/db/migration/`
 
@@ -121,8 +128,8 @@ spring:
 
 | Prohibited | Reason |
 |------------|--------|
-| Placing `.sql` files in module `src/main/resources/db/migration/` | Causes Flyway version conflicts with blog-start |
+| Placing `.sql` files in any module other than `blog-db-migration` | Causes Flyway version conflicts with the centralized migrations |
 | Editing an already-deployed migration | Flyway checksum mismatch → startup failure |
 | Skipping version numbers | Causes confusion about migration history |
 | Using different column types between production and test migrations | Schema divergence causes hard-to-debug test failures |
-| UNIQUE constraint 靠 PG 自動命名 | 將來 DROP CONSTRAINT 時需查系統表才能找到名字 |
+| UNIQUE / CHECK constraint 靠 PG 自動命名 | 將來 DROP CONSTRAINT 時需查系統表才能找到名字 |

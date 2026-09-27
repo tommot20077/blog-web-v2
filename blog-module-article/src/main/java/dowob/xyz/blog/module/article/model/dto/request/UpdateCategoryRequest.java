@@ -1,5 +1,7 @@
 package dowob.xyz.blog.module.article.model.dto.request;
 
+import dowob.xyz.blog.module.article.model.Category;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -16,6 +18,7 @@ public class UpdateCategoryRequest {
     private String name;
 
     @Size(max = 60, message = "slug 長度不得超過 60 字")
+    @Pattern(regexp = Category.SLUG_PATTERN, message = Category.SLUG_PATTERN_MESSAGE)
     private String slug;
 
     @Size(max = 200, message = "描述長度不得超過 200 字")
