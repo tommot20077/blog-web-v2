@@ -76,6 +76,24 @@ class CommentServiceTest {
     }
 
     @Test
+    @DisplayName("建立留言時同時寫入 article_id 與 article_uuid（ARCH-30 P2 雙寫）")
+    void createComment_writesBothArticleIdAndArticleUuid() {
+        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
+        when(renderer.render(any())).thenReturn("<p>x</p>");
+        when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        CreateCommentRequest req = new CreateCommentRequest();
+        req.setContent("x");
+
+        service.createComment(articleUuid, userId, req);
+
+        ArgumentCaptor<Comment> captor = ArgumentCaptor.forClass(Comment.class);
+        verify(commentRepo).save(captor.capture());
+        assertThat(captor.getValue().getArticleId()).isEqualTo(articleId);
+        assertThat(captor.getValue().getArticleUuid()).isEqualTo(articleUuid);
+    }
+
+    @Test
     void createComment_topLevel_incrementsArticleCommentCount() {
         when(articleFacade.findIdByUuid(articleUuid)).thenReturn(articleId);
         when(renderer.render(any())).thenReturn("<p>x</p>");

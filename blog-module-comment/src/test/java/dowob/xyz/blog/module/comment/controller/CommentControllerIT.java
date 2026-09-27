@@ -164,6 +164,7 @@ class CommentControllerIT {
         Comment c = new Comment();
         c.setUuid(UUID.randomUUID());
         c.setArticleId(articleId);
+        c.setArticleUuid(articleUuid);
         c.setParentId(parentId);
         c.setUserId(userId);
         c.setContent("seed");
