@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.TestFileApplication;
 import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
+import dowob.xyz.blog.module.file.support.SeaweedFsContainer;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
@@ -37,7 +38,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
-import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -66,7 +66,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 檔案 Controller 整合測試
  *
  * <p>
- * 使用 TestContainers 啟動 PostgreSQL、Redis 與 MinIO，
+ * 使用 TestContainers 啟動 PostgreSQL、Redis 與 S3 相容儲存（SeaweedFS，見 {@link SeaweedFsContainer}），
  * 測試 FileController 的完整 API 流程。
  * 使用 Spring Security Test 提供的 RequestPostProcessor 模擬認證，
  * 確保 SecurityContext 在完整過濾器鏈中正確傳遞。
@@ -96,10 +96,10 @@ class FileControllerIT {
             new com.redis.testcontainers.RedisContainer("redis:7-alpine");
 
     /**
-     * MinIO TestContainer
+     * S3 相容儲存 TestContainer（SeaweedFS；應用程式仍以 MinIO Java SDK 連線）
      */
     @Container
-    static MinIOContainer minio = new MinIOContainer("minio/minio:latest");
+    static SeaweedFsContainer s3Storage = new SeaweedFsContainer();
 
     /**
      * 動態注入容器連線設定
@@ -113,9 +113,9 @@ class FileControllerIT {
         registry.add("spring.datasource.password", postgres::getPassword);
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
-        registry.add("minio.endpoint", minio::getS3URL);
-        registry.add("minio.access-key", minio::getUserName);
-        registry.add("minio.secret-key", minio::getPassword);
+        registry.add("minio.endpoint", s3Storage::getS3Url);
+        registry.add("minio.access-key", s3Storage::getAccessKey);
+        registry.add("minio.secret-key", s3Storage::getSecretKey);
         registry.add("minio.bucket-name", () -> "blog-files");
     }
 
