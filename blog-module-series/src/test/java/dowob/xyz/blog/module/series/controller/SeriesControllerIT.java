@@ -573,9 +573,17 @@ class SeriesControllerIT {
     }
 
     @Test
-    @DisplayName("GET /series?size=100000 - 每頁筆數夾到上界 100（未認證亦不能觸發無上界查詢，finding #4）")
-    void list_oversizedPageSize_clampedTo100() throws Exception {
+    @DisplayName("GET /series?size=100000 - 超過 PageQuery 上限 → 400（SEC-04：超出範圍改為拒絕而非靜默夾界；finding #4）")
+    void list_pageSizeAbovePageQueryMax_returns400() throws Exception {
         mockMvc.perform(get("/api/v1/series").param("size", "100000"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0001"));
+    }
+
+    @Test
+    @DisplayName("GET /series?size=500 - 在 PageQuery 上限內但超過系列自身上限 100 → 仍夾到 100（SeriesService.MAX_PAGE_SIZE）")
+    void list_pageSizeAboveSeriesMax_clampedTo100() throws Exception {
+        mockMvc.perform(get("/api/v1/series").param("size", "500"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.size").value(100));
     }

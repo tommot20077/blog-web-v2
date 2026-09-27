@@ -83,8 +83,11 @@
 
 - `PageQuery.MAX_SIZE` 1000 → 100，並更新其 JavaDoc（目前寫明「取 1000 是為了不改變現行前端行為」）
 - `PageQueryTest` 的 `上限值為 1000，與 ArticleList 前端現行傳值對齊` 測試需同步改寫
-- **待 Yuan 拍板**（上游交接 §1.4）：超過上限時維持「截斷」（現行、靜默）還是改「回 400」（誠實但屬破壞性契約變更）
-- 上線前 grep 前端所有 `size` 傳值，確認沒有 > 100 的呼叫點殘留
+- ~~待 Yuan 拍板：截斷還是回 400~~ → **Yuan 2026-09-27 決定回 400，且上下界都回 400**；機制已先行落地
+  （分支 `feat/page-query-reject-out-of-range`）：`PageQueryArgumentResolver` 解析 page/size，
+  `page < 1`、`size ∉ [1, MAX_SIZE]`、非整數一律 400（`A0001`）。故第 3 段剩下的真的只有改常數
+- ⚠️ **因此降到 100 之後，任何 `size > 100` 的呼叫會直接 400 而非少資料**——上線前必須 grep 前端所有 `size`
+  傳值，確認沒有 > 100 的呼叫點殘留（2026-09-27 盤點：ArticleList 1000、AuthorView 200、TagView 100，其餘 ≤ 30）
 - 更新 `findings.md` SEC-04 狀態
 
 ---
