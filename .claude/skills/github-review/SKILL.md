@@ -11,24 +11,46 @@ Fetch PR comments → Categorise → Discuss trade-offs with Yuan → Confirm im
 
 ### Step 0 — Identify the Target PR
 
-Run `git remote get-url origin` to parse the repo owner/name, and `git branch --show-current` to get the current branch.
+Run `gh auth status` first (if not logged in → **STOP** and ask Yuan to run `gh auth login`). Then run `gh repo view --json nameWithOwner` to get the repo owner/name, and `git branch --show-current` to get the current branch.
 
 **Selection rules:**
 - If the current branch has a matching open PR, select it automatically
-- Otherwise, list all open PRs with `mcp__github__list_pull_requests` and let Yuan choose
+- Otherwise, list all open PRs with `gh pr list --state open --json number,title,headRefName,author` and let Yuan choose
 - If no open PRs exist → **STOP** and inform Yuan (suggest running `/open-pr` first)
 
 ---
 
 ### Step 1 — Fetch All Comments
 
-Call the following three tools **in parallel** for the selected PR:
+Run the following three commands **in parallel** (as separate `Bash` calls) for the selected PR `<n>`:
 
-| Tool call | Data |
+| Command | Data |
 |---|---|
-| `pull_request_read` (get_reviews) | Overall review decisions (APPROVE / REQUEST_CHANGES / COMMENT) |
-| `pull_request_read` (get_review_comments) | Line-level review threads (includes `isResolved` / `isOutdated`) |
-| `pull_request_read` (get_comments) | General PR comments (issue comments) |
+| `gh pr view <n> --json reviews` | Overall review decisions (APPROVED / CHANGES_REQUESTED / COMMENTED) |
+| `gh api graphql -f query='...' -f owner=<owner> -f repo=<repo> -F n=<n>` (see below) | Line-level review threads (includes `isResolved` / `isOutdated`) |
+| `gh pr view <n> --json comments` | General PR comments (issue comments) |
+
+GraphQL query for review threads:
+
+```graphql
+query($owner: String!, $repo: String!, $n: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $n) {
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 50) { nodes { author { login } body } }
+        }
+      }
+    }
+  }
+}
+```
+
+If `reviewThreads` has more than 100 nodes, page with `pageInfo { hasNextPage endCursor }` and `after:`.
 
 ---
 
@@ -115,11 +137,12 @@ After Yuan confirms, call the `Skill` tool to invoke `review-implementing`, pass
 |---|---|---|
 | `Bash` (`git remote get-url origin`) | Step 0 | Parse repo owner/name |
 | `Bash` (`git branch --show-current`) | Step 0 | Get current branch |
-| `mcp__github__list_pull_requests` | Step 0 | List open PRs |
-| `mcp__github__pull_request_read` (get) | Step 1 | PR basic info |
-| `mcp__github__pull_request_read` (get_reviews) | Step 1 | Overall reviews |
-| `mcp__github__pull_request_read` (get_review_comments) | Step 1 | Line-level threads |
-| `mcp__github__pull_request_read` (get_comments) | Step 1 | General comments |
+| `Bash` (`gh auth status`) | Step 0 | Confirm gh login |
+| `Bash` (`gh pr list --state open --json ...`) | Step 0 | List open PRs |
+| `Bash` (`gh pr view <n>`) | Step 1 | PR basic info |
+| `Bash` (`gh pr view <n> --json reviews`) | Step 1 | Overall reviews |
+| `Bash` (`gh api graphql` reviewThreads) | Step 1 | Line-level threads |
+| `Bash` (`gh pr view <n> --json comments`) | Step 1 | General comments |
 | `AskUserQuestion` | Step 4, 5 | Discussion and final confirmation |
 | `Skill` (`review-implementing`) | Step 6 | Hand off to implementation |
 
@@ -150,4 +173,4 @@ After Yuan confirms, call the `Skill` tool to invoke `review-implementing`, pass
 - Highlight it explicitly in Step 4, explain the impact, and let Yuan decide before adding to the list
 
 **GitHub API call fails:**
-- Report the error to Yuan and suggest checking repo permissions or network connectivity
+- Report the error to Yuan and suggest checking `gh auth status`, repo permissions or network connectivity
