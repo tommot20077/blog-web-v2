@@ -32,6 +32,12 @@ public class Comment {
     @Column("article_id")
     private Long articleId;
 
+    /**
+     * 所屬文章的 UUID（ARCH-30 P2 起與 {@link #articleId} 雙寫；P3 讀寫切換至此欄後，articleId 於 P4 移除）。
+     */
+    @Column("article_uuid")
+    private UUID articleUuid;
+
     @Column("parent_id")
     private Long parentId;
 
