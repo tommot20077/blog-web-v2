@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.reading.controller;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.service.ArticleLikeService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -41,20 +42,20 @@ public class ArticleLikeController {
     @PostMapping
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "按讚文章（idempotent）")
-    public ApiResponse<Void> like(@AuthenticationPrincipal Long userId,
+    public ApiResponse<Void> like(@AuthenticationPrincipal AuthUser user,
                                     @PathVariable UUID articleUuid) {
         Long articleId = resolveArticleId(articleUuid);
-        likeService.likeArticle(userId, articleId);
+        likeService.likeArticle(user.id(), articleId);
         return ApiResponse.success();
     }
 
     @DeleteMapping
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "取消按讚（idempotent）")
-    public ApiResponse<Void> unlike(@AuthenticationPrincipal Long userId,
+    public ApiResponse<Void> unlike(@AuthenticationPrincipal AuthUser user,
                                       @PathVariable UUID articleUuid) {
         Long articleId = resolveArticleId(articleUuid);
-        likeService.unlikeArticle(userId, articleId);
+        likeService.unlikeArticle(user.id(), articleId);
         return ApiResponse.success();
     }
 

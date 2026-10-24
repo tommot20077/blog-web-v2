@@ -2,6 +2,8 @@ package dowob.xyz.blog.common.constant;
 
 import lombok.experimental.UtilityClass;
 
+import java.util.UUID;
+
 /**
  * Redis Key 常量與生成工具
  *
@@ -13,13 +15,13 @@ public class RedisKeyConstant {
 
     /**
      * 用戶認證快取 (Hash)
-     * Key: user:auth:{userId}
+     * Key: user:auth:{userUuid}
      */
     public static final String USER_AUTH_KEY_PREFIX = "user:auth:";
 
     /**
      * 用戶 Refresh Token 快取 (String)
-     * Key: user:refresh:{userId}
+     * Key: user:refresh:{userUuid}
      */
     public static final String USER_REFRESH_KEY_PREFIX = "user:refresh:";
 
@@ -36,11 +38,11 @@ public class RedisKeyConstant {
     /**
      * 生成用戶認證 Redis Key
      *
-     * @param userId 用戶 ID
+     * @param userUuid 用戶 UUID
      * @return Redis Key
      */
-    public static String getUserAuthKey(Long userId) {
-        return USER_AUTH_KEY_PREFIX + userId;
+    public static String getUserAuthKey(UUID userUuid) {
+        return USER_AUTH_KEY_PREFIX + userUuid;
     }
 
     /**
@@ -58,11 +60,11 @@ public class RedisKeyConstant {
     /**
      * 生成用戶 Refresh Token Redis Key
      *
-     * @param userId 用戶 ID
+     * @param userUuid 用戶 UUID
      * @return Redis Key
      */
-    public static String getUserRefreshKey(Long userId) {
-        return USER_REFRESH_KEY_PREFIX + userId;
+    public static String getUserRefreshKey(UUID userUuid) {
+        return USER_REFRESH_KEY_PREFIX + userUuid;
     }
 
     /**
@@ -94,7 +96,7 @@ public class RedisKeyConstant {
 
     /**
      * 登入失敗計數 Key 前綴 (String)
-     * Key: login:fail:{userId}
+     * Key: login:fail:{userUuid}
      */
     public static final String LOGIN_FAIL_PREFIX = "login:fail:";
 
@@ -120,11 +122,11 @@ public class RedisKeyConstant {
     /**
      * 生成登入失敗計數 Redis Key
      *
-     * @param userId 用戶 ID
+     * @param userUuid 用戶 UUID
      * @return Redis Key
      */
-    public static String getLoginFailKey(Long userId) {
-        return LOGIN_FAIL_PREFIX + userId;
+    public static String getLoginFailKey(UUID userUuid) {
+        return LOGIN_FAIL_PREFIX + userUuid;
     }
 
     /**
@@ -291,18 +293,18 @@ public class RedisKeyConstant {
 
     /**
      * 個人搜尋歷史 List Key 前綴
-     * Key: search:history:{userId}
+     * Key: search:history:{userUuid}
      */
     public static final String SEARCH_HISTORY_PREFIX = "search:history:";
 
     /**
      * 生成個人搜尋歷史 Redis Key
      *
-     * @param userId 用戶 ID
+     * @param userUuid 用戶 UUID
      * @return Redis Key
      */
-    public static String getSearchHistoryKey(Long userId) {
-        return SEARCH_HISTORY_PREFIX + userId;
+    public static String getSearchHistoryKey(UUID userUuid) {
+        return SEARCH_HISTORY_PREFIX + userUuid;
     }
 
     /**
@@ -393,6 +395,11 @@ public class RedisKeyConstant {
      * Auth Hash 角色欄位
      */
     public static final String FIELD_ROLE = "role";
+
+    /**
+     * Auth Hash 使用者主鍵欄位（過渡欄位，供 {@code AuthUser.id()} 使用；收尾階段移除）
+     */
+    public static final String FIELD_ID = "id";
 
     /** ===================== Reading Progress（批 2 / V14）===================== */
 

@@ -6,6 +6,7 @@ import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.file.model.FileMetadata;
@@ -77,7 +78,7 @@ public class FileController {
      * @param usageType      用途類型
      * @param articleUuid    要一併綁定的文章 UUID（可選；新文章尚未儲存時可留空，待文章儲存時再由
      *                       {@code blog-module-article} 掃描內文回填綁定）
-     * @param userId         當前登入用戶的資料庫主鍵
+     * @param user         當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 上傳成功的檔案資訊（{@code url} 為相對路徑 {@code /api/v1/files/{id}/content}）
      */
@@ -94,9 +95,9 @@ public class FileController {
             @Parameter(hidden = true) @RequestParam("file") MultipartFile file,
             @Parameter(hidden = true) @RequestParam("usageType") UsageType usageType,
             @Parameter(hidden = true) @RequestParam(value = "articleUuid", required = false) UUID articleUuid,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
-        UUID uploaderId = resolveUserUuid(userId);
+        UUID uploaderId = resolveUserUuid(user.id());
         Role roleEnum = SecurityUtils.resolveRole(authentication);
         String role = roleEnum != null ? roleEnum.name() : "USER";
         return ApiResponse.success(fileService.uploadFile(file, usageType, uploaderId, role, articleUuid));
@@ -114,16 +115,16 @@ public class FileController {
      * </p>
      *
      * @param id             檔案 UUID
-     * @param userId         當前登入用戶的資料庫主鍵（匿名為 null）
+     * @param user         當前登入者（AuthUser；匿名為 null）
      * @param authentication 當前認證資訊（用於判斷是否為 ADMIN）
      * @return 檔案元資料
      */
     @GetMapping("/api/v1/files/{id}")
     public ApiResponse<FileMetadata> getFileMetadata(
             @PathVariable UUID id,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
-        UUID requesterId = resolveOptionalUserUuid(userId);
+        UUID requesterId = resolveOptionalUserUuid(user == null ? null : user.id());
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
         /* 先取一次 metadata 再授權，避免 canRead(id,..) 與 getFileMetadata(id) 各查一次 DB */
         FileMetadata metadata = fileService.getFileMetadata(id);
@@ -148,17 +149,17 @@ public class FileController {
      * </p>
      *
      * @param id             檔案 UUID
-     * @param userId         當前登入用戶的資料庫主鍵（匿名為 null）
+     * @param user         當前登入者（AuthUser；匿名為 null）
      * @param authentication 當前認證資訊（用於判斷是否為 ADMIN）
      * @param response       HTTP 回應（用於寫入 302 狀態碼與 Location 標頭）
      */
     @GetMapping("/api/v1/files/{id}/content")
     public void getFileContent(
             @PathVariable UUID id,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             Authentication authentication,
             HttpServletResponse response) {
-        UUID requesterId = resolveOptionalUserUuid(userId);
+        UUID requesterId = resolveOptionalUserUuid(user == null ? null : user.id());
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
 
         /*
@@ -200,7 +201,7 @@ public class FileController {
      * 刪除檔案（需認證，擁有者或管理員可操作）
      *
      * @param id             檔案 UUID
-     * @param userId         當前登入用戶的資料庫主鍵
+     * @param user         當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於判斷是否為管理員）
      * @return 空回應
      */
@@ -208,9 +209,9 @@ public class FileController {
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<Void> deleteFile(
             @PathVariable UUID id,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
-        UUID requesterId = resolveUserUuid(userId);
+        UUID requesterId = resolveUserUuid(user.id());
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
         fileService.deleteFile(id, requesterId, isAdmin);
         return ApiResponse.success();
@@ -219,32 +220,32 @@ public class FileController {
     /**
      * 取得目前使用者的所有上傳檔案
      *
-     * @param userId   當前登入用戶的資料庫主鍵
+     * @param user   當前登入者（AuthUser）
      * @param pageable 分頁參數
      * @return 檔案列表
      */
     @GetMapping("/api/v1/users/me/files")
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<List<FileMetadata>> getUserFiles(
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             Pageable pageable) {
-        UUID uploaderId = resolveUserUuid(userId);
+        UUID uploaderId = resolveUserUuid(user.id());
         return ApiResponse.success(fileService.getUserFiles(uploaderId, pageable));
     }
 
     /**
      * 取得目前使用者的儲存配額資訊
      *
-     * @param userId         當前登入用戶的資料庫主鍵
+     * @param user         當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 配額資訊
      */
     @GetMapping("/api/v1/users/me/quota")
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<QuotaResponse> getQuota(
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
-        UUID uploaderId = resolveUserUuid(userId);
+        UUID uploaderId = resolveUserUuid(user.id());
         Role roleEnum = SecurityUtils.resolveRole(authentication);
         String role = roleEnum != null ? roleEnum.name() : "USER";
         return ApiResponse.success(fileService.getQuota(uploaderId, role));

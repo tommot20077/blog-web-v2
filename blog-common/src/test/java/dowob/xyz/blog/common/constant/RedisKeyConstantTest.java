@@ -3,6 +3,8 @@ package dowob.xyz.blog.common.constant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.UUID;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -13,6 +15,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @DisplayName("RedisKeyConstant 單元測試")
 class RedisKeyConstantTest {
+
+    /** 測試用使用者 uuid */
+    private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
     @Test
     @DisplayName("TAG_HOT_KEY 應為 tag:hot")
@@ -45,9 +50,9 @@ class RedisKeyConstantTest {
     }
 
     @Test
-    @DisplayName("getSearchHistoryKey 應回傳 search:history:{userId}")
+    @DisplayName("getSearchHistoryKey 應回傳 search:history:{userUuid}")
     void getSearchHistoryKey_returnsHistoryKey() {
-        assertThat(RedisKeyConstant.getSearchHistoryKey(42L)).isEqualTo("search:history:42");
+        assertThat(RedisKeyConstant.getSearchHistoryKey(USER_UUID)).isEqualTo("search:history:" + USER_UUID);
     }
 
     @Test
@@ -87,21 +92,27 @@ class RedisKeyConstantTest {
     }
 
     @Test
+    @DisplayName("FIELD_ID 應為 id（auth hash 的使用者主鍵欄位）")
+    void fieldId_hasExpectedValue() {
+        assertThat(RedisKeyConstant.FIELD_ID).isEqualTo("id");
+    }
+
+    @Test
     @DisplayName("FIELD_ROLE 應為 role")
     void fieldRole_hasExpectedValue() {
         assertThat(RedisKeyConstant.FIELD_ROLE).isEqualTo("role");
     }
 
     @Test
-    @DisplayName("getUserAuthKey 應回傳 user:auth:{userId}")
+    @DisplayName("getUserAuthKey 應回傳 user:auth:{userUuid}")
     void getUserAuthKey_returnsAuthKey() {
-        assertThat(RedisKeyConstant.getUserAuthKey(1L)).isEqualTo("user:auth:1");
+        assertThat(RedisKeyConstant.getUserAuthKey(USER_UUID)).isEqualTo("user:auth:" + USER_UUID);
     }
 
     @Test
-    @DisplayName("getUserRefreshKey 應回傳 user:refresh:{userId}")
+    @DisplayName("getUserRefreshKey 應回傳 user:refresh:{userUuid}")
     void getUserRefreshKey_returnsRefreshKey() {
-        assertThat(RedisKeyConstant.getUserRefreshKey(99L)).isEqualTo("user:refresh:99");
+        assertThat(RedisKeyConstant.getUserRefreshKey(USER_UUID)).isEqualTo("user:refresh:" + USER_UUID);
     }
 
     @Test
@@ -119,9 +130,9 @@ class RedisKeyConstantTest {
     }
 
     @Test
-    @DisplayName("getLoginFailKey 應回傳 login:fail:{userId}")
+    @DisplayName("getLoginFailKey 應回傳 login:fail:{userUuid}")
     void getLoginFailKey_returnsLoginFailKey() {
-        assertThat(RedisKeyConstant.getLoginFailKey(7L)).isEqualTo("login:fail:7");
+        assertThat(RedisKeyConstant.getLoginFailKey(USER_UUID)).isEqualTo("login:fail:" + USER_UUID);
     }
 
     @Test

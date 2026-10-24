@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.series.controller;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.model.dto.request.AddArticleToSeriesRequest;
@@ -77,24 +78,24 @@ public class SeriesController {
      * </p>
      *
      * @param slug          Series URL slug
-     * @param currentUserId 當前使用者 ID（未登入為 null，僅供 myProgress 個人化）
+     * @param user 當前登入者（AuthUser；未登入為 null，僅供 myProgress 個人化）
      * @return Series 詳情（含文章列表與我的進度）
      */
     @GetMapping("/{slug}")
     @Operation(summary = "Series 詳情（匿名可存取，登入時含我的進度）")
     public ApiResponse<SeriesDetailResponse> get(
             @PathVariable String slug,
-            @AuthenticationPrincipal Long currentUserId) {
-        return ApiResponse.success(seriesService.getSeriesDetail(slug, currentUserId));
+            @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(seriesService.getSeriesDetail(slug, (user == null ? null : user.id())));
     }
 
     @PostMapping
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "建立 Series")
     public ApiResponse<SeriesSummaryResponse> create(
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateSeriesRequest req) {
-        return ApiResponse.success(seriesService.createSeries(userId, req));
+        return ApiResponse.success(seriesService.createSeries(user.id(), req));
     }
 
     @PutMapping("/{uuid}")
@@ -102,10 +103,10 @@ public class SeriesController {
     @Operation(summary = "更新 Series")
     public ApiResponse<SeriesSummaryResponse> update(
             @PathVariable UUID uuid,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdateSeriesRequest req) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        return ApiResponse.success(seriesService.updateSeries(uuid, userId, isAdmin, req));
+        return ApiResponse.success(seriesService.updateSeries(uuid, user.id(), isAdmin, req));
     }
 
     @DeleteMapping("/{uuid}")
@@ -113,9 +114,9 @@ public class SeriesController {
     @Operation(summary = "刪除 Series")
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
-            @AuthenticationPrincipal Long userId) {
+            @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        seriesService.deleteSeries(uuid, userId, isAdmin);
+        seriesService.deleteSeries(uuid, user.id(), isAdmin);
         return ApiResponse.success();
     }
 
@@ -125,10 +126,10 @@ public class SeriesController {
     public ApiResponse<Void> addArticle(
             @PathVariable UUID uuid,
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody AddArticleToSeriesRequest req) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        seriesService.addArticleToSeries(uuid, articleUuid, userId, isAdmin, req.getPosition());
+        seriesService.addArticleToSeries(uuid, articleUuid, user.id(), isAdmin, req.getPosition());
         return ApiResponse.success();
     }
 
@@ -138,9 +139,9 @@ public class SeriesController {
     public ApiResponse<Void> removeArticle(
             @PathVariable UUID uuid,
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long userId) {
+            @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        seriesService.removeArticleFromSeries(uuid, articleUuid, userId, isAdmin);
+        seriesService.removeArticleFromSeries(uuid, articleUuid, user.id(), isAdmin);
         return ApiResponse.success();
     }
 

@@ -68,6 +68,9 @@ import static org.mockito.Mockito.when;
 @DisplayName("SearchService 單元測試")
 class SearchServiceTest {
 
+    /** 測試用使用者 uuid（搜尋紀錄 Redis key 以 uuid 為鍵） */
+    private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
+
     /**
      * Elasticsearch 操作工具（Mock）
      */
@@ -294,11 +297,11 @@ class SearchServiceTest {
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
             when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
 
-            searchService.search("java", null, "relevance", 1, 10, 42L);
+            searchService.search("java", null, "relevance", 1, 10, USER_UUID);
 
             verify(zSetOperations).incrementScore("search:hot", "java", 1.0);
-            verify(listOperations).leftPush("search:history:42", "java");
-            verify(listOperations).trim("search:history:42", 0, 19);
+            verify(listOperations).leftPush("search:history:" + USER_UUID, "java");
+            verify(listOperations).trim("search:history:" + USER_UUID, 0, 19);
         }
 
         /**
@@ -326,7 +329,7 @@ class SearchServiceTest {
             SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
 
-            searchService.search(null, null, "relevance", 1, 10, 1L);
+            searchService.search(null, null, "relevance", 1, 10, USER_UUID);
 
             verify(zSetOperations, never()).incrementScore(anyString(), anyString(), anyDouble());
             verify(listOperations, never()).leftPush(anyString(), anyString());
@@ -441,11 +444,11 @@ class SearchServiceTest {
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
             when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
 
-            PageResult<SearchResultResponse> result = searchService.search("Spring", "java", "relevance", 1, 10, 1L);
+            PageResult<SearchResultResponse> result = searchService.search("Spring", "java", "relevance", 1, 10, USER_UUID);
 
             assertThat(result).isNotNull();
             verify(zSetOperations).incrementScore("search:hot", "spring", 1.0);
-            verify(listOperations).leftPush("search:history:1", "spring");
+            verify(listOperations).leftPush("search:history:" + USER_UUID, "spring");
         }
     }
 
@@ -520,13 +523,13 @@ class SearchServiceTest {
         @Test
         @DisplayName("應從 Redis 取得最近 20 筆搜尋歷史")
         void getHistory_returnsRedisListRange() {
-            when(listOperations.range("search:history:7", 0, 19))
+            when(listOperations.range("search:history:" + USER_UUID, 0, 19))
                     .thenReturn(List.of("spring boot", "java基礎"));
 
-            List<String> history = searchService.getHistory(7L);
+            List<String> history = searchService.getHistory(USER_UUID);
 
             assertThat(history).containsExactly("spring boot", "java基礎");
-            verify(listOperations).range("search:history:7", 0, 19);
+            verify(listOperations).range("search:history:" + USER_UUID, 0, 19);
         }
 
         /**
@@ -537,7 +540,7 @@ class SearchServiceTest {
         void getHistory_whenRedisReturnsNull_returnsEmptyList() {
             when(listOperations.range(anyString(), anyLong(), anyLong())).thenReturn(null);
 
-            List<String> history = searchService.getHistory(7L);
+            List<String> history = searchService.getHistory(USER_UUID);
 
             assertThat(history).isEmpty();
         }
@@ -554,11 +557,11 @@ class SearchServiceTest {
          * 應刪除對應用戶的 Redis List key
          */
         @Test
-        @DisplayName("應刪除 Redis search:history:{userId} key")
+        @DisplayName("應刪除 Redis search:history:{userUuid} key")
         void clearHistory_deletesRedisKey() {
-            searchService.clearHistory(99L);
+            searchService.clearHistory(USER_UUID);
 
-            verify(redisTemplate).delete("search:history:99");
+            verify(redisTemplate).delete("search:history:" + USER_UUID);
         }
     }
 

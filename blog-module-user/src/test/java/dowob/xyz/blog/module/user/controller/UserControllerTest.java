@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
@@ -81,10 +83,14 @@ class UserControllerTest {
     @MockitoBean
     private UserAuthService userAuthService;
 
-    /** 測試用 Authentication（principal=1L，角色=ROLE_USER） */
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
+
+    /** 測試用 Authentication（principal=AuthUser(id=1L)，角色=ROLE_USER） */
     private static final UsernamePasswordAuthenticationToken USER_AUTH =
             new UsernamePasswordAuthenticationToken(
-                    1L, null,
+                    new AuthUser(1L, new UUID(0L, 1L), Role.USER), null,
                     List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
 
     // =========================================================================

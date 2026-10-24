@@ -2,6 +2,8 @@ package dowob.xyz.blog.module.article.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
@@ -410,8 +412,10 @@ class ArticleResponseMapperTest {
         }
 
         private void authenticateAs(Long userId, String springSecurityRole) {
+            Role role = Role.valueOf(springSecurityRole.substring("ROLE_".length()));
             Authentication auth = new UsernamePasswordAuthenticationToken(
-                    userId, null, List.of(new SimpleGrantedAuthority(springSecurityRole)));
+                    new AuthUser(userId, new UUID(0L, userId), role), null,
+                    List.of(new SimpleGrantedAuthority(springSecurityRole)));
             SecurityContextHolder.getContext().setAuthentication(auth);
         }
 

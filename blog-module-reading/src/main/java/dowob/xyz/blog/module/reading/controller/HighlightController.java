@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.reading.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.reading.model.dto.request.CreateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.request.UpdateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.response.HighlightResponse;
@@ -42,9 +43,9 @@ public class HighlightController {
     @Operation(summary = "建立 highlight + 可選 note")
     public ApiResponse<HighlightResponse> create(
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateHighlightRequest req) {
-        return ApiResponse.success(highlightService.create(articleUuid, userId, req));
+        return ApiResponse.success(highlightService.create(articleUuid, user.id(), req));
     }
 
     @GetMapping("/articles/{articleUuid}/highlights")
@@ -52,8 +53,8 @@ public class HighlightController {
     @Operation(summary = "撈我在這篇文章的所有 highlight")
     public ApiResponse<List<HighlightResponse>> list(
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success(highlightService.getByArticle(articleUuid, userId));
+            @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(highlightService.getByArticle(articleUuid, user.id()));
     }
 
     @PutMapping("/highlights/{uuid}")
@@ -61,9 +62,9 @@ public class HighlightController {
     @Operation(summary = "更新 highlight (color/note)")
     public ApiResponse<HighlightResponse> update(
             @PathVariable UUID uuid,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdateHighlightRequest req) {
-        return ApiResponse.success(highlightService.update(uuid, userId, req));
+        return ApiResponse.success(highlightService.update(uuid, user.id(), req));
     }
 
     @DeleteMapping("/highlights/{uuid}")
@@ -71,8 +72,8 @@ public class HighlightController {
     @Operation(summary = "硬刪除 highlight")
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
-            @AuthenticationPrincipal Long userId) {
-        highlightService.delete(uuid, userId);
+            @AuthenticationPrincipal AuthUser user) {
+        highlightService.delete(uuid, user.id());
         return ApiResponse.success();
     }
 }

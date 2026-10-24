@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.controller;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleWebTestConfiguration;
@@ -66,6 +67,10 @@ class ArticleControllerListTest {
 
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
 
     @BeforeEach
     void setUp() {

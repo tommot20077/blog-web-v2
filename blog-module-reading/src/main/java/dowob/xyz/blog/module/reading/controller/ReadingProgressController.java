@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.reading.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.reading.model.dto.request.UpdateProgressRequest;
 import dowob.xyz.blog.module.reading.model.dto.response.ProgressResponse;
 import dowob.xyz.blog.module.reading.service.ReadingProgressService;
@@ -38,9 +39,9 @@ public class ReadingProgressController {
     @Operation(summary = "更新閱讀進度（HSET Redis）")
     public ApiResponse<Void> update(
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdateProgressRequest req) {
-        progressService.update(userId, articleUuid, req.getProgress(), req.getLastHeading());
+        progressService.update(user.id(), articleUuid, req.getProgress(), req.getLastHeading());
         return ApiResponse.success();
     }
 
@@ -49,7 +50,7 @@ public class ReadingProgressController {
     @Operation(summary = "查詢進度（Redis 優先）")
     public ApiResponse<ProgressResponse> get(
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success(progressService.get(userId, articleUuid).orElse(null));
+            @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(progressService.get(user.id(), articleUuid).orElse(null));
     }
 }

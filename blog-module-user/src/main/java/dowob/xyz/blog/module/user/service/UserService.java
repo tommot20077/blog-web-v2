@@ -149,7 +149,7 @@ public class UserService {
         user.setTokenVersion(newVersion);
         userRepository.save(user);
 
-        sessionRevoker.revokeAllSessions(userId);
+        sessionRevoker.revokeAllSessions(user.getUuid());
     }
 
     /**
@@ -173,6 +173,6 @@ public class UserService {
         user.setStatus(UserStatus.DELETED);
         userRepository.save(user);
 
-        sessionRevoker.revokeAllSessions(userId);
+        sessionRevoker.revokeAllSessions(user.getUuid());
     }
 }

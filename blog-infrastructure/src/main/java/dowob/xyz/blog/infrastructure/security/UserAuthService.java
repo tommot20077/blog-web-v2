@@ -1,7 +1,7 @@
 package dowob.xyz.blog.infrastructure.security;
 
-import dowob.xyz.blog.common.api.enums.UserStatus;
-import dowob.xyz.blog.common.exception.BusinessException;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 用戶認證服務接口
@@ -15,25 +15,12 @@ import dowob.xyz.blog.common.exception.BusinessException;
  */
 public interface UserAuthService {
     /**
-     * 獲取用戶當前的 Token 版本號
+     * 以 uuid 查詢使用者的認證狀態（供 {@code AuthStateLoader} 在 Redis miss 時回填）。
      *
-     * @param userId 用戶 ID
-     * @return Token 版本號
-     */
-    String getUserTokenVersion(Long userId) throws Exception;
-
-    /**
-     * 載入用戶詳細資訊 (用於構建 Authentication)
+     * <p>只回報事實，不套用任何狀態政策；查無使用者時回傳 empty 而非拋例外。</p>
      *
-     * @param userId 用戶 ID
-     * @return 用戶詳細資訊 (包含角色等)
-     *
+     * @param uuid 使用者 UUID
+     * @return 認證狀態；使用者不存在時為 {@link Optional#empty()}
      */
-    SimpleUserDetail getUserDetail(Long userId) throws Exception;
-
-    /**
-     * 簡易用戶詳情 DTO
-     */
-    record SimpleUserDetail(Long id, String email, String role, UserStatus status) {
-    }
+    Optional<AuthState> findAuthStateByUuid(UUID uuid);
 }

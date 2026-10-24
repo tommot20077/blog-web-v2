@@ -335,7 +335,8 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 (b) 除白名單（SecurityUtils、JwtAuthenticationFilter、AuthStateLoader 所在類別）外，不得呼叫 `Authentication.getPrincipal()`
 (c) 反向驗證 fixture（放 src/test）：Long 型別的 @AuthenticationPrincipal、白名單外呼叫 getPrincipal()，兩者都被抓到
 【驗收條件】
-- 本 Task 完成時守衛**必須是紅的**（現況 63 處 Long principal、2 處 getPrincipal()），回報附紅燈輸出中的違規數
+- 現存違規（63 處 Long principal、2 處 getPrincipal()）以**例外清單**列入（比照 EventContractTest，含防死條目、每條標 T0b-3 清除），守衛保持綠；
+  RED 證據為「拿掉例外清單後的紅燈輸出」（2026-10-24 調整：避免 T0b-2 期間 blog-start 測試持續紅燈）；T0b-3 清空例外清單
 - 反向驗證 fixture 測試綠
 - 驗證指令：`mvn test -pl blog-start -am -Dtest=PrincipalTypeTest -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress`
 <§1.2 共通回報格式>

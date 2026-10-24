@@ -2,8 +2,10 @@ package dowob.xyz.blog.module.tag.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.tag.model.Tag;
@@ -79,6 +81,10 @@ class AdminTagControllerTest {
     @MockitoBean
     private UserAuthService userAuthService;
 
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
+
     private static final UUID TAG_ID = UUID.randomUUID();
 
     private static RequestPostProcessor asAdmin() {
@@ -87,7 +93,7 @@ class AdminTagControllerTest {
         Role.ADMIN.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(1L, null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(1L, new UUID(0L, 1L), Role.ADMIN), null, authorities);
         return authentication(auth);
     }
 
@@ -97,7 +103,7 @@ class AdminTagControllerTest {
         Role.USER.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(2L, null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(2L, new UUID(0L, 2L), Role.USER), null, authorities);
         return authentication(auth);
     }
 
