@@ -501,22 +501,6 @@ public class AuthService {
     }
 
     /**
-     * 查詢用戶當前角色
-     *
-     * <p>供 {@code /refresh} 於 Redis auth hash 缺少 role 欄位時回退至 DB 取得用戶實際角色，
-     * 避免刷新 Access Token 時角色被降級為 USER。</p>
-     *
-     * @param userUuid 用戶 UUID
-     * @return 角色名稱（如 {@code "AUTHOR"}）
-     */
-    @Transactional(readOnly = true)
-    public String resolveUserRole(UUID userUuid) {
-        return userRepository.findByUuid(userUuid)
-                .map(user -> user.getRole().name())
-                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
-    }
-
-    /**
      * 遞增 Token 版本號
      *
      * <p>解析 "v{n}" 格式的版本字串，遞增數字後回傳新版本。

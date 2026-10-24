@@ -2,9 +2,7 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
-import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.security.AuthState;
-import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -18,16 +16,13 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 /**
  * UserAuthServiceImpl 單元測試
  *
  * <p>
- * 驗證 {@link UserAuthServiceImpl} 的三個方法：
- * {@code getUserTokenVersion}、{@code getUserDetail} 與 {@code findAuthStateByUuid}。
- * 測試涵蓋用戶存在與不存在的場景，以及不同用戶狀態對 {@code isAvailable} 的影響。
+ * 驗證 {@link UserAuthServiceImpl#findAuthStateByUuid} 在用戶存在、不存在與欄位為 null 時的行為。
  * </p>
  *
  * @author Yuan
@@ -52,111 +47,6 @@ class UserAuthServiceImplTest {
 
     /** 測試用電子信箱 */
     private static final String TEST_EMAIL = "test@example.com";
-
-    /* =========================================================================
-       getUserTokenVersion 測試
-       ========================================================================= */
-
-    /**
-     * 驗證：用戶存在時應回傳其 tokenVersion。
-     */
-    @Test
-    @DisplayName("getUserTokenVersion → 用戶存在 → 應回傳 tokenVersion")
-    void getUserTokenVersion_userExists_shouldReturnTokenVersion() throws Exception {
-        User mockUser = buildUser(UserStatus.ACTIVE, "v3");
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
-
-        String version = userAuthServiceImpl.getUserTokenVersion(TEST_USER_ID);
-
-        assertThat(version).isEqualTo("v3");
-    }
-
-    /**
-     * 驗證：用戶不存在時應拋出 BusinessException。
-     */
-    @Test
-    @DisplayName("getUserTokenVersion → 用戶不存在 → 應拋出 BusinessException")
-    void getUserTokenVersion_userNotFound_shouldThrowBusinessException() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> userAuthServiceImpl.getUserTokenVersion(TEST_USER_ID))
-                .isInstanceOf(BusinessException.class);
-    }
-
-    /* =========================================================================
-       getUserDetail 測試
-       ========================================================================= */
-
-    /**
-     * 驗證：用戶存在時應正確組裝 SimpleUserDetail（id、email、role、status）。
-     */
-    @Test
-    @DisplayName("getUserDetail → 用戶存在 → 應正確組裝 SimpleUserDetail 所有欄位")
-    void getUserDetail_userExists_shouldReturnCorrectDetail() throws Exception {
-        User mockUser = buildUser(UserStatus.ACTIVE, "v1");
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
-
-        UserAuthService.SimpleUserDetail detail = userAuthServiceImpl.getUserDetail(TEST_USER_ID);
-
-        assertThat(detail.id()).isEqualTo(TEST_USER_ID);
-        assertThat(detail.email()).isEqualTo(TEST_EMAIL);
-        assertThat(detail.role()).isEqualTo(Role.USER.name());
-        assertThat(detail.status()).isEqualTo(UserStatus.ACTIVE);
-    }
-
-    /**
-     * 驗證：ACTIVE 用戶應保留原始狀態。
-     */
-    @Test
-    @DisplayName("getUserDetail → ACTIVE 用戶 → status 應為 ACTIVE")
-    void getUserDetail_activeUser_shouldReturnActiveStatus() throws Exception {
-        User mockUser = buildUser(UserStatus.ACTIVE, "v1");
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
-
-        UserAuthService.SimpleUserDetail detail = userAuthServiceImpl.getUserDetail(TEST_USER_ID);
-
-        assertThat(detail.status()).isEqualTo(UserStatus.ACTIVE);
-    }
-
-    /**
-     * 驗證：DELETED 用戶應保留原始狀態。
-     */
-    @Test
-    @DisplayName("getUserDetail → DELETED 用戶 → status 應為 DELETED")
-    void getUserDetail_deletedUser_shouldReturnDeletedStatus() throws Exception {
-        User mockUser = buildUser(UserStatus.DELETED, "v1");
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
-
-        UserAuthService.SimpleUserDetail detail = userAuthServiceImpl.getUserDetail(TEST_USER_ID);
-
-        assertThat(detail.status()).isEqualTo(UserStatus.DELETED);
-    }
-
-    /**
-     * 驗證：BANNED 用戶應保留原始狀態。
-     */
-    @Test
-    @DisplayName("getUserDetail → BANNED 用戶 → status 應為 BANNED")
-    void getUserDetail_suspendedUser_shouldReturnBannedStatus() throws Exception {
-        User mockUser = buildUser(UserStatus.BANNED, "v1");
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
-
-        UserAuthService.SimpleUserDetail detail = userAuthServiceImpl.getUserDetail(TEST_USER_ID);
-
-        assertThat(detail.status()).isEqualTo(UserStatus.BANNED);
-    }
-
-    /**
-     * 驗證：用戶不存在時應拋出 BusinessException。
-     */
-    @Test
-    @DisplayName("getUserDetail → 用戶不存在 → 應拋出 BusinessException")
-    void getUserDetail_userNotFound_shouldThrowBusinessException() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> userAuthServiceImpl.getUserDetail(TEST_USER_ID))
-                .isInstanceOf(BusinessException.class);
-    }
 
     /* =========================================================================
        findAuthStateByUuid 測試
