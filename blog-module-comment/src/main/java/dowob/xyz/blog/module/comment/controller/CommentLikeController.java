@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.comment.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.comment.service.CommentLikeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -34,16 +35,16 @@ public class CommentLikeController {
     @PostMapping
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "按讚留言（idempotent；軟刪除留言阻擋 C0104）")
-    public ApiResponse<Void> like(@AuthenticationPrincipal Long userId, @PathVariable UUID uuid) {
-        likeService.likeComment(uuid, userId);
+    public ApiResponse<Void> like(@AuthenticationPrincipal AuthUser user, @PathVariable UUID uuid) {
+        likeService.likeComment(uuid, user.id());
         return ApiResponse.success();
     }
 
     @DeleteMapping
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "取消按讚（idempotent）")
-    public ApiResponse<Void> unlike(@AuthenticationPrincipal Long userId, @PathVariable UUID uuid) {
-        likeService.unlikeComment(uuid, userId);
+    public ApiResponse<Void> unlike(@AuthenticationPrincipal AuthUser user, @PathVariable UUID uuid) {
+        likeService.unlikeComment(uuid, user.id());
         return ApiResponse.success();
     }
 }
