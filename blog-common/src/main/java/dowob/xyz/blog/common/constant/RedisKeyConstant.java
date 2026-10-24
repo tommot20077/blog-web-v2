@@ -353,6 +353,40 @@ public class RedisKeyConstant {
      */
     public static final String LOCK_TRENDING_REFRESH = "lock:trending-refresh";
 
+    /**
+     * 孤兒校正分散式鎖 Key 前綴
+     * Key: lock:reconciliation:{module}:{table}
+     */
+    public static final String LOCK_RECONCILIATION_PREFIX = "lock:reconciliation:";
+
+    /**
+     * 孤兒校正續跑游標 Key 前綴（String，值為最後處理的 UUID）
+     * Key: reconciliation:cursor:{module}:{table}
+     */
+    public static final String RECONCILIATION_CURSOR_PREFIX = "reconciliation:cursor:";
+
+    /**
+     * 生成孤兒校正分散式鎖 Key
+     *
+     * @param module 模組名稱
+     * @param table  表名
+     * @return Redis Key
+     */
+    public static String getReconciliationLockKey(String module, String table) {
+        return LOCK_RECONCILIATION_PREFIX + module + ":" + table;
+    }
+
+    /**
+     * 生成孤兒校正續跑游標 Key
+     *
+     * @param module 模組名稱
+     * @param table  表名
+     * @return Redis Key
+     */
+    public static String getReconciliationCursorKey(String module, String table) {
+        return RECONCILIATION_CURSOR_PREFIX + module + ":" + table;
+    }
+
     /** ===================== Auth Hash Fields ===================== */
 
     /**

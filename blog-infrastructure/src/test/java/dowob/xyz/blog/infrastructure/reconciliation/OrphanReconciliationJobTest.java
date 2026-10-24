@@ -1,5 +1,6 @@
 package dowob.xyz.blog.infrastructure.reconciliation;
 
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.infrastructure.reconciliation.OrphanReconciliationJob.Result;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -28,8 +29,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -295,16 +299,441 @@ class OrphanReconciliationJobTest {
                 .contains("orphansRemoved=1");
     }
 
+    // ===================================================================================
+    // 摘要 log：每種結果各自恰好一行
+    // ===================================================================================
+
+    /** @return 目前捕捉到、層級為 INFO 以上的訊息 */
+    private List<String> summaryLines() {
+        return appender.events.stream()
+                .filter(e -> e.getLevel().isMoreSpecificThan(org.apache.logging.log4j.Level.INFO))
+                .map(e -> e.getMessage().getFormattedMessage())
+                .toList();
+    }
+
     @Test
-    @DisplayName("取鎖失敗與執行失敗各自也只輸出一行摘要")
-    void run_whenSkippedOrFailed_stillLogsOneSummaryLine() {
+    @DisplayName("取鎖失敗（skipped）只輸出一行摘要")
+    void run_whenSkipped_logsExactlyOneSummaryLine() {
         when(valueOps.setIfAbsent(eq(LOCK_KEY), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
-        StubOrphanReconciliationJob skipped = new StubOrphanReconciliationJob(redis, registry);
-        skipped.run();
-        List<String> skippedLines = new ArrayList<>(appender.events.stream()
-                .map(e -> e.getMessage().getFormattedMessage()).toList());
-        assertThat(skippedLines).hasSize(1);
-        assertThat(skippedLines.get(0)).contains("result=skipped");
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+
+        job.run();
+
+        assertThat(summaryLines()).hasSize(1);
+        assertThat(summaryLines().get(0)).contains("result=skipped");
+    }
+
+    @Test
+    @DisplayName("執行失敗（failed）輸出摘要：除例外細節外不再有其他 INFO 以上的行")
+    void run_whenFailed_logsSummaryLineWithResultFailed() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        job.referenced.add(uuid(1));
+        job.filterFailure = new IllegalStateException("owner down");
+
+        job.run();
+
+        List<String> lines = summaryLines();
+        assertThat(lines).anyMatch(l -> l.contains("result=failed"));
+        assertThat(lines).filteredOn(l -> l.contains("孤兒校正摘要")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("中止（aborted）輸出一行 error 摘要，含 found、scanned 與門檻")
+    void run_whenAborted_logsOneErrorLineWithFoundScannedAndThresholds() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 100, 100);
+        job.filterOverride = (call, in) -> Set.of();
+
+        job.run();
+
+        List<LogEvent> errors = appender.events.stream()
+                .filter(e -> e.getLevel().isMoreSpecificThan(org.apache.logging.log4j.Level.ERROR)).toList();
+        assertThat(errors).hasSize(1);
+        assertThat(summaryLines()).hasSize(1);
+        String line = errors.get(0).getMessage().getFormattedMessage();
+        assertThat(line).contains("result=aborted").contains("orphansFound=100").contains("scanned=100")
+                .contains("maxOrphans=1000").contains("maxRatio=0.2");
+    }
+
+    // ===================================================================================
+    // 中止門檻（CRITICAL：filterExisting 異常時整張表不可被當孤兒）
+    // ===================================================================================
+
+    /**
+     * 建立 1..total 的被參照 UUID，其中前 orphanCount 個在 owner 端不存在。
+     *
+     * @param job         測試 job
+     * @param total       被參照總數
+     * @param orphanCount 孤兒數
+     */
+    private static void populate(StubOrphanReconciliationJob job, int total, int orphanCount) {
+        for (int i = 1; i <= total; i++) {
+            job.referenced.add(uuid(i));
+            if (i > orphanCount) {
+                job.existingInOwner.add(uuid(i));
+            }
+        }
+    }
+
+    private void assertAbortedWithoutAnyModification(StubOrphanReconciliationJob job, Result result) {
+        assertThat(result).isEqualTo(Result.ABORTED);
+        assertThat(job.removeCalls).isZero();
+        assertThat(job.removed).isEmpty();
+        verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
+        verify(redis, never()).delete(CURSOR_KEY);
+        assertThat(counter("reconciliation.runs", "module", "stub", "table", "stub_table", "result", "aborted"))
+                .isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("filterExisting 回傳空集合（疑似 owner 異常）時中止：不移除、不推進游標")
+    @SuppressWarnings("unchecked")
+    void run_whenFilterExistingReturnsEmptySet_abortsWithoutRemoving() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 1000, 0); // 實際上全部都存在
+        job.filterOverride = (call, in) -> Set.of(); // owner 異常：回傳空集合
+
+        Result result = job.run();
+
+        assertAbortedWithoutAnyModification(job, result);
+        verify(redis).execute(any(RedisScript.class), eq(List.of(LOCK_KEY)), any()); // 仍然解鎖
+    }
+
+    @Test
+    @DisplayName("filterExisting 回傳 null 違反契約：拋 IllegalStateException，整次 failed、零修改")
+    void run_whenFilterExistingReturnsNull_failsWithoutRemoving() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 100, 0);
+        job.filterOverride = (call, in) -> null;
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.FAILED);
+        assertThat(job.removeCalls).isZero();
+        verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("filterExisting 回傳輸入以外的元素違反契約：整次 failed、零修改")
+    void run_whenFilterExistingReturnsForeignElement_failsWithoutRemoving() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 10, 3);
+        job.filterOverride = (call, in) -> {
+            Set<UUID> result = new java.util.HashSet<>(in);
+            result.add(uuid(999_999)); // 輸入以外
+            return result;
+        };
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.FAILED);
+        assertThat(job.removeCalls).isZero();
+    }
+
+    @Test
+    @DisplayName("孤兒數剛好等於絕對上限（1000）時照常處理；超過 1 筆（1001）即中止")
+    void run_absoluteThreshold_boundary() {
+        StubOrphanReconciliationJob atLimit = new StubOrphanReconciliationJob(redis, registry);
+        populate(atLimit, 10_000, OrphanReconciliationJob.MAX_ORPHANS_PER_RUN); // 10%，不觸發比例門檻
+        assertThat(atLimit.run()).isEqualTo(Result.COMPLETED);
+        assertThat(atLimit.removed).hasSize(1000);
+
+        StubOrphanReconciliationJob overLimit = new StubOrphanReconciliationJob(redis, registry);
+        populate(overLimit, 10_000, OrphanReconciliationJob.MAX_ORPHANS_PER_RUN + 1);
+        Result result = overLimit.run();
+        assertThat(overLimit.removeCalls).isZero();
+        assertThat(result).isEqualTo(Result.ABORTED);
+    }
+
+    @Test
+    @DisplayName("孤兒占比剛好 20% 時照常處理；超過（21%）即中止")
+    void run_ratioThreshold_boundary() {
+        StubOrphanReconciliationJob atLimit = new StubOrphanReconciliationJob(redis, registry);
+        populate(atLimit, 100, 20);
+        assertThat(atLimit.run()).isEqualTo(Result.COMPLETED);
+        assertThat(atLimit.removed).hasSize(20);
+
+        StubOrphanReconciliationJob overLimit = new StubOrphanReconciliationJob(redis, registry);
+        populate(overLimit, 100, 21);
+        Result result = overLimit.run();
+        assertThat(overLimit.removeCalls).isZero();
+        assertThat(result).isEqualTo(Result.ABORTED);
+    }
+
+    @Test
+    @DisplayName("掃描數少於 50 時比例門檻不啟用（49 筆全為孤兒仍處理）；剛好 50 筆時啟用")
+    void run_ratioThreshold_disabledBelowMinimumScanned() {
+        StubOrphanReconciliationJob below = new StubOrphanReconciliationJob(redis, registry);
+        populate(below, 49, 49);
+        assertThat(below.run()).isEqualTo(Result.COMPLETED);
+        assertThat(below.removed).hasSize(49);
+
+        StubOrphanReconciliationJob atMinimum = new StubOrphanReconciliationJob(redis, registry);
+        populate(atMinimum, 50, 11); // 22%
+        Result result = atMinimum.run();
+        assertThat(atMinimum.removeCalls).isZero();
+        assertThat(result).isEqualTo(Result.ABORTED);
+    }
+
+    @Test
+    @DisplayName("子類別可覆寫絕對上限")
+    void run_subclassCanOverrideAbsoluteThreshold() {
+        StubOrphanReconciliationJob ok = new StubOrphanReconciliationJob(redis, registry);
+        ok.maxOrphansOverride = 3;
+        populate(ok, 10_000, 3);
+        assertThat(ok.run()).isEqualTo(Result.COMPLETED);
+
+        StubOrphanReconciliationJob over = new StubOrphanReconciliationJob(redis, registry);
+        over.maxOrphansOverride = 3;
+        populate(over, 10_000, 4);
+        assertThat(over.run()).isEqualTo(Result.ABORTED);
+        assertThat(over.removeCalls).isZero();
+    }
+
+    @Test
+    @DisplayName("子類別可覆寫比例上限")
+    void run_subclassCanOverrideRatioThreshold() {
+        StubOrphanReconciliationJob ok = new StubOrphanReconciliationJob(redis, registry);
+        ok.maxRatioOverride = 0.5;
+        populate(ok, 100, 40); // 40% 超過預設 20% 但在 50% 內
+        assertThat(ok.run()).isEqualTo(Result.COMPLETED);
+
+        StubOrphanReconciliationJob over = new StubOrphanReconciliationJob(redis, registry);
+        over.maxRatioOverride = 0.5;
+        populate(over, 100, 51);
+        assertThat(over.run()).isEqualTo(Result.ABORTED);
+        assertThat(over.removeCalls).isZero();
+    }
+
+    // ===================================================================================
+    // 修改前複查（TOCTOU）
+    // ===================================================================================
+
+    @Test
+    @DisplayName("修改前複查：第一次判定不存在、複查已存在者不移除")
+    void run_recheckBeforeModification_skipsUuidsThatAppearedMeanwhile() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 5, 2); // u1、u2 為孤兒
+        job.filterOverride = (call, in) -> {
+            Set<UUID> result = new java.util.HashSet<>(in);
+            if (call == 1) {
+                result.removeAll(Set.of(uuid(1), uuid(2)));
+            } else {
+                result.remove(uuid(1)); // 複查時 u2 已出現在 owner
+            }
+            return result;
+        };
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.COMPLETED);
+        assertThat(job.removed).containsExactly(uuid(1));
+        assertThat(job.filterCalls).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("修改前複查拋例外：整次 failed、零修改")
+    void run_whenRecheckThrows_failsWithoutRemoving() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 5, 2);
+        job.filterFailure = new IllegalStateException("owner down on recheck");
+        job.failOnFilterCall = 2;
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.FAILED);
+        assertThat(job.removeCalls).isZero();
+        verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
+    }
+
+    // ===================================================================================
+    // removeOrphans 切批
+    // ===================================================================================
+
+    @Test
+    @DisplayName("孤兒數大於頁大小時，removeOrphans 每次收到的筆數不超過頁大小")
+    void run_whenOrphansExceedPageSize_removeOrphansChunksAreBoundedByPageSize() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry, 3, 100);
+        populate(job, 8, 8);
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.COMPLETED);
+        assertThat(job.removeChunkSizes).containsExactly(3, 3, 2);
+        assertThat(job.removed).hasSize(8);
+    }
+
+    // ===================================================================================
+    // 時間預算
+    // ===================================================================================
+
+    private static final long TTL_NANOS = TimeUnit.SECONDS.toNanos(OrphanReconciliationJob.LOCK_TTL_SECONDS);
+
+    @Test
+    @DisplayName("掃描耗時超過 TTL 的 40% 時收尾為 partial，並保存游標")
+    void run_whenScanExceedsFortyPercentOfTtl_endsPartialAndSavesCursor() {
+        AtomicLong clock = new AtomicLong();
+        StubOrphanReconciliationJob job = StubOrphanReconciliationJob.withClock(redis, registry, 2, 100, clock);
+        populate(job, 10, 0);
+        job.beforeFetchHook = call -> {
+            if (call == 2) {
+                clock.set((long) (TTL_NANOS * 0.41));
+            }
+        };
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.PARTIAL);
+        assertThat(job.fetchCursors).hasSize(2);
+        verify(valueOps).set(eq(CURSOR_KEY), eq(uuid(4).toString()), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("進入修改階段前已超過 TTL 的 80%：不修改、partial、游標不推進")
+    void run_whenOverEightyPercentBeforeModification_skipsModification() {
+        AtomicLong clock = new AtomicLong();
+        StubOrphanReconciliationJob job = StubOrphanReconciliationJob.withClock(redis, registry, 2, 100, clock);
+        populate(job, 4, 2);
+        job.beforeFetchHook = call -> clock.set((long) (TTL_NANOS * 0.85));
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.PARTIAL);
+        assertThat(job.removeCalls).isZero();
+        verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
+        verify(redis, never()).delete(CURSOR_KEY);
+    }
+
+    @Test
+    @DisplayName("修改階段每個 chunk 前檢查 TTL 的 80%：超過即不處理剩餘 chunk、游標不推進")
+    void run_whenOverEightyPercentBetweenChunks_stopsRemainingChunks() {
+        AtomicLong clock = new AtomicLong();
+        StubOrphanReconciliationJob job = StubOrphanReconciliationJob.withClock(redis, registry, 2, 100, clock);
+        populate(job, 6, 5); // 5 個孤兒 → 3 個 chunk（2、2、1）
+        job.afterRemoveHook = call -> clock.set((long) (TTL_NANOS * 0.81));
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.PARTIAL);
+        assertThat(job.removeChunkSizes).containsExactly(2);
+        assertThat(counter("reconciliation.orphans_removed", "module", "stub", "table", "stub_table"))
+                .isEqualTo(2.0);
+        verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
+        verify(redis, never()).delete(CURSOR_KEY);
+    }
+
+    // ===================================================================================
+    // 修改階段失敗、連續失敗、取鎖例外、游標損毀、建構子參數
+    // ===================================================================================
+
+    @Test
+    @DisplayName("removeOrphans 中途失敗：已刪的不回滾、result=failed、游標不推進、仍解鎖")
+    @SuppressWarnings("unchecked")
+    void run_whenRemoveOrphansFailsMidway_keepsEarlierRemovalsAndDoesNotAdvanceCursor() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry, 2, 100);
+        populate(job, 5, 5);
+        job.removeFailure = new IllegalStateException("db down");
+        job.failOnRemoveCall = 2;
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.FAILED);
+        assertThat(job.removed).hasSize(2); // 第一個 chunk 已提交
+        assertThat(counter("reconciliation.orphans_removed", "module", "stub", "table", "stub_table"))
+                .isEqualTo(2.0);
+        verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
+        verify(redis, never()).delete(CURSOR_KEY);
+        verify(redis).execute(any(RedisScript.class), eq(List.of(LOCK_KEY)), any());
+    }
+
+    @Test
+    @DisplayName("連續失敗次數以 gauge 與摘要 log 暴露，成功後歸零")
+    void run_exposesConsecutiveFailuresAndResetsOnSuccess() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 3, 0);
+        job.filterFailure = new IllegalStateException("owner down");
+
+        job.run();
+        job.run();
+
+        var gauge = registry.find("reconciliation.consecutive_failures").tags("module", "stub", "table", "stub_table")
+                .gauge();
+        assertThat(gauge).isNotNull();
+        assertThat(gauge.value()).isEqualTo(2.0);
+        assertThat(summaryLines()).anyMatch(l -> l.contains("consecutiveFailures=2"));
+
+        job.filterFailure = null;
+        assertThat(job.run()).isEqualTo(Result.COMPLETED);
+        assertThat(gauge.value()).isEqualTo(0.0);
+    }
+
+    @Test
+    @DisplayName("取鎖時 Redis 拋例外：result=failed、不處理、不丟出例外、只輸出一行摘要")
+    @SuppressWarnings("unchecked")
+    void run_whenLockAcquisitionThrows_returnsFailedWithoutProcessing() {
+        when(valueOps.setIfAbsent(eq(LOCK_KEY), anyString(), anyLong(), any(TimeUnit.class)))
+                .thenThrow(new IllegalStateException("redis down"));
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 3, 3);
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.FAILED);
+        assertThat(job.fetchCursors).isEmpty();
+        verify(redis, never()).execute(any(RedisScript.class), anyList(), any());
+        assertThat(summaryLines().stream().filter(l -> l.contains("孤兒校正摘要"))).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("游標損毀（無法解析為 UUID）：刪除游標、從頭掃描、記錄 warn")
+    void run_whenCursorCorrupted_deletesCursorAndScansFromStart() {
+        when(valueOps.get(CURSOR_KEY)).thenReturn("not-a-uuid");
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 3, 0);
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.COMPLETED);
+        assertThat(job.fetchCursors).containsExactly((UUID) null);
+        verify(redis, org.mockito.Mockito.atLeastOnce()).delete(CURSOR_KEY);
+        assertThat(appender.events).anyMatch(e ->
+                e.getLevel() == org.apache.logging.log4j.Level.WARN
+                        && e.getMessage().getFormattedMessage().contains("游標"));
+    }
+
+    @Test
+    @DisplayName("建構子的頁大小與頁數上限必須為正數")
+    void constructor_rejectsNonPositiveArguments() {
+        assertThatThrownBy(() -> new StubOrphanReconciliationJob(redis, registry, 0, 1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new StubOrphanReconciliationJob(redis, registry, -1, 1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new StubOrphanReconciliationJob(redis, registry, 1, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new StubOrphanReconciliationJob(redis, registry, 1, -5))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("預設頁大小與 BatchedQuery.BATCH_SIZE 同源")
+    void pageSize_isSameAsBatchedQueryBatchSize() {
+        assertThat(OrphanReconciliationJob.PAGE_SIZE).isEqualTo(BatchedQuery.BATCH_SIZE);
+    }
+
+    @Test
+    @DisplayName("游標順序採 PostgreSQL uuid 語意：最高位元為 1 的 UUID 也能完整走訪")
+    void run_walksUuidsWithHighBitSetUsingDatabaseOrdering() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry, 2, 100);
+        List<UUID> all = List.of(new UUID(0x7000000000000000L, 1), new UUID(0x8000000000000000L, 2),
+                new UUID(0xF000000000000000L, 3), new UUID(0x0000000000000001L, 4), new UUID(0xFFFFFFFFFFFFFFFFL, 5));
+        job.referenced.addAll(all);
+        job.existingInOwner.addAll(all);
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.COMPLETED);
+        assertThat(job.filterCalls).isEqualTo(3); // 5 筆、頁大小 2 → 2 + 2 + 1
+        assertThat(job.fetchCursors.get(1)).isEqualTo(new UUID(0x7000000000000000L, 1));
     }
 
     /** 捕捉日誌事件的測試用 appender（本專案日誌實作為 log4j2）。 */

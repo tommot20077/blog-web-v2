@@ -191,4 +191,18 @@ class RedisKeyConstantTest {
     void registerIpTtlMinutes_hasExpectedValue() {
         assertThat(RedisKeyConstant.REGISTER_IP_TTL_MINUTES).isEqualTo(60L);
     }
+
+    @Test
+    @DisplayName("getReconciliationLockKey 應回傳 lock:reconciliation:{module}:{table}")
+    void getReconciliationLockKey_containsModuleAndTable() {
+        assertThat(RedisKeyConstant.getReconciliationLockKey("article", "articles"))
+                .isEqualTo("lock:reconciliation:article:articles");
+    }
+
+    @Test
+    @DisplayName("getReconciliationCursorKey 應回傳 reconciliation:cursor:{module}:{table}")
+    void getReconciliationCursorKey_containsModuleAndTable() {
+        assertThat(RedisKeyConstant.getReconciliationCursorKey("article", "articles"))
+                .isEqualTo("reconciliation:cursor:article:articles");
+    }
 }
