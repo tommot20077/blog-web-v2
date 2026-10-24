@@ -231,6 +231,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 .map(t -> new ArticleIndexData.TagData(t.id(), t.name(), t.slug()))
                 .toList();
 
+        ArticleDataAssembler.warnIfAuthorUuidMissing(article.getId(), article.getAuthorId(), authorUuids);
         return new ArticleIndexData(
                 article.getUuid(),
                 article.getTitle(),
@@ -538,6 +539,10 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * @return ArticleContentData record
      */
     private ArticleContentData toContentData(Article article) {
+        Map<Long, UUID> authorUuids = articleDataAssembler.resolveAuthorUuids(
+                article.getAuthorId() == null ? List.of() : List.of(article.getAuthorId()));
+        ArticleDataAssembler.warnIfAuthorUuidMissing(article.getId(), article.getAuthorId(), authorUuids);
+        UUID authorUuid = article.getAuthorId() == null ? null : authorUuids.get(article.getAuthorId());
         return new ArticleContentData(
                 article.getId(),
                 article.getUuid(),
@@ -548,9 +553,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 article.getSummary(),
                 article.getCoverImageUrl(),
                 article.getStatus() != null ? article.getStatus().name() : null,
-                article.getAuthorId() == null ? null
-                        : articleDataAssembler.resolveAuthorUuids(List.of(article.getAuthorId()))
-                                .get(article.getAuthorId())
+                authorUuid
         );
     }
 

@@ -24,7 +24,9 @@ import java.util.UUID;
  * @param viewCount      瀏覽次數
  * @param likeCount      按讚次數
  * @param tags           標籤列表
- * @param authorUuid     作者公開 UUID（設計 §3.1 過渡欄位，供 M7 搜尋改存 author.uuid；舊 12 參數建構子產生者為 null）
+ * @param authorUuid     作者公開 UUID（設計 §3.1 過渡欄位，供 M7 搜尋改存 author.uuid）。<b>正常情況必定非 null；為 null 代表資料異常</b>
+ *                       （articles.author_id 有 FK 指向 users 且使用者只軟刪除，owner 模組查不到時會記 warn）。
+ *                       例外：舊 12 參數建構子（僅供過渡期既有呼叫端 / 測試 mock，Z1 移除）產生者恆為 null
  *
  * @author Yuan
  * @version 1.0

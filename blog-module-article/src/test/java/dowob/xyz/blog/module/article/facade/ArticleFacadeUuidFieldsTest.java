@@ -15,6 +15,7 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleFileBinder;
 import dowob.xyz.blog.module.article.service.ArticleService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -65,6 +66,7 @@ class ArticleFacadeUuidFieldsTest {
     @Mock private SeriesFacade seriesFacade;
 
     private ArticleFacadeImpl facade;
+    private WarnLogCapture logCapture;
 
     private static final UUID AUTHOR_UUID = UUID.randomUUID();
     private static final UUID SERIES_UUID = UUID.randomUUID();
@@ -80,6 +82,17 @@ class ArticleFacadeUuidFieldsTest {
         when(articleMapper.findUserUuidsByIds(anyCollection()))
                 .thenReturn(List.of(new ArticleMapper.UserUuidRow(7L, AUTHOR_UUID)));
         when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of(3L, SERIES_UUID));
+
+        logCapture = new WarnLogCapture(ArticleDataAssembler.class);
+    }
+
+    @AfterEach
+    void detachLogAppender() {
+        logCapture.close();
+    }
+
+    private List<String> warnings() {
+        return logCapture.warnings();
     }
 
     private static Article article(long id, Long seriesId) {
@@ -171,5 +184,42 @@ class ArticleFacadeUuidFieldsTest {
         assertThat(result).extracting(ArticleIndexData::authorUuid).containsOnly(AUTHOR_UUID);
         assertThat(result).extracting(ArticleIndexData::authorId).containsOnly(7L);
         verify(articleMapper, times(1)).findUserUuidsByIds(anyCollection());
+    }
+
+    @Test
+    @DisplayName("findContentById 查不到作者 uuid（資料異常）→ authorUuid 為 null，並以 warn 記錄 article id 與 author id")
+    void findContentById_authorUuidNotFound_logsWarn() {
+        when(articleMapper.findUserUuidsByIds(anyCollection())).thenReturn(List.of());
+        when(articleService.findById(21L)).thenReturn(Optional.of(article(21L, null)));
+
+        ArticleContentData data = facade.findContentById(21L).orElseThrow();
+
+        assertThat(data.authorUuid()).isNull();
+        assertThat(warnings()).hasSize(1);
+        assertThat(warnings().get(0)).contains("21").contains("7");
+    }
+
+    @Test
+    @DisplayName("findAllPublishedForIndex 查不到作者 uuid（資料異常）→ authorUuid 為 null，並以 warn 記錄")
+    void findAllPublishedForIndex_authorUuidNotFound_logsWarn() {
+        when(articleMapper.findUserUuidsByIds(anyCollection())).thenReturn(List.of());
+        when(articleMapper.findAllPublished()).thenReturn(List.of(article(31L, null)));
+        when(articleMapper.findTagsByArticleUuid(org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
+
+        List<ArticleIndexData> result = facade.findAllPublishedForIndex();
+
+        assertThat(result.get(0).authorUuid()).isNull();
+        assertThat(warnings()).hasSize(1);
+        assertThat(warnings().get(0)).contains("31").contains("7");
+    }
+
+    @Test
+    @DisplayName("作者 uuid 查得到 → findContentById 不記 warn")
+    void findContentById_authorUuidResolved_noWarn() {
+        when(articleService.findById(1L)).thenReturn(Optional.of(article(1L, null)));
+
+        facade.findContentById(1L);
+
+        assertThat(warnings()).isEmpty();
     }
 }

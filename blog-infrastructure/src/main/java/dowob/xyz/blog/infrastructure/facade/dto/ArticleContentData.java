@@ -20,7 +20,9 @@ import java.util.UUID;
  * @param summary         摘要
  * @param coverImageUrl   封面圖 URL（nullable）
  * @param status          文章狀態（PUBLISHED / DRAFT / PENDING_REVIEW / etc.）— String 對齊 ArticleData 避免 cross-module enum import
- * @param authorUuid      作者公開 UUID（設計 §3.1 過渡欄位；舊 9 參數建構子產生者為 null）
+ * @param authorUuid      作者公開 UUID（設計 §3.1 過渡欄位）。<b>正常情況必定非 null；為 null 代表資料異常</b>
+ *                        （articles.author_id 有 FK 指向 users 且使用者只軟刪除，owner 模組查不到時會記 warn）。
+ *                        例外：舊 9 參數建構子（僅供過渡期既有呼叫端 / 測試 mock，Z1 移除）產生者恆為 null
  *
  * @author Yuan
  * @version 1.0

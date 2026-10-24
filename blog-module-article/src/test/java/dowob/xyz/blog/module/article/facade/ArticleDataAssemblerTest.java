@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,10 +50,21 @@ class ArticleDataAssemblerTest {
     @Mock private SeriesFacade seriesFacade;
 
     private ArticleDataAssembler assembler;
+    private WarnLogCapture logCapture;
 
     @BeforeEach
     void setUp() {
         assembler = new ArticleDataAssembler(articleMapper, seriesFacadeProvider);
+        logCapture = new WarnLogCapture(ArticleDataAssembler.class);
+    }
+
+    @AfterEach
+    void detachLogAppender() {
+        logCapture.close();
+    }
+
+    private List<String> warnings() {
+        return logCapture.warnings();
     }
 
     private static Article article(long id, long authorId, Long seriesId) {
@@ -183,5 +195,43 @@ class ArticleDataAssemblerTest {
         assertThat(assembler.resolveAuthorUuids(List.of())).isEmpty();
 
         verify(articleMapper, never()).findUserUuidsByIds(anyCollection());
+    }
+
+    @Test
+    @DisplayName("查不到作者 uuid（資料異常）→ authorUuid 仍為 null，並以 warn 記錄 article id 與 author id")
+    void toArticleData_authorUuidNotFound_logsWarnWithArticleIdAndAuthorId() {
+        when(articleMapper.findUserUuidsByIds(anyCollection())).thenReturn(List.of());
+
+        ArticleData data = assembler.toArticleData(article(11L, 77L, null));
+
+        assertThat(data.authorUuid()).isNull();
+        assertThat(warnings()).hasSize(1);
+        assertThat(warnings().get(0)).contains("11").contains("77");
+    }
+
+    @Test
+    @DisplayName("批次中只有部分作者查不到 → 只為查不到者各記一筆 warn")
+    void toArticleDataList_partialAuthorMissing_warnsOnlyForMissing() {
+        UUID authorA = UUID.randomUUID();
+        when(articleMapper.findUserUuidsByIds(anyCollection()))
+                .thenReturn(List.of(new ArticleMapper.UserUuidRow(7L, authorA)));
+
+        List<ArticleData> result = assembler.toArticleDataList(List.of(
+                article(1L, 7L, null), article(2L, 99L, null), article(3L, 99L, null)));
+
+        assertThat(result).extracting(ArticleData::authorUuid).containsExactly(authorA, null, null);
+        assertThat(warnings()).hasSize(2);
+        assertThat(warnings()).allSatisfy(m -> assertThat(m).contains("99"));
+    }
+
+    @Test
+    @DisplayName("作者 uuid 都查得到 → 不記 warn")
+    void toArticleDataList_allAuthorsResolved_noWarn() {
+        when(articleMapper.findUserUuidsByIds(anyCollection()))
+                .thenReturn(List.of(new ArticleMapper.UserUuidRow(7L, UUID.randomUUID())));
+
+        assembler.toArticleDataList(List.of(article(1L, 7L, null)));
+
+        assertThat(warnings()).isEmpty();
     }
 }

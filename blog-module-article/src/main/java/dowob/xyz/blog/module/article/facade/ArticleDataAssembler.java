@@ -5,6 +5,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
@@ -40,6 +41,7 @@ import java.util.stream.Collectors;
  * @author Yuan
  * @version 1.0
  */
+@Slf4j
 @Component
 public class ArticleDataAssembler {
 
@@ -87,6 +89,7 @@ public class ArticleDataAssembler {
                 articles.stream().map(Article::getAuthorId).toList());
         Map<Long, UUID> seriesUuids = resolveSeriesUuids(
                 articles.stream().map(Article::getSeriesId).toList());
+        articles.forEach(a -> warnIfAuthorUuidMissing(a.getId(), a.getAuthorId(), authorUuids));
         return articles.stream()
                 .map(a -> new ArticleData(
                         a.getId(),
@@ -98,6 +101,23 @@ public class ArticleDataAssembler {
                         a.getAuthorId() == null ? null : authorUuids.get(a.getAuthorId()),
                         a.getSeriesId() == null ? null : seriesUuids.get(a.getSeriesId())))
                 .toList();
+    }
+
+    /**
+     * 作者 uuid 查不到時記錄 warn（值仍為 null）。
+     *
+     * <p>{@code articles.author_id} 有 FK 指向 {@code users}，且使用者只做軟刪除（列仍在），
+     * 因此正常情況下作者 uuid 必定查得到；查不到代表資料異常，需要有人注意到而非靜默給 null。</p>
+     *
+     * @param articleId   文章主鍵（僅供日誌）
+     * @param authorId    作者主鍵；null 時不檢查
+     * @param authorUuids 已解析的作者主鍵 → UUID
+     */
+    static void warnIfAuthorUuidMissing(Long articleId, Long authorId, Map<Long, UUID> authorUuids) {
+        if (authorId != null && authorUuids.get(authorId) == null) {
+            log.warn("查無文章作者的 uuid（資料異常：articles.author_id 應有 FK 指向 users）：articleId={}, authorId={}",
+                    articleId, authorId);
+        }
     }
 
     /**
