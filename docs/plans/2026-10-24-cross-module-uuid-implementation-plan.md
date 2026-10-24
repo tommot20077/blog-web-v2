@@ -462,7 +462,9 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 5. service／controller 改用 `AuthUser.uuid()`；呼叫 owner facade 的 UUID 版。owner 缺 UUID 版時可在本 Task 於 owner 模組**新增**
    （介面＋實作＋測試），**不得刪除或修改既有 Long 版**。
 6. JOIN users → `UserFacade` 批次方法（缺就新增 UUID 版，例如 getAuthorInfoByUuids），一頁只查一次。
-7. 移除本模組對其他模組的直接 import；本模組使用的事件改讀 uuid 欄位；本模組**發送**的事件移除 Long 過渡欄位（接收端同步改讀 uuid）。
+7. 移除本模組對其他模組的直接 import；本模組使用的事件改讀 uuid 欄位。**事件 Long 過渡欄位的移除時機＝最後一個讀取它的模組改造時**：
+   若本模組是某個 Long 欄位的最後讀取者，本 Task 一併移除該欄位，並對發送端（owner 模組）做**最小必要修改**（不再填該欄位）——這是「對 owner 只增不刪」禁區的唯一例外；
+   以 EventContractTest 例外清單上標註的階段為準（T0a-7 已依事件 JavaDoc 標註 M3／M4／M6／M8）。
    從 EventContractTest、CrossModuleImportTest 的例外清單刪除本模組條目。
 8. 刪除連動 consumer（ConsumerExecutor 包裝；在本模組的 RabbitMqConfig 宣告 queue〔命名沿用 `<模組>.<事件>` 慣例〕、DLQ 參數沿用既有 `dlqArgs` 寫法、
    binding 一律使用 T0a-5 共用契約的 exchange／routing key 常數）＋ OrphanReconciliationJob 子類別（每日一次）——
