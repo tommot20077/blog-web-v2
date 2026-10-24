@@ -537,4 +537,40 @@ public interface ArticleMapper {
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")
     List<String> findExistingUuidsIn(@Param("list") List<UUID> uuids);
+
+    /**
+     * 批次查詢使用者主鍵對應的公開 UUID（供 {@code ArticleDataAssembler} 填 {@code authorUuid}，設計 §3.1 過渡 API）。
+     *
+     * <p>{@code users} 為 reference data，依 {@code architecture.md} 可直接讀取。
+     * 軟刪除的使用者仍有 uuid，故不加狀態過濾（與 {@code articles.author_id} 的 JOIN 語意一致）。
+     * M6 把 {@code articles.author_id} 改為 {@code author_uuid} 欄位後，本查詢即可移除。</p>
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（userId, userUuid）必須與 {@link UserUuidRow} 的元件順序一致，不可調整。</p>
+     *
+     * @param userIds 使用者主鍵集合（不得為空，由 caller 保證）
+     * @return 每個存在的使用者的主鍵與 UUID
+     */
+    @Select({
+        "<script>",
+        "SELECT id AS userId, uuid AS userUuid",
+        "  FROM users",
+        " WHERE id IN",
+        "<foreach collection='userIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        "</script>"
+    })
+    List<UserUuidRow> findUserUuidsByIds(@Param("userIds") Collection<Long> userIds);
+
+    /**
+     * {@link #findUserUuidsByIds} 的投影列。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（userId, userUuid）必須與此 record 的元件順序一致，不可調整。</p>
+     *
+     * @param userId   使用者主鍵
+     * @param userUuid 使用者公開 UUID
+     */
+    record UserUuidRow(Long userId, UUID userUuid) {}
 }
