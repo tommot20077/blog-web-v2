@@ -180,6 +180,36 @@ public interface ArticleFacade {
     void decrementCommentCount(Long articleId);
 
     /**
+     * 文章是否存在，<b>不分狀態</b>（UUID 版）。
+     *
+     * <p>DRAFT、PENDING、REJECTED、PUBLISHED、ARCHIVED 一律算存在，僅被硬刪（查無此列）者回傳 false。
+     * 供 comment 模組建立留言時的存在性檢查：留言表已無指向 {@code articles} 的 FK，
+     * 這個檢查是「不對不存在的文章寫入留言」的唯一防線。</p>
+     *
+     * @param articleUuid 文章公開 UUID；{@code null} 回傳 false
+     * @return 文章存在為 true
+     */
+    boolean existsByUuid(UUID articleUuid);
+
+    /**
+     * comment 模組創建 comment 時連動 article.comment_count + 1（UUID 版，語意與 {@link #incrementCommentCount(Long)} 相同）。
+     *
+     * <p>原子 +1；文章不存在時不影響任何列（no-op）。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     */
+    void incrementCommentCount(UUID articleUuid);
+
+    /**
+     * comment 模組刪除 comment 時連動 article.comment_count - 1（UUID 版，語意與 {@link #decrementCommentCount(Long)} 相同）。
+     *
+     * <p>原子 -1，守衛 {@code comment_count > 0}（防 underflow）；文章不存在時不影響任何列（no-op）。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     */
+    void decrementCommentCount(UUID articleUuid);
+
+    /**
      * reading 模組 like article 時連動 article.like_count + 1。
      */
     void incrementLikeCount(Long articleId);
