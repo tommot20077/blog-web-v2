@@ -293,18 +293,18 @@ public class RedisKeyConstant {
 
     /**
      * 個人搜尋歷史 List Key 前綴
-     * Key: search:history:{userId}
+     * Key: search:history:{userUuid}
      */
     public static final String SEARCH_HISTORY_PREFIX = "search:history:";
 
     /**
      * 生成個人搜尋歷史 Redis Key
      *
-     * @param userId 用戶 ID
+     * @param userUuid 用戶 UUID
      * @return Redis Key
      */
-    public static String getSearchHistoryKey(Long userId) {
-        return SEARCH_HISTORY_PREFIX + userId;
+    public static String getSearchHistoryKey(UUID userUuid) {
+        return SEARCH_HISTORY_PREFIX + userUuid;
     }
 
     /**

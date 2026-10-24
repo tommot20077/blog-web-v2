@@ -50,9 +50,9 @@ class RedisKeyConstantTest {
     }
 
     @Test
-    @DisplayName("getSearchHistoryKey 應回傳 search:history:{userId}")
+    @DisplayName("getSearchHistoryKey 應回傳 search:history:{userUuid}")
     void getSearchHistoryKey_returnsHistoryKey() {
-        assertThat(RedisKeyConstant.getSearchHistoryKey(42L)).isEqualTo("search:history:42");
+        assertThat(RedisKeyConstant.getSearchHistoryKey(USER_UUID)).isEqualTo("search:history:" + USER_UUID);
     }
 
     @Test

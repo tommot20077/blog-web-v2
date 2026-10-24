@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.service.SearchService;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 搜尋 Controller
@@ -51,7 +53,7 @@ public class SearchController {
      * @param sort 排序：{@code relevance}（預設）/ {@code latest} / {@code hot}
      * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
      *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
-     * @param userId 當前登入用戶的資料庫主鍵（匿名為 null，用於記錄搜尋歷史）
+     * @param user 當前登入用戶（匿名為 null，用於記錄搜尋歷史）
      * @return 分頁搜尋結果
      */
     @GetMapping
@@ -60,8 +62,9 @@ public class SearchController {
             @RequestParam(required = false) String tag,
             @RequestParam(defaultValue = "relevance") String sort,
             PageQuery pageQuery,
-            @AuthenticationPrincipal Long userId) {
-        return ApiResponse.success(searchService.search(q, tag, sort, pageQuery.page(), pageQuery.sizeOrDefault(10), userId));
+            @AuthenticationPrincipal AuthUser user) {
+        UUID userUuid = user == null ? null : user.uuid();
+        return ApiResponse.success(searchService.search(q, tag, sort, pageQuery.page(), pageQuery.sizeOrDefault(10), userUuid));
     }
 
     /**
@@ -87,16 +90,16 @@ public class SearchController {
      * 需登入，回傳最近 20 筆搜尋紀錄。
      * </p>
      *
-     * @param userId 當前登入用戶的資料庫主鍵
+     * @param user 當前登入用戶
      * @return 搜尋歷史列表（最新在前）
      */
     @PreAuthorize("isAuthenticated()")
     @GetMapping("/history")
-    public ApiResponse<List<String>> getHistory(@AuthenticationPrincipal Long userId) {
-        if (userId == null) {
+    public ApiResponse<List<String>> getHistory(@AuthenticationPrincipal AuthUser user) {
+        if (user == null) {
             throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
         }
-        return ApiResponse.success(searchService.getHistory(userId));
+        return ApiResponse.success(searchService.getHistory(user.uuid()));
     }
 
     /**
@@ -106,16 +109,16 @@ public class SearchController {
      * 需登入，刪除所有個人搜尋紀錄。
      * </p>
      *
-     * @param userId 當前登入用戶的資料庫主鍵
+     * @param user 當前登入用戶
      * @return 成功回應
      */
     @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/history")
-    public ApiResponse<Void> clearHistory(@AuthenticationPrincipal Long userId) {
-        if (userId == null) {
+    public ApiResponse<Void> clearHistory(@AuthenticationPrincipal AuthUser user) {
+        if (user == null) {
             throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
         }
-        searchService.clearHistory(userId);
+        searchService.clearHistory(user.uuid());
         return ApiResponse.success();
     }
 }

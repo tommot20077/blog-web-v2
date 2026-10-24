@@ -6,6 +6,7 @@ import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 搜尋服務介面
@@ -33,10 +34,10 @@ public interface SearchService {
      * @param sort    排序方式：{@code relevance}（預設）/ {@code latest} / {@code hot}
      * @param page    頁碼（從 1 開始）
      * @param size    每頁筆數
-     * @param userId  當前用戶 ID（匿名為 null，用於記錄搜尋歷史）
+     * @param userUuid 當前用戶 UUID（匿名為 null，用於記錄搜尋歷史）
      * @return 分頁搜尋結果
      */
-    PageResult<SearchResultResponse> search(String q, String tag, String sort, int page, int size, Long userId);
+    PageResult<SearchResultResponse> search(String q, String tag, String sort, int page, int size, UUID userUuid);
 
     /**
      * 熱門搜尋詞建議
@@ -55,24 +56,24 @@ public interface SearchService {
      * 取得個人搜尋歷史
      *
      * <p>
-     * 從 Redis List {@code search:history:{userId}} 取得最近 20 筆。
+     * 從 Redis List {@code search:history:{userUuid}} 取得最近 20 筆。
      * </p>
      *
-     * @param userId 用戶資料庫主鍵
+     * @param userUuid 用戶 UUID
      * @return 搜尋歷史列表（最新在前）
      */
-    List<String> getHistory(Long userId);
+    List<String> getHistory(UUID userUuid);
 
     /**
      * 清除個人搜尋歷史
      *
      * <p>
-     * 刪除 Redis List {@code search:history:{userId}}。
+     * 刪除 Redis List {@code search:history:{userUuid}}。
      * </p>
      *
-     * @param userId 用戶資料庫主鍵
+     * @param userUuid 用戶 UUID
      */
-    void clearHistory(Long userId);
+    void clearHistory(UUID userUuid);
 
     /**
      * 索引單篇文章
