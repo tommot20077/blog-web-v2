@@ -5,7 +5,7 @@
 - Design doc: `docs/plans/2026-10-24-cross-module-uuid-design.md`
 - Approved by: Yuan（2026-10-24，逐段確認；同日追加 `user_preferences.user_id` 為第 18 個欄位）
 - 執行模型：**Sonnet**（`model: "sonnet"`）。升級規則見 §1.3
-- 修訂紀錄：v2（2026-10-24）依 fresh-context 審查修正 3 CRITICAL／7 HIGH／11 MEDIUM（事件搬遷、過渡 API、0b 合併、校正可設 NULL、重試冪等順序、指令與環境）
+- 修訂紀錄：v2（2026-10-24）依 fresh-context 審查修正 3 CRITICAL／7 HIGH／11 MEDIUM（事件搬遷、過渡 API、0b 合併、校正可設 NULL、重試冪等順序、指令與環境）；v3（同日）依複審修正 3 HIGH／6 MEDIUM／2 LOW（T0b-2 提交點與 controller 範圍、facade bean 循環、ArticleData 相容建構子、守衛指令加 -am、排程池、冪等與業務同交易、consumer queue 宣告）
 
 ---
 
@@ -27,6 +27,7 @@
 | M8 | #10 | 1 個 | user |
 | Z | #11 | Z1、Z2、Z3 | 移除過渡碼／全域守衛／打開重試 |
 | 並行 | 另開 | — | 公開作者功能（`docs/plans/2026-10-23-public-author-profile-design.md`），0b 合併後可與 M 階段並行，但 Flyway 版號與 facade 檔需與當下的 M 階段協調 |
+| 並行 | 另開 | — | DATA-01 標籤計數（待辦 #5）：其每日**重算**排程與 T0a-3 的**孤兒校正**目的不同；若 0a 已合併，鎖與計數改用 T0a-3 的共用元件，不另寫一份 |
 
 **一個階段 = 一個 PR，依序進行**；前一個 PR 合併進 `develop` 後才開始下一個。每個 Task 派**一個新的 Sonnet 實作 agent**，完成後派**另一個 Sonnet 審查 agent**（§1.4），主線抽查後才進下一個 Task。
 
@@ -70,6 +71,8 @@ Do NOT operate on the main repository root.
 - 首次先 `mvn -q install -DskipTests --no-transfer-progress` 讓各模組進本機 repository；
   之後若你改了上游模組（blog-common、blog-infrastructure 或被依賴的模組），先對它重新 `mvn -q install -DskipTests -pl <上游> --no-transfer-progress`
 - 跑某模組測試：`mvn test -pl <module> --no-transfer-progress 2>&1 | tee logs/<task>-<red|green|baseline>.log`
+- **blog-start 的 ArchUnit 守衛一律加 `-am`**（守衛掃的是各模組 class；不加 -am 會讀到 ~/.m2 裡舊的 jar 而假綠或假紅）：
+  `mvn test -pl blog-start -am -Dtest=<Guard> -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress`
 - 只重跑單一類別：`mvn test -pl <module> -Dtest=<ClassName> -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress`
 - 全 reactor 編譯檢查：`mvn -q test-compile --no-transfer-progress`
 - blog-common、blog-infrastructure、blog-module-user 三個模組的 pom **沒有** `*IT.java` 的 surefire includes——
@@ -192,8 +195,9 @@ log 關鍵資訊、MQ 訊息格式全部凍結；不新增功能、不改 queue 
   但**解鎖改為 token compare-and-delete**（Lua 或 RedisScript），避免刪到別人的鎖；鎖 key 含 module 與 table）、逐頁處理、
   計數 `reconciliation.orphans_removed{module,table}`、`reconciliation.runs{module,table,result}`、每次一行摘要 log
 - owner facade 拋例外 → 整次中止、零修改、result=failed（fail-safe）
-- 排程由子類別以 @Scheduled 觸發；框架提供 `run()`。JavaDoc 註明：排程池為單執行緒（findings PERF-16），
-  各子類別 cron 必須錯開，且不得與 `ReadingProgressFlushJob`、`ViewCount` flush、`TrendingRefreshJob` 的時段重疊
+- 排程由子類別以 @Scheduled 觸發；框架提供 `run()`。排程池目前為單執行緒（findings PERF-16），而既有 flush／trending job 是 fixedDelay、
+  沒有固定時段可錯開——本 Task 在 application.yaml 設定 `spring.task.scheduling.pool.size: 4`（附測試或 context 驗證），
+  並在框架加「單次執行處理頁數上限」（預設值寫成常數，超過即結束本次、下次續跑），避免長掃描佔住執行緒
 【範圍】只動 blog-infrastructure。
 【驗收條件】
 - 測試：取鎖失敗 → 不處理；鎖以 token 解鎖（他人的鎖不被刪）；多頁走訪；只處理不存在者；filterExisting 拋例外 → 零修改＋result=failed；計數與 log
@@ -222,7 +226,7 @@ null／空輸入不發查詢、去重、經 `BatchedQuery` 切批。
 
 ### Task T0a-5 — 事件契約：跨模組事件搬到共用位置（只增不減）
 
-- **相依**：T0a-2
+- **相依**：T0a-2、**T0a-6**（需要 T0a-6 的過渡 API 取得 authorUuid／seriesUuid）
 
 ```
 <§1.1 共通頭>
@@ -239,7 +243,7 @@ ArticleTagEvent（tag；現有兩份重複定義，findings ARCH-01——收斂�
 - 既有 Long 欄位**保留**（過渡欄位，JavaDoc 標「將於 M<n> 移除」），發送端同時填 Long 與 uuid
 - 發送端（article）與所有接收端改 import 新位置；接收端邏輯不變（仍讀 Long 欄位）
 - search 的鏡像 DTO（listener/dto/*Message）**本 Task 不動**，只需確認 JSON 欄位相容（新增欄位不影響反序列化）
-- authorUuid／seriesUuid 的取得：article 模組內以 T0a-6 的過渡 API 或 users／series 的 facade 取得，不得 JOIN series 表
+- authorUuid／seriesUuid 的取得：沿用 T0a-6 在 article 模組建立的取得方式（含其 bean 循環處理），不得 JOIN series 表
 【禁區】exchange 名稱、routing key、queue 宣告、訊息既有欄位的名稱與型別凍結；不改任何 consumer 的業務邏輯。
 【驗收條件】
 - 每個搬移事件的序列化測試：新 JSON 含原有全部欄位（名稱型別不變）＋ eventId ＋ 新 uuid 欄位
@@ -249,7 +253,7 @@ ArticleTagEvent（tag；現有兩份重複定義，findings ARCH-01——收斂�
 
 ### Task T0a-6 — 過渡 API：owner DTO 補 UUID 欄位
 
-- **相依**：無（與 T0a-5 同時進行時注意 ArticleData 的衝突，建議 T0a-6 先做）
+- **相依**：無（**必須先於 T0a-5**）
 
 ```
 <§1.1 共通頭>
@@ -258,9 +262,13 @@ ArticleTagEvent（tag；現有兩份重複定義，findings ARCH-01——收斂�
 comment、series、version 的授權判斷用 `article.authorId().equals(userId)`（例 CommentService、SeriesService、VersioningService）；
 `ArticleVisibility.isReadableBy`（blog-common）只吃 Long。M4 需要以 series uuid 查文章，但 articles 只有 series_id。
 本任務只**新增**：
-1. `ArticleData` 加 `authorUuid`、`seriesUuid`（record 加欄位會破壞所有建構呼叫——以編譯錯誤為導引逐一修正建構處與測試，值以下列方式取得）
+1. `ArticleData` 加 `authorUuid`、`seriesUuid`。為避免破壞他模組的建構呼叫與測試 mock：**保留原本 6 參數的建構子**（委派到新的 canonical 建構子、新欄位為 null，
+   JavaDoc 標「僅供過渡期既有呼叫端，Z1 移除」）；**article 模組內產生 ArticleData 的地方一律改用新建構子並填值**（加測試確保 facade 回傳的值非 null）。
+   批次方法（findByIds 等）的 authorUuid／seriesUuid 必須**一次批次取得**，不得逐筆查詢。值以下列方式取得
    - authorUuid：article 模組內 users 仍是 reference data，可 JOIN users 取 uuid（M6 改為 author_uuid 欄位）
-   - seriesUuid：經 `SeriesFacade` 批次把 series id 轉 uuid（新增 `Map<Long, UUID> findUuidsByIds(Collection<Long>)`），**不得 JOIN series 表**（CrossModuleBoundaryTest 會擋）
+   - seriesUuid：經 `SeriesFacade` 批次把 series id 轉 uuid（新增 `Map<Long, UUID> findUuidsByIds(Collection<Long>)`），**不得 JOIN series 表**（CrossModuleBoundaryTest 會擋）。
+     ⚠️ **bean 循環**：`SeriesFacadeImpl` 已建構子注入 `ArticleFacade`；`ArticleFacadeImpl`（以及 T0a-5 的 `ArticleEventPublisher`）再注入 `SeriesFacade` 會形成循環。
+     一律以 `ObjectProvider<SeriesFacade>`（延遲取得）注入，不得用 field injection 或 `allow-circular-references`
 2. `SeriesFacade.findIdByUuid(UUID)`：供 M4～M6 過渡期 article 以 series uuid 查詢
 3. `ArticleVisibility.isReadableBy` 的 UUID 版 overload（語意與 Long 版完全相同）
 4. 其他 M1～M4 會用到、目前只有 Long 版的 owner DTO 欄位（以 grep `authorId()` 的跨模組使用點盤點），一律只增不減
@@ -268,13 +276,14 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 【驗收條件】
 - 新欄位的值有測試（authorUuid 與 users.uuid 一致、seriesUuid 與 series.uuid 一致、無系列時為 null）
 - `mvn -q test-compile` 全 reactor 通過；受影響模組測試全綠
+- **Spring context 能啟動**：`mvn test -pl blog-start -am -Dtest=ContextSmokeTest -Dcontext.smoke=true -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress` 綠（驗證沒有 bean 循環）
 <§1.2 共通回報格式>
 ```
 
 ### Task T0a-7 — blog-start/Architecture：事件契約與跨模組 import 守衛
 
 - **相依**：T0a-5、T0a-6
-- **驗證**：`mvn test -pl blog-start -Dtest='EventContractTest,CrossModuleImportTest' -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress`
+- **驗證**：`mvn test -pl blog-start -am -Dtest='EventContractTest,CrossModuleImportTest' -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress`
 
 ```
 <§1.1 共通頭>
@@ -309,13 +318,14 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 <§1.1 共通頭>
 【目標與動機】T0b-3 的漏改不會造成編譯失敗，必須先有守衛。新增 ArchUnit `PrincipalTypeTest`（只掃 src/main 的類別）：
 (a) 標註 @AuthenticationPrincipal 的參數型別必須是 `AuthUser`（本 Task 先在 blog-common 建立 `AuthUser(Long id, UUID uuid, Role role)`
-    record 讓守衛能引用；id 的 JavaDoc 標「過渡欄位，收尾階段移除，新程式碼一律用 uuid()」）
+    record 讓守衛能引用；id 的 JavaDoc 標「過渡欄位，收尾階段移除，新程式碼一律用 uuid()」），
+    並在 blog-common 的 `SecurityUtils` 新增 `Optional<AuthUser> currentAuthUser(Authentication)`（T0b-3 會用；本 Task 只建立＋單元測試）
 (b) 除白名單（SecurityUtils、JwtAuthenticationFilter、AuthStateLoader 所在類別）外，不得呼叫 `Authentication.getPrincipal()`
 (c) 反向驗證 fixture（放 src/test）：Long 型別的 @AuthenticationPrincipal、白名單外呼叫 getPrincipal()，兩者都被抓到
 【驗收條件】
 - 本 Task 完成時守衛**必須是紅的**（現況 63 處 Long principal、2 處 getPrincipal()），回報附紅燈輸出中的違規數
 - 反向驗證 fixture 測試綠
-- 驗證指令：`mvn test -pl blog-start -Dtest=PrincipalTypeTest -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress`
+- 驗證指令：`mvn test -pl blog-start -am -Dtest=PrincipalTypeTest -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress`
 <§1.2 共通回報格式>
 ```
 
@@ -326,26 +336,32 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 
 ```
 <§1.1 共通頭>
-【目標與動機】設計 §3.2＋Q9。以下必須在同一個 Task 完成，拆開會無法編譯：
+【目標與動機】設計 §3.2＋Q9。以下必須在同一個 Task 完成，拆開會無法編譯。**Task 內分 3 個提交點，每個提交點都必須 `mvn -q test-compile` 全 reactor 綠，並各自 commit**：
+- 提交點 1：第 1 項（JWT）＋ RedisKeyConstant 改收 UUID ＋ user 模組的呼叫端（第 5 項）
+- 提交點 2：第 2、3 項（UserAuthService UUID 版＋AuthStateLoader）
+- 提交點 3：第 4、6 項（filter、search）＋ 兩個 controller（見第 8 項）
 1. JwtService：access／refresh token 的 subject 改為使用者 uuid；`getUserIdFromToken` 改為 `getUserUuidFromToken` 回傳 UUID；
    subject 為數字的舊 token 一律無效（Yuan 決定直接切換）
 2. `UserAuthService`（blog-infrastructure 介面，user 模組 `UserAuthServiceImpl` 實作，目前只有 Long 版）新增以 uuid 查詢認證狀態的方法並實作
 3. `AuthStateLoader`（blog-infrastructure）：輸入 uuid，回傳 {id, uuid, status, role, tokenVersion}；Redis key `user:auth:{uuid}`
    （RedisKeyConstant.getUserAuthKey 改收 UUID），hash 新增 id 欄位；**hash 缺任一必要欄位（含 id）一律視為 miss**，查 DB 回填。
    loader 只負責取資料；「哪些 status 可通過」的政策**留在呼叫端並維持現狀**（filter 現行接受的狀態、refresh 要求 ACTIVE，兩者不得改變）
-4. JwtAuthenticationFilter 改用 loader，principal 改為 AuthUser（authorities 計算方式不變）
+4. JwtAuthenticationFilter 改用 loader，principal 改為 AuthUser。authorities 計算方式不變；**AuthUser.role 與 authorities 同源**（維持現行：取自 token 的 role claim），不得因改用 loader 而改變角色來源
 5. user 模組：
    - AuthService.login：寫 auth hash 時**必須寫入 id**（現在 AuthService.java 約 221-224 行只寫 version/status/role），key 改 uuid
    - AuthController.refresh：改用 AuthStateLoader（修 SEC-26：Redis miss 不再誤判 ACCOUNT_SUSPENDED）；refresh ZSet key 改 uuid
    - logout、裝置數修剪、登入失敗計數、SessionRevoker：Redis key 全改 uuid（RedisKeyConstant 對應方法改收 UUID）；撤銷仍在 afterCommit
 6. 搜尋紀錄 key（getSearchHistoryKey）改收 UUID；呼叫端 SearchServiceImpl 的簽章在本 Task 改為收 UUID（controller 的傳值在 T0b-3 處理）
 7. 這兩個模組的整合測試命名為 `*IntegrationTest`（見共通頭）
-【禁區】token version 比對、status 檢查、authorities 計算語意不變；security.md 原則 10 不得破壞；本 Task 不改各模組 controller 的 principal（T0b-3）。
+8. **例外：本 Task 一併把 `AuthController`（logout 等）與 `SearchController` 的 `@AuthenticationPrincipal Long` 改為 `AuthUser`**，
+   傳 `user.uuid()` 給已改收 UUID 的 service——否則第 5、6 項的簽章變更會讓這兩個 controller 編譯不過
+【禁區】token version 比對、status 檢查、authorities 計算語意不變；security.md 原則 10 不得破壞；除第 8 項的兩個 controller 外，不改各模組 controller 的 principal（T0b-3）。
 【驗收條件】
 - `mvn -q test-compile` 全 reactor 通過
 - RED→GREEN 測試至少涵蓋：subject 為 uuid；數字 subject 無效；loader 命中不查 DB；hash 缺 id 視為 miss 並回填；DB 查不到回 empty；
   login 寫入的 hash 含 id；Redis auth hash 被刪後 refresh 成功並回填（SEC-26）；非 ACTIVE 仍被 refresh 拒絕；撤銷刪除的是 uuid 版 key
-- `mvn test -pl blog-infrastructure,blog-module-user,blog-module-search --no-transfer-progress` 全綠（log）
+- `mvn test -pl blog-common,blog-infrastructure,blog-module-user,blog-module-search --no-transfer-progress` 全綠（log）
+- 3 個提交點各自的 `test-compile` 輸出（log）
 <§1.2 共通回報格式>
 ```
 
@@ -359,8 +375,8 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 【目標與動機】設計 §3.2。principal 已是 AuthUser，T0b-1 的守衛目前是紅的。把所有 `@AuthenticationPrincipal Long xxx` 改為
 `@AuthenticationPrincipal AuthUser user`（公開端點維持可為 null），方法內原本用 Long 的地方改用 `user.id()`
 （可為 null 處 `user == null ? null : user.id()`）。這是**純型別替換**，業務邏輯照舊用 Long id。
-例外（因 T0b-2 已改成收 UUID，必須傳 `user.uuid()`）：SearchController → SearchServiceImpl 的搜尋紀錄、AuthController 的 logout 等呼叫 Redis key 的路徑。
-直接讀 principal 的兩處改用 SecurityUtils 提供的 AuthUser 取得方法：ArticleResponseMapper.java:288、ArticleQueryService.java:301。
+（AuthController、SearchController 已在 T0b-2 改完，本 Task 不再處理。）
+直接讀 principal 的兩處改用 T0b-1 建立的 `SecurityUtils.currentAuthUser(...)`：ArticleResponseMapper.java:288、ArticleQueryService.java:301。
 測試：各測試類別的 asUser(Long, Role) 類 helper 改為放入 AuthUser（固定測試 UUID，id 維持原值）；約 31 個測試檔。
 分布（2026-10-24）：@AuthenticationPrincipal 63 處——article 2 檔、comment 2、file 1、reading 4、search 1、series 1、tag 1、user 2、version 2。
 逐模組處理，每個模組改完就跑該模組測試。
@@ -436,7 +452,8 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 6. JOIN users → `UserFacade` 批次方法（缺就新增 UUID 版，例如 getAuthorInfoByUuids），一頁只查一次。
 7. 移除本模組對其他模組的直接 import；本模組使用的事件改讀 uuid 欄位；本模組**發送**的事件移除 Long 過渡欄位（接收端同步改讀 uuid）。
    從 EventContractTest、CrossModuleImportTest 的例外清單刪除本模組條目。
-8. 刪除連動 consumer（ConsumerExecutor 包裝）＋ OrphanReconciliationJob 子類別（cron 與既有 job 錯開）——
+8. 刪除連動 consumer（ConsumerExecutor 包裝；在本模組的 RabbitMqConfig 宣告 queue〔命名沿用 `<模組>.<事件>` 慣例〕、DLQ 參數沿用既有 `dlqArgs` 寫法、
+   binding 一律使用 T0a-5 共用契約的 exchange／routing key 常數）＋ OrphanReconciliationJob 子類別（每日一次）——
    **只針對原本有 FK CASCADE／SET NULL 的參照**；原本就沒有連動的（例如 file_metadata.article_uuid，V20 刻意無 FK）不得新增連動。
 9. 若本模組的 IT 透過 *TestApplication 掃描了他模組的真實碼，或 R__*_seed.sql 的 users uuid 為隨機值：以固定 uuid 修正 seed，並跑那些 IT。
 10. 跑本模組與所有被動到的模組測試（綠燈 log）。
@@ -490,7 +507,8 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 ```
 <§1.1 共通頭>
 【目標與動機】設計 §6 全域守衛：
-① facade 介面（dowob.xyz.blog.infrastructure.facade..）方法：名稱以 Id／Ids 結尾的參數，型別不得為 Long／long／Collection<Long>；
+① facade 介面（dowob.xyz.blog.infrastructure.facade..）方法：名稱以 Id／Ids 結尾的參數，型別不得為 Long／long／Collection<Long>
+   （取參數名需要 class 檔保留參數名——先確認編譯有 `-parameters`〔Spring Boot parent 預設開啟〕，沒有就改用 Java reflection `Parameter#getName` 並在 pom 開啟）；
    回傳型別不得為 Map<Long, …> 或含 Long id 欄位的 DTO——判定規則以「參數名／欄位名 *Id、*Ids」為準，計數類（count、total）列白名單
 ② EventContractTest、CrossModuleImportTest 例外清單必須為空（刪除清單機制或保留空清單，擇一並說明）
 ③ IT：以 information_schema 斷言沒有跨模組 FK——模組→表的對照表在本 Task 重寫為完整版（現行 CrossModuleBoundaryTest 的
@@ -509,10 +527,12 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 → ARCH-02＋PERF-30（retry interceptor 是死碼；修活時必須設 concurrency，避免單一訊息卡住整條 queue）。
 - ConsumerExecutor 改為拋例外交由 retry interceptor 處理
 - **冪等順序**：現行 IdempotencyService.markProcessed 是「先標記（REQUIRES_NEW 即時提交）再處理」——直接套重試會讓第一次失敗的訊息
-  在重試時被判「已處理」而遺失。必須改為「處理成功後才標記」或「失敗時撤銷標記」，冪等檢查集中在 ConsumerExecutor
+  在重試時被判「已處理」而遺失。改為：**`processed_events` 的寫入與業務寫入在同一個資料庫交易中**（業務失敗 → 標記一起 rollback；
+  標記與業務一起 commit → 重送必被跳過），冪等檢查集中在 ConsumerExecutor。業務不寫資料庫的 consumer（例如只寫 ES、Redis）在回報中逐一列出並說明重複處理的影響
 - stateful retry 需要 AMQP messageId：發送端開啟（RabbitTemplate 的 MessagePostProcessor 或 setCreateMessageIds 等），與 eventId 對齊
 【驗收條件】IT（真 RabbitMQ＋Postgres）：
 - 第 1 次失敗、第 2 次成功，且業務確實執行一次（不是被冪等跳過）
+- 業務寫入後、commit 前失敗 → 標記也被 rollback，重試時業務會再執行且最終只生效一次
 - 同一 eventId 重送只處理一次
 - 超過重試次數進 DLQ，dead_lettered 計數正確
 - 一則持續失敗的訊息不阻塞同 queue 的其他訊息（concurrency）
