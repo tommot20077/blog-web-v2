@@ -206,6 +206,73 @@ class TagUsageConsumerTest {
     }
 
     /**
+     * 情境：tagRepository.save 拋例外 → 不得被吞掉：nack 一次（requeue=false）、不 ack、failed／dead_lettered 各加一
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handleArticleTagged：save 拋例外時 nack 一次、不 ack，計入 failed／dead_lettered")
+    void handleArticleTagged_onSaveFailure_nacksOnceAndDoesNotAck() throws Exception {
+        UUID tagId = UUID.randomUUID();
+        Tag tag = new Tag();
+        tag.setId(tagId);
+        tag.setUsageCount(0);
+        when(tagRepository.findById(tagId)).thenReturn(Optional.of(tag));
+        when(tagRepository.save(any(Tag.class))).thenThrow(new RuntimeException("DB write error"));
+        /* Redis 路徑須可正常執行：若 save 例外被吞掉，流程會一路成功並 ack，測試才能抓到 */
+        when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
+        ArticleTagEvent event = new ArticleTagEvent(UUID.randomUUID(), UUID.randomUUID(), List.of(tagId));
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            tagUsageConsumer.handleArticleTagged(event, channel, 8L);
+
+            verify(channel, times(1)).basicNack(8L, false, false);
+            verify(channel, never()).basicAck(any(long.class), any(boolean.class));
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, TagUsageConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, TagUsageConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, TagUsageConsumer.CONSUMER_NAME)).isZero();
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 情境：Redis incrementScore 拋例外 → 不得被吞掉：nack 一次（requeue=false）、不 ack、failed／dead_lettered 各加一
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handleArticleTagged：Redis incrementScore 拋例外時 nack 一次、不 ack，計入 failed／dead_lettered")
+    void handleArticleTagged_onRedisFailure_nacksOnceAndDoesNotAck() throws Exception {
+        UUID tagId = UUID.randomUUID();
+        Tag tag = new Tag();
+        tag.setId(tagId);
+        tag.setUsageCount(0);
+        when(tagRepository.findById(tagId)).thenReturn(Optional.of(tag));
+        when(tagRepository.save(any(Tag.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.incrementScore(eq(RedisKeyConstant.TAG_HOT_KEY), eq(tagId.toString()), eq(1.0)))
+                .thenThrow(new RuntimeException("Redis down"));
+        ArticleTagEvent event = new ArticleTagEvent(UUID.randomUUID(), UUID.randomUUID(), List.of(tagId));
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            tagUsageConsumer.handleArticleTagged(event, channel, 9L);
+
+            verify(channel, times(1)).basicNack(9L, false, false);
+            verify(channel, never()).basicAck(any(long.class), any(boolean.class));
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, TagUsageConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, TagUsageConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, TagUsageConsumer.CONSUMER_NAME)).isZero();
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
      * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
