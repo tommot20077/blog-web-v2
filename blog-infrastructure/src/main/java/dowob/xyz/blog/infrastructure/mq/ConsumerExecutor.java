@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.function.Supplier;
 
 /**
  * RabbitMQ consumer 的共用 ack/nack 包裝。
@@ -59,7 +60,8 @@ public class ConsumerExecutor {
     /**
      * 執行 consumer 業務邏輯，並依結果 ack 或 nack。
      *
-     * <p>本方法<b>保證不往外拋例外</b>：任何失敗都被轉為 nack（requeue=false）。</p>
+     * <p>等同 {@link #execute(String, Supplier, Channel, long, ThrowingRunnable)}
+     * 不帶業務上下文。本方法<b>保證不往外拋例外</b>：任何失敗都被轉為 nack（requeue=false）。</p>
      *
      * @param consumerName consumer 識別名稱，作為指標的 {@code consumer} tag 與日誌識別
      * @param channel      AMQP channel
@@ -67,14 +69,66 @@ public class ConsumerExecutor {
      * @param body         業務邏輯；拋出任何例外即視為處理失敗
      */
     public void execute(String consumerName, Channel channel, long deliveryTag, ThrowingRunnable body) {
+        execute(consumerName, null, channel, deliveryTag, body);
+    }
+
+    /**
+     * 執行 consumer 業務邏輯，並依結果 ack 或 nack；失敗日誌帶業務上下文。
+     *
+     * <p>既有 consumer 的錯誤日誌都帶業務識別（articleUuid、eventId、userId……），
+     * 供告警與人工補送定位。{@code logContext} 讓呼叫端把這些資訊交給本類統一輸出。
+     * 它是 {@link Supplier}，僅在<b>失敗時</b>才求值，成功路徑零成本。</p>
+     *
+     * <p>本方法<b>保證不往外拋例外</b>，包含：</p>
+     * <ul>
+     *   <li>{@code logContext} 自身拋例外（或本身為 {@code null}）：退回不帶上下文的日誌</li>
+     *   <li>計數失敗：只記 warn，絕不影響 ack/nack（見 {@link #increment}）</li>
+     *   <li>body 拋 {@link InterruptedException}：照常 nack，並還原執行緒的 interrupt 旗標</li>
+     * </ul>
+     *
+     * @param consumerName consumer 識別名稱，作為指標的 {@code consumer} tag 與日誌識別
+     * @param logContext   失敗時附加於 ERROR 日誌的業務上下文；可為 {@code null}，
+     *                     回傳 {@code null} 或空白亦視為無上下文
+     * @param channel      AMQP channel
+     * @param deliveryTag  訊息的 delivery tag
+     * @param body         業務邏輯；拋出任何例外即視為處理失敗
+     */
+    public void execute(String consumerName, Supplier<String> logContext,
+                        Channel channel, long deliveryTag, ThrowingRunnable body) {
         try {
             body.run();
             channel.basicAck(deliveryTag, false);
             increment(PROCESSED_METRIC, consumerName);
         } catch (Exception e) {
-            log.error("consumer {} 處理訊息失敗，訊息送往 DLQ，deliveryTag={}", consumerName, deliveryTag, e);
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            String context = resolveContext(logContext);
+            log.error("consumer {} 處理訊息失敗，訊息送往 DLQ，deliveryTag={}{}",
+                    consumerName, deliveryTag, context, e);
             increment(FAILED_METRIC, consumerName);
-            nackWithoutRequeue(consumerName, channel, deliveryTag);
+            nackWithoutRequeue(consumerName, context, channel, deliveryTag);
+        }
+    }
+
+    /**
+     * 求值業務上下文並格式化為日誌後綴。
+     *
+     * <p>{@link Supplier} 拋任何例外都被吞掉並退回空字串——取日誌上下文不得讓失敗處理本身失敗。</p>
+     *
+     * @param logContext 上下文來源；可為 {@code null}
+     * @return 形如 {@code "，articleUuid=..."} 的後綴；無上下文時為空字串
+     */
+    private String resolveContext(Supplier<String> logContext) {
+        if (logContext == null) {
+            return "";
+        }
+        try {
+            String value = logContext.get();
+            return value == null || value.isBlank() ? "" : "，" + value;
+        } catch (RuntimeException e) {
+            log.warn("取得 consumer 日誌上下文失敗，改以不帶上下文輸出", e);
+            return "";
         }
     }
 
@@ -82,31 +136,45 @@ public class ConsumerExecutor {
      * 以 requeue=false 拒絕訊息；nack 失敗只記錄、不外拋。
      *
      * @param consumerName consumer 識別名稱
+     * @param context      已格式化的業務上下文後綴；可為空字串
      * @param channel      AMQP channel
      * @param deliveryTag  訊息的 delivery tag
      */
-    private void nackWithoutRequeue(String consumerName, Channel channel, long deliveryTag) {
+    private void nackWithoutRequeue(String consumerName, String context, Channel channel, long deliveryTag) {
         try {
             channel.basicNack(deliveryTag, false, false);
             increment(DEAD_LETTERED_METRIC, consumerName);
         } catch (IOException nackEx) {
-            log.error("consumer {} NACK 亦失敗，deliveryTag={}", consumerName, deliveryTag, nackEx);
+            log.error("consumer {} NACK 亦失敗，deliveryTag={}{}", consumerName, deliveryTag, context, nackEx);
         }
     }
 
     /**
-     * 將指定指標加一。全域 registry 未掛任何子 registry 時直接跳過。
+     * 將指定指標加一；<b>絕不外拋</b>。
+     *
+     * <p>計數是旁路觀測，不得影響訊息的 ack/nack：
+     * 失敗路徑若因計數例外而外拋，訊息不會被 nack；
+     * 成功路徑若在 ack 之後計數失敗落入 catch，會對已 ack 的 tag 再 nack
+     * （broker 端 PRECONDITION_FAILED、關閉 channel）。故任何 {@link RuntimeException}
+     * （例如 MeterFilter 拋錯、{@code consumerName} 為 {@code null}）都只記 warn。</p>
+     *
+     * <p>全域 registry 未掛任何子 registry 時直接跳過——這只是省去建立 Counter 的成本，
+     * <b>不是正確性所需</b>：即使沒有此 guard，無子 registry 時註冊 Counter 也是安全的 no-op。</p>
      *
      * @param metric       指標名稱
      * @param consumerName consumer 識別名稱
      */
     private void increment(String metric, String consumerName) {
-        if (Metrics.globalRegistry.getRegistries().isEmpty()) {
-            return;
+        try {
+            if (Metrics.globalRegistry.getRegistries().isEmpty()) {
+                return;
+            }
+            Counter.builder(metric)
+                    .tag(CONSUMER_TAG, consumerName)
+                    .register(Metrics.globalRegistry)
+                    .increment();
+        } catch (RuntimeException e) {
+            log.warn("consumer {} 指標 {} 計數失敗，已忽略（不影響 ack/nack）", consumerName, metric, e);
         }
-        Counter.builder(metric)
-                .tag(CONSUMER_TAG, consumerName)
-                .register(Metrics.globalRegistry)
-                .increment();
     }
 }
