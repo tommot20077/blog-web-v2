@@ -45,6 +45,8 @@ M1～M8 共用 **§4 範本**；派工前主線必須先做 §4.1 的刷新盤�
 - **Docker**：daemon 預設未啟動。啟動：`(nohup dockerd > /tmp/dockerd.log 2>&1 &)`，再以 `docker info` 確認。實測 `postgres:16-alpine` 可拉取、`CrossModuleCommentIT` 4/4 通過——**IT 可在本機跑**
 - `logs/` 被 `.gitignore`，新 worktree 不存在 → 先 `mkdir -p logs`
 - `@DisplayName` 的中文在輸出中顯示為 `????`（container 語系），不影響結果
+- **並行批次**：同時派多個 agent 時，各自用主線預先建立的 worktree（`git worktree add -b wt/<task> .worktrees/<task> <base>`），
+  且提示詞改為**禁止 `mvn install`**、一律 `mvn test -pl <m> -am`——所有 worktree 共用 ~/.m2，install 會互相污染
 - Flyway 目前最高版號 V24（若 DATA-01 等其他工作先合併，版號會前進——一律以 `ls ... | sort -V | tail -1` 為準）
 
 ---
@@ -198,7 +200,7 @@ log 關鍵資訊、MQ 訊息格式全部凍結；不新增功能、不改 queue 
 - 排程由子類別以 @Scheduled 觸發；框架提供 `run()`。排程池目前為單執行緒（findings PERF-16），而既有 flush／trending job 是 fixedDelay、
   沒有固定時段可錯開——本 Task 在 application.yaml 設定 `spring.task.scheduling.pool.size: 4`（附測試或 context 驗證），
   並在框架加「單次執行處理頁數上限」（預設值寫成常數，超過即結束本次、下次續跑），避免長掃描佔住執行緒
-【範圍】只動 blog-infrastructure。
+【範圍】blog-infrastructure（框架與測試）＋ blog-start 的 application.yaml（排程池設定）。
 【驗收條件】
 - 測試：取鎖失敗 → 不處理；鎖以 token 解鎖（他人的鎖不被刪）；多頁走訪；只處理不存在者；filterExisting 拋例外 → 零修改＋result=failed；計數與 log
 - 以 src/test 的測試子類別驗證，不得在 src/main 新增具體子類別
