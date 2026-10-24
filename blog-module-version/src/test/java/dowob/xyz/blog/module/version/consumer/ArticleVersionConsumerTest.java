@@ -3,8 +3,8 @@ package dowob.xyz.blog.module.version.consumer;
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent.Action;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.version.service.AutoSnapshotPolicy;
 import dowob.xyz.blog.module.version.service.VersioningService;
 import io.micrometer.core.instrument.Counter;
@@ -71,7 +71,7 @@ class ArticleVersionConsumerTest {
 
     private ArticleContentChangedEvent event(Action action) {
         return new ArticleContentChangedEvent(
-                ARTICLE_ID, UUID.randomUUID(), 1L, action, Instant.now());
+                UUID.randomUUID(), ARTICLE_ID, UUID.randomUUID(), 1L, null, action, Instant.now());
     }
 
     @Test

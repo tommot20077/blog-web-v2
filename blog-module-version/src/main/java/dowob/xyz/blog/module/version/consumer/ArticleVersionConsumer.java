@@ -2,7 +2,7 @@ package dowob.xyz.blog.module.version.consumer;
 
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.version.config.VersionRabbitMqConfig;
 import dowob.xyz.blog.module.version.service.AutoSnapshotPolicy;
 import dowob.xyz.blog.module.version.service.VersioningService;

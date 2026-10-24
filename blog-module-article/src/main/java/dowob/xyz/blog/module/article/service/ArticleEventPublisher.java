@@ -7,8 +7,9 @@ import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.facade.ArticleDataAssembler;
@@ -63,14 +64,16 @@ public class ArticleEventPublisher {
     public void publishContentChanged(Article article, ArticleContentChangedEvent.Action action) {
         try {
             ArticleContentChangedEvent event = new ArticleContentChangedEvent(
+                    UUID.randomUUID(),
                     article.getId(),
                     article.getUuid(),
                     article.getAuthorId(),
+                    resolveAuthorUuid(article.getAuthorId()),
                     action,
                     Instant.now());
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
-                    ArticleRabbitMqConfig.ROUTING_KEY_CONTENT_CHANGED,
+                    ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED,
                     event);
         } catch (Exception e) {
             log.warn("ContentChanged 事件 MQ 發送失敗（best-effort）: {}", e.getMessage(), e);

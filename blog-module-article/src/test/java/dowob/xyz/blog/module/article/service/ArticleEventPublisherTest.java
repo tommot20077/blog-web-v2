@@ -4,6 +4,7 @@ import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.facade.ArticleDataAssembler;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
@@ -63,6 +64,59 @@ class ArticleEventPublisherTest {
 
     @InjectMocks
     private ArticleEventPublisher publisher;
+
+    @Nested
+    @DisplayName("publishContentChanged")
+    class PublishContentChanged {
+
+        @Test
+        @DisplayName("正常：事件帶新的 eventId 與 authorUuid，並保留 articleId／authorId 過渡欄位")
+        void publishContentChanged_shouldFillEventIdAndAuthorUuid() {
+            Article article = new Article();
+            article.setId(100L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(1L);
+            UUID authorUuid = UUID.randomUUID();
+            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+
+            publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.SAVED);
+
+            ArgumentCaptor<ArticleContentChangedEvent> captor =
+                    ArgumentCaptor.forClass(ArticleContentChangedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE),
+                    eq(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED),
+                    captor.capture());
+            ArticleContentChangedEvent event = captor.getValue();
+            assertThat(event.eventId()).isNotNull();
+            assertThat(event.articleId()).isEqualTo(100L);
+            assertThat(event.articleUuid()).isEqualTo(article.getUuid());
+            assertThat(event.authorId()).isEqualTo(1L);
+            assertThat(event.authorUuid()).isEqualTo(authorUuid);
+            assertThat(event.action()).isEqualTo(ArticleContentChangedEvent.Action.SAVED);
+        }
+
+        @Test
+        @DisplayName("防禦：authorUuid 查詢失敗不得阻擋事件發送（欄位為 null）")
+        void publishContentChanged_whenUuidLookupFails_shouldStillPublish() {
+            Article article = new Article();
+            article.setId(100L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(1L);
+            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
+
+            publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.PUBLISHED);
+
+            ArgumentCaptor<ArticleContentChangedEvent> captor =
+                    ArgumentCaptor.forClass(ArticleContentChangedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE),
+                    eq(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED),
+                    captor.capture());
+            assertThat(captor.getValue().authorUuid()).isNull();
+            assertThat(captor.getValue().authorId()).isEqualTo(1L);
+        }
+    }
 
     @Nested
     @DisplayName("publishDeleted")
