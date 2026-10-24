@@ -143,10 +143,13 @@ public class ArticleDataAssembler {
     /**
      * 批次把 series 主鍵轉成公開 UUID（經 {@link SeriesFacade}，延遲取得）。
      *
+     * <p>設為 public 供 {@code ArticleEventPublisher} 填事件的 seriesUuid 時沿用同一機制
+     * （不得在 publisher 直接注入 SeriesFacade，會造成 bean 循環）。</p>
+     *
      * @param seriesIds series 主鍵集合（可含 null 與重複）
      * @return series 主鍵 → 公開 UUID；集合中沒有任何 series id 時不取用 SeriesFacade 並回傳空 Map
      */
-    private Map<Long, UUID> resolveSeriesUuids(Collection<Long> seriesIds) {
+    public Map<Long, UUID> resolveSeriesUuids(Collection<Long> seriesIds) {
         Set<Long> distinct = distinctNonNull(seriesIds);
         if (distinct.isEmpty()) {
             return Collections.emptyMap();

@@ -4,7 +4,7 @@ import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
-import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Metrics;
@@ -53,7 +53,7 @@ class SeriesArticleDeletedConsumerTest {
     private ArticleDeletedEvent event(Long seriesId) {
         return new ArticleDeletedEvent(
             UUID.randomUUID(), 100L, UUID.randomUUID(), 1L,
-            seriesId, List.of(), List.of(), Instant.now()
+            seriesId, List.of(), List.of(), Instant.now(), null, null
         );
     }
 

@@ -55,11 +55,6 @@ public class ArticleRabbitMqConfig {
     public static final String ROUTING_KEY_UPDATED = "article.updated";
 
     /**
-     * 文章已刪除 Routing Key
-     */
-    public static final String ROUTING_KEY_DELETED = "article.deleted";
-
-    /**
      * 文章被標記標籤 Routing Key
      */
     public static final String ROUTING_KEY_TAGGED = "article.tagged";

@@ -4,7 +4,8 @@ import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
-import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
+import dowob.xyz.blog.module.article.facade.ArticleDataAssembler;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import org.junit.jupiter.api.DisplayName;
@@ -25,12 +26,16 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 
@@ -52,6 +57,9 @@ class ArticleEventPublisherTest {
 
     @Mock
     private ArticleMapper articleMapper;
+
+    @Mock
+    private ArticleDataAssembler articleDataAssembler;
 
     @InjectMocks
     private ArticleEventPublisher publisher;
@@ -76,7 +84,7 @@ class ArticleEventPublisherTest {
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
+                    eq(ArticleEventContract.ROUTING_KEY_DELETED),
                     captor.capture()
             );
             ArticleDeletedEvent event = captor.getValue();
@@ -103,13 +111,74 @@ class ArticleEventPublisherTest {
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
+                    eq(ArticleEventContract.ROUTING_KEY_DELETED),
                     captor.capture()
             );
             ArticleDeletedEvent event = captor.getValue();
             assertThat(event.seriesId()).isNull();
             assertThat(event.categoryIds()).isEmpty();
             assertThat(event.tagIds()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("正常：事件帶 authorUuid 與 seriesUuid（經 ArticleDataAssembler 批次取得，不 JOIN series）")
+        void publishDeleted_shouldFillAuthorUuidAndSeriesUuid() {
+            Article article = new Article();
+            article.setId(100L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(1L);
+            UUID authorUuid = UUID.randomUUID();
+            UUID seriesUuid = UUID.randomUUID();
+            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+            when(articleDataAssembler.resolveSeriesUuids(anyCollection())).thenReturn(Map.of(200L, seriesUuid));
+
+            publisher.publishDeleted(article, 200L, List.of(), List.of());
+
+            ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
+            ArticleDeletedEvent event = captor.getValue();
+            assertThat(event.authorId()).isEqualTo(1L);
+            assertThat(event.authorUuid()).isEqualTo(authorUuid);
+            assertThat(event.seriesId()).isEqualTo(200L);
+            assertThat(event.seriesUuid()).isEqualTo(seriesUuid);
+        }
+
+        @Test
+        @DisplayName("邊界：seriesId 為 null 時不查 series，seriesUuid 為 null")
+        void publishDeleted_withoutSeries_shouldNotResolveSeriesUuid() {
+            Article article = new Article();
+            article.setId(10L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(5L);
+
+            publisher.publishDeleted(article, null, List.of(), List.of());
+
+            ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
+            assertThat(captor.getValue().seriesUuid()).isNull();
+            verify(articleDataAssembler, never()).resolveSeriesUuids(anyCollection());
+        }
+
+        @Test
+        @DisplayName("防禦：uuid 過渡欄位查詢失敗不得阻擋事件發送（欄位為 null，事件仍送出）")
+        void publishDeleted_whenUuidLookupFails_shouldStillPublishWithNullUuids() {
+            Article article = new Article();
+            article.setId(30L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(1L);
+            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
+            when(articleDataAssembler.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
+
+            publisher.publishDeleted(article, 200L, List.of(), List.of());
+
+            ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
+            assertThat(captor.getValue().authorUuid()).isNull();
+            assertThat(captor.getValue().seriesUuid()).isNull();
+            assertThat(captor.getValue().authorId()).isEqualTo(1L);
         }
 
         @Test
@@ -125,7 +194,7 @@ class ArticleEventPublisherTest {
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
+                    eq(ArticleEventContract.ROUTING_KEY_DELETED),
                     captor.capture()
             );
             ArticleDeletedEvent event = captor.getValue();
@@ -149,7 +218,7 @@ class ArticleEventPublisherTest {
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
                     .convertAndSend(eq(ArticleEventContract.EXCHANGE),
-                            eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
+                            eq(ArticleEventContract.ROUTING_KEY_DELETED),
                             any(Object.class));
 
             CapturingAppender appender = attachAppender();
@@ -176,7 +245,7 @@ class ArticleEventPublisherTest {
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
                     .convertAndSend(eq(ArticleEventContract.EXCHANGE),
-                            eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
+                            eq(ArticleEventContract.ROUTING_KEY_DELETED),
                             any(Object.class));
 
             assertThatCode(() -> publisher.publishDeleted(article, null, null, null))
@@ -215,7 +284,7 @@ class ArticleEventPublisherTest {
         void publishArchived_doesNotReuseDeletedRoutingKey() {
             assertThat(ArticleEventContract.ROUTING_KEY_ARCHIVED)
                     .isEqualTo("article.archived")
-                    .isNotEqualTo(ArticleRabbitMqConfig.ROUTING_KEY_DELETED);
+                    .isNotEqualTo(ArticleEventContract.ROUTING_KEY_DELETED);
         }
 
         @Test

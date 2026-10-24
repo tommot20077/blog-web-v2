@@ -7,10 +7,11 @@ import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
-import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
+import dowob.xyz.blog.module.article.facade.ArticleDataAssembler;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,12 @@ public class ArticleEventPublisher {
     private final UserFacade userFacade;
 
     private final ArticleMapper articleMapper;
+
+    /**
+     * 作者／series uuid 的批次轉換元件（T0a-6 建立；內部以 ObjectProvider 延遲取得 SeriesFacade，
+     * 避開 SeriesFacadeImpl → ArticleFacade 的 bean 循環，本類別不得直接注入 SeriesFacade）
+     */
+    private final ArticleDataAssembler articleDataAssembler;
 
     // ──────────────────────────────────────────────
     // ContentChanged（SAVED / PUBLISHED / RESTORED）
@@ -167,11 +174,13 @@ public class ArticleEventPublisher {
                 seriesId,
                 categoryIds != null ? categoryIds : List.of(),
                 tagIds != null ? tagIds : List.of(),
-                Instant.now()
+                Instant.now(),
+                resolveAuthorUuid(article.getAuthorId()),
+                resolveSeriesUuid(seriesId)
             );
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
-                    ArticleRabbitMqConfig.ROUTING_KEY_DELETED,
+                    ArticleEventContract.ROUTING_KEY_DELETED,
                     event);
         } catch (Exception e) {
             log.error("文章刪除事件發送失敗，Elasticsearch 索引可能未移除、series 計數可能未遞減，"
@@ -259,6 +268,49 @@ public class ArticleEventPublisher {
     // ──────────────────────────────────────────────
     // Private helpers
     // ──────────────────────────────────────────────
+
+    /**
+     * 取得作者公開 UUID（事件的過渡 uuid 欄位）。
+     *
+     * <p>uuid 欄位是新增的過渡資料，現有 consumer 仍讀 Long 欄位；因此查詢失敗<b>不得</b>阻擋事件發送
+     * （尤其刪除／下架事件是移除 ES 索引的唯一觸發），失敗時記 warn 並回傳 null。</p>
+     *
+     * @param authorId 作者主鍵；null 回傳 null
+     * @return 作者 UUID；查無或查詢失敗為 null
+     */
+    private UUID resolveAuthorUuid(Long authorId) {
+        if (authorId == null) {
+            return null;
+        }
+        try {
+            return articleDataAssembler.resolveAuthorUuids(List.of(authorId)).get(authorId);
+        } catch (Exception e) {
+            log.warn("事件的 authorUuid 查詢失敗，以 null 發送（過渡欄位）：authorId={}, error={}",
+                    authorId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 取得 series 公開 UUID（事件的過渡 uuid 欄位），經 {@link ArticleDataAssembler}，不 JOIN series 表。
+     *
+     * <p>失敗處理同 {@link #resolveAuthorUuid(Long)}。</p>
+     *
+     * @param seriesId series 主鍵；null（文章不在 series）回傳 null 且不發任何查詢
+     * @return series UUID；查無或查詢失敗為 null
+     */
+    private UUID resolveSeriesUuid(Long seriesId) {
+        if (seriesId == null) {
+            return null;
+        }
+        try {
+            return articleDataAssembler.resolveSeriesUuids(List.of(seriesId)).get(seriesId);
+        } catch (Exception e) {
+            log.warn("事件的 seriesUuid 查詢失敗，以 null 發送（過渡欄位）：seriesId={}, error={}",
+                    seriesId, e.getMessage());
+            return null;
+        }
+    }
 
     /**
      * 去除 Markdown 格式，回傳純文字（供 Elasticsearch 索引）。
