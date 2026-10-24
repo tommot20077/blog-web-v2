@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
@@ -85,17 +86,17 @@ public class AdminArticleController {
      * </p>
      *
      * @param uuid           文章公開 UUID
-     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param user     當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 下架後的文章完整資訊
      */
     @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
     @PostMapping("/{uuid}/archive")
     public ApiResponse<ArticleResponse> archiveArticle(@PathVariable UUID uuid,
-                                                       @AuthenticationPrincipal Long operatorId,
+                                                       @AuthenticationPrincipal AuthUser user,
                                                        Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.archiveArticle(operatorId, operatorRole, uuid));
+        return ApiResponse.success(articleService.archiveArticle(user.id(), operatorRole, uuid));
     }
 
     /**
@@ -112,17 +113,17 @@ public class AdminArticleController {
      * </p>
      *
      * @param uuid           文章公開 UUID
-     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param user     當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 復原後的文章完整資訊
      */
     @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
     @PostMapping("/{uuid}/unarchive")
     public ApiResponse<ArticleResponse> unarchiveArticle(@PathVariable UUID uuid,
-                                                         @AuthenticationPrincipal Long operatorId,
+                                                         @AuthenticationPrincipal AuthUser user,
                                                          Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.unarchiveArticle(operatorId, operatorRole, uuid));
+        return ApiResponse.success(articleService.unarchiveArticle(user.id(), operatorRole, uuid));
     }
 
 }

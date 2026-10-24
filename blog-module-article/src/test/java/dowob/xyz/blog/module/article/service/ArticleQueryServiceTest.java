@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.service;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
@@ -159,7 +160,8 @@ class ArticleQueryServiceTest {
 
             // 設定登入狀態
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
@@ -177,7 +179,8 @@ class ArticleQueryServiceTest {
             when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Collections.emptySet());
 
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
@@ -224,7 +227,8 @@ class ArticleQueryServiceTest {
             when(readingFacade.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
 
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
 
@@ -240,7 +244,8 @@ class ArticleQueryServiceTest {
             when(readingFacade.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(false);
 
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
 
@@ -275,7 +280,8 @@ class ArticleQueryServiceTest {
             when(readingFacade.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
 
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleBySlug("test-slug", AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
 
@@ -299,7 +305,8 @@ class ArticleQueryServiceTest {
             when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Set.of(ARTICLE_DB_ID));
 
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getMyArticles(AUTHOR_ID, 1, 10, null);
 
@@ -348,7 +355,8 @@ class ArticleQueryServiceTest {
                     .thenReturn(Collections.emptyMap());
 
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
@@ -371,7 +379,8 @@ class ArticleQueryServiceTest {
                     .thenReturn(Map.of(ARTICLE_DB_ID, progress));
 
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
@@ -485,7 +494,8 @@ class ArticleQueryServiceTest {
             when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.empty());
 
             SecurityContextHolder.getContext().setAuthentication(
-                    new UsernamePasswordAuthenticationToken(AUTHOR_ID, null, List.of()));
+                    new UsernamePasswordAuthenticationToken(
+                            new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(
                     ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");

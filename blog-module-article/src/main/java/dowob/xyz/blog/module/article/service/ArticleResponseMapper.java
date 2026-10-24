@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.service;
 
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -18,7 +19,6 @@ import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.model.dto.response.TagSummaryResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -273,19 +273,16 @@ class ArticleResponseMapper {
     /**
      * 從認證物件取出觀看者的資料庫主鍵。
      *
-     * <p>Principal 由 {@code JwtAuthenticationFilter} 寫入為 {@link Long}（userId），
+     * <p>Principal 由 {@code JwtAuthenticationFilter} 寫入為 {@link AuthUser}，
+     * 經 {@link SecurityUtils#currentAuthUser(Authentication)} 取出後僅取其 {@code id}，
      * 與 {@code ArticleQueryService} 判斷 liked / bookmarked 的取值方式一致。
-     * 未登入 / 匿名 / principal 非 Long 一律回傳 {@code null}，代表「無法識別的觀看者」。</p>
+     * 未登入 / 匿名 / principal 非 AuthUser 一律回傳 {@code null}，代表「無法識別的觀看者」。</p>
      *
      * @param authentication 當前認證物件（可為 null）
      * @return 觀看者 DB 主鍵，無法識別時回傳 {@code null}
      */
     private Long resolveViewerId(Authentication authentication) {
-        if (authentication == null || !authentication.isAuthenticated()
-                || authentication instanceof AnonymousAuthenticationToken) {
-            return null;
-        }
-        return authentication.getPrincipal() instanceof Long viewerId ? viewerId : null;
+        return SecurityUtils.currentAuthUser(authentication).map(AuthUser::id).orElse(null);
     }
 
     UUID resolveAuthorUuid(Long authorId) {

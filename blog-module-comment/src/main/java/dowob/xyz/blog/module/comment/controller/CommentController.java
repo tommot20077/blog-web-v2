@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.comment.controller;
 
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
@@ -71,7 +72,7 @@ public class CommentController {
      * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
      *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @param sort          排序方式（newest / oldest 等）
-     * @param currentUserId 當前使用者 ID（未登入為 null，僅供個人化）
+     * @param user          當前登入者（未登入為 null，僅供個人化）
      * @return 留言列表（含軟刪除佔位）
      */
     @GetMapping("/articles/{articleUuid}/comments")
@@ -80,10 +81,10 @@ public class CommentController {
             @PathVariable UUID articleUuid,
             PageQuery pageQuery,
             @RequestParam(defaultValue = "newest") String sort,
-            @AuthenticationPrincipal Long currentUserId) {
+            @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(
-                commentService.listComments(articleUuid, currentUserId, isAdmin, sort, pageQuery.page(), pageQuery.sizeOrDefault(20)));
+                commentService.listComments(articleUuid, (user == null ? null : user.id()), isAdmin, sort, pageQuery.page(), pageQuery.sizeOrDefault(20)));
     }
 
     @PostMapping("/articles/{articleUuid}/comments")
@@ -91,9 +92,9 @@ public class CommentController {
     @Operation(summary = "建立留言（top-level 或 reply）")
     public ApiResponse<CommentResponse> create(
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateCommentRequest req) {
-        return ApiResponse.success(commentService.createComment(articleUuid, userId, req));
+        return ApiResponse.success(commentService.createComment(articleUuid, user.id(), req));
     }
 
     @PutMapping("/comments/{uuid}")
@@ -101,10 +102,10 @@ public class CommentController {
     @Operation(summary = "編輯留言（5 分鐘窗，Admin 不受限）")
     public ApiResponse<CommentResponse> edit(
             @PathVariable UUID uuid,
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody EditCommentRequest req) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        return ApiResponse.success(commentService.editComment(uuid, userId, isAdmin, req));
+        return ApiResponse.success(commentService.editComment(uuid, user.id(), isAdmin, req));
     }
 
     @DeleteMapping("/comments/{uuid}")
@@ -112,9 +113,9 @@ public class CommentController {
     @Operation(summary = "軟刪除留言")
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
-            @AuthenticationPrincipal Long userId) {
+            @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        commentService.deleteComment(uuid, userId, isAdmin);
+        commentService.deleteComment(uuid, user.id(), isAdmin);
         return ApiResponse.success();
     }
 }

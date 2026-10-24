@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
@@ -39,20 +40,20 @@ public class BookmarkController {
     @PostMapping("/articles/{articleUuid}/bookmark")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "收藏文章（idempotent）")
-    public ApiResponse<Void> bookmark(@AuthenticationPrincipal Long userId,
+    public ApiResponse<Void> bookmark(@AuthenticationPrincipal AuthUser user,
                                         @PathVariable UUID articleUuid) {
         Long articleId = resolveArticleId(articleUuid);
-        bookmarkService.bookmark(userId, articleId);
+        bookmarkService.bookmark(user.id(), articleId);
         return ApiResponse.success();
     }
 
     @DeleteMapping("/articles/{articleUuid}/bookmark")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "取消收藏（idempotent）")
-    public ApiResponse<Void> unbookmark(@AuthenticationPrincipal Long userId,
+    public ApiResponse<Void> unbookmark(@AuthenticationPrincipal AuthUser user,
                                           @PathVariable UUID articleUuid) {
         Long articleId = resolveArticleId(articleUuid);
-        bookmarkService.unbookmark(userId, articleId);
+        bookmarkService.unbookmark(user.id(), articleId);
         return ApiResponse.success();
     }
 
@@ -63,7 +64,7 @@ public class BookmarkController {
      * <b>對本人可見</b>的收藏數，與 {@code pages} 一致——前端以 {@code pages}
      * 畫分頁器，若沿用收藏列數會產生空尾頁。</p>
      *
-     * @param userId         當前登入用戶的資料庫主鍵
+     * @param user         當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於判斷是否為 ADMIN）
      * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
      *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
@@ -73,11 +74,11 @@ public class BookmarkController {
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "我的收藏列表")
     public ApiResponse<PageResult<ArticleSummaryResponse>> myBookmarks(
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             Authentication authentication,
             PageQuery pageQuery) {
         return ApiResponse.success(bookmarkQueryService.listMyBookmarks(
-                userId, SecurityUtils.isAdmin(authentication), pageQuery.page(), pageQuery.sizeOrDefault(20)));
+                user.id(), SecurityUtils.isAdmin(authentication), pageQuery.page(), pageQuery.sizeOrDefault(20)));
     }
 
     /**

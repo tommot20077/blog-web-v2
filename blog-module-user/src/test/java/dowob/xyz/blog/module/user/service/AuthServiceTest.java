@@ -759,31 +759,6 @@ class AuthServiceTest {
     }
 
     /**
-     * 驗證：resolveUserRole 應回傳 DB 中該用戶的實際角色名稱（供 refresh 於快取缺 role 時回退）。
-     */
-    @Test
-    @DisplayName("resolveUserRole → 應回傳 DB 中該用戶的角色名稱")
-    void resolveUserRole_shouldReturnRoleFromDb() {
-        User mockUser = buildActiveUser();
-        mockUser.setRole(Role.AUTHOR);
-        when(userRepository.findByUuid(USER_UUID)).thenReturn(Optional.of(mockUser));
-
-        assertThat(authService.resolveUserRole(USER_UUID)).isEqualTo("AUTHOR");
-    }
-
-    /**
-     * 驗證：resolveUserRole 在用戶不存在時應拋出 BusinessException。
-     */
-    @Test
-    @DisplayName("resolveUserRole → 用戶不存在 → 應拋出 BusinessException")
-    void resolveUserRole_userNotFound_shouldThrowBusinessException() {
-        when(userRepository.findByUuid(USER_UUID)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> authService.resolveUserRole(USER_UUID))
-                .isInstanceOf(BusinessException.class);
-    }
-
-    /**
      * 驗證：resetPassword 使用已過期的 Token 應拋出 BusinessException。
      */
     @Test

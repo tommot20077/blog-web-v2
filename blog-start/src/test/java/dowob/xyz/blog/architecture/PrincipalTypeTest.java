@@ -112,159 +112,19 @@ class PrincipalTypeTest {
     /** 快取的正式碼匯入結果（匯入約數秒，各測試共用） */
     private static JavaClasses productionClasses;
 
-    /** 規則 (a) 例外的清除說明：T0b-3 逐 controller 純型別替換 */
-    private static final String T0B3_PARAM = "T0b-3：controller 純型別替換，@AuthenticationPrincipal Long 改為 AuthUser";
-
-    /** 規則 (b) 例外的清除說明 */
-    private static final String T0B3_PRINCIPAL_READ = "T0b-3：改用 SecurityUtils.currentAuthUser(Authentication)";
-
     /**
      * 規則 (a) 例外清單：型別不是 AuthUser 的 {@code @AuthenticationPrincipal} 參數。
      * key 為 {@code 類別全名#方法名[參數索引]}，value 為「Task：說明」。
+     * T0b-3 已清空；機制保留，日後若需暫時豁免須標明預計清除的 Task。
      */
-    private static final Map<String, String> PRINCIPAL_PARAM_EXEMPT = Map.ofEntries(
-            // AdminArticleController
-            Map.entry("dowob.xyz.blog.module.article.controller.AdminArticleController#archiveArticle[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.AdminArticleController#unarchiveArticle[1]",
-                    T0B3_PARAM),
-            // ArticleController
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#createArticle[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#deleteArticle[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#getArticleBySlug[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#getArticleForEdit[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#getArticle[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#getMyArticles[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#publishArticle[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#rejectArticle[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#submitForReview[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#updateArticle[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.article.controller.ArticleController#withdrawArticle[1]",
-                    T0B3_PARAM),
-            // CommentController
-            Map.entry("dowob.xyz.blog.module.comment.controller.CommentController#create[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.comment.controller.CommentController#delete[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.comment.controller.CommentController#edit[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.comment.controller.CommentController#list[3]",
-                    T0B3_PARAM),
-            // CommentLikeController
-            Map.entry("dowob.xyz.blog.module.comment.controller.CommentLikeController#like[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.comment.controller.CommentLikeController#unlike[0]",
-                    T0B3_PARAM),
-            // FileController
-            Map.entry("dowob.xyz.blog.module.file.controller.FileController#deleteFile[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.file.controller.FileController#getFileContent[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.file.controller.FileController#getFileMetadata[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.file.controller.FileController#getQuota[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.file.controller.FileController#getUserFiles[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.file.controller.FileController#uploadFile[3]",
-                    T0B3_PARAM),
-            // ArticleLikeController
-            Map.entry("dowob.xyz.blog.module.reading.controller.ArticleLikeController#like[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.reading.controller.ArticleLikeController#unlike[0]",
-                    T0B3_PARAM),
-            // BookmarkController
-            Map.entry("dowob.xyz.blog.module.reading.controller.BookmarkController#bookmark[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.reading.controller.BookmarkController#myBookmarks[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.reading.controller.BookmarkController#unbookmark[0]",
-                    T0B3_PARAM),
-            // HighlightController
-            Map.entry("dowob.xyz.blog.module.reading.controller.HighlightController#create[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.reading.controller.HighlightController#delete[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.reading.controller.HighlightController#list[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.reading.controller.HighlightController#update[1]",
-                    T0B3_PARAM),
-            // ReadingProgressController
-            Map.entry("dowob.xyz.blog.module.reading.controller.ReadingProgressController#get[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.reading.controller.ReadingProgressController#update[1]",
-                    T0B3_PARAM),
-            // SeriesController
-            Map.entry("dowob.xyz.blog.module.series.controller.SeriesController#addArticle[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.series.controller.SeriesController#create[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.series.controller.SeriesController#delete[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.series.controller.SeriesController#get[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.series.controller.SeriesController#removeArticle[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.series.controller.SeriesController#update[1]",
-                    T0B3_PARAM),
-            // TagController
-            Map.entry("dowob.xyz.blog.module.tag.controller.TagController#followTag[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.tag.controller.TagController#getTagDetail[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.tag.controller.TagController#unfollowTag[1]",
-                    T0B3_PARAM),
-            // UserController
-            Map.entry("dowob.xyz.blog.module.user.controller.UserController#changePassword[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.user.controller.UserController#deleteAccount[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.user.controller.UserController#getMe[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.user.controller.UserController#updateNotifications[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.user.controller.UserController#updateProfile[0]",
-                    T0B3_PARAM),
-            // PreferenceController
-            Map.entry("dowob.xyz.blog.module.version.controller.PreferenceController#get[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.version.controller.PreferenceController#reset[0]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.version.controller.PreferenceController#update[0]",
-                    T0B3_PARAM),
-            // VersionController
-            Map.entry("dowob.xyz.blog.module.version.controller.VersionController#createManual[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.version.controller.VersionController#delete[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.version.controller.VersionController#getDetail[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.version.controller.VersionController#list[1]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.version.controller.VersionController#promote[2]",
-                    T0B3_PARAM),
-            Map.entry("dowob.xyz.blog.module.version.controller.VersionController#restore[2]",
-                    T0B3_PARAM));
+    private static final Map<String, String> PRINCIPAL_PARAM_EXEMPT = Map.of();
 
     /**
      * 規則 (b) 例外清單：白名單外呼叫 {@code getPrincipal()} 的程式碼。
      * key 為 {@code 呼叫端最外層類別全名#方法名}，value 為「Task：說明」。
+     * T0b-3 已清空；機制保留，日後若需暫時豁免須標明預計清除的 Task。
      */
-    private static final Map<String, String> GET_PRINCIPAL_EXEMPT = Map.ofEntries(
-            Map.entry("dowob.xyz.blog.module.article.service.ArticleQueryService#currentUserIdOrNull",
-                    T0B3_PRINCIPAL_READ),
-            Map.entry("dowob.xyz.blog.module.article.service.ArticleResponseMapper#resolveViewerId",
-                    T0B3_PRINCIPAL_READ));
+    private static final Map<String, String> GET_PRINCIPAL_EXEMPT = Map.of();
 
     @Test
     @DisplayName("規則 (a)：@AuthenticationPrincipal 參數型別必須是 AuthUser（例外清單以外不得有）")
