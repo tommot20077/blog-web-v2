@@ -1,23 +1,29 @@
 package dowob.xyz.blog.module.search.listener;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
+import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.listener.dto.ArticleArchivedMessage;
 import dowob.xyz.blog.module.search.listener.dto.ArticleDeletedMessage;
 import dowob.xyz.blog.module.search.listener.dto.ArticlePublishedMessage;
 import dowob.xyz.blog.module.search.service.SearchService;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.Logger;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
@@ -47,6 +53,10 @@ class ArticleSearchListenerTest {
 
     @Mock
     private Channel channel;
+
+    /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
+    @Spy
+    private ConsumerExecutor consumerExecutor = new ConsumerExecutor();
 
     @InjectMocks
     private ArticleSearchListener listener;
@@ -244,14 +254,14 @@ class ArticleSearchListenerTest {
     }
 
     /**
-     * 掛上捕捉用 appender 以取得 {@link ArticleSearchListener} 的日誌事件。
+     * 掛上捕捉用 appender 以取得 {@link ConsumerExecutor} 的日誌事件（失敗日誌已收斂至 ConsumerExecutor）。
      *
      * @return 已啟動並掛載的 appender
      */
     private CapturingAppender attachAppender() {
         CapturingAppender appender = new CapturingAppender();
         appender.start();
-        ((Logger) LogManager.getLogger(ArticleSearchListener.class)).addAppender(appender);
+        ((Logger) LogManager.getLogger(ConsumerExecutor.class)).addAppender(appender);
         return appender;
     }
 
@@ -261,7 +271,7 @@ class ArticleSearchListenerTest {
      * @param appender 先前掛上的 appender
      */
     private void detachAppender(CapturingAppender appender) {
-        ((Logger) LogManager.getLogger(ArticleSearchListener.class)).removeAppender(appender);
+        ((Logger) LogManager.getLogger(ConsumerExecutor.class)).removeAppender(appender);
         appender.stop();
     }
 
@@ -319,5 +329,246 @@ class ArticleSearchListenerTest {
 
             verify(channel).basicNack(3L, false, false);
         }
+    }
+
+    /**
+     * 情境：成功處理 → 經 ConsumerExecutor 計入 processed 指標（consumer tag 為 CONSUMER_NAME）
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("onArticlePublished：成功時 ConsumerExecutor 計入 processed 指標")
+    void onArticlePublished_success_recordsProcessedMetric() throws Exception {
+        ArticlePublishedMessage message = buildPublishedMessage();
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            listener.onArticlePublished(message, channel, 5L);
+
+            assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).isZero();
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("onArticlePublished：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    void onArticlePublished_onFailure_recordsMetricsAndLogsContext() throws Exception {
+        ArticlePublishedMessage message = buildPublishedMessage();
+        doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            List<LogEvent> logs = captureExecutorLogs(() -> listener.onArticlePublished(message, channel, 6L));
+
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).isEqualTo(1.0);
+            assertThat(logs).anySatisfy(e -> {
+                assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(e.getMessage().getFormattedMessage())
+                        .contains(message.getArticleUuid().toString());
+            });
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 情境：成功處理 → 經 ConsumerExecutor 計入 processed 指標（consumer tag 為 CONSUMER_NAME）
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("onArticleUpdated：成功時 ConsumerExecutor 計入 processed 指標")
+    void onArticleUpdated_success_recordsProcessedMetric() throws Exception {
+        ArticlePublishedMessage message = buildPublishedMessage();
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            listener.onArticleUpdated(message, channel, 5L);
+
+            assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).isZero();
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("onArticleUpdated：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    void onArticleUpdated_onFailure_recordsMetricsAndLogsContext() throws Exception {
+        ArticlePublishedMessage message = buildPublishedMessage();
+        doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            List<LogEvent> logs = captureExecutorLogs(() -> listener.onArticleUpdated(message, channel, 6L));
+
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).isEqualTo(1.0);
+            assertThat(logs).anySatisfy(e -> {
+                assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(e.getMessage().getFormattedMessage())
+                        .contains(message.getArticleUuid().toString());
+            });
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 情境：成功處理 → 經 ConsumerExecutor 計入 processed 指標（consumer tag 為 CONSUMER_NAME）
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("onArticleDeleted：成功時 ConsumerExecutor 計入 processed 指標")
+    void onArticleDeleted_success_recordsProcessedMetric() throws Exception {
+        ArticleDeletedMessage message = new ArticleDeletedMessage();
+        message.setArticleUuid(UUID.randomUUID());
+        message.setDeletedAt(Instant.now());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            listener.onArticleDeleted(message, channel, 5L);
+
+            assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).isZero();
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("onArticleDeleted：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    void onArticleDeleted_onFailure_recordsMetricsAndLogsContext() throws Exception {
+        ArticleDeletedMessage message = new ArticleDeletedMessage();
+        message.setArticleUuid(UUID.randomUUID());
+        message.setDeletedAt(Instant.now());
+        doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            List<LogEvent> logs = captureExecutorLogs(() -> listener.onArticleDeleted(message, channel, 6L));
+
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).isEqualTo(1.0);
+            assertThat(logs).anySatisfy(e -> {
+                assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(e.getMessage().getFormattedMessage())
+                        .contains(message.getArticleUuid().toString());
+            });
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 情境：成功處理 → 經 ConsumerExecutor 計入 processed 指標（consumer tag 為 CONSUMER_NAME）
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("onArticleArchived：成功時 ConsumerExecutor 計入 processed 指標")
+    void onArticleArchived_success_recordsProcessedMetric() throws Exception {
+        ArticleArchivedMessage message = new ArticleArchivedMessage();
+        message.setEventId(UUID.randomUUID());
+        message.setArticleUuid(UUID.randomUUID());
+        message.setOccurredAt(Instant.now());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            listener.onArticleArchived(message, channel, 5L);
+
+            assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).isZero();
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("onArticleArchived：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    void onArticleArchived_onFailure_recordsMetricsAndLogsContext() throws Exception {
+        ArticleArchivedMessage message = new ArticleArchivedMessage();
+        message.setEventId(UUID.randomUUID());
+        message.setArticleUuid(UUID.randomUUID());
+        message.setOccurredAt(Instant.now());
+        doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
+        try {
+            List<LogEvent> logs = captureExecutorLogs(() -> listener.onArticleArchived(message, channel, 6L));
+
+            assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).isEqualTo(1.0);
+            assertThat(logs).anySatisfy(e -> {
+                assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(e.getMessage().getFormattedMessage())
+                        .contains(message.getArticleUuid().toString())
+                        .contains(message.getEventId().toString());
+            });
+        } finally {
+            Metrics.removeRegistry(registry);
+            registry.close();
+        }
+    }
+
+    /**
+     * 讀取指定 consumer 的指標計數，指標不存在時視為 0。
+     *
+     * @param registry     測試用 registry
+     * @param metric       指標名稱
+     * @param consumerName consumer 識別名稱（指標的 consumer tag）
+     * @return 計數值
+     */
+    private static double count(SimpleMeterRegistry registry, String metric, String consumerName) {
+        Counter counter = registry.find(metric).tag("consumer", consumerName).counter();
+        return counter == null ? 0.0 : counter.count();
+    }
+
+    /**
+     * 執行動作並捕捉 {@link ConsumerExecutor} 輸出的日誌事件。
+     *
+     * @param action 要執行的動作
+     * @return 捕捉到的日誌事件
+     * @throws Exception 動作拋出的例外
+     */
+    private List<LogEvent> captureExecutorLogs(ThrowingRunnable action) throws Exception {
+        CapturingAppender appender = attachAppender();
+        try {
+            action.run();
+        } finally {
+            detachAppender(appender);
+        }
+        return appender.events;
     }
 }
