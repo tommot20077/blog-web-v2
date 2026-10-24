@@ -85,19 +85,11 @@ public abstract class CommentCleanupITSupport {
     @Autowired protected CommentLikeRepository commentLikeRepo;
     @Autowired protected JdbcTemplate jdbc;
 
-    /** seed 資料中的使用者主鍵 */
-    protected static final Long USER_ID = 1L;
+    /** seed 資料中的使用者公開 UUID（固定值，見 {@link SeededUsers}） */
+    protected static final UUID USER_UUID = SeededUsers.USER_UUID;
 
-    /**
-     * 確保 comments 的觸發器處於啟用狀態。
-     *
-     * <p>{@link #insertOrphanComment} 已用 finally 還原，這裡是第二道保險：即使測試中途失敗，
-     * 也不讓 DISABLE 的狀態外洩到同一個（單例）容器裡的其他測試。</p>
-     */
-    @AfterEach
-    void reEnableCommentTriggers() {
-        jdbc.execute("ALTER TABLE comments ENABLE TRIGGER ALL");
-    }
+    /** seed 資料中的使用者主鍵（僅供 articles.author_id 使用；article 模組尚未改為 UUID） */
+    protected static final Long USER_ID = SeededUsers.USER_ID;
 
     /** 清空本測試建立的資料（comments 先於 articles）。 */
     @AfterEach
@@ -140,10 +132,9 @@ public abstract class CommentCleanupITSupport {
     protected Comment createComment(Article article, Long parentId) {
         Comment comment = new Comment();
         comment.setUuid(UUID.randomUUID());
-        comment.setArticleId(article.getId());
         comment.setArticleUuid(article.getUuid());
         comment.setParentId(parentId);
-        comment.setUserId(USER_ID);
+        comment.setUserUuid(USER_UUID);
         comment.setContent("c");
         comment.setContentHtml("<p>c</p>");
         comment.setLikeCount(0);
@@ -154,11 +145,11 @@ public abstract class CommentCleanupITSupport {
      * 為指定留言建立一筆留言讚。
      *
      * @param commentId 留言主鍵
-     * @param userId    按讚者主鍵
+     * @param userUuid  按讚者公開 UUID
      */
-    protected void createLike(Long commentId, Long userId) {
+    protected void createLike(Long commentId, UUID userUuid) {
         CommentLike like = new CommentLike();
-        like.setUserId(userId);
+        like.setUserUuid(userUuid);
         like.setCommentId(commentId);
         like.setCreatedAt(LocalDateTime.now());
         commentLikeRepo.save(like);
@@ -167,26 +158,18 @@ public abstract class CommentCleanupITSupport {
     /**
      * 直接以 SQL 製造「article_uuid 指向不存在文章」的孤兒留言。
      *
-     * <p>現階段 {@code comments_article_uuid_fkey} 與 {@code article_id} FK 仍存在，正常寫入會被拒絕。
-     * 這裡以 {@code ALTER TABLE comments DISABLE TRIGGER ALL} 暫時停用 comments 上的 FK 觸發器（需超級使用者，
-     * Testcontainers 的 test 帳號是）、寫入後<b>立即還原</b>（finally），避免影響後續的 CASCADE 行為。
-     * article_id 借用一篇真實文章的主鍵（該欄位的 FK 同樣被停用，且此任務不讀它）。</p>
+     * <p>V25 起 {@code comments} 已沒有任何指向 {@code articles} 的 FK，孤兒留言可以直接寫入，
+     * 不需要（也不再）停用觸發器。</p>
      *
      * @param orphanArticleUuid 不存在於 articles 的文章 UUID
-     * @param borrowedArticleId 借用的真實 article_id（滿足 NOT NULL）
      * @param parentId          父留言主鍵；null 表示頂層
      * @return 新留言主鍵
      */
-    protected Long insertOrphanComment(UUID orphanArticleUuid, Long borrowedArticleId, Long parentId) {
-        jdbc.execute("ALTER TABLE comments DISABLE TRIGGER ALL");
-        try {
-            return jdbc.queryForObject(
-                    "INSERT INTO comments (uuid, article_id, article_uuid, parent_id, user_id, content, content_html) "
-                            + "VALUES (?, ?, ?, ?, ?, 'orphan', '<p>orphan</p>') RETURNING id",
-                    Long.class, UUID.randomUUID(), borrowedArticleId, orphanArticleUuid, parentId, USER_ID);
-        } finally {
-            jdbc.execute("ALTER TABLE comments ENABLE TRIGGER ALL");
-        }
+    protected Long insertOrphanComment(UUID orphanArticleUuid, Long parentId) {
+        return jdbc.queryForObject(
+                "INSERT INTO comments (uuid, article_uuid, parent_id, user_uuid, content, content_html) "
+                        + "VALUES (?, ?, ?, ?, 'orphan', '<p>orphan</p>') RETURNING id",
+                Long.class, UUID.randomUUID(), orphanArticleUuid, parentId, USER_UUID);
     }
 
     /**

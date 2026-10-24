@@ -29,11 +29,9 @@ public class Comment {
     private Long id;
     private UUID uuid;
 
-    @Column("article_id")
-    private Long articleId;
-
     /**
-     * 所屬文章的 UUID（ARCH-30 P2 起與 {@link #articleId} 雙寫；P3 讀寫切換至此欄後，articleId 於 P4 移除）。
+     * 所屬文章的公開 UUID（跨模組識別）。V25 起是文章的唯一識別，沒有 FK；
+     * 文章刪除由 {@code CommentArticleDeletedConsumer} 與 {@code CommentOrphanReconciliationJob} 連動清除。
      */
     @Column("article_uuid")
     private UUID articleUuid;
@@ -41,8 +39,11 @@ public class Comment {
     @Column("parent_id")
     private Long parentId;
 
-    @Column("user_id")
-    private Long userId;
+    /**
+     * 留言者的公開 UUID（跨模組識別）。V25 起取代舊的 Long 使用者欄位，沒有 FK；使用者為軟刪除，不連帶。
+     */
+    @Column("user_uuid")
+    private UUID userUuid;
 
     private String content;
 

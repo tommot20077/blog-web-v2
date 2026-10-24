@@ -14,6 +14,7 @@ import dowob.xyz.blog.module.comment.config.CommentTestApplication;
 import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.repository.CommentLikeRepository;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
+import dowob.xyz.blog.module.comment.support.SeededUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +24,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -76,6 +78,7 @@ class CommentLikeControllerIT {
     @Autowired private ArticleRepository articleRepo;
     @Autowired private CommentRepository commentRepo;
     @Autowired private CommentLikeRepository commentLikeRepo;
+    @Autowired private JdbcTemplate jdbc;
 
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
@@ -86,9 +89,8 @@ class CommentLikeControllerIT {
     /** article 模組的 ArticleFileBinder 依賴 FileFacade，其實作在 blog-module-file（未被本測試 scan） */
     @MockitoBean private FileFacade fileFacade;
 
-    private static final Long USER_ID = 1L;
+    private static final UUID USER_UUID = SeededUsers.USER_UUID;
     private UUID articleUuid;
-    private Long articleId;
     private UUID commentUuid;
     private Long commentId;
 
@@ -96,7 +98,7 @@ class CommentLikeControllerIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(USER_ID);
+        article.setAuthorId(SeededUsers.USER_ID);
         article.setTitle("Test Article");
         article.setSlug("test-clike-" + UUID.randomUUID());
         article.setContent("test");
@@ -109,13 +111,11 @@ class CommentLikeControllerIT {
         article.setUpdatedAt(LocalDateTime.now());
         Article savedA = articleRepo.save(article);
         articleUuid = savedA.getUuid();
-        articleId = savedA.getId();
 
         Comment c = new Comment();
         c.setUuid(UUID.randomUUID());
-        c.setArticleId(articleId);
         c.setArticleUuid(articleUuid);
-        c.setUserId(USER_ID);
+        c.setUserUuid(USER_UUID);
         c.setContent("seed comment");
         c.setContentHtml("<p>seed comment</p>");
         c.setLikeCount(0);
@@ -131,11 +131,11 @@ class CommentLikeControllerIT {
         articleRepo.deleteAll();
     }
 
-    private RequestPostProcessor asUser(Long userId, Role role) {
+    private RequestPostProcessor asUser(UUID userUuid, Role role) {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
-        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userUuid.getLeastSignificantBits(), userUuid, role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -143,25 +143,31 @@ class CommentLikeControllerIT {
     @DisplayName("POST /comments/{uuid}/like - 200 + 建 row + count+1")
     void like_returns200() throws Exception {
         mockMvc.perform(post("/api/v1/comments/{uuid}/like", commentUuid)
-                .with(asUser(USER_ID, Role.USER)))
+                .with(asUser(USER_UUID, Role.USER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
-        assertThat(commentLikeRepo.findByUserIdAndCommentId(USER_ID, commentId)).isPresent();
+        assertThat(commentLikeRepo.findByUserUuidAndCommentId(USER_UUID, commentId)).isPresent();
         assertThat(commentRepo.findByUuid(commentUuid).orElseThrow().getLikeCount()).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("POST /like - idempotent，連續按兩次只算一次")
+    @DisplayName("POST /like - idempotent，連續按兩次：兩次都 200、like_count 只 +1、comment_likes 只有 1 列（RACE-01）")
     void like_idempotent() throws Exception {
         mockMvc.perform(post("/api/v1/comments/{uuid}/like", commentUuid)
-                .with(asUser(USER_ID, Role.USER)))
-                .andExpect(status().isOk());
+                .with(asUser(USER_UUID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
         mockMvc.perform(post("/api/v1/comments/{uuid}/like", commentUuid)
-                .with(asUser(USER_ID, Role.USER)))
-                .andExpect(status().isOk());
+                .with(asUser(USER_UUID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
 
         assertThat(commentRepo.findByUuid(commentUuid).orElseThrow().getLikeCount()).isEqualTo(1);
+        Integer rows = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM comment_likes WHERE comment_id = ? AND user_uuid = ?",
+                Integer.class, commentId, USER_UUID);
+        assertThat(rows).isEqualTo(1);
     }
 
     @Test
@@ -173,7 +179,7 @@ class CommentLikeControllerIT {
         commentRepo.save(c);
 
         mockMvc.perform(post("/api/v1/comments/{uuid}/like", commentUuid)
-                .with(asUser(USER_ID, Role.USER)))
+                .with(asUser(USER_UUID, Role.USER)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("C0104"));
     }
@@ -183,15 +189,15 @@ class CommentLikeControllerIT {
     void unlike_returns200() throws Exception {
         // 先按讚
         mockMvc.perform(post("/api/v1/comments/{uuid}/like", commentUuid)
-                .with(asUser(USER_ID, Role.USER)))
+                .with(asUser(USER_UUID, Role.USER)))
                 .andExpect(status().isOk());
 
         mockMvc.perform(delete("/api/v1/comments/{uuid}/like", commentUuid)
-                .with(asUser(USER_ID, Role.USER)))
+                .with(asUser(USER_UUID, Role.USER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
-        assertThat(commentLikeRepo.findByUserIdAndCommentId(USER_ID, commentId)).isEmpty();
+        assertThat(commentLikeRepo.findByUserUuidAndCommentId(USER_UUID, commentId)).isEmpty();
         assertThat(commentRepo.findByUuid(commentUuid).orElseThrow().getLikeCount()).isEqualTo(0);
     }
 
@@ -199,7 +205,7 @@ class CommentLikeControllerIT {
     @DisplayName("DELETE /like - 沒按過 idempotent")
     void unlike_idempotent() throws Exception {
         mockMvc.perform(delete("/api/v1/comments/{uuid}/like", commentUuid)
-                .with(asUser(USER_ID, Role.USER)))
+                .with(asUser(USER_UUID, Role.USER)))
                 .andExpect(status().isOk());
     }
 

@@ -7,6 +7,7 @@ import dowob.xyz.blog.infrastructure.reconciliation.OrphanReconciliationJob.Resu
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.support.CommentCleanupITSupport;
+import dowob.xyz.blog.module.comment.support.SeededUsers;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -26,8 +27,8 @@ import static org.mockito.Mockito.doThrow;
 /**
  * {@link CommentOrphanReconciliationJob} 整合測試（真實 Postgres、Redis；owner 存在性查詢走真實 ArticleFacade）。
  *
- * <p>孤兒留言的製造方式見 {@link CommentCleanupITSupport#insertOrphanComment}：FK 仍在，故暫時停用
- * comments 上的觸發器寫入後立即還原。測試資料的規模刻意維持在框架中止門檻之下
+ * <p>孤兒留言的製造方式見 {@link CommentCleanupITSupport#insertOrphanComment}：V25 起 comments 沒有指向
+ * articles 的 FK，直接以 SQL 寫入即可。測試資料的規模刻意維持在框架中止門檻之下
  * （孤兒不超過掃描數的全部），並另有案例確認「全部都是孤兒」時 ABORTED、零刪除。</p>
  *
  * @author Yuan
@@ -73,9 +74,9 @@ class CommentOrphanReconciliationJobIT extends CommentCleanupITSupport {
         createComment(draft, null);
         createComment(another, null);
         UUID orphanUuid = UUID.randomUUID();
-        Long orphanTop = insertOrphanComment(orphanUuid, published.getId(), null);
-        Long orphanReply = insertOrphanComment(orphanUuid, published.getId(), orphanTop);
-        createLike(orphanReply, 1L);
+        Long orphanTop = insertOrphanComment(orphanUuid, null);
+        Long orphanReply = insertOrphanComment(orphanUuid, orphanTop);
+        createLike(orphanReply, SeededUsers.USER_UUID);
         double before = removedCounter();
 
         Result result = job.run();
@@ -110,8 +111,8 @@ class CommentOrphanReconciliationJobIT extends CommentCleanupITSupport {
         Article borrowed = createArticle(ArticleStatus.PUBLISHED);
         UUID orphan1 = UUID.randomUUID();
         UUID orphan2 = UUID.randomUUID();
-        insertOrphanComment(orphan1, borrowed.getId(), null);
-        insertOrphanComment(orphan2, borrowed.getId(), null);
+        insertOrphanComment(orphan1, null);
+        insertOrphanComment(orphan2, null);
         double before = removedCounter();
 
         Result result = job.run();
@@ -130,7 +131,7 @@ class CommentOrphanReconciliationJobIT extends CommentCleanupITSupport {
         createComment(a, null);
         createComment(b, null);
         UUID orphanUuid = UUID.randomUUID();
-        insertOrphanComment(orphanUuid, a.getId(), null);
+        insertOrphanComment(orphanUuid, null);
         doThrow(new IllegalStateException("article service down")).when(articleFacade).filterExistingUuids(any());
 
         Result result = job.run();
