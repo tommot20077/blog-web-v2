@@ -88,6 +88,17 @@ public abstract class CommentCleanupITSupport {
     /** seed 資料中的使用者主鍵 */
     protected static final Long USER_ID = 1L;
 
+    /**
+     * 確保 comments 的觸發器處於啟用狀態。
+     *
+     * <p>{@link #insertOrphanComment} 已用 finally 還原，這裡是第二道保險：即使測試中途失敗，
+     * 也不讓 DISABLE 的狀態外洩到同一個（單例）容器裡的其他測試。</p>
+     */
+    @AfterEach
+    void reEnableCommentTriggers() {
+        jdbc.execute("ALTER TABLE comments ENABLE TRIGGER ALL");
+    }
+
     /** 清空本測試建立的資料（comments 先於 articles）。 */
     @AfterEach
     void cleanUpCommentCleanupData() {

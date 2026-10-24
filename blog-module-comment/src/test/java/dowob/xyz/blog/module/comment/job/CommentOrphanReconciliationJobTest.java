@@ -2,7 +2,6 @@ package dowob.xyz.blog.module.comment.job;
 
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.comment.mapper.CommentArticleCleanupMapper;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -39,8 +38,7 @@ class CommentOrphanReconciliationJobTest {
     void setUp() {
         mapper = mock(CommentArticleCleanupMapper.class);
         articleFacade = mock(ArticleFacade.class);
-        job = new CommentOrphanReconciliationJob(mock(StringRedisTemplate.class), new SimpleMeterRegistry(),
-                mapper, articleFacade);
+        job = new CommentOrphanReconciliationJob(mock(StringRedisTemplate.class), mapper, articleFacade);
     }
 
     @Test

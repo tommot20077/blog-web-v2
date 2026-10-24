@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.comment.job;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.reconciliation.OrphanReconciliationJob;
 import dowob.xyz.blog.module.comment.mapper.CommentArticleCleanupMapper;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -47,15 +46,17 @@ public class CommentOrphanReconciliationJob extends OrphanReconciliationJob {
     /**
      * 建立排程。
      *
+     * <p>指標走全域 registry（{@code Metrics.globalRegistry}）：正式環境由 Spring Boot actuator 綁定，
+     * comment 模組的測試應用程式沒有 actuator 也不需要補 {@code MeterRegistry} bean。</p>
+     *
      * @param redis          Redis 模板（分散式鎖與游標）
-     * @param registry       指標註冊表
      * @param cleanupMapper  留言清除 mapper
      * @param articleFacade  文章 facade（存在性查詢）
      */
-    public CommentOrphanReconciliationJob(StringRedisTemplate redis, MeterRegistry registry,
+    public CommentOrphanReconciliationJob(StringRedisTemplate redis,
                                           CommentArticleCleanupMapper cleanupMapper,
                                           ArticleFacade articleFacade) {
-        super(redis, registry);
+        super(redis);
         this.cleanupMapper = cleanupMapper;
         this.articleFacade = articleFacade;
     }

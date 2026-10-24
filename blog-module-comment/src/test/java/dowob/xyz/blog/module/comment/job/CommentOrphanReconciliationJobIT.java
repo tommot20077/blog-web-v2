@@ -7,7 +7,9 @@ import dowob.xyz.blog.infrastructure.reconciliation.OrphanReconciliationJob.Resu
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.support.CommentCleanupITSupport;
-import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,14 +38,23 @@ class CommentOrphanReconciliationJobIT extends CommentCleanupITSupport {
 
     @Autowired private CommentOrphanReconciliationJob job;
     @Autowired private StringRedisTemplate redis;
-    @Autowired private MeterRegistry registry;
+    /** 測試期間掛到全域 registry 的 registry（job 的指標走 Metrics.globalRegistry） */
+    private SimpleMeterRegistry registry;
     /** Spy：預設走真實實作，個別案例改為拋例外以模擬 owner 不可用 */
     @MockitoSpyBean private ArticleFacade articleFacade;
 
     @BeforeEach
     void clearRedisState() {
+        registry = new SimpleMeterRegistry();
+        Metrics.addRegistry(registry);
         redis.delete(RedisKeyConstant.getReconciliationLockKey("comment", "comments"));
         redis.delete(RedisKeyConstant.getReconciliationCursorKey("comment", "comments"));
+    }
+
+    @AfterEach
+    void removeRegistry() {
+        Metrics.removeRegistry(registry);
+        registry.close();
     }
 
     private double removedCounter() {

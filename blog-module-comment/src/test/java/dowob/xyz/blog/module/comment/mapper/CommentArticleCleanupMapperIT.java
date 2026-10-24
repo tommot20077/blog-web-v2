@@ -33,14 +33,27 @@ class CommentArticleCleanupMapperIT extends CommentCleanupITSupport {
     @Test
     @DisplayName("findDistinctArticleUuidsAfter：去重、依資料庫 uuid 順序分頁，游標不含自身，最後一頁不足 limit")
     void findDistinctArticleUuidsAfter_pagesDistinctInDatabaseOrder() {
+        // 固定兩個極值 UUID：Java 的 UUID.compareTo（高低 64 位元各自以有號數比較）會把 ffff... 排在 0000...01 之前，
+        // 而 PostgreSQL 的 uuid 以無號位元組比較，排在其後——兩者順序必然不同，才能驗出排序確實由資料庫決定。
+        // 這兩個 UUID 沒有對應文章，以 insertOrphanComment 寫入（停用 FK 觸發器，寫完立即還原）。
+        UUID lowest = UUID.fromString("00000000-0000-0000-0000-000000000001");
+        UUID highest = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
+        assertThat(highest.compareTo(lowest)).as("前置條件：Java 排序與 PG 排序不同").isNegative();
         List<Article> articles = new ArrayList<>();
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 3; i++) {
             Article article = createArticle(ArticleStatus.PUBLISHED);
             articles.add(article);
             createComment(article, null);
         }
         createComment(articles.get(0), null); // 同一篇兩則留言，結果只能出現一次
-        List<UUID> expected = articles.stream().map(Article::getUuid).sorted(PG_UUID_ORDER).toList();
+        insertOrphanComment(lowest, articles.get(0).getId(), null);
+        insertOrphanComment(highest, articles.get(0).getId(), null);
+        List<UUID> expected = new ArrayList<>(articles.stream().map(Article::getUuid).toList());
+        expected.add(lowest);
+        expected.add(highest);
+        expected.sort(PG_UUID_ORDER);
+        assertThat(expected.get(0)).isEqualTo(lowest);
+        assertThat(expected.get(expected.size() - 1)).isEqualTo(highest);
 
         List<String> page1 = mapper.findDistinctArticleUuidsAfter(null, 2);
         List<String> page2 = mapper.findDistinctArticleUuidsAfter(UUID.fromString(page1.get(1)), 2);
