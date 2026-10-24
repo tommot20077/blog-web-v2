@@ -20,7 +20,7 @@
 **不在範圍**：實際拆分資料庫（schema / instance）、實際部署成獨立服務。
 
 **不變**：
-- 各模組**自己的主鍵**維持 Long（`users.id`、`articles.id`、`series.id` …）；**模組內部**關聯維持 Long（`verification_tokens.user_id`、`user_preferences.user_id`、`article_categories.article_id`、`comment_likes.comment_id`、`comments.parent_id`）
+- 各模組**自己的主鍵**維持 Long（`users.id`、`articles.id`、`series.id` …）；**模組內部**關聯維持 Long（`verification_tokens.user_id`、`article_categories.article_id`、`comment_likes.comment_id`、`comments.parent_id`）
 - **刪除語意不變**（Yuan 確認）：文章刪除 → 其他模組的相關資料硬刪；系列刪除 → 文章脫離系列；使用者只做軟刪除（Q2 匿名化另案 DATA-02）
 - 對外 API 契約不變（對外本來就全是 UUID）
 
@@ -28,7 +28,7 @@
 
 ## 1. 現況盤點（2026-10-24）
 
-### 1.1 要轉換的欄位（17 個，皆為 BIGINT）
+### 1.1 要轉換的欄位（18 個，皆為 BIGINT）
 
 | 模組 | 表 | → users | → articles | → series |
 |---|---|---|---|---|
@@ -38,6 +38,7 @@
 | reading | `user_article_likes`、`user_bookmarks`、`user_highlights`、`user_reading_progress` | `user_id`×4 | `article_id`×4 | — |
 | series | `series` | `author_id` | — | — |
 | version | `article_versions` | `author_id` | `article_id` | — |
+| version | `user_preferences` | `user_id`（ON DELETE CASCADE；2026-10-24 審查補列，原誤歸為模組內部） | — | — |
 | file | `files` | `uploader_id` | — | — |
 
 已是 UUID：`article_tags.article_id`（有 FK → `articles(uuid)`，於 tag 模組處理時移除 FK）、`user_tag_follows.user_id`（無 FK）、`file_metadata.uploader_id`（無 FK）。
@@ -58,8 +59,8 @@ JWT subject = Long userId；`JwtAuthenticationFilter` 放入的 principal 為 `L
 
 ### 1.5 非識別類耦合
 
-- 直接 JOIN `users`：article（`ArticleMapper`、`ArticleRecommendMapper` + XML、`ArticleSummaryRow`、`ArticleResponseMapper`）、comment（`CommentMapper`、`CommentWithAuthor`）、series（`SeriesMapper`、`SeriesService`）、version（`VersionSummaryResponse`）
-- 跨模組直接 import（Q11，11 處）：reading、series → `ArticleQueryService`、`ArticleSummaryResponse`；series、version → `ArticleDeletedEvent`／`ArticleContentChangedEvent`、`ArticleRabbitMqConfig`；version → `ArticleMarkdownRenderer`、`ArticleTocCodec`、`RenderResult`
+- 直接 JOIN `users`：article（`ArticleMapper`、`ArticleRecommendMapper` + XML、`ArticleSummaryRow`、`ArticleResponseMapper`）、comment（`CommentMapper`、`CommentWithAuthor`）、series（`SeriesMapper`、`SeriesService`）（version 的 `VersionSummaryResponse` 經查已不再 JOIN users）
+- 跨模組直接 import（Q11，約 14 行、13 組來源→目標，以 ArchUnit 掃描為準）：reading、series → `ArticleQueryService`、`ArticleSummaryResponse`；series、version → `ArticleDeletedEvent`／`ArticleContentChangedEvent`、`ArticleRabbitMqConfig`；version → `ArticleMarkdownRenderer`、`ArticleTocCodec`、`RenderResult`
 - 跨模組 FK（含 CASCADE）：見 1.1
 
 ---
@@ -85,11 +86,12 @@ JWT subject = Long userId；`JwtAuthenticationFilter` 放入的 principal 為 `L
 
 | 元件 | 內容 |
 |---|---|
-| consumer 共用包裝 | 收斂 10 個 consumer 的 try/ack/catch/nack 樣板；計數 `mq.consumer.processed` / `mq.consumer.failed` / `mq.consumer.dead_lettered`（tag：consumer 名稱）。**維持現行 ack/nack 行為，不打開重試**（Yuan 決定：重試須待所有 consumer 冪等，於收尾階段打開） |
-| 校正排程框架 | 抽象 `OrphanReconciliationJob`：取本模組表中對外 UUID → 以 owner facade 分批查存在性 → 刪除不存在者 → 計數 `reconciliation.orphans_removed{module,table}` ＋ log；Redis 鎖比照 `TrendingRefreshJob`；每日一次 |
+| consumer 共用包裝 | 收斂 9 個檔案、12 個 `@RabbitListener` 方法的 try/ack/catch/nack 樣板；計數 `mq.consumer.processed` / `mq.consumer.failed` / `mq.consumer.dead_lettered`（tag：consumer 名稱）。**維持現行 ack/nack 行為，不打開重試**（Yuan 決定：重試須待所有 consumer 冪等，於收尾階段打開） |
+| 校正排程框架 | 抽象 `OrphanReconciliationJob`：取本模組表中對外 UUID → 以 owner facade 分批查存在性 → **移除孤兒**（依欄位語意刪除列或設為 NULL；`articles.series_uuid` 為設 NULL，絕不可刪文章）→ 計數 `reconciliation.orphans_removed{module,table}` ＋ log；Redis 鎖比照 `TrendingRefreshJob` 但以 token compare-and-delete 解鎖；各 job 的 cron 錯開（排程池為單執行緒，PERF-16）；每日一次 |
 | owner 存在性查詢 | `ArticleFacade.filterExistingUuids(Collection<UUID>)`、`SeriesFacade.filterExistingUuids(Collection<UUID>)`，經 `BatchedQuery` 切批（使用者為軟刪除，不需要） |
-| 事件契約位置 | 跨模組事件統一放 `blog-infrastructure/.../event`；ArchUnit 守衛：事件類別必須有 `UUID eventId`、不得有 `Long`/`long` 欄位——以**例外清單**起步，各模組 PR 清掉自己的條目 |
-| 跨模組 import 守衛（Q11） | 現存 11 處列入例外清單；守衛含「例外清單不得有死條目」（比照 `EndpointAuthorizationTest`）；收尾時清單必須為空 |
+| 事件契約位置 | **跨模組**事件（有他模組 consumer 者）統一放 `blog-infrastructure/.../event`，exchange／routing key 常數一併搬移；搬移採**只增不減**：先加 uuid 欄位與 `eventId`，既有 Long 欄位保留為過渡欄位（列入例外清單），由各模組階段移除。ArchUnit 守衛：所有事件必須有 `UUID eventId`、不得有 `Long`/`long` 欄位；跨模組事件必須位於共用位置——以**例外清單**起步，各模組 PR 清掉自己的條目 |
+| 過渡 API | owner 的 facade DTO 先補 UUID 欄位（`ArticleData.authorUuid`、`seriesUuid` 等）、`ArticleVisibility` 的 UUID 版本、`SeriesFacade` 的 uuid↔id 轉換，讓各模組階段不必等 owner 改造完成 |
+| 跨模組 import 守衛（Q11） | 現存違規列入例外清單；守衛含「例外清單不得有死條目」（比照 `EndpointAuthorizationTest`）；收尾時清單必須為空 |
 
 可觀測性的 Prometheus／Grafana／告警屬 infrastructure repo 的另案，不阻擋本計畫。
 
@@ -122,7 +124,7 @@ JWT subject = Long userId；`JwtAuthenticationFilter` 放入的 principal 為 `L
 | 9 | 本模組發出的事件只帶 UUID 且有 `eventId` | 守衛例外清單刪除該模組條目 |
 | 10 | grep 證據：本模組不再有指向他模組的 Long 欄位／參數；附於 PR 說明 | grep 輸出 |
 
-**Migration 授權**（Yuan 2026-10-24，`judgment.md` §5）：§1.1 的 17 個欄位可新增 uuid、回填、NOT NULL，並於同一 migration DROP 舊欄位與其 FK、索引；`comments_article_uuid_fkey`（V24）、`article_tags` 指向 `articles(uuid)` 的 FK 一併 DROP；`files` 表整張 DROP。**邊界**：各模組自己的主鍵與模組內部關聯不在授權內，不得刪除。每個 PR 須附 grep 證據與測試結果。
+**Migration 授權**（Yuan 2026-10-24，`judgment.md` §5）：§1.1 的 18 個欄位（含 `user_preferences.user_id`，Yuan 2026-10-24 追加授權）可新增 uuid、回填、NOT NULL，並於同一 migration DROP 舊欄位與其 FK、索引；`comments_article_uuid_fkey`（V24）、`article_tags` 指向 `articles(uuid)` 的 FK 一併 DROP；`files` 表整張 DROP。**邊界**：各模組自己的主鍵與模組內部關聯不在授權內，不得刪除。每個 PR 須附 grep 證據與測試結果。
 
 **鎖與資料量**：沿用 ARCH-30 計畫 §3 的注意事項；目前無正式環境、資料量可忽略，單一 migration 可接受。
 
@@ -134,7 +136,7 @@ JWT subject = Long userId；`JwtAuthenticationFilter` 放入的 principal 為 `L
 |---|---|---|---|
 | 1 | comment | `comments.user_id`、`comments.article_id`（DROP 舊欄與 V24 的 FK）、`comment_likes.user_id` | `CommentMapper` JOIN users；留言數改 UUID 版 facade；RACE-01（留言按讚）、RACE-09（併發雙刪雙扣） |
 | 2 | reading | 4 表的 `user_id`、`article_id` | 移除對 `ArticleQueryService` 的直接依賴，改 `ArticleFacade.getSummariesByUuids`（**回應 JSON 不變**）；`ReadingFacade` 6 個方法改 UUID；閱讀進度 Redis key 與 `ReadingProgressFlushJob`；RACE-01、RACE-04、RACE-13 |
-| 3 | version | `article_versions.article_id`、`author_id` | 還原改為把 Markdown 交給 article 渲染（`ArticleFacade.applyRestoreContent` 由 article 自行算 html/toc），version 不再 import 渲染器；`ArticleContentChangedEvent` 移至共用契約、帶 uuid 與 `eventId`；`VersionSummaryResponse` JOIN users |
+| 3 | version | `article_versions.article_id`、`author_id`；`user_preferences.user_id` | 還原改為把 Markdown 交給 article 渲染（`ArticleFacade.applyRestoreContent` 由 article 自行算 html/toc），version 不再 import 渲染器；`ArticleContentChangedEvent` 改用共用契約的 uuid 欄位 |
 | 4 | series | `series.author_id` | 移除 import `ArticleQueryService`、`ArticleDeletedEvent`、`ArticleRabbitMqConfig`；新增 `SeriesDeletedEvent`；`SeriesMapper` JOIN users；RACE-14、RACE-15 |
 | 5 | file | DROP `files` 表 | `file_metadata.uploader_id` 已是 uuid，確認無 FK、事件與守衛合規 |
 | 6 | article | `articles.author_id` → `author_uuid`、`series_id` → `series_uuid` | 訂閱 `SeriesDeletedEvent` 清空 `series_uuid`；推薦查詢 JOIN users；`ArticlePublishedEvent` 等改 uuid＋`eventId`；`ArticleFacade.countPublishedByAuthor()` 改以 `author_uuid` 計算 |
@@ -158,7 +160,7 @@ JWT subject = Long userId；`JwtAuthenticationFilter` 放入的 principal 為 `L
 |---|---|
 | 移除過渡碼 | `AuthUser.id`；facade 所有 Long 版方法；DTO 的 Long 欄位（`ArticleData.id` 等） |
 | 全域守衛 | ① facade 介面參數與回傳不得有代表 id 的 Long ② 事件無 Long 欄位、必有 `eventId` ③ 跨模組 import 例外清單為空 ④ IT 以 `information_schema` 斷言無跨模組 FK |
-| 打開 MQ 重試 | 共用包裝改為拋例外交由 retry interceptor；`eventId` 冪等檢查集中在包裝；設定 concurrency（ARCH-02、PERF-15、PERF-30 一併處理；順序依 triage：PERF-15 → ARCH-02＋PERF-30） |
+| 打開 MQ 重試 | 共用包裝改為拋例外交由 retry interceptor；`eventId` 冪等檢查集中在包裝，**且必須「處理成功後才標記已處理」**（現行 `IdempotencyService.markProcessed` 先標記再處理，直接套重試會讓失敗訊息被當成已處理而遺失）；發送端開啟 AMQP messageId（stateful retry 需要）；設定 concurrency（ARCH-02、PERF-15、PERF-30 一併處理；順序依 triage：PERF-15 → ARCH-02＋PERF-30） |
 | 規範文件（提案制，需 Yuan 簽核） | `architecture.md`：移除「`users` 為 reference data 可直接 JOIN」；新增「跨模組識別一律 UUID、跨模組不得有 FK、刪除連動靠事件＋校正排程」 |
 | findings | ARCH-30、ARCH-07、ARCH-09、ARCH-13、ARCH-02 與相關 RACE 條目轉 DONE |
 

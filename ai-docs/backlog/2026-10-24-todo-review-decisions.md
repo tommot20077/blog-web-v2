@@ -101,7 +101,7 @@
 | 15 | 查證 ArticleList 左欄 Tags 連結以名稱代 slug | 前端 | 無 |
 | — | 對帳後仍 OPEN 的其他 findings（FE-01 全域錯誤處理、FE-02 未存檔守衛等）重新排序 | 兩 repo | #1 |
 
-**等待 Yuan 回答**：JWT subject 改為 uuid 導致部署後全體重新登入是否可接受（可於 #7 設計討論回答）。
+**#7 已完成**（2026-10-24）：設計 `docs/plans/2026-10-24-cross-module-uuid-design.md`、實作計畫 `docs/plans/2026-10-24-cross-module-uuid-implementation-plan.md`。範圍擴大為 (c)：含拆跨模組 FK 與事件驅動刪除；JWT 直接切換（全體重新登入，無正式環境）；Q9 併入 0b；Q11 以「例外清單逐步清空」解決；`user_preferences.user_id` 追加為第 18 個欄位；`files` 表 DROP。#10～#12 併入該計畫的 M／Z 階段。
 
 ---
 
