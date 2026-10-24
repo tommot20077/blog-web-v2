@@ -100,15 +100,27 @@ class ArticleFacadeFilterExistingUuidsIT {
     }
 
     @Test
-    @DisplayName("草稿與已發布皆回傳，已刪除（不存在）者不回傳")
+    @DisplayName("草稿與已發布皆回傳，曾存在後來被刪除者不回傳（校正排程實際會遇到的情境）")
     void returnsDraftAndPublishedButNotDeleted() {
         UUID draft = insertArticle("DRAFT");
         UUID published = insertArticle("PUBLISHED");
-        UUID deleted = UUID.randomUUID();
+        UUID deleted = insertArticle("DRAFT");
+        jdbcTemplate.update("DELETE FROM articles WHERE uuid = ?", deleted);
 
         Set<UUID> result = articleFacade.filterExistingUuids(List.of(draft, published, deleted));
 
         assertThat(result).containsExactlyInAnyOrder(draft, published);
+    }
+
+    @Test
+    @DisplayName("從未寫入的隨機 uuid 同樣不回傳")
+    void neverInsertedUuidIsNotReturned() {
+        UUID draft = insertArticle("DRAFT");
+        UUID neverInserted = UUID.randomUUID();
+
+        Set<UUID> result = articleFacade.filterExistingUuids(List.of(draft, neverInserted));
+
+        assertThat(result).containsExactly(draft);
     }
 
     @Test
