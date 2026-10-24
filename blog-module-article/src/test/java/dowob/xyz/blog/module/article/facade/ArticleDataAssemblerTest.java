@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -54,7 +55,7 @@ class ArticleDataAssemblerTest {
 
     @BeforeEach
     void setUp() {
-        assembler = new ArticleDataAssembler(articleMapper, seriesFacadeProvider);
+        assembler = new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider));
         logCapture = new WarnLogCapture(ArticleDataAssembler.class);
     }
 

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
@@ -73,7 +74,7 @@ class ArticleFacadeUuidFieldsTest {
 
     @BeforeEach
     void setUp() {
-        ArticleDataAssembler assembler = new ArticleDataAssembler(articleMapper, seriesFacadeProvider);
+        ArticleDataAssembler assembler = new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider));
         facade = new ArticleFacadeImpl(
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,

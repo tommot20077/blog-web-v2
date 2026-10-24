@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.recommend.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -26,9 +27,9 @@ import java.util.Map;
 public class RecommendRabbitMqConfig {
 
     /**
-     * 文章事件 Exchange 名稱（與 article 模組共用）
+     * 文章事件 Exchange 名稱（取自共用事件契約 {@link ArticleEventContract#EXCHANGE}）
      */
-    public static final String ARTICLE_EVENTS_EXCHANGE = "article.events";
+    public static final String ARTICLE_EVENTS_EXCHANGE = ArticleEventContract.EXCHANGE;
 
     /**
      * 推薦模組監聽文章發布事件的 Queue 名稱
@@ -38,7 +39,7 @@ public class RecommendRabbitMqConfig {
     /**
      * 文章已發布 Routing Key
      */
-    public static final String ROUTING_KEY_ARTICLE_PUBLISHED = "article.published";
+    public static final String ROUTING_KEY_ARTICLE_PUBLISHED = ArticleEventContract.ROUTING_KEY_PUBLISHED;
 
     /**
      * 建立死信隊列（DLQ）參數

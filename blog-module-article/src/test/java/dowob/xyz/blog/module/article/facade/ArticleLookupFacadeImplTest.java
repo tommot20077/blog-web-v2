@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
@@ -75,7 +76,7 @@ class ArticleLookupFacadeImplTest {
         lenient().when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
         lenient().when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of());
         articleLookupFacadeImpl = new ArticleLookupFacadeImpl(
-                articleRepository, new ArticleDataAssembler(articleMapper, seriesFacadeProvider));
+                articleRepository, new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)));
     }
 
     /**

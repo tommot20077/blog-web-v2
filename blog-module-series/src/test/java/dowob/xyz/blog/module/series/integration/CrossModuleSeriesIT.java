@@ -11,7 +11,7 @@ import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
-import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.series.config.SeriesTestApplication;
@@ -165,7 +165,7 @@ class CrossModuleSeriesIT {
         try {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
                 eventId, articleId, articleUuid, authorId,
-                seriesId, List.of(), List.of(), Instant.now()
+                seriesId, List.of(), List.of(), Instant.now(), null, null
             );
             Channel mockChannel = Mockito.mock(Channel.class);
             seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
@@ -325,7 +325,7 @@ class CrossModuleSeriesIT {
         UUID eventId = UUID.randomUUID();
         ArticleDeletedEvent event = new ArticleDeletedEvent(
             eventId, article.getId(), article.getUuid(), AUTHOR_ID,
-            series.getId(), List.of(), List.of(), Instant.now()
+            series.getId(), List.of(), List.of(), Instant.now(), null, null
         );
 
         // 3. 第一次處理 → article_count 從 1 變 0
@@ -357,7 +357,7 @@ class CrossModuleSeriesIT {
         // 1. 構造 seriesId == null 的事件
         ArticleDeletedEvent event = new ArticleDeletedEvent(
             UUID.randomUUID(), 100L, UUID.randomUUID(), AUTHOR_ID,
-            null, List.of(), List.of(), Instant.now()
+            null, List.of(), List.of(), Instant.now(), null, null
         );
         Channel mockChannel = Mockito.mock(Channel.class);
         seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);

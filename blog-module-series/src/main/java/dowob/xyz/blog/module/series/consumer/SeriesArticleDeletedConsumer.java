@@ -3,7 +3,7 @@ package dowob.xyz.blog.module.series.consumer;
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
-import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.series.config.SeriesRabbitMqConfig;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import lombok.RequiredArgsConstructor;

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
@@ -826,7 +827,7 @@ class ArticleControllerIT {
         /** 驗證 MQ 瀏覽事件（ArticleViewedEvent）整個流程只發送過一次 */
         org.mockito.Mockito.verify(rabbitTemplate, org.mockito.Mockito.times(1))
                 .convertAndSend(
-                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.EXCHANGE),
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.infrastructure.event.ArticleEventContract.EXCHANGE),
                         org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                         org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
     }
@@ -871,7 +872,7 @@ class ArticleControllerIT {
             txActiveAtPublish.set(TransactionSynchronizationManager.isActualTransactionActive());
             return null;
         }).when(rabbitTemplate).convertAndSend(
-                org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.EXCHANGE),
+                org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.infrastructure.event.ArticleEventContract.EXCHANGE),
                 org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                 org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
 
@@ -881,7 +882,7 @@ class ArticleControllerIT {
         /** 先確認事件確實有送出，避免因未呼叫而讓下方斷言空過 */
         org.mockito.Mockito.verify(rabbitTemplate, org.mockito.Mockito.times(1))
                 .convertAndSend(
-                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.EXCHANGE),
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.infrastructure.event.ArticleEventContract.EXCHANGE),
                         org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
                         org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
 
@@ -1619,8 +1620,8 @@ class ArticleControllerIT {
 
         /** 連鎖副作用 4：發出 article.archived 事件（search 模組據此移除 ES 索引） */
         verify(rabbitTemplate).convertAndSend(
-                eq(ArticleRabbitMqConfig.EXCHANGE),
-                eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                eq(ArticleEventContract.EXCHANGE),
+                eq(ArticleEventContract.ROUTING_KEY_ARCHIVED),
                 any(Object.class));
 
         /** 作者本人仍可看到自己的已下架文章（與其他非公開狀態一致） */
@@ -1645,8 +1646,8 @@ class ArticleControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
         verify(rabbitTemplate, never()).convertAndSend(
-                eq(ArticleRabbitMqConfig.EXCHANGE),
-                eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                eq(ArticleEventContract.EXCHANGE),
+                eq(ArticleEventContract.ROUTING_KEY_ARCHIVED),
                 any(Object.class));
     }
 
@@ -1802,8 +1803,8 @@ class ArticleControllerIT {
 
         /** ES 索引由 published 事件重建（下架時移除、重新發布時重新建立） */
         verify(rabbitTemplate, times(2)).convertAndSend(
-                eq(ArticleRabbitMqConfig.EXCHANGE),
-                eq(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED),
+                eq(ArticleEventContract.EXCHANGE),
+                eq(ArticleEventContract.ROUTING_KEY_PUBLISHED),
                 any(Object.class));
     }
 

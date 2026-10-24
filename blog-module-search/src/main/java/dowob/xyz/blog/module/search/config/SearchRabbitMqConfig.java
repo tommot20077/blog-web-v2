@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.search.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -30,24 +31,24 @@ public class SearchRabbitMqConfig {
     public static final String QUEUE_SEARCH_INDEX = "queue.search.index";
 
     /**
-     * 文章事件 Exchange 名稱（由 blog-module-article 宣告）
+     * 文章事件 Exchange 名稱（取自共用事件契約 {@link ArticleEventContract#EXCHANGE}）
      */
-    public static final String ARTICLE_EVENTS_EXCHANGE = "article.events";
+    public static final String ARTICLE_EVENTS_EXCHANGE = ArticleEventContract.EXCHANGE;
 
     /**
      * 文章發布 Routing Key
      */
-    public static final String ROUTING_KEY_PUBLISHED = "article.published";
+    public static final String ROUTING_KEY_PUBLISHED = ArticleEventContract.ROUTING_KEY_PUBLISHED;
 
     /**
      * 文章更新 Routing Key
      */
-    public static final String ROUTING_KEY_UPDATED = "article.updated";
+    public static final String ROUTING_KEY_UPDATED = ArticleEventContract.ROUTING_KEY_UPDATED;
 
     /**
      * 文章刪除 Routing Key
      */
-    public static final String ROUTING_KEY_DELETED = "article.deleted";
+    public static final String ROUTING_KEY_DELETED = ArticleEventContract.ROUTING_KEY_DELETED;
 
     /**
      * 搜尋索引更新 Queue 名稱
@@ -69,7 +70,7 @@ public class SearchRabbitMqConfig {
      * （移除 document），故指向同一段處理邏輯但各自一條 queue。
      * </p>
      */
-    public static final String ROUTING_KEY_ARCHIVED = "article.archived";
+    public static final String ROUTING_KEY_ARCHIVED = ArticleEventContract.ROUTING_KEY_ARCHIVED;
 
     /**
      * 搜尋索引下架移除 Queue 名稱
