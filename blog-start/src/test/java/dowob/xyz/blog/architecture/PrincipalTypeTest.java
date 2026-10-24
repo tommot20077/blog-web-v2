@@ -1,6 +1,7 @@
 package dowob.xyz.blog.architecture;
 
 import com.tngtech.archunit.core.domain.JavaAccess;
+import com.tngtech.archunit.core.domain.JavaAnnotation;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethod;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -32,14 +34,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <ol>
  *   <li>(a) 標註 {@code @AuthenticationPrincipal} 的方法參數，型別必須是 {@link AuthUser}
  *       （{@code Long}、{@code long}、{@code Object} 等一律違規）；</li>
- *   <li>(b) 除 {@link #GET_PRINCIPAL_ALLOWED 白名單}（{@code SecurityUtils}、{@code JwtAuthenticationFilter}、
- *       {@code AuthStateLoader}）外，任何程式碼不得呼叫 {@code Authentication.getPrincipal()}——
+ *   <li>(b) 除 {@link #GET_PRINCIPAL_ALLOWED 白名單}（只有 {@code SecurityUtils}）外，
+ *       任何程式碼不得呼叫 {@code Authentication.getPrincipal()}——
  *       含具體子類別（如 {@code UsernamePasswordAuthenticationToken}）、lambda 與方法參考；
- *       讀取已登入者一律改走 {@code SecurityUtils.currentAuthUser(Authentication)}。</li>
+ *       讀取已登入者一律改走 {@code SecurityUtils.currentAuthUser(Authentication)}；</li>
+ *   <li>(b2) 白名單外同樣不得呼叫 {@code Principal#getName()}（含 {@code Authentication#getName()}）、
+ *       {@code HttpServletRequest#getUserPrincipal()}、{@code HttpServletRequest#getRemoteUser()}：
+ *       principal 換成 record 後 {@code getName()} 會回 {@code AuthUser[id=…, uuid=…]}，是靜默的語意改變；</li>
+ *   <li>(c) 禁用 {@code @CurrentSecurityContext}，以及被 {@code @AuthenticationPrincipal}／
+ *       {@code @CurrentSecurityContext} 直接或 meta 標註的自訂註解（定義與使用處都算）——
+ *       它們能繞過 (a) 的參數型別檢查。擇「直接禁用」而非「其參數也必須是 AuthUser」，
+ *       因為後者要求守衛追蹤任意註解的 meta 鏈與 SpEL expression。</li>
  * </ol>
  *
  * <p><b>例外清單起步、T0b-3 清空</b>：T0b-1 只建立守衛、不動 filter 與 controller，故現存違規
- * （63 處 {@code @AuthenticationPrincipal Long}、2 處 {@code getPrincipal()}）列入例外清單，
+ * （63 處 {@code @AuthenticationPrincipal Long}、2 處 {@code getPrincipal()}）列入例外清單；
+ * (b2)(c) 現況零違規，故不設例外清單，
  * value 必須以預計清除的 Task（{@code T0b-2} 或 {@code T0b-3}）開頭。
  * 各 Task 清掉自己的條目；<b>T0b-3 完成時兩份例外清單必須為空</b>，且守衛仍須為綠。
  * 這取代「完成時守衛是紅的」的作法，避免 develop 上出現長期紅燈；
@@ -48,9 +58,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>為何附防死條目與反向驗證</b>：與 {@link EventContractTest}、{@link CrossModuleImportTest} 同理——
  * 清單會腐爛，守衛也可能壞掉而「掃不到」被誤認為「沒違規」，故兩者都以測試驗證。</p>
  *
- * <p>守衛的已知範圍：只看方法參數上的 {@code @AuthenticationPrincipal}（欄位、建構子參數不在範圍，
- * Spring MVC 也只對 handler 方法參數解析它），以及 {@code Authentication} 型別上的
- * {@code getPrincipal()} 呼叫（反射呼叫不在範圍）。</p>
+ * <p>守衛的已知範圍：只看方法參數上的注入註解（欄位、建構子參數不在範圍，
+ * Spring MVC 也只對 handler 方法參數解析它），以及 {@code Authentication}／{@code Principal}／
+ * {@code HttpServletRequest} 型別上的上述方法呼叫（反射呼叫、經由 {@code SecurityContextHolder} 以外的
+ * 自製包裝不在範圍；包裝類別本身若呼叫了禁用方法仍會被抓到）。(b2)(c) 在正式碼沒有正例，
+ * 偵測能力只由反向驗證 fixture 保證。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -75,23 +87,23 @@ class PrincipalTypeTest {
     /** 讀取 principal 的唯一入口 */
     private static final String SECURITY_UTILS = "dowob.xyz.blog.common.util.SecurityUtils";
 
-    /** 由 token 建立 Authentication 的 filter（建立者，不是讀取者；仍列入白名單以便 T0b-2 改寫） */
-    private static final String JWT_FILTER = "dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter";
+    /** {@code @CurrentSecurityContext} 的全限定名（可用 SpEL 取出任意 principal 屬性，繞過規則 (a)） */
+    private static final String CURRENT_SECURITY_CONTEXT =
+            "org.springframework.security.core.annotation.CurrentSecurityContext";
 
-    /** 以 uuid 載入認證狀態的元件（T0b-2 於 blog-infrastructure 建立；先登記以免 T0b-2 被守衛擋下） */
-    private static final String AUTH_STATE_LOADER = "dowob.xyz.blog.infrastructure.security.AuthStateLoader";
+    /** {@code java.security.Principal} 的全限定名（{@code Authentication} 的父介面） */
+    private static final String PRINCIPAL = "java.security.Principal";
 
-    /** 規則 (b) 白名單中「尚未建立」的類別：T0b-2 建立後即移出此集合 */
-    private static final Set<String> RESERVED_NOT_YET_CREATED = Set.of(AUTH_STATE_LOADER);
+    /** {@code HttpServletRequest} 的全限定名 */
+    private static final String HTTP_SERVLET_REQUEST = "jakarta.servlet.http.HttpServletRequest";
 
     /**
-     * 規則 (b) 白名單：允許呼叫 {@code Authentication.getPrincipal()} 的最外層類別全名。
-     * 新增項目須經人工確認；原則是「只有把 principal 轉成 {@link AuthUser} 的入口才需要」。
+     * 規則 (b)(b2) 白名單：允許讀取 principal 的最外層類別全名，<b>只留 {@code SecurityUtils}</b>。
+     * 新增項目須經人工確認；不得預先登記尚未存在的類別（放錯套件時防死條目仍綠、
+     * 同名類別會自動獲得權限）。{@code JwtAuthenticationFilter} 與 T0b-2 的 {@code AuthStateLoader}
+     * 是「建立」身分而非「讀取」身分，不需要；日後真的需要再加。
      */
-    private static final Set<String> GET_PRINCIPAL_ALLOWED = Set.of(
-            SECURITY_UTILS,
-            JWT_FILTER,
-            AUTH_STATE_LOADER);
+    private static final Set<String> GET_PRINCIPAL_ALLOWED = Set.of(SECURITY_UTILS);
 
     /** 預期有使用 {@code @AuthenticationPrincipal} 的業務模組；新增有登入端點的模組時須同步更新 */
     private static final Set<String> EXPECTED_PRINCIPAL_MODULES = Set.of(
@@ -317,19 +329,14 @@ class PrincipalTypeTest {
     }
 
     @Test
-    @DisplayName("防死條目 (b 白名單)：白名單的每個類別都必須存在，尚未建立者須登記在預留集合")
+    @DisplayName("防死條目 (b 白名單)：白名單的每個類別都必須存在於正式碼")
     void getPrincipalAllowListMustNotContainStaleEntries() {
         Set<String> existing = new TreeSet<>();
         importProduction().forEach(c -> existing.add(c.getName()));
 
         assertThat(GET_PRINCIPAL_ALLOWED)
-                .as("白名單類別若已改名或刪除，就成了死條目；同名新類別會無條件獲得讀取 principal 的權限。"
-                  + "尚未建立的類別（T0b-2 的 AuthStateLoader）須登記在 RESERVED_NOT_YET_CREATED。")
-                .allSatisfy(allowed -> assertThat(existing.contains(allowed)
-                        || RESERVED_NOT_YET_CREATED.contains(allowed)).as(allowed).isTrue());
-        assertThat(RESERVED_NOT_YET_CREATED)
-                .as("預留類別一旦建立就必須移出預留集合，否則白名單的存在檢查形同虛設")
-                .allSatisfy(reserved -> assertThat(existing).doesNotContain(reserved));
+                .as("白名單類別若已改名或刪除，就成了死條目；同名新類別會無條件獲得讀取 principal 的權限，請移除。")
+                .allSatisfy(allowed -> assertThat(existing).contains(allowed));
     }
 
     @Test
@@ -337,6 +344,35 @@ class PrincipalTypeTest {
     void everyExemptEntryMustDeclareClearingTask() {
         assertThat(PRINCIPAL_PARAM_EXEMPT.values()).allSatisfy(v -> assertThat(v).matches(STAGE_PREFIX));
         assertThat(GET_PRINCIPAL_EXEMPT.values()).allSatisfy(v -> assertThat(v).matches(STAGE_PREFIX));
+    }
+
+    @Test
+    @DisplayName("白名單最小化：只有 SecurityUtils 可以讀取 principal")
+    void allowListMustContainOnlySecurityUtils() {
+        assertThat(GET_PRINCIPAL_ALLOWED)
+                .as("白名單只留把 principal 轉成 AuthUser 的唯一入口；日後真的需要再加（須人工確認）。"
+                  + "尚未存在的類別不得預先登記，否則放錯套件時防死條目仍綠、同名類別會自動獲得權限。")
+                .containsExactly(SECURITY_UTILS);
+    }
+
+    @Test
+    @DisplayName("規則 (b2)：白名單外不得呼叫 getName()／getUserPrincipal()／getRemoteUser()（現況零違規，無例外清單）")
+    void identityNameAccessorsMustNotBeCalledOutsideAllowList() {
+        assertThat(findIdentityAccessorCallers(importProduction(), GET_PRINCIPAL_ALLOWED))
+                .as("principal 換成 record 後，Authentication／Principal 的 getName() 會回 AuthUser[id=…, uuid=…]，"
+                  + "HttpServletRequest 的 getUserPrincipal()／getRemoteUser() 同理，是靜默的語意改變。"
+                  + "請改用 SecurityUtils.currentAuthUser(Authentication)。")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("規則 (c)：禁止 @CurrentSecurityContext 與以 meta 標註繞過 (a) 的自訂註解（現況零違規，無例外清單）")
+    void principalInjectionBypassesMustNotExist() {
+        assertThat(findPrincipalInjectionBypasses(importProduction()))
+                .as("@CurrentSecurityContext 與「被 @AuthenticationPrincipal／@CurrentSecurityContext meta 標註的自訂註解」"
+                  + "都能繞過規則 (a) 的參數型別檢查，一律禁用（不採「其參數也必須是 AuthUser」的折衷，"
+                  + "因為那會要求守衛追蹤任意註解的 meta 鏈與 expression）。")
+                .isEmpty();
     }
 
     @Test
@@ -433,6 +469,62 @@ class PrincipalTypeTest {
                 .noneMatch(v -> v.startsWith(allowed + "#"))
                 .as("白名單只放行列出的類別，其他違規不受影響")
                 .contains(other + "#viaInterface");
+    }
+
+    @Test
+    @DisplayName("反向驗證 (b2)：抓得到 Authentication／Principal／子類別／方法參考的 getName() 與 request 的 getUserPrincipal()／getRemoteUser()")
+    void guardDetectsIdentityAccessorCalls() {
+        String fixture = FIXTURE_ROOT + ".name.NameReadFixture";
+
+        List<String> violations = findIdentityAccessorCallers(importFixtures(), Set.of());
+
+        assertThat(violations)
+                .as("守衛若抓不到已知違規，「正向掃描為空」就沒有意義")
+                .contains(fixture + "#viaAuthentication")
+                .contains(fixture + "#viaPrincipal")
+                .contains(fixture + "#viaConcreteToken")
+                .as("方法參考沒有 invoke 指令，也要抓")
+                .contains(fixture + "#viaMethodReference")
+                .contains(fixture + "#viaUserPrincipal")
+                .contains(fixture + "#viaRemoteUser")
+                .as("request 的其他方法、與 Principal 無關的同名 getName() 皆合規")
+                .doesNotContain(fixture + "#compliantHeader")
+                .doesNotContain(fixture + "#unrelatedSameName");
+    }
+
+    @Test
+    @DisplayName("反向驗證 (b2 白名單)：白名單能放行，不放白名單時抓得到")
+    void identityAccessorAllowListSkipsOnlyListedClasses() {
+        String allowed = FIXTURE_ROOT + ".name.AllowedNameReader";
+        String other = FIXTURE_ROOT + ".name.NameReadFixture";
+
+        assertThat(findIdentityAccessorCallers(importFixtures(), Set.of()))
+                .contains(allowed + "#name");
+        assertThat(findIdentityAccessorCallers(importFixtures(), Set.of(allowed)))
+                .doesNotContain(allowed + "#name")
+                .contains(other + "#viaAuthentication");
+    }
+
+    @Test
+    @DisplayName("反向驗證 (c)：抓得到 @CurrentSecurityContext、meta 標註的自訂註解（定義與使用處），不誤判無關註解")
+    void guardDetectsPrincipalInjectionBypasses() {
+        String pkg = FIXTURE_ROOT + ".inject.";
+
+        List<String> violations = findPrincipalInjectionBypasses(importFixtures());
+
+        assertThat(violations)
+                .as("守衛若抓不到已知違規，「正向掃描為空」就沒有意義")
+                .contains(pkg + "InjectionFixture#currentSecurityContext[0]")
+                .as("使用被 meta 標註的自訂註解的參數")
+                .contains(pkg + "InjectionFixture#customPrincipal[0]")
+                .contains(pkg + "InjectionFixture#customSecurityContext[0]")
+                .as("自訂註解本身的定義也要抓（禁用定義，使用處就不可能合法出現）")
+                .contains(pkg + "CustomPrincipal")
+                .contains(pkg + "CustomSecurityContext")
+                .as("無關註解與無註解參數皆合規")
+                .doesNotContain(pkg + "InjectionFixture#unrelated[0]")
+                .doesNotContain(pkg + "InjectionFixture#plain[0]")
+                .doesNotContain(pkg + "UnrelatedMarker");
     }
 
     /**
@@ -551,6 +643,100 @@ class PrincipalTypeTest {
     private static boolean isGetPrincipalOnAuthentication(JavaAccess<?> access) {
         return access.getName().equals("getPrincipal")
                 && access.getTargetOwner().isAssignableTo(Authentication.class);
+    }
+
+    /**
+     * 規則 (b2)：找出白名單外呼叫身分名稱存取器的程式碼：
+     * {@code Principal#getName()}（含 {@code Authentication} 與其實作類別）、
+     * {@code HttpServletRequest#getUserPrincipal()}、{@code HttpServletRequest#getRemoteUser()}。
+     *
+     * <p>principal 換成 record 後 {@code getName()} 會回 {@code AuthUser[id=…, uuid=…]}，是靜默的語意改變。
+     * 方法參考與 lambda 內的呼叫同樣算；歸併與白名單比對規則同 {@link #findGetPrincipalCallers}。</p>
+     *
+     * @param classes   待掃描的類集合
+     * @param allowList 白名單（最外層類別全名）
+     * @return {@code 呼叫端最外層類別全名#方法名}（排序、去重）
+     */
+    private static List<String> findIdentityAccessorCallers(JavaClasses classes, Set<String> allowList) {
+        return classes.stream()
+                .flatMap(c -> c.getCodeUnitAccessesFromSelf().stream())
+                .filter(PrincipalTypeTest::isIdentityAccessor)
+                .filter(a -> !allowList.contains(topLevelName(a.getOriginOwner())))
+                .map(a -> topLevelName(a.getOriginOwner()) + "#" + a.getOrigin().getName())
+                .distinct()
+                .sorted()
+                .toList();
+    }
+
+    /**
+     * 判斷存取是否為規則 (b2) 禁止的身分名稱存取器。
+     *
+     * @param access 待判斷的存取
+     * @return 符合 (b2) 的三種存取之一回傳 true
+     */
+    private static boolean isIdentityAccessor(JavaAccess<?> access) {
+        JavaClass owner = access.getTargetOwner();
+        return switch (access.getName()) {
+            case "getName" -> owner.isAssignableTo(PRINCIPAL);
+            case "getUserPrincipal", "getRemoteUser" -> owner.isAssignableTo(HTTP_SERVLET_REQUEST);
+            default -> false;
+        };
+    }
+
+    /**
+     * 規則 (c)：找出繞過規則 (a) 的注入方式——一律禁用，不追蹤其參數型別。
+     *
+     * <ul>
+     *   <li>參數標註 {@code @CurrentSecurityContext}，或標註「被 {@code @AuthenticationPrincipal}／
+     *       {@code @CurrentSecurityContext} 直接或 meta 標註的自訂註解」（key 同規則 (a)：
+     *       {@code 類別全名#方法名[參數索引]}）；</li>
+     *   <li>這類自訂註解的定義本身（key 為註解全名），使用處因此不可能合法出現。</li>
+     * </ul>
+     *
+     * <p>直接標註 {@code @AuthenticationPrincipal} 的參數由規則 (a) 管，這裡不重複計。</p>
+     *
+     * @param classes 待掃描的類集合
+     * @return 違規描述（排序、去重）
+     */
+    private static List<String> findPrincipalInjectionBypasses(JavaClasses classes) {
+        Stream<String> definitions = classes.stream()
+                .filter(JavaClass::isAnnotation)
+                .filter(PrincipalTypeTest::isPrincipalInjectionAnnotation)
+                .map(JavaClass::getName);
+        Stream<String> usages = classes.stream()
+                .flatMap(c -> c.getMethods().stream())
+                .flatMap(m -> m.getParameters().stream()
+                        .filter(p -> p.getAnnotations().stream()
+                                .map(JavaAnnotation::getRawType)
+                                .anyMatch(PrincipalTypeTest::isForbiddenInjectionAnnotation))
+                        .map(p -> parameterKey(m, p)));
+        return Stream.concat(definitions, usages).distinct().sorted().toList();
+    }
+
+    /**
+     * 判斷註解型別是否為被禁用的注入註解：{@code @CurrentSecurityContext} 本身，或被注入註解標註的自訂註解。
+     *
+     * @param annotationType 註解型別
+     * @return 禁用回傳 true；{@code @AuthenticationPrincipal} 本身不算（由規則 (a) 管）
+     */
+    private static boolean isForbiddenInjectionAnnotation(JavaClass annotationType) {
+        return annotationType.getName().equals(CURRENT_SECURITY_CONTEXT)
+                || (!annotationType.getName().equals(AUTH_PRINCIPAL)
+                        && isPrincipalInjectionAnnotation(annotationType));
+    }
+
+    /**
+     * 判斷註解型別是否被 {@code @AuthenticationPrincipal} 或 {@code @CurrentSecurityContext}
+     * 直接或 meta 標註。
+     *
+     * @param annotationType 註解型別
+     * @return 是回傳 true
+     */
+    private static boolean isPrincipalInjectionAnnotation(JavaClass annotationType) {
+        return annotationType.isAnnotatedWith(AUTH_PRINCIPAL)
+                || annotationType.isMetaAnnotatedWith(AUTH_PRINCIPAL)
+                || annotationType.isAnnotatedWith(CURRENT_SECURITY_CONTEXT)
+                || annotationType.isMetaAnnotatedWith(CURRENT_SECURITY_CONTEXT);
     }
 
     /**
