@@ -51,6 +51,60 @@
   - 拆服務後 `users` 不能再被他模組直接 JOIN——`architecture.md`「reference data 可 JOIN」條文與各 mapper 的 `JOIN users` 是否一併處理
   - 模組順序
 
+- **拆服務對 JOIN 的影響**：facade 批次查詢在單體內只多一次 DB 往返（PERF-02 的 `getAuthorInfoByIds` 為範本）；拆服務後改為批次 API ＋ 快取，熱點才考慮副本。**以他模組欄位做 filter / sort 的查詢無法以批次補值取代**——公開作者設計的 `GET /api/v1/authors`（`articles JOIN users`，以 nickname 篩、以文章數排）屬此類，須在 UUID 設計討論中一併決定寫法
+- 新增程式碼（含公開作者功能）的 facade 簽章應直接採用 UUID，避免日後再改一次
+
+## 6.1 SEC-01 / Q7
+
+- **SEC-01 定案（a）**：正式拓撲確認為 Client → Cloudflare → nginx → k3s Ingress → app。本 repo 先做第 3 層（`ClientIpResolver`，patch 在 `ai-docs/backlog/patches/2026-09-04-client-ip-resolver.patch`；移除 `forward-headers-strategy: framework`；刪除 `ArticleController` 說反的 JavaDoc），預設 `app.http.trusted-proxy-count=0`，prod 依第 2 層結果設 `1`。第 1、2 層（只放行 Cloudflare、nginx realip 覆寫 XFF、nginx 設定收進版控）由 Yuan 於 infrastructure repo 處理
+- **Q7 結案**：Yuan 確認無長期環境跑過舊版，無需維運清理
+
+## 6.2 T2 冪等反模式（RACE-01/03/04/08/15）
+
+- 定案（a）：**併入各模組的 UUID 改造 PR**，重寫 repository 時改用 `INSERT ... ON CONFLICT`，依 affected rows 決定計數；每項附真 Postgres 的雙擊 IT；完成後把 TEST-10 的 red E2E（雙擊按讚應 200）收進 CI gate
+- 例外：RACE-03（註冊撞 UNIQUE → 500）與 Q8 改寫同一段註冊流程，**隨 Q8 一起修**，避免同一段碼動兩次
+
+## 6.3 DATA-01（標籤計數）
+
+- 定案（a）：前台顯示的 `articleCount` = **已發布**文章數；刪除守衛改為「`article_tags` 是否有任何列」（含草稿），不再依賴計數器
+- 機制：收到事件時對受影響標籤**重算**（tag 模組自 `article_tags` 取 article uuid → `ArticleFacade.filterPublishedUuids` → 分組計數），以 `ZADD` 設定 Redis 熱門分數，不再 `incrementScore`；另加每日全量校正排程（比照 `TrendingRefreshJob`）
+- 補 `article_tags.tag_id` 索引（PERF-07，新 migration，同步 `schema.md`）
+- 界限寫進 JavaDoc：單一標籤超過約 1 萬篇時改為增量計數＋定期校正
+- TDD 起點：先改寫 TEST-02（把盲目 +1 固化成規格的測試）
+- **現在獨立修**（與 UUID 改造幾乎無重疊）
+
+## 6.4 其他
+
+- ArchUnit 守衛（Transaction+MQ、`@PreAuthorize`）**實際已於 `29cbc09`（2026-09-06）落地**，backlog 檔未更新
+- 登記簿對帳：Yuan 同意進行（docs-only PR）
+
+---
+
+## 8. 最終待辦與施工順序（2026-10-24）
+
+| # | 項目 | repo | 依賴 / 備註 |
+|---|---|---|---|
+| 1 | findings 登記簿對帳 | 後端（docs） | 無；進行中 |
+| 2 | 前端相依升級 ＋ DOMPurify 收緊（§3） | 前端 | 無 |
+| 3 | SEC-01 第 3 層 `ClientIpResolver` | 後端 | 無；第 1、2 層 Yuan 於 infrastructure |
+| 4 | Q9 refresh cache-aside（修 SEC-26） | 後端 | 無 |
+| 5 | DATA-01 標籤計數重算 ＋ 索引 ＋ 每日校正 | 後端 | 無 |
+| 6 | Q8 註冊 email 一律回成功 ＋ RACE-03 | 後端 | **#3 上線後** |
+| 7 | UUID 全面改造的設計討論（ARCH-30 擴大） | 兩 repo | 無；**須在 #8 實作前完成**，以決定新端點寫法 |
+| 8 | 公開作者功能 後端 PR → 重抓快照 → 前端 PR（含 SEC-04 第 2 段） | 兩 repo | #7 |
+| 9 | SEC-04 第 3 段：`MAX_SIZE` 1000 → 100 | 後端 | #8 前端上線後 |
+| 10 | UUID 改造：各模組一個 PR（含該模組 T2 修復） | 後端（＋事件） | #7 |
+| 11 | SEC-16 互動路徑「可讀才可互動」 | 後端 | #10 的 comment、reading 完成後 |
+| 12 | ES 重建：存 `authorUuid`、移除 `username`，拿掉搜尋的批次作者查詢 | 後端 | #10 |
+| 13 | CSP Report-Only | 前端 nginx／infrastructure | 無 |
+| 14 | 第 3 段：拆 CASCADE、事件驅動刪除 | 後端 | ARCH-16 可觀測性 |
+| 15 | 查證 ArticleList 左欄 Tags 連結以名稱代 slug | 前端 | 無 |
+| — | 對帳後仍 OPEN 的其他 findings（FE-01 全域錯誤處理、FE-02 未存檔守衛等）重新排序 | 兩 repo | #1 |
+
+**等待 Yuan 回答**：JWT subject 改為 uuid 導致部署後全體重新登入是否可接受（可於 #7 設計討論回答）。
+
+---
+
 ## 7. 盤點時發現、需另行處理
 
 - **`findings.md` 狀態嚴重過時**：本次確認 Q4、Q5、Q6（含 AUTH-01、DATA-03）、Q7 皆已做完卻仍標待決策 → 需排一次「登記簿對帳」
