@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.user.controller;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 認證控制器
@@ -125,16 +127,16 @@ public class AuthController {
             throw unauthenticatedRefresh();
         }
 
-        Long userId = Long.parseLong(jwtService.getUserIdFromToken(refreshToken));
+        UUID userUuid = jwtService.getUserUuidFromToken(refreshToken);
 
-        Double score = redisTemplate.opsForZSet().score(RedisKeyConstant.getUserRefreshKey(userId), refreshToken);
+        Double score = redisTemplate.opsForZSet().score(RedisKeyConstant.getUserRefreshKey(userUuid), refreshToken);
         if (score == null) {
             throw unauthenticatedRefresh();
         }
 
         /** 單次 multiGet 取回 version/status/role 三個欄位，避免對同一把 key 連做三次往返 */
         List<Object> authFields = redisTemplate.opsForHash().multiGet(
-                RedisKeyConstant.getUserAuthKey(userId),
+                RedisKeyConstant.getUserAuthKey(userUuid),
                 List.of(RedisKeyConstant.FIELD_VERSION, RedisKeyConstant.FIELD_STATUS, RedisKeyConstant.FIELD_ROLE));
         String version = (String) authFields.get(0);
         String status = (String) authFields.get(1);
@@ -145,8 +147,8 @@ public class AuthController {
         }
 
         String newAccessToken = jwtService.generateAccessToken(
-                userId,
-                roleStr != null ? roleStr : authService.resolveUserRole(userId),
+                userUuid,
+                roleStr != null ? roleStr : authService.resolveUserRole(userUuid),
                 version != null ? version : "v1"
         );
 
@@ -180,7 +182,7 @@ public class AuthController {
      *
      * <p>清除 Redis 中的 Refresh Token 並重置 Cookie。</p>
      *
-     * @param userId       當前登入用戶的資料庫主鍵（由 Spring Security 自動注入）
+     * @param user         當前登入用戶（由 Spring Security 自動注入）
      * @param refreshToken Cookie 中的 Refresh Token（可為 null）
      * @param response     HTTP 回應，用於清除 Cookie
      * @return 成功回應
@@ -188,10 +190,10 @@ public class AuthController {
     @Operation(summary = "用戶登出", description = "清除 Refresh Token，使 Cookie 失效")
     @PreAuthorize("isAuthenticated()")
     @PostMapping("/logout")
-    public ApiResponse<Void> logout(@AuthenticationPrincipal Long userId,
+    public ApiResponse<Void> logout(@AuthenticationPrincipal AuthUser user,
                                     @CookieValue(name = "refreshToken", required = false) String refreshToken,
                                     HttpServletResponse response) {
-        authService.logout(userId, refreshToken);
+        authService.logout(user.uuid(), refreshToken);
 
         ResponseCookie clearCookie = ResponseCookie.from("refreshToken", "")
                 .httpOnly(true)

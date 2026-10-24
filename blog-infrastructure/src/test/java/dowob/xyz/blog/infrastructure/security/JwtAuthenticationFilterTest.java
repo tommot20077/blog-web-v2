@@ -3,7 +3,8 @@ package dowob.xyz.blog.infrastructure.security;
 import dowob.xyz.blog.common.api.enums.Permission;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
-import dowob.xyz.blog.common.constant.RedisKeyConstant;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -15,18 +16,18 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.HashOperations;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,7 +37,8 @@ import static org.mockito.Mockito.when;
  * <p>
  * 驗證過濾器在 JWT 有效且狀態正常時，
  * 所設定的 {@link Authentication#getAuthorities()} 應同時包含
- * Spring Security 角色字串（{@code ROLE_XXX}）與所有對應的 {@link Permission} 名稱。
+ * Spring Security 角色字串（{@code ROLE_XXX}）與所有對應的 {@link Permission} 名稱，
+ * principal 為 {@link AuthUser}，且 token version 與帳號狀態的判斷語意維持不變。
  * </p>
  *
  * @author Yuan
@@ -50,13 +52,9 @@ class JwtAuthenticationFilterTest {
     @Mock
     private JwtService jwtService;
 
-    /** 使用者認證服務 Mock */
+    /** 認證狀態載入器 Mock（Redis 優先、miss 回填 DB 的邏輯由 AuthStateLoaderTest 驗證） */
     @Mock
-    private UserAuthService userAuthService;
-
-    /** Redis 模板 Mock */
-    @Mock
-    private StringRedisTemplate redisTemplate;
+    private AuthStateLoader authStateLoader;
 
     /** 受測物件 */
     @InjectMocks
@@ -65,8 +63,11 @@ class JwtAuthenticationFilterTest {
     /** 假 JWT Token */
     private static final String FAKE_JWT = "fake.jwt.token";
 
-    /** 測試用 userId */
+    /** 測試用 userId（AuthUser 過渡欄位） */
     private static final Long USER_ID = 1L;
+
+    /** 測試用使用者 uuid（JWT subject） */
+    private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
     /** 測試用 Token 版本號 */
     private static final String TOKEN_VERSION = "1";
@@ -92,28 +93,49 @@ class JwtAuthenticationFilterTest {
     }
 
     /**
-     * 建立模擬 JWT 認證環境的共用輔助方法
+     * 建立認證狀態：預設 ACTIVE、版本與 token 相同。
      *
-     * @param role 要模擬的角色
+     * @param status 帳號狀態
+     * @param role   資料庫中的角色
+     * @param version 伺服端 Token 版本
+     * @return 認證狀態
+     */
+    private AuthState state(UserStatus status, Role role, String version) {
+        return new AuthState(USER_ID, USER_UUID, status, role, version);
+    }
+
+    /**
+     * 準備一次帶有效 JWT 的請求並執行過濾器。
+     *
+     * @param tokenRole 寫在 token role claim 的角色
+     * @param tokenVersion 寫在 token 的版本
+     * @param loaded loader 回傳的狀態（null 表示 Redis 與 DB 都查不到）
+     * @param chain 過濾鏈 Mock
      * @throws Exception 過濾器執行時可能拋出的例外
      */
-    @SuppressWarnings("unchecked")
-    private void performFilterWithRole(Role role) throws Exception {
+    private void performFilter(Role tokenRole, String tokenVersion, AuthState loaded, FilterChain chain)
+            throws Exception {
         HttpServletRequest request = mock(HttpServletRequest.class);
         HttpServletResponse response = mock(HttpServletResponse.class);
-        FilterChain chain = mock(FilterChain.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
         when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
         when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
-        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
-        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
-        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(role);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(TOKEN_VERSION);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn("ACTIVE");
+        when(jwtService.getUserUuidFromToken(FAKE_JWT)).thenReturn(USER_UUID);
+        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(tokenVersion);
+        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(tokenRole);
+        when(authStateLoader.load(USER_UUID)).thenReturn(Optional.ofNullable(loaded));
 
         filter.doFilterInternal(request, response, chain);
+    }
+
+    /**
+     * 以 ACTIVE 狀態、版本一致的情境執行過濾器。
+     *
+     * @param role 要模擬的角色（token 與資料庫一致）
+     * @throws Exception 過濾器執行時可能拋出的例外
+     */
+    private void performFilterWithRole(Role role) throws Exception {
+        performFilter(role, TOKEN_VERSION, state(UserStatus.ACTIVE, role, TOKEN_VERSION), mock(FilterChain.class));
     }
 
     @Test
@@ -176,11 +198,34 @@ class JwtAuthenticationFilterTest {
         }
     }
 
+    @Test
+    @DisplayName("通過驗證時 principal 為 AuthUser(id, uuid, role)，role 取自 token 的 role claim")
+    void authenticated_principalShouldBeAuthUserWithTokenRole() throws Exception {
+        performFilterWithRole(Role.AUTHOR);
+
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        assertThat(auth).isNotNull();
+        assertThat(SecurityUtils.currentAuthUser(auth))
+                .contains(new AuthUser(USER_ID, USER_UUID, Role.AUTHOR));
+    }
+
+    @Test
+    @DisplayName("AuthUser.role 與 authorities 同源：以 token 的 role claim 為準，不受 loader 回傳的角色影響")
+    void roleSource_shouldBeTokenClaimForBothPrincipalAndAuthorities() throws Exception {
+        performFilter(Role.ADMIN, TOKEN_VERSION, state(UserStatus.ACTIVE, Role.USER, TOKEN_VERSION),
+                mock(FilterChain.class));
+
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        assertThat(auth).isNotNull();
+        assertThat(SecurityUtils.currentAuthUser(auth)).get().extracting(AuthUser::role).isEqualTo(Role.ADMIN);
+        assertThat(auth.getAuthorities().stream().map(a -> a.getAuthority()).collect(Collectors.toSet()))
+                .contains("ROLE_ADMIN");
+    }
+
     /** ===== 未覆蓋路徑 ===== */
 
     @Test
     @DisplayName("請求無 Authorization Header 時，應直接放行至下一個 Filter，SecurityContext 保持空白")
-    @SuppressWarnings("unchecked")
     void noAuthorizationHeader_shouldPassThroughWithoutSettingAuthentication() throws Exception {
         HttpServletRequest request = mock(HttpServletRequest.class);
         HttpServletResponse response = mock(HttpServletResponse.class);
@@ -192,11 +237,11 @@ class JwtAuthenticationFilterTest {
 
         verify(chain).doFilter(request, response);
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        verifyNoInteractions(authStateLoader);
     }
 
     @Test
-    @DisplayName("JWT 驗證失敗時，應直接放行至下一個 Filter，SecurityContext 保持空白")
-    @SuppressWarnings("unchecked")
+    @DisplayName("JWT 驗證失敗時（含 subject 為數字的舊 token），應直接放行至下一個 Filter，SecurityContext 保持空白")
     void invalidJwt_shouldPassThroughWithoutSettingAuthentication() throws Exception {
         HttpServletRequest request = mock(HttpServletRequest.class);
         HttpServletResponse response = mock(HttpServletResponse.class);
@@ -209,147 +254,76 @@ class JwtAuthenticationFilterTest {
 
         verify(chain).doFilter(request, response);
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        verifyNoInteractions(authStateLoader);
     }
 
     @Test
-    @DisplayName("Redis Miss 且 DB 查無用戶時，應放行請求至下一個 Filter，SecurityContext 保持空白")
-    @SuppressWarnings("unchecked")
-    void redisMiss_userNotFound_shouldPassThroughWithoutSettingAuthentication() throws Exception {
-        HttpServletRequest request = mock(HttpServletRequest.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
+    @DisplayName("Redis 與 DB 都查無用戶時，應放行請求至下一個 Filter，SecurityContext 保持空白")
+    void userNotFound_shouldPassThroughWithoutSettingAuthentication() throws Exception {
         FilterChain chain = mock(FilterChain.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
-        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
-        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
-        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
-        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
-        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        /** Redis miss: both fields return null */
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
-        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
-        when(userAuthService.getUserDetail(USER_ID)).thenReturn(null);
+        performFilter(Role.USER, TOKEN_VERSION, null, chain);
 
-        filter.doFilterInternal(request, response, chain);
-
-        verify(chain).doFilter(request, response);
+        verify(chain).doFilter(any(), any());
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 
     @Test
-    @DisplayName("Redis Miss 且用戶狀態為 disabled 時，應放行請求至下一個 Filter，SecurityContext 保持空白")
-    @SuppressWarnings("unchecked")
-    void redisMiss_userDisabled_shouldPassThroughWithoutSettingAuthentication() throws Exception {
-        HttpServletRequest request = mock(HttpServletRequest.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
+    @DisplayName("用戶狀態為 BANNED 時，應放行請求至下一個 Filter，SecurityContext 保持空白")
+    void bannedUser_shouldPassThroughWithoutSettingAuthentication() throws Exception {
         FilterChain chain = mock(FilterChain.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
-        UserAuthService.SimpleUserDetail disabledUser =
-                new UserAuthService.SimpleUserDetail(USER_ID, "user@test.com", "USER", UserStatus.BANNED);
+        performFilter(Role.USER, TOKEN_VERSION, state(UserStatus.BANNED, Role.USER, TOKEN_VERSION), chain);
 
-        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
-        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
-        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
-        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
-        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        /** Redis miss: version field returns null, triggering DB fallback */
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
-        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
-        when(userAuthService.getUserDetail(USER_ID)).thenReturn(disabledUser);
-
-        filter.doFilterInternal(request, response, chain);
-
-        /** disabled user -> status="SUSPENDED" -> no auth set, but chain still called */
-        verify(chain).doFilter(request, response);
+        verify(chain).doFilter(any(), any());
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 
     @Test
-    @DisplayName("Redis Miss 且 DB 狀態為 PENDING_VERIFICATION 時，應直接快取原始 UserStatus 並通過認證")
-    @SuppressWarnings("unchecked")
-    void redisMiss_pendingVerification_shouldCacheStatusEnumAndAuthenticate() throws Exception {
-        HttpServletRequest request = mock(HttpServletRequest.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
+    @DisplayName("用戶狀態為 DELETED 時，不得通過認證")
+    void deletedUser_shouldNotAuthenticate() throws Exception {
+        performFilter(Role.USER, TOKEN_VERSION, state(UserStatus.DELETED, Role.USER, TOKEN_VERSION),
+                mock(FilterChain.class));
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    @DisplayName("用戶狀態為 PENDING_VERIFICATION 時，維持現行行為：可通過認證")
+    void pendingVerification_shouldAuthenticate() throws Exception {
         FilterChain chain = mock(FilterChain.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
-        UserAuthService.SimpleUserDetail pendingUser =
-                new UserAuthService.SimpleUserDetail(USER_ID, "user@test.com", "USER", UserStatus.PENDING_VERIFICATION);
+        performFilter(Role.USER, TOKEN_VERSION, state(UserStatus.PENDING_VERIFICATION, Role.USER, TOKEN_VERSION),
+                chain);
 
-        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
-        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
-        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
-        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
-        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
-        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
-        when(userAuthService.getUserDetail(USER_ID)).thenReturn(pendingUser);
-
-        filter.doFilterInternal(request, response, chain);
-
-        verify(hashOps).put(RedisKeyConstant.getUserAuthKey(USER_ID),
-                RedisKeyConstant.FIELD_STATUS, UserStatus.PENDING_VERIFICATION.name());
-        verify(chain).doFilter(request, response);
+        verify(chain).doFilter(any(), any());
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
     }
 
     @Test
-    @DisplayName("Redis Miss 回填時，應一併寫入 role 欄位（供 /refresh 沿用，避免刷新時角色降級為 USER）")
-    @SuppressWarnings("unchecked")
-    void redisMiss_shouldCacheRoleField() throws Exception {
-        HttpServletRequest request = mock(HttpServletRequest.class);
-        HttpServletResponse response = mock(HttpServletResponse.class);
+    @DisplayName("JWT 版本號與伺服端版本不一致時，應放行請求但 SecurityContext 保持空白")
+    void tokenVersionMismatch_shouldPassThroughWithoutSettingAuthentication() throws Exception {
         FilterChain chain = mock(FilterChain.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
-        UserAuthService.SimpleUserDetail authorUser =
-                new UserAuthService.SimpleUserDetail(USER_ID, "author@test.com", "AUTHOR", UserStatus.ACTIVE);
+        performFilter(Role.USER, "1", state(UserStatus.ACTIVE, Role.USER, "2"), chain);
 
-        when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
-        when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
-        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
-        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
-        when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.AUTHOR);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        /** Redis miss: 觸發 DB 回填 */
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(null);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn(null);
-        when(userAuthService.getUserTokenVersion(USER_ID)).thenReturn(TOKEN_VERSION);
-        when(userAuthService.getUserDetail(USER_ID)).thenReturn(authorUser);
-
-        filter.doFilterInternal(request, response, chain);
-
-        verify(hashOps).put(RedisKeyConstant.getUserAuthKey(USER_ID),
-                RedisKeyConstant.FIELD_ROLE, "AUTHOR");
+        verify(chain).doFilter(any(), any());
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
     }
 
     @Test
-    @DisplayName("JWT 版本號與 Redis 儲存版本不一致時，應放行請求但 SecurityContext 保持空白")
-    @SuppressWarnings("unchecked")
-    void tokenVersionMismatch_shouldPassThroughWithoutSettingAuthentication() throws Exception {
+    @DisplayName("loader 拋出例外時，不得讓例外外洩，SecurityContext 保持空白並放行")
+    void loaderThrows_shouldPassThroughWithoutSettingAuthentication() throws Exception {
         HttpServletRequest request = mock(HttpServletRequest.class);
         HttpServletResponse response = mock(HttpServletResponse.class);
         FilterChain chain = mock(FilterChain.class);
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
-
-        String jwtVersion = "1";
-        String serverVersion = "2"; // mismatch
 
         when(request.getHeader("Authorization")).thenReturn("Bearer " + FAKE_JWT);
         when(jwtService.validateToken(FAKE_JWT)).thenReturn(true);
-        when(jwtService.getUserIdFromToken(FAKE_JWT)).thenReturn(String.valueOf(USER_ID));
-        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(jwtVersion);
+        when(jwtService.getUserUuidFromToken(FAKE_JWT)).thenReturn(USER_UUID);
+        when(jwtService.getVersionFromToken(FAKE_JWT)).thenReturn(TOKEN_VERSION);
         when(jwtService.getRoleFromToken(FAKE_JWT)).thenReturn(Role.USER);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_VERSION))).thenReturn(serverVersion);
-        when(hashOps.get(any(), eq(RedisKeyConstant.FIELD_STATUS))).thenReturn("ACTIVE");
+        when(authStateLoader.load(USER_UUID)).thenThrow(new IllegalStateException("redis down"));
 
         filter.doFilterInternal(request, response, chain);
 

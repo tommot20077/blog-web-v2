@@ -2,9 +2,7 @@ package dowob.xyz.blog.infrastructure.security;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
-import dowob.xyz.blog.common.constant.RedisKeyConstant;
-
-import java.util.concurrent.TimeUnit;
+import dowob.xyz.blog.common.security.AuthUser;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -12,7 +10,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jetbrains.annotations.NotNull;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -25,9 +22,15 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * JWT 認證過濾器
+ *
+ * <p>驗證 Access Token 後，經 {@link AuthStateLoader} 取得 token version 與帳號狀態（Redis 優先、
+ * miss 回填 DB），通過時放入 {@link AuthUser} 作為 principal。authorities 與 {@code AuthUser.role}
+ * 同源，皆取自 token 的 role claim。通過的帳號狀態為 ACTIVE 與 PENDING_VERIFICATION。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -38,8 +41,7 @@ import java.util.Objects;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
-    private final UserAuthService userAuthService;
-    private final StringRedisTemplate redisTemplate;
+    private final AuthStateLoader authStateLoader;
 
     @Override
     protected void doFilterInternal(@NotNull HttpServletRequest request, @NotNull HttpServletResponse response,
@@ -50,49 +52,27 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String jwt = getJwtFromRequest(request);
 
             if (StringUtils.hasText(jwt) && jwtService.validateToken(jwt)) {
-                String userIdStr = jwtService.getUserIdFromToken(jwt);
-                Long userId = Long.parseLong(userIdStr);
+                UUID userUuid = jwtService.getUserUuidFromToken(jwt);
                 String tokenVersion = jwtService.getVersionFromToken(jwt);
                 Role role = jwtService.getRoleFromToken(jwt);
 
-                /** 檢查 Redis 中的版本號與狀態，Key format: user:auth:{userId} -> Hash */
-                String redisKey = RedisKeyConstant.getUserAuthKey(userId);
-                Object redisVersionObj = redisTemplate.opsForHash().get(redisKey, RedisKeyConstant.FIELD_VERSION);
-                Object redisStatusObj = redisTemplate.opsForHash().get(redisKey, RedisKeyConstant.FIELD_STATUS);
-
-                String currentVersion;
-                String currentStatus;
-
-                if (redisVersionObj == null || redisStatusObj == null) {
-                    /** Redis Miss -> 查 DB 回填 */
-                    currentVersion = userAuthService.getUserTokenVersion(userId);
-                    UserAuthService.SimpleUserDetail userDetail = userAuthService.getUserDetail(userId);
-
-                    if (userDetail == null) {
-                        log.info("User {} not found in DB, skip authentication", userId);
-                        chain.doFilter(request, response);
-                        return;
-                    }
-
-                    UserStatus userStatus = userDetail.status();
-                    currentStatus = userStatus.name();
-
-                    redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_VERSION, currentVersion);
-                    redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_STATUS, currentStatus);
-                    /** 一併回填 role，供 /refresh 沿用 auth hash 取得實際角色，避免刷新時角色降級為 USER */
-                    redisTemplate.opsForHash().put(redisKey, RedisKeyConstant.FIELD_ROLE, userDetail.role());
-                    redisTemplate.expire(redisKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
-                } else {
-                    currentVersion = (String) redisVersionObj;
-                    currentStatus = (String) redisStatusObj;
+                /** Redis 命中即用，miss 由 loader 查 DB 回填；DB 也查不到代表使用者不存在 */
+                Optional<AuthState> loaded = authStateLoader.load(userUuid);
+                if (loaded.isEmpty()) {
+                    log.info("User {} not found in DB, skip authentication", userUuid);
+                    chain.doFilter(request, response);
+                    return;
                 }
+                AuthState authState = loaded.get();
+                String currentVersion = authState.tokenVersion();
+                UserStatus currentStatus = authState.status();
 
                 /** 1. 檢查版本號（必須完全一致） */
                 if (Objects.equals(tokenVersion, currentVersion)) {
 
                     /** 2. 檢查狀態 */
-                    if (!"ACTIVE".equals(currentStatus) && !"PENDING_VERIFICATION".equals(currentStatus)) {
-                        log.info("User {} is not active (status={}), skip authentication", userId, currentStatus);
+                    if (currentStatus != UserStatus.ACTIVE && currentStatus != UserStatus.PENDING_VERIFICATION) {
+                        log.info("User {} is not active (status={}), skip authentication", userUuid, currentStatus);
                         chain.doFilter(request, response);
                         return;
                     }
@@ -102,13 +82,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
                     role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
 
+                    /** principal 的 role 與 authorities 同源（皆取自 token 的 role claim） */
+                    AuthUser principal = new AuthUser(authState.id(), authState.uuid(), role);
                     UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                            userId, null, authorities);
+                            principal, null, authorities);
 
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                 } else {
-                    log.info("Token version mismatch for user {}: token={}, server={}", userId, tokenVersion,
+                    log.info("Token version mismatch for user {}: token={}, server={}", userUuid, tokenVersion,
                             currentVersion);
                 }
             }

@@ -31,6 +31,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -99,6 +100,9 @@ class AuthServiceTest {
 
     /** 測試用電子信箱 */
     private static final String TEST_EMAIL = "test@example.com";
+
+    /** 測試用使用者 uuid（JWT subject 與所有 Redis key 的鍵） */
+    private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
     /** 測試用密碼 */
     private static final String TEST_PASSWORD = "password123";
@@ -269,14 +273,14 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD);
 
         assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
         assertThat(result.refreshToken()).isEqualTo(MOCK_REFRESH_TOKEN);
-        verify(hashOperations, times(3)).put(anyString(), anyString(), anyString());
+        verify(hashOperations, times(4)).put(anyString(), anyString(), anyString());
         verify(zSetOps).add(anyString(), eq(MOCK_REFRESH_TOKEN), anyDouble());
     }
 
@@ -295,8 +299,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD);
 
@@ -409,8 +413,8 @@ class AuthServiceTest {
         when(userRepository.findByEmail(TEST_USERNAME)).thenReturn(Optional.empty());
         when(userRepository.findByUsername(TEST_USERNAME)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         LoginResult result = authService.login(TEST_USERNAME, TEST_PASSWORD);
 
@@ -430,7 +434,7 @@ class AuthServiceTest {
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
 
-        authService.logout(1L, MOCK_REFRESH_TOKEN);
+        authService.logout(USER_UUID, MOCK_REFRESH_TOKEN);
 
         verify(zSetOps).remove(anyString(), eq((Object) MOCK_REFRESH_TOKEN));
     }
@@ -748,7 +752,7 @@ class AuthServiceTest {
         ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(userCaptor.capture());
         assertThat(userCaptor.getValue().getTokenVersion()).isEqualTo("v2");
-        verify(sessionRevoker).revokeAllSessions(mockUser.getId());
+        verify(sessionRevoker).revokeAllSessions(mockUser.getUuid());
         verify(verificationTokenRepository).delete(resetToken);
     }
 
@@ -760,9 +764,9 @@ class AuthServiceTest {
     void resolveUserRole_shouldReturnRoleFromDb() {
         User mockUser = buildActiveUser();
         mockUser.setRole(Role.AUTHOR);
-        when(userRepository.findById(1L)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(USER_UUID)).thenReturn(Optional.of(mockUser));
 
-        assertThat(authService.resolveUserRole(1L)).isEqualTo("AUTHOR");
+        assertThat(authService.resolveUserRole(USER_UUID)).isEqualTo("AUTHOR");
     }
 
     /**
@@ -771,9 +775,9 @@ class AuthServiceTest {
     @Test
     @DisplayName("resolveUserRole → 用戶不存在 → 應拋出 BusinessException")
     void resolveUserRole_userNotFound_shouldThrowBusinessException() {
-        when(userRepository.findById(1L)).thenReturn(Optional.empty());
+        when(userRepository.findByUuid(USER_UUID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> authService.resolveUserRole(1L))
+        assertThatThrownBy(() -> authService.resolveUserRole(USER_UUID))
                 .isInstanceOf(BusinessException.class);
     }
 
@@ -863,8 +867,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
@@ -890,8 +894,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
@@ -913,8 +917,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
@@ -930,7 +934,7 @@ class AuthServiceTest {
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
 
-        authService.logout(1L, MOCK_REFRESH_TOKEN);
+        authService.logout(USER_UUID, MOCK_REFRESH_TOKEN);
 
         verify(zSetOps).remove(anyString(), eq((Object) MOCK_REFRESH_TOKEN));
     }
@@ -1119,8 +1123,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD);
 
@@ -1138,7 +1142,7 @@ class AuthServiceTest {
     @Test
     @DisplayName("logout → refreshToken 為 null → 應刪除整個 ZSet Key")
     void logout_withNullRefreshToken_shouldDeleteEntireKey() {
-        authService.logout(1L, null);
+        authService.logout(USER_UUID, null);
 
         verify(redisTemplate).delete(contains("user:refresh:"));
         verify(redisTemplate, never()).opsForZSet();
@@ -1150,7 +1154,7 @@ class AuthServiceTest {
     @Test
     @DisplayName("logout → refreshToken 為空白字串 → 應刪除整個 ZSet Key")
     void logout_withBlankRefreshToken_shouldDeleteEntireKey() {
-        authService.logout(1L, "   ");
+        authService.logout(USER_UUID, "   ");
 
         verify(redisTemplate).delete(contains("user:refresh:"));
         verify(redisTemplate, never()).opsForZSet();
@@ -1355,8 +1359,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP);
 
@@ -1401,8 +1405,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP);
 
@@ -1425,8 +1429,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP);
 
@@ -1449,8 +1453,8 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD, null);
 
@@ -1576,6 +1580,7 @@ class AuthServiceTest {
     private User buildActiveUser() {
         User user = new User();
         user.setId(1L);
+        user.setUuid(USER_UUID);
         user.setEmail(TEST_EMAIL);
         user.setPasswordHash("encodedPassword");
         user.setNickname(TEST_NICKNAME);
@@ -1610,6 +1615,92 @@ class AuthServiceTest {
      * @return VerificationToken 實體
      */
     // =========================================================================
+    // uuid 化：JWT subject、auth hash（含 id）、Redis key
+    // =========================================================================
+
+    /**
+     * 驗證：login 寫入的 auth hash 必須含 id（欄位值為資料庫主鍵），且 key 以 uuid 為鍵。
+     */
+    @Test
+    @DisplayName("login → auth hash 以 uuid 為鍵，且寫入 id／version／status／role 四個欄位")
+    void login_shouldWriteIdIntoAuthHashKeyedByUuid() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        mockUser.setRole(Role.AUTHOR);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        String authKey = "user:auth:" + USER_UUID;
+        verify(hashOperations).put(authKey, RedisKeyConstant.FIELD_ID, "1");
+        verify(hashOperations).put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
+        verify(hashOperations).put(authKey, RedisKeyConstant.FIELD_STATUS, "ACTIVE");
+        verify(hashOperations).put(authKey, RedisKeyConstant.FIELD_ROLE, "AUTHOR");
+    }
+
+    /**
+     * 驗證：login 簽發的 access／refresh token 以 uuid 為 subject（傳給 JwtService 的是 uuid）。
+     */
+    @Test
+    @DisplayName("login → 以使用者 uuid 簽發 access 與 refresh token")
+    void login_shouldIssueTokensWithUserUuid() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        verify(jwtService).generateAccessToken(USER_UUID, "USER", "v1");
+        verify(jwtService).generateRefreshToken(USER_UUID);
+        verify(zSetOps).add(eq("user:refresh:" + USER_UUID), eq(MOCK_REFRESH_TOKEN), anyDouble());
+    }
+
+    /**
+     * 驗證：登入失敗計數與 logout 的 Redis key 皆以 uuid 為鍵。
+     */
+    @Test
+    @DisplayName("login 密碼錯誤 → 失敗計數 key 以 uuid 為鍵")
+    void login_wrongPassword_shouldCountFailuresByUuidKey() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
+
+        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
+                .isInstanceOf(BusinessException.class);
+
+        verify(valueOperations).increment("login:fail:" + USER_UUID);
+    }
+
+    /**
+     * 驗證：logout 登出所有裝置時刪除的是 uuid 版 refresh key。
+     */
+    @Test
+    @DisplayName("logout → 刪除 uuid 版 refresh key")
+    void logout_shouldDeleteUuidKeyedRefreshZSet() {
+        authService.logout(USER_UUID, null);
+
+        verify(redisTemplate).delete("user:refresh:" + USER_UUID);
+    }
+
+    // =========================================================================
     // user:auth TTL 驗證
     // =========================================================================
 
@@ -1628,12 +1719,12 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(anyLong())).thenReturn(MOCK_REFRESH_TOKEN);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
-        String expectedAuthKey = RedisKeyConstant.getUserAuthKey(mockUser.getId());
+        String expectedAuthKey = RedisKeyConstant.getUserAuthKey(mockUser.getUuid());
         verify(redisTemplate).expire(eq(expectedAuthKey), eq(RedisKeyConstant.USER_AUTH_TTL_DAYS), eq(java.util.concurrent.TimeUnit.DAYS));
     }
 

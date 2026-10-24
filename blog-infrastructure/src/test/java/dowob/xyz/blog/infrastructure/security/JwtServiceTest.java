@@ -8,8 +8,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Date;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * JwtService 單元測試
@@ -29,8 +31,8 @@ class JwtServiceTest {
     /** 受測物件 */
     private JwtService jwtService;
 
-    /** 測試用 userId */
-    private static final Long TEST_USER_ID = 42L;
+    /** 測試用使用者 uuid（JWT subject） */
+    private static final UUID TEST_USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
     /** 測試用 role */
     private static final String TEST_ROLE = "USER";
@@ -61,13 +63,13 @@ class JwtServiceTest {
      * 驗證：生成 Token 後可正確取回 userId (subject)。
      */
     @Test
-    @DisplayName("generateToken → getUserIdFromToken 應回傳原始 userId")
+    @DisplayName("generateToken → getUserUuidFromToken 應回傳原始 uuid")
     void generateToken_andExtractUserId_shouldMatch() {
-        String token = jwtService.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = jwtService.generateToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
-        String extracted = jwtService.getUserIdFromToken(token);
+        UUID extracted = jwtService.getUserUuidFromToken(token);
 
-        assertThat(extracted).isEqualTo(String.valueOf(TEST_USER_ID));
+        assertThat(extracted).isEqualTo(TEST_USER_UUID);
     }
 
     /**
@@ -76,7 +78,7 @@ class JwtServiceTest {
     @Test
     @DisplayName("generateToken → getRoleFromToken 應回傳原始 role")
     void generateToken_andExtractRole_shouldMatch() {
-        String token = jwtService.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = jwtService.generateToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
         Role extracted = jwtService.getRoleFromToken(token);
 
@@ -95,7 +97,7 @@ class JwtServiceTest {
     @Test
     @DisplayName("generateToken → getVersionFromToken 應回傳原始 version (Bug 修復驗證)")
     void generateToken_andExtractVersion_shouldMatch() {
-        String token = jwtService.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = jwtService.generateToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
         String extracted = jwtService.getVersionFromToken(token);
 
@@ -108,7 +110,7 @@ class JwtServiceTest {
     @Test
     @DisplayName("validateToken → 有效 Token 應回傳 true")
     void validateToken_withValidToken_shouldReturnTrue() {
-        String token = jwtService.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = jwtService.generateToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
         boolean result = jwtService.validateToken(token);
 
@@ -121,7 +123,7 @@ class JwtServiceTest {
     @Test
     @DisplayName("validateToken → 竄改 Token 應回傳 false")
     void validateToken_withTamperedToken_shouldReturnFalse() {
-        String token = jwtService.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = jwtService.generateToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
         String tampered = token + "tampered";
 
         boolean result = jwtService.validateToken(tampered);
@@ -136,9 +138,9 @@ class JwtServiceTest {
     @Test
     @DisplayName("generateAccessToken → 應生成含 role 與 version 的 Access Token")
     void generateAccessToken_shouldProduceTokenWithRoleAndVersion() {
-        String token = jwtService.generateAccessToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = jwtService.generateAccessToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
-        assertThat(jwtService.getUserIdFromToken(token)).isEqualTo(String.valueOf(TEST_USER_ID));
+        assertThat(jwtService.getUserUuidFromToken(token)).isEqualTo(TEST_USER_UUID);
         assertThat(jwtService.getRoleFromToken(token)).isEqualTo(Role.USER);
         assertThat(jwtService.getVersionFromToken(token)).isEqualTo(TEST_VERSION);
         assertThat(jwtService.getTokenTypeFromToken(token)).isEqualTo("access");
@@ -153,9 +155,9 @@ class JwtServiceTest {
     void generateRefreshToken_shouldProduceTokenWithUserIdOnly() {
         ReflectionTestUtils.setField(jwtService, "refreshTokenExpiration", 604800000L);
 
-        String token = jwtService.generateRefreshToken(TEST_USER_ID);
+        String token = jwtService.generateRefreshToken(TEST_USER_UUID);
 
-        assertThat(jwtService.getUserIdFromToken(token)).isEqualTo(String.valueOf(TEST_USER_ID));
+        assertThat(jwtService.getUserUuidFromToken(token)).isEqualTo(TEST_USER_UUID);
         assertThat(jwtService.getTokenTypeFromToken(token)).isEqualTo("refresh");
     }
 
@@ -165,7 +167,7 @@ class JwtServiceTest {
     @Test
     @DisplayName("getTokenType → Access Token 應回傳 'access'")
     void getTokenType_forAccessToken_shouldReturnAccess() {
-        String token = jwtService.generateAccessToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = jwtService.generateAccessToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
         assertThat(jwtService.getTokenTypeFromToken(token)).isEqualTo("access");
     }
@@ -178,7 +180,7 @@ class JwtServiceTest {
     void getTokenType_forRefreshToken_shouldReturnRefresh() {
         ReflectionTestUtils.setField(jwtService, "refreshTokenExpiration", 604800000L);
 
-        String token = jwtService.generateRefreshToken(TEST_USER_ID);
+        String token = jwtService.generateRefreshToken(TEST_USER_UUID);
 
         assertThat(jwtService.getTokenTypeFromToken(token)).isEqualTo("refresh");
     }
@@ -209,10 +211,10 @@ class JwtServiceTest {
         ReflectionTestUtils.setField(svcWithPem, "refreshTokenExpiration", 604800000L);
         svcWithPem.init();
 
-        String token = svcWithPem.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = svcWithPem.generateToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
         assertThat(svcWithPem.validateToken(token)).isTrue();
-        assertThat(svcWithPem.getUserIdFromToken(token)).isEqualTo(String.valueOf(TEST_USER_ID));
+        assertThat(svcWithPem.getUserUuidFromToken(token)).isEqualTo(TEST_USER_UUID);
     }
 
     /**
@@ -221,7 +223,7 @@ class JwtServiceTest {
     @Test
     @DisplayName("validateRefreshToken → 有效 Refresh Token 應回傳 true")
     void validateRefreshToken_withValidRefreshToken_shouldReturnTrue() {
-        String refreshToken = jwtService.generateRefreshToken(TEST_USER_ID);
+        String refreshToken = jwtService.generateRefreshToken(TEST_USER_UUID);
 
         boolean result = jwtService.validateRefreshToken(refreshToken);
 
@@ -234,7 +236,7 @@ class JwtServiceTest {
     @Test
     @DisplayName("validateRefreshToken → Access Token 應回傳 false")
     void validateRefreshToken_withAccessToken_shouldReturnFalse() {
-        String accessToken = jwtService.generateAccessToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String accessToken = jwtService.generateAccessToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
         boolean result = jwtService.validateRefreshToken(accessToken);
 
@@ -247,7 +249,7 @@ class JwtServiceTest {
     @Test
     @DisplayName("validateRefreshToken → 竄改 Token 應回傳 false")
     void validateRefreshToken_withTamperedToken_shouldReturnFalse() {
-        String refreshToken = jwtService.generateRefreshToken(TEST_USER_ID);
+        String refreshToken = jwtService.generateRefreshToken(TEST_USER_UUID);
         String tampered = refreshToken + "tampered";
 
         boolean result = jwtService.validateRefreshToken(tampered);
@@ -268,10 +270,10 @@ class JwtServiceTest {
         ReflectionTestUtils.setField(svcNoPem, "refreshTokenExpiration", 604800000L);
         svcNoPem.init();
 
-        String token = svcNoPem.generateToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = svcNoPem.generateToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
 
         assertThat(svcNoPem.validateToken(token)).isTrue();
-        assertThat(svcNoPem.getUserIdFromToken(token)).isEqualTo(String.valueOf(TEST_USER_ID));
+        assertThat(svcNoPem.getUserUuidFromToken(token)).isEqualTo(TEST_USER_UUID);
     }
 
     /**
@@ -293,7 +295,7 @@ class JwtServiceTest {
         // 不覆蓋 accessTokenExpiration，使用 setUp() 注入的預設值
 
         long beforeMs = System.currentTimeMillis();
-        String token = jwtService.generateAccessToken(TEST_USER_ID, TEST_ROLE, TEST_VERSION);
+        String token = jwtService.generateAccessToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
         long afterMs = System.currentTimeMillis();
 
         Claims claims = ReflectionTestUtils.invokeMethod(jwtService, "extractAllClaims", token);
@@ -307,5 +309,77 @@ class JwtServiceTest {
                 beforeMs + 895_000L,
                 afterMs  + 905_000L
         );
+    }
+
+    /**
+     * 驗證：access 與 refresh token 的 subject 必須是使用者 uuid 的字串形式（而非資料庫主鍵）。
+     */
+    @Test
+    @DisplayName("access／refresh token 的 subject 應為使用者 uuid 字串")
+    void tokens_subjectShouldBeUserUuidString() {
+        String access = jwtService.generateAccessToken(TEST_USER_UUID, TEST_ROLE, TEST_VERSION);
+        String refresh = jwtService.generateRefreshToken(TEST_USER_UUID);
+
+        Claims accessClaims = ReflectionTestUtils.invokeMethod(jwtService, "extractAllClaims", access);
+        Claims refreshClaims = ReflectionTestUtils.invokeMethod(jwtService, "extractAllClaims", refresh);
+
+        assertThat(accessClaims).isNotNull();
+        assertThat(refreshClaims).isNotNull();
+        assertThat(accessClaims.getSubject()).isEqualTo(TEST_USER_UUID.toString());
+        assertThat(refreshClaims.getSubject()).isEqualTo(TEST_USER_UUID.toString());
+    }
+
+    /**
+     * 驗證：以本服務金鑰簽署、但 subject 為數字（舊格式）的 access token 一律無效。
+     */
+    @Test
+    @DisplayName("subject 為數字的舊格式 access token 應視為無效")
+    void numericSubjectAccessToken_shouldBeInvalid() {
+        String legacy = signLegacyToken("42", "access");
+
+        assertThat(jwtService.validateToken(legacy)).isFalse();
+    }
+
+    /**
+     * 驗證：subject 為數字（舊格式）的 refresh token 一律無效，無法通過 validateRefreshToken。
+     */
+    @Test
+    @DisplayName("subject 為數字的舊格式 refresh token 應視為無效")
+    void numericSubjectRefreshToken_shouldBeInvalid() {
+        String legacy = signLegacyToken("42", "refresh");
+
+        assertThat(jwtService.validateRefreshToken(legacy)).isFalse();
+    }
+
+    /**
+     * 驗證：對數字 subject 的 token 取 uuid 時拋出例外，而不是回傳 null 或錯誤值。
+     */
+    @Test
+    @DisplayName("對數字 subject 的 token 呼叫 getUserUuidFromToken 應拋出例外")
+    void getUserUuidFromToken_withNumericSubject_shouldThrow() {
+        String legacy = signLegacyToken("42", "access");
+
+        assertThatThrownBy(() -> jwtService.getUserUuidFromToken(legacy))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * 以本服務的私鑰簽出舊格式（subject 為資料庫主鍵）的 token，模擬切換前已發出的 token。
+     *
+     * @param subject token 類型為 type claim 之外的 subject 字串
+     * @param type    type claim（access／refresh）
+     * @return 簽名有效但 subject 非 uuid 的 JWT
+     */
+    private String signLegacyToken(String subject, String type) {
+        java.security.PrivateKey key = (java.security.PrivateKey) ReflectionTestUtils.getField(jwtService, "privateKey");
+        return io.jsonwebtoken.Jwts.builder()
+                .claim("type", type)
+                .claim("role", TEST_ROLE)
+                .claim("version", TEST_VERSION)
+                .subject(subject)
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60_000L))
+                .signWith(key, io.jsonwebtoken.Jwts.SIG.ES256)
+                .compact();
     }
 }

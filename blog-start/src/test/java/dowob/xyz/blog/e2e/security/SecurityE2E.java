@@ -17,6 +17,8 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import java.util.Map;
 
+import java.util.UUID;
+
 import static dowob.xyz.blog.e2e.support.AuthHelper.bearerToken;
 import static dowob.xyz.blog.e2e.support.DataBuilder.article;
 import static dowob.xyz.blog.e2e.support.DataBuilder.category;
@@ -216,11 +218,11 @@ class SecurityE2E extends AbstractE2ETest {
                     "expire@test.com");
 
             // 清除 Redis 中該用戶的認證快取，強制 JwtAuthenticationFilter 重新查 DB
-            Long userId = jdbcTemplate.queryForObject(
-                    "SELECT id FROM users WHERE email = ?",
-                    Long.class,
+            UUID userUuid = jdbcTemplate.queryForObject(
+                    "SELECT uuid FROM users WHERE email = ?",
+                    UUID.class,
                     "expire@test.com");
-            String redisKey = RedisKeyConstant.getUserAuthKey(userId);
+            String redisKey = RedisKeyConstant.getUserAuthKey(userUuid);
             redisTemplate.delete(redisKey);
 
             // 使用舊 Token 存取需認證端點，版本不符應回傳 401

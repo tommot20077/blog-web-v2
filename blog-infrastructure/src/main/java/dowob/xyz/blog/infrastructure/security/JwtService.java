@@ -205,13 +205,13 @@ public class JwtService {
     /**
      * 生成 Token（向後相容方法，委派至 generateAccessToken）
      *
-     * @param userId  用戶 ID
+     * @param userUuid 用戶 UUID（寫入 subject）
      * @param role    角色
      * @param version Token 版本號
      * @return JWT Access Token
      */
-    public String generateToken(Long userId, String role, String version) {
-        return generateAccessToken(userId, role, version);
+    public String generateToken(UUID userUuid, String role, String version) {
+        return generateAccessToken(userUuid, role, version);
     }
 
     /**
@@ -219,34 +219,34 @@ public class JwtService {
      *
      * <p>包含 role、version、type="access" 三個 claim，過期時間為 1 小時。</p>
      *
-     * @param userId  用戶 ID
+     * @param userUuid 用戶 UUID（寫入 subject）
      * @param role    角色名稱
      * @param version Token 版本號
      * @return 已簽名的 JWT Access Token
      */
-    public String generateAccessToken(Long userId, String role, String version) {
+    public String generateAccessToken(UUID userUuid, String role, String version) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("role", role);
         claims.put("version", version);
         claims.put("type", "access");
-        return createToken(claims, String.valueOf(userId), accessTokenExpiration);
+        return createToken(claims, userUuid.toString(), accessTokenExpiration);
     }
 
     /**
      * 生成 Refresh Token
      *
      * <p>
-     * 僅包含 type="refresh" claim 與 userId (subject)，不含 role 與 version，
+     * 僅包含 type="refresh" claim 與使用者 uuid (subject)，不含 role 與 version，
      * 過期時間為 7 天。
      * </p>
      *
-     * @param userId 用戶 ID
+     * @param userUuid 用戶 UUID（寫入 subject）
      * @return 已簽名的 JWT Refresh Token
      */
-    public String generateRefreshToken(Long userId) {
+    public String generateRefreshToken(UUID userUuid) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("type", "refresh");
-        return createToken(claims, String.valueOf(userId), refreshTokenExpiration);
+        return createToken(claims, userUuid.toString(), refreshTokenExpiration);
     }
 
     /**
@@ -286,15 +286,19 @@ public class JwtService {
     }
 
     /**
-     * 驗證 JWT Token 簽名與有效期
+     * 驗證 JWT Token 簽名、有效期與 subject 格式
+     *
+     * <p>subject 必須是 UUID 字串。切換為 uuid subject 前發出的舊 token
+     * （subject 為數字主鍵）簽名雖然有效，但一律視為無效。</p>
      *
      * @param token JWT Token 字串
-     * @return 若簽名有效且未過期回傳 true，否則 false
+     * @return 若簽名有效、未過期且 subject 為 UUID 回傳 true，否則 false
      */
     public boolean validateToken(String token) {
         try {
             /** 使用公鑰驗證 */
-            Jwts.parser().verifyWith(publicKey).build().parseSignedClaims(token);
+            Claims claims = Jwts.parser().verifyWith(publicKey).build().parseSignedClaims(token).getPayload();
+            UUID.fromString(claims.getSubject());
             return true;
         } catch (Exception e) {
             return false;
@@ -302,13 +306,14 @@ public class JwtService {
     }
 
     /**
-     * 從 Token 取得用戶 ID（subject claim）
+     * 從 Token 取得用戶 UUID（subject claim）
      *
      * @param token JWT Token 字串
-     * @return 用戶 ID 字串
+     * @return 用戶 UUID
+     * @throws IllegalArgumentException subject 不是 UUID 格式（例如切換前發出的數字 subject 舊 token）
      */
-    public String getUserIdFromToken(String token) {
-        return extractClaim(token, Claims::getSubject);
+    public UUID getUserUuidFromToken(String token) {
+        return UUID.fromString(extractClaim(token, Claims::getSubject));
     }
 
     /**

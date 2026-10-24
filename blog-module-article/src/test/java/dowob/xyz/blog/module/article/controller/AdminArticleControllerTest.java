@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleWebTestConfiguration;
@@ -74,6 +75,10 @@ class AdminArticleControllerTest {
 
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
 
     private static RequestPostProcessor asAdmin() {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();

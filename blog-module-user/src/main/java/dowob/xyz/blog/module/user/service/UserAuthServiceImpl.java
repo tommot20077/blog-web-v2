@@ -2,11 +2,15 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.security.AuthState;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Infrastructure 用戶認證服務實作
@@ -52,5 +56,20 @@ public class UserAuthServiceImpl implements UserAuthService {
         return userRepository.findById(userId)
                 .map(u -> new UserAuthService.SimpleUserDetail(u.getId(), u.getEmail(), u.getRole().name(), u.getStatus()))
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
+    }
+
+    /**
+     * 以 uuid 查詢使用者的認證狀態
+     *
+     * <p>回傳包含 id、uuid、status、role、tokenVersion 的 {@link AuthState}；
+     * 狀態不做任何過濾，是否放行由呼叫端決定。</p>
+     *
+     * @param uuid 使用者 UUID
+     * @return 認證狀態；使用者不存在時為 empty
+     */
+    @Override
+    public Optional<AuthState> findAuthStateByUuid(UUID uuid) {
+        return userRepository.findByUuid(uuid)
+                .map(u -> new AuthState(u.getId(), u.getUuid(), u.getStatus(), u.getRole(), u.getTokenVersion()));
     }
 }

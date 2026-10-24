@@ -13,6 +13,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -41,8 +42,8 @@ class SessionRevokerTest {
     @InjectMocks
     private SessionRevoker sessionRevoker;
 
-    /** 測試用 userId */
-    private static final Long USER_ID = 1L;
+    /** 測試用使用者 uuid */
+    private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
     /**
      * 確保每個測試後清空交易同步狀態，避免污染其他測試。
@@ -60,10 +61,23 @@ class SessionRevokerTest {
     @Test
     @DisplayName("revokeAllSessions → 無交易 → 應立即刪除 auth hash 與 refresh ZSet")
     void revokeAllSessions_withoutTransaction_deletesImmediately() {
-        sessionRevoker.revokeAllSessions(USER_ID);
+        sessionRevoker.revokeAllSessions(USER_UUID);
 
-        verify(redisTemplate).delete(RedisKeyConstant.getUserAuthKey(USER_ID));
-        verify(redisTemplate).delete(RedisKeyConstant.getUserRefreshKey(USER_ID));
+        verify(redisTemplate).delete(RedisKeyConstant.getUserAuthKey(USER_UUID));
+        verify(redisTemplate).delete(RedisKeyConstant.getUserRefreshKey(USER_UUID));
+    }
+
+    /**
+     * 驗證：撤銷刪除的是 uuid 版的 key（{@code user:auth:{uuid}}、{@code user:refresh:{uuid}}），
+     * 而不是以資料庫主鍵為鍵的舊 key。
+     */
+    @Test
+    @DisplayName("revokeAllSessions → 刪除的 key 為 user:auth:{uuid} 與 user:refresh:{uuid}")
+    void revokeAllSessions_deletesUuidKeyedEntries() {
+        sessionRevoker.revokeAllSessions(USER_UUID);
+
+        verify(redisTemplate).delete("user:auth:11111111-2222-3333-4444-555555555555");
+        verify(redisTemplate).delete("user:refresh:11111111-2222-3333-4444-555555555555");
     }
 
     /**
@@ -75,7 +89,7 @@ class SessionRevokerTest {
     void revokeAllSessions_withinTransaction_defersUntilAfterCommit() {
         TransactionSynchronizationManager.initSynchronization();
 
-        sessionRevoker.revokeAllSessions(USER_ID);
+        sessionRevoker.revokeAllSessions(USER_UUID);
 
         // 交易尚未提交前，絕不可刪除 Redis
         verify(redisTemplate, never()).delete(anyString());
@@ -85,7 +99,7 @@ class SessionRevokerTest {
         assertThat(syncs).hasSize(1);
         syncs.forEach(TransactionSynchronization::afterCommit);
 
-        verify(redisTemplate).delete(RedisKeyConstant.getUserAuthKey(USER_ID));
-        verify(redisTemplate).delete(RedisKeyConstant.getUserRefreshKey(USER_ID));
+        verify(redisTemplate).delete(RedisKeyConstant.getUserAuthKey(USER_UUID));
+        verify(redisTemplate).delete(RedisKeyConstant.getUserRefreshKey(USER_UUID));
     }
 }

@@ -7,6 +7,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.UUID;
+
 /**
  * Session 撤銷服務
  *
@@ -30,7 +32,7 @@ public class SessionRevoker {
     /**
      * 撤銷指定用戶的所有 session。
      *
-     * <p>刪除 Redis 中的 {@code user:auth:{id}} Hash（Token 版本與狀態快取）與
+     * <p>刪除 Redis 中的 {@code user:auth:{uuid}} Hash（Token 版本與狀態快取）與
      * refresh ZSet（該用戶所有裝置的 Refresh Token），使既有的 Access Token 與
      * Refresh Token 全數立即失效。下次請求時 {@code JwtAuthenticationFilter} 會以
      * DB 最新版本回填快取，舊 Access Token 因版本不符被拒；被清除的 Refresh Token
@@ -42,28 +44,28 @@ public class SessionRevoker {
      * 撤銷形同失效。故當偵測到交易同步進行中時，將清理延遲至 {@code afterCommit} 執行，
      * 確保回填讀到的必定是已提交的新版本；無交易時則立即清理。</p>
      *
-     * @param userId 目標用戶 ID
+     * @param userUuid 目標用戶 UUID
      */
-    public void revokeAllSessions(Long userId) {
+    public void revokeAllSessions(UUID userUuid) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    doRevoke(userId);
+                    doRevoke(userUuid);
                 }
             });
         } else {
-            doRevoke(userId);
+            doRevoke(userUuid);
         }
     }
 
     /**
      * 實際執行 Redis 清理：刪除 auth hash 與 refresh ZSet。
      *
-     * @param userId 目標用戶 ID
+     * @param userUuid 目標用戶 UUID
      */
-    private void doRevoke(Long userId) {
-        redisTemplate.delete(RedisKeyConstant.getUserAuthKey(userId));
-        redisTemplate.delete(RedisKeyConstant.getUserRefreshKey(userId));
+    private void doRevoke(UUID userUuid) {
+        redisTemplate.delete(RedisKeyConstant.getUserAuthKey(userUuid));
+        redisTemplate.delete(RedisKeyConstant.getUserRefreshKey(userUuid));
     }
 }

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
@@ -30,9 +32,9 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
@@ -80,6 +82,13 @@ class AuthControllerTest {
     /** Mock：用戶認證服務（JwtAuthenticationFilter 所需） */
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
+
+    /** 測試用使用者 uuid */
+    private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
     /** 測試用電子信箱 */
     private static final String TEST_EMAIL = "test@example.com";
@@ -282,15 +291,19 @@ class AuthControllerTest {
     @DisplayName("POST /logout → 已登入用戶 → 應回傳 200 並清除 Cookie")
     void logout_authenticatedUser_shouldReturn200AndClearCookie() throws Exception {
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
+                new AuthUser(1L, USER_UUID, Role.USER), null,
+                List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
 
-        doNothing().when(authService).logout(anyLong(), any());
+        doNothing().when(authService).logout(any(UUID.class), any());
 
         mockMvc.perform(post("/api/v1/auth/logout")
+                        .cookie(new Cookie("refreshToken", "some.refresh.token"))
                         .with(authentication(auth)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(header().exists("Set-Cookie"));
+
+        verify(authService).logout(USER_UUID, "some.refresh.token");
     }
 
     // =========================================================================
@@ -652,7 +665,7 @@ class AuthControllerTest {
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(jwtService.getUserUuidFromToken("valid.refresh.token")).thenReturn(USER_UUID);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(null);
 
@@ -674,7 +687,7 @@ class AuthControllerTest {
         HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
         when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(jwtService.getUserUuidFromToken("valid.refresh.token")).thenReturn(USER_UUID);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
@@ -698,12 +711,12 @@ class AuthControllerTest {
         HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
         when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(jwtService.getUserUuidFromToken("valid.refresh.token")).thenReturn(USER_UUID);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
         when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList("v1", "ACTIVE", "USER"));
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString()))
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString()))
                 .thenReturn("new.access.token");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
@@ -726,13 +739,13 @@ class AuthControllerTest {
         HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
         when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(jwtService.getUserUuidFromToken("valid.refresh.token")).thenReturn(USER_UUID);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
         when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList("v1", "ACTIVE", null));
-        when(authService.resolveUserRole(1L)).thenReturn("AUTHOR");
-        when(jwtService.generateAccessToken(eq(1L), eq("AUTHOR"), eq("v1")))
+        when(authService.resolveUserRole(USER_UUID)).thenReturn("AUTHOR");
+        when(jwtService.generateAccessToken(eq(USER_UUID), eq("AUTHOR"), eq("v1")))
                 .thenReturn("new.access.token.author");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
@@ -741,7 +754,7 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.accessToken").value("new.access.token.author"));
 
-        verify(jwtService).generateAccessToken(1L, "AUTHOR", "v1");
+        verify(jwtService).generateAccessToken(USER_UUID, "AUTHOR", "v1");
     }
 
     /**
@@ -757,12 +770,12 @@ class AuthControllerTest {
         HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
 
         when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(jwtService.getUserUuidFromToken("valid.refresh.token")).thenReturn(USER_UUID);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
         when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList(null, "ACTIVE", "USER"));
-        when(jwtService.generateAccessToken(eq(1L), eq("USER"), eq("v1")))
+        when(jwtService.generateAccessToken(eq(USER_UUID), eq("USER"), eq("v1")))
                 .thenReturn("new.access.token.v1default");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
@@ -771,7 +784,7 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.accessToken").value("new.access.token.v1default"));
 
-        verify(jwtService).generateAccessToken(1L, "USER", "v1");
+        verify(jwtService).generateAccessToken(USER_UUID, "USER", "v1");
     }
 
     // =========================================================================

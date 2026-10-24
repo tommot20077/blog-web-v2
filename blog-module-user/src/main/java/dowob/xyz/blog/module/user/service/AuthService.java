@@ -191,7 +191,7 @@ public class AuthService {
                 .or(() -> userRepository.findByUsername(identifier))
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_PASSWORD_ERROR));
 
-        String loginFailKey = RedisKeyConstant.getLoginFailKey(user.getId());
+        String loginFailKey = RedisKeyConstant.getLoginFailKey(user.getUuid());
         String failCountStr = redisTemplate.opsForValue().get(loginFailKey);
         if (failCountStr != null && Integer.parseInt(failCountStr) >= RedisKeyConstant.LOGIN_FAIL_MAX) {
             throw new BusinessException(UserErrorCode.ACCOUNT_LOCKED);
@@ -215,16 +215,18 @@ public class AuthService {
             throw new BusinessException(UserErrorCode.ACCOUNT_SUSPENDED);
         }
 
-        String accessToken = jwtService.generateAccessToken(user.getId(), user.getRole().name(), user.getTokenVersion());
-        String refreshToken = jwtService.generateRefreshToken(user.getId());
+        String accessToken = jwtService.generateAccessToken(user.getUuid(), user.getRole().name(), user.getTokenVersion());
+        String refreshToken = jwtService.generateRefreshToken(user.getUuid());
 
-        String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
+        /** auth hash 以 uuid 為鍵；id 欄位供 JwtAuthenticationFilter 組出 AuthUser（缺 id 的 hash 會被視為 miss） */
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ID, String.valueOf(user.getId()));
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, user.getTokenVersion());
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, user.getStatus().name());
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ROLE, user.getRole().name());
         redisTemplate.expire(authKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
 
-        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());
         redisTemplate.opsForZSet().add(refreshKey, refreshToken, System.currentTimeMillis());
         Long deviceCount = redisTemplate.opsForZSet().zCard(refreshKey);
         if (deviceCount != null && deviceCount > 3) {
@@ -241,11 +243,11 @@ public class AuthService {
      * <p>從 ZSet 中移除指定的 Refresh Token，使該裝置立即失效。
      * 若 refreshToken 為空，刪除整個 ZSet 以登出所有裝置。</p>
      *
-     * @param userId       用戶 ID
+     * @param userUuid     用戶 UUID
      * @param refreshToken 要撤銷的 Refresh Token（可為 null，表示登出所有裝置）
      */
-    public void logout(Long userId, String refreshToken) {
-        String refreshKey = RedisKeyConstant.getUserRefreshKey(userId);
+    public void logout(UUID userUuid, String refreshToken) {
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(userUuid);
         if (refreshToken != null && !refreshToken.isBlank()) {
             redisTemplate.opsForZSet().remove(refreshKey, refreshToken);
         } else {
@@ -490,7 +492,7 @@ public class AuthService {
         user.setTokenVersion(incrementVersion(user.getTokenVersion()));
         userRepository.save(user);
 
-        sessionRevoker.revokeAllSessions(user.getId());
+        sessionRevoker.revokeAllSessions(user.getUuid());
 
         verificationTokenRepository.delete(resetToken);
     }
@@ -501,12 +503,12 @@ public class AuthService {
      * <p>供 {@code /refresh} 於 Redis auth hash 缺少 role 欄位時回退至 DB 取得用戶實際角色，
      * 避免刷新 Access Token 時角色被降級為 USER。</p>
      *
-     * @param userId 用戶 ID
+     * @param userUuid 用戶 UUID
      * @return 角色名稱（如 {@code "AUTHOR"}）
      */
     @Transactional(readOnly = true)
-    public String resolveUserRole(Long userId) {
-        return userRepository.findById(userId)
+    public String resolveUserRole(UUID userUuid) {
+        return userRepository.findByUuid(userUuid)
                 .map(user -> user.getRole().name())
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
     }

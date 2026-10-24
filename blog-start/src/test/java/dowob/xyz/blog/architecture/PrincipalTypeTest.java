@@ -234,9 +234,6 @@ class PrincipalTypeTest {
                     T0B3_PARAM),
             Map.entry("dowob.xyz.blog.module.tag.controller.TagController#unfollowTag[1]",
                     T0B3_PARAM),
-            // AuthController
-            Map.entry("dowob.xyz.blog.module.user.controller.AuthController#logout[0]",
-                    T0B2_PARAM),
             // UserController
             Map.entry("dowob.xyz.blog.module.user.controller.UserController#changePassword[0]",
                     T0B3_PARAM),
