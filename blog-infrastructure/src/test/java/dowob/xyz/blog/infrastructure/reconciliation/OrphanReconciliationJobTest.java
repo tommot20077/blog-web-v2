@@ -461,12 +461,12 @@ class OrphanReconciliationJobTest {
     }
 
     @Test
-    @DisplayName("掃描數少於 50 時比例門檻不啟用（49 筆全為孤兒仍處理）；剛好 50 筆時啟用")
+    @DisplayName("掃描數少於 50 時比例門檻不啟用（49 筆中 48 筆孤兒仍處理）；剛好 50 筆時啟用")
     void run_ratioThreshold_disabledBelowMinimumScanned() {
         StubOrphanReconciliationJob below = new StubOrphanReconciliationJob(redis, registry);
-        populate(below, 49, 49);
+        populate(below, 49, 48); // 98% 孤兒但仍有一筆存在（全部孤兒的情況另有專屬門檻）
         assertThat(below.run()).isEqualTo(Result.COMPLETED);
-        assertThat(below.removed).hasSize(49);
+        assertThat(below.removed).hasSize(48);
 
         StubOrphanReconciliationJob atMinimum = new StubOrphanReconciliationJob(redis, registry);
         populate(atMinimum, 50, 11); // 22%
@@ -554,7 +554,7 @@ class OrphanReconciliationJobTest {
     @DisplayName("孤兒數大於頁大小時，removeOrphans 每次收到的筆數不超過頁大小")
     void run_whenOrphansExceedPageSize_removeOrphansChunksAreBoundedByPageSize() {
         StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry, 3, 100);
-        populate(job, 8, 8);
+        populate(job, 9, 8); // 8 個孤兒 + 1 個存在者（避免觸發「全部都是孤兒」中止）
 
         Result result = job.run();
 
@@ -589,19 +589,21 @@ class OrphanReconciliationJobTest {
     }
 
     @Test
-    @DisplayName("進入修改階段前已超過 TTL 的 80%：不修改、partial、游標不推進")
-    void run_whenOverEightyPercentBeforeModification_skipsModification() {
+    @DisplayName("進入修改階段前已超過 TTL 的 80%：不修改、truncated、游標不推進")
+    void run_whenOverEightyPercentBeforeModification_skipsModificationAndReturnsTruncated() {
         AtomicLong clock = new AtomicLong();
         StubOrphanReconciliationJob job = StubOrphanReconciliationJob.withClock(redis, registry, 2, 100, clock);
-        populate(job, 4, 2);
+        populate(job, 4, 1); // 第一頁 [孤兒, 存在]，避免觸發「全部都是孤兒」中止
         job.beforeFetchHook = call -> clock.set((long) (TTL_NANOS * 0.85));
 
         Result result = job.run();
 
-        assertThat(result).isEqualTo(Result.PARTIAL);
+        assertThat(result).isEqualTo(Result.TRUNCATED);
         assertThat(job.removeCalls).isZero();
         verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
         verify(redis, never()).delete(CURSOR_KEY);
+        assertThat(counter("reconciliation.runs", "module", "stub", "table", "stub_table", "result", "truncated"))
+                .isEqualTo(1.0);
     }
 
     @Test
@@ -614,12 +616,92 @@ class OrphanReconciliationJobTest {
 
         Result result = job.run();
 
-        assertThat(result).isEqualTo(Result.PARTIAL);
+        assertThat(result).isEqualTo(Result.TRUNCATED);
         assertThat(job.removeChunkSizes).containsExactly(2);
         assertThat(counter("reconciliation.orphans_removed", "module", "stub", "table", "stub_table"))
                 .isEqualTo(2.0);
         verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
         verify(redis, never()).delete(CURSOR_KEY);
+    }
+
+    @Test
+    @DisplayName("複查前已超過 TTL 的 80%：不複查、不修改、truncated")
+    void run_whenOverEightyPercentBeforeRecheck_skipsRecheckAndModification() {
+        AtomicLong clock = new AtomicLong();
+        StubOrphanReconciliationJob job = StubOrphanReconciliationJob.withClock(redis, registry, 2, 100, clock);
+        populate(job, 4, 1);
+        job.filterOverride = (call, in) -> {
+            clock.set((long) (TTL_NANOS * 0.85)); // 第一頁的 owner 查詢很慢
+            Set<UUID> result = new java.util.HashSet<>(in);
+            result.retainAll(job.existingInOwner);
+            return result;
+        };
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.TRUNCATED);
+        assertThat(job.filterCalls).isEqualTo(1); // 沒有複查
+        assertThat(job.removeCalls).isZero();
+        verify(valueOps, never()).set(eq(CURSOR_KEY), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("truncated 不會把連續失敗次數歸零（持續變慢時指標看得出來）")
+    void run_whenTruncated_doesNotResetConsecutiveFailures() {
+        AtomicLong clock = new AtomicLong();
+        StubOrphanReconciliationJob job = StubOrphanReconciliationJob.withClock(redis, registry, 2, 100, clock);
+        populate(job, 4, 1);
+        job.filterFailure = new IllegalStateException("owner down");
+        job.run();
+        var gauge = registry.find("reconciliation.consecutive_failures").tags("module", "stub", "table", "stub_table")
+                .gauge();
+        assertThat(gauge.value()).isEqualTo(1.0);
+
+        job.filterFailure = null;
+        job.beforeFetchHook = call -> clock.set((long) (TTL_NANOS * 0.85));
+        assertThat(job.run()).isEqualTo(Result.TRUNCATED);
+
+        assertThat(gauge.value()).isEqualTo(1.0);
+    }
+
+    // ===================================================================================
+    // 小表全部都是孤兒（scanned < 50 時比例門檻不啟用的缺口）
+    // ===================================================================================
+
+    @Test
+    @DisplayName("本次被參照的 UUID 全部是孤兒且 scanned >= 2：中止（2、8、49 筆）")
+    void run_whenAllReferencedAreOrphansAndScannedAtLeastTwo_aborts() {
+        for (int total : new int[]{2, 8, 49}) {
+            StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+            populate(job, total, total);
+
+            Result result = job.run();
+
+            assertThat(result).as("scanned=%d", total).isEqualTo(Result.ABORTED);
+            assertThat(job.removeCalls).as("scanned=%d", total).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("殘餘風險：只有 1 筆且是孤兒時無法分辨，照常處理")
+    void run_whenSingleReferencedIsOrphan_isProcessedAsKnownResidualRisk() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 1, 1);
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.COMPLETED);
+        assertThat(job.removed).containsExactly(uuid(1));
+    }
+
+    @Test
+    @DisplayName("小表只有部分是孤兒（2 筆中 1 筆）照常處理")
+    void run_whenSmallTableHasSomeExistingOwners_processesOrphans() {
+        StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry);
+        populate(job, 2, 1);
+
+        assertThat(job.run()).isEqualTo(Result.COMPLETED);
+        assertThat(job.removed).containsExactly(uuid(1));
     }
 
     // ===================================================================================
@@ -631,7 +713,7 @@ class OrphanReconciliationJobTest {
     @SuppressWarnings("unchecked")
     void run_whenRemoveOrphansFailsMidway_keepsEarlierRemovalsAndDoesNotAdvanceCursor() {
         StubOrphanReconciliationJob job = new StubOrphanReconciliationJob(redis, registry, 2, 100);
-        populate(job, 5, 5);
+        populate(job, 6, 5); // 5 個孤兒（chunk 2、2、1）+ 1 個存在者
         job.removeFailure = new IllegalStateException("db down");
         job.failOnRemoveCall = 2;
 

@@ -50,7 +50,8 @@ import java.util.function.LongSupplier;
  *   <li>逐頁處理，且<b>單次執行頁數有上限</b>（{@link #MAX_PAGES_PER_RUN}）：超過即結束本次（result=partial），
  *       游標存入 Redis，下次從游標續跑；掃完整張表後清除游標。避免長掃描長時間佔住排程執行緒（PERF-16）</li>
  *   <li><b>時間預算</b>（以單調時鐘，相對於鎖 TTL）：掃描超過 TTL 的 40% 即收尾為 partial；
- *       修改階段進入前與每個 chunk 前若已超過 TTL 的 80%，不再修改剩餘部分（partial，游標不推進），
+ *       複查與修改階段的每個 chunk 前若已超過 TTL 的 80%，不再複查／修改剩餘部分
+ *       （result=truncated，游標不推進；truncated 不會重置連續失敗次數，持續變慢時指標才看得出來），
  *       避免鎖在修改途中到期而與下一個實例重疊</li>
  *   <li>fail-safe：<b>先掃描、後修改</b>。掃描階段（fetch／owner facade）任何例外都使整次中止、
  *       完全不呼叫 {@code removeOrphans}、游標不推進，result=failed——owner 暫時不可用時絕不能把「查不到」
@@ -59,14 +60,18 @@ import java.util.function.LongSupplier;
  *       只能從結果的規模辨識。以本次掃描到的不重複 UUID 計，孤兒數超過 {@link #maxOrphansPerRun()}
  *       （預設 {@link #MAX_ORPHANS_PER_RUN}），或掃描數達 {@link #MIN_SCANNED_FOR_RATIO} 後孤兒占比超過
  *       {@link #maxOrphanRatio()}（預設 {@link #MAX_ORPHAN_RATIO}），即完全不修改、游標不推進，
- *       並以一行 error log 呈報。真的有大量孤兒時須由人調查後處理，而非讓排程自動大量刪除</li>
+ *       並以一行 error log 呈報。真的有大量孤兒時須由人調查後處理，而非讓排程自動大量刪除。
+ *       另有一條針對小表的規則：本次被參照的 UUID <b>全部</b>都是孤兒且掃描數 &gt;=
+ *       {@link #MIN_SCANNED_FOR_ALL_ORPHANS} 也中止。<b>代價</b>：小表若合法地全部是孤兒（例如最後一個
+ *       owner 被刪除），每次執行都會持續 aborted，需要人工處理（代價是告警，而非資料遺失）；
+ *       掃描數只有 1 筆時無法分辨，為接受的殘餘風險</li>
  *   <li>契約檢查：{@code filterExisting} 回傳 null 或含輸入以外的元素，視為實作錯誤，整次 failed</li>
  *   <li>修改前複查（TOCTOU）：進入修改階段前，對疑似孤兒再呼叫一次 {@code filterExisting}，
  *       只處理兩次都不存在者</li>
  *   <li>指標：{@code reconciliation.orphans_removed{module,table}}、
- *       {@code reconciliation.runs{module,table,result}}（result：completed／partial／skipped／failed／aborted）、
+ *       {@code reconciliation.runs{module,table,result}}（result：completed／partial／truncated／skipped／failed／aborted）、
  *       gauge {@code reconciliation.consecutive_failures{module,table}}（本實例連續 failed／aborted 的次數，
- *       成功或部分完成即歸零，skipped 不影響；實例重啟後歸零）</li>
+ *       completed 或 partial 即歸零，skipped 與 truncated 不影響；實例重啟後歸零）</li>
  *   <li>日誌：每次執行輸出恰好一行摘要（含 consecutiveFailures）；failed 時另有一行 warn 帶例外細節，
  *       aborted 時摘要本身為 error 層級並帶出 found、scanned 與門檻</li>
  * </ul>
@@ -99,6 +104,15 @@ public abstract class OrphanReconciliationJob {
 
     /** 比例門檻啟用所需的最少掃描數；樣本太小時比例沒有意義，只受絕對上限約束 */
     public static final int MIN_SCANNED_FOR_RATIO = 50;
+
+    /**
+     * 「本次被參照的 UUID 全部都是孤兒」中止規則啟用所需的最少掃描數。
+     *
+     * <p>補足 {@link #MIN_SCANNED_FOR_RATIO} 之前比例門檻不啟用、又遠低於絕對上限的小表缺口：
+     * owner 查詢異常回空集合時，小表會被整個清掉。掃描數只有 1 筆時無法分辨「真的是孤兒」與「查詢異常」，
+     * 為接受的殘餘風險。</p>
+     */
+    public static final int MIN_SCANNED_FOR_ALL_ORPHANS = 2;
 
     /** 分散式鎖 TTL（秒）；須大於單次執行（至多 {@link #MAX_PAGES_PER_RUN} 頁）的合理耗時 */
     public static final long LOCK_TTL_SECONDS = 600L;
@@ -195,12 +209,14 @@ public abstract class OrphanReconciliationJob {
     public enum Result {
         /** 掃完整張表 */
         COMPLETED,
-        /** 達到頁數上限或時間預算，游標已保存（或修改被截斷、游標未推進），下次續跑 */
+        /** 達到頁數上限或掃描時間預算，游標已保存，下次續跑 */
         PARTIAL,
         /** 未取得分散式鎖，未處理任何資料 */
         SKIPPED,
         /** 掃描或移除過程發生例外；掃描階段失敗時零修改 */
         FAILED,
+        /** 修改階段因時間預算被截斷（未完成、游標未推進）；不重置連續失敗次數 */
+        TRUNCATED,
         /** 孤兒數超過安全門檻，疑似 owner 查詢異常，完全未修改 */
         ABORTED;
 
@@ -391,11 +407,11 @@ public abstract class OrphanReconciliationJob {
         }
 
         // 修改前複查（TOCTOU）：只處理兩次都不存在者
-        List<UUID> confirmed = recheck(suspected);
+        List<UUID> confirmed = recheck(suspected, stats);
 
         // 修改階段：掃描已全部成功
-        boolean truncated = false;
-        for (int from = 0; from < confirmed.size(); from += pageSize) {
+        boolean truncated = stats.truncated;
+        for (int from = 0; !truncated && from < confirmed.size(); from += pageSize) {
             if (elapsedNanos(stats) > modifyBudgetNanos) {
                 truncated = true;
                 break;
@@ -405,7 +421,7 @@ public abstract class OrphanReconciliationJob {
         }
 
         if (truncated) {
-            return Result.PARTIAL; // 修改未完成：游標不推進，下次重掃
+            return Result.TRUNCATED; // 複查／修改未完成：游標不推進，下次重掃
         }
         if (finished) {
             redis.delete(cursorKey);
@@ -427,7 +443,8 @@ public abstract class OrphanReconciliationJob {
         boolean overAbsolute = stats.orphansFound > maxOrphans;
         boolean overRatio = stats.scanned >= MIN_SCANNED_FOR_RATIO
                 && (double) stats.orphansFound / stats.scanned > maxRatio;
-        if (overAbsolute || overRatio) {
+        boolean allOrphans = stats.scanned >= MIN_SCANNED_FOR_ALL_ORPHANS && stats.orphansFound == stats.scanned;
+        if (overAbsolute || overRatio || allOrphans) {
             stats.maxOrphans = maxOrphans;
             stats.maxRatio = maxRatio;
             return true;
@@ -438,13 +455,20 @@ public abstract class OrphanReconciliationJob {
     /**
      * 對疑似孤兒再查一次 owner，排除掃描期間才出現的 owner 資料。
      *
+     * <p>複查也受修改預算約束：每批複查前若已超過預算，標記 {@code stats.truncated} 並停止。</p>
+     *
      * @param suspected 第一次判定不存在者
-     * @return 兩次都不存在者（保持原順序）
+     * @param stats     本次統計
+     * @return 兩次都不存在者（保持原順序）；被截斷時內容不完整，呼叫端不得使用
      */
-    private List<UUID> recheck(Set<UUID> suspected) {
+    private List<UUID> recheck(Set<UUID> suspected, RunStats stats) {
         List<UUID> all = new ArrayList<>(suspected);
         List<UUID> confirmed = new ArrayList<>();
         for (int from = 0; from < all.size(); from += pageSize) {
+            if (elapsedNanos(stats) > modifyBudgetNanos) {
+                stats.truncated = true;
+                return confirmed;
+            }
             Set<UUID> chunk = new LinkedHashSet<>(all.subList(from, Math.min(from + pageSize, all.size())));
             Set<UUID> existingNow = checkedFilterExisting(chunk);
             for (UUID uuid : chunk) {
@@ -534,7 +558,7 @@ public abstract class OrphanReconciliationJob {
         int failures;
         if (result == Result.FAILED || result == Result.ABORTED) {
             failures = consecutiveFailures.incrementAndGet();
-        } else if (result == Result.SKIPPED) {
+        } else if (result == Result.SKIPPED || result == Result.TRUNCATED) {
             failures = consecutiveFailures.get();
         } else {
             consecutiveFailures.set(0);
@@ -546,10 +570,11 @@ public abstract class OrphanReconciliationJob {
 
         if (result == Result.ABORTED) {
             log.error("孤兒校正摘要 module={} table={} result={} pages={} scanned={} orphansFound={} orphansRemoved={} "
-                            + "consecutiveFailures={} maxOrphans={} maxRatio={} minScannedForRatio={} "
+                            + "consecutiveFailures={} maxOrphans={} maxRatio={} minScannedForRatio={} minScannedForAllOrphans={} "
                             + "（孤兒規模超過安全門檻，疑似 owner 查詢異常，未做任何修改，請人工調查）",
                     module(), table(), result.tag(), stats.pages, stats.scanned, stats.orphansFound,
-                    stats.orphansRemoved, failures, stats.maxOrphans, stats.maxRatio, MIN_SCANNED_FOR_RATIO);
+                    stats.orphansRemoved, failures, stats.maxOrphans, stats.maxRatio, MIN_SCANNED_FOR_RATIO,
+                    MIN_SCANNED_FOR_ALL_ORPHANS);
         } else {
             log.info("孤兒校正摘要 module={} table={} result={} pages={} scanned={} orphansFound={} "
                             + "orphansRemoved={} consecutiveFailures={}",
@@ -568,6 +593,7 @@ public abstract class OrphanReconciliationJob {
         long orphansRemoved;
         int maxOrphans;
         double maxRatio;
+        boolean truncated;
 
         RunStats(long startNanos) {
             this.startNanos = startNanos;
