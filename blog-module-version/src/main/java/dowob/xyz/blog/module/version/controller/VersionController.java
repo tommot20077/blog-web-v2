@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.version.controller;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.model.dto.request.CreateManualSnapshotRequest;
@@ -68,12 +69,12 @@ public class VersionController {
     @Operation(summary = "版本列表（分頁）")
     public ApiResponse<PageResult<VersionSummaryResponse>> list(
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long currentUserId,
+            @AuthenticationPrincipal AuthUser user,
             @RequestParam(required = false) String type,
             PageQuery pageQuery) {
         boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(
-            versioningService.listByArticle(articleUuid, type, pageQuery.page(), pageQuery.sizeOrDefault(20), currentUserId, isAdmin));
+            versioningService.listByArticle(articleUuid, type, pageQuery.page(), pageQuery.sizeOrDefault(20), user.id(), isAdmin));
     }
 
     /**
@@ -86,11 +87,11 @@ public class VersionController {
     public ApiResponse<VersionDetailResponse> getDetail(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
-            @AuthenticationPrincipal Long currentUserId) {
+            @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         return ApiResponse.success(
-            versioningService.getDetail(versionUuid, currentUserId, isAdmin));
+            versioningService.getDetail(versionUuid, user.id(), isAdmin));
     }
 
     /**
@@ -105,10 +106,10 @@ public class VersionController {
     @Operation(summary = "建立手動快照")
     public ApiResponse<VersionDetailResponse> createManual(
             @PathVariable UUID articleUuid,
-            @AuthenticationPrincipal Long currentUserId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody(required = false) CreateManualSnapshotRequest req) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        Long articleId = versioningService.findArticleIdByUuidOrThrow(articleUuid, currentUserId, isAdmin);
+        Long articleId = versioningService.findArticleIdByUuidOrThrow(articleUuid, user.id(), isAdmin);
         String note = req != null ? req.getNote() : null;
         ArticleVersion v = versioningService.recordManualSnapshot(articleId, note);
         return ApiResponse.success(versioningService.toDetailResponse(v));
@@ -131,10 +132,10 @@ public class VersionController {
     public ApiResponse<Void> restore(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
-            @AuthenticationPrincipal Long currentUserId) {
+            @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
-        versioningService.restore(versionUuid, currentUserId, isAdmin);
+        versioningService.restore(versionUuid, user.id(), isAdmin);
         return ApiResponse.success();
     }
 
@@ -151,10 +152,10 @@ public class VersionController {
     public ApiResponse<VersionDetailResponse> promote(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
-            @AuthenticationPrincipal Long currentUserId) {
+            @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
-        ArticleVersion v = versioningService.promote(versionUuid, currentUserId, isAdmin);
+        ArticleVersion v = versioningService.promote(versionUuid, user.id(), isAdmin);
         return ApiResponse.success(versioningService.toDetailResponse(v));
     }
 
@@ -172,10 +173,10 @@ public class VersionController {
     public ApiResponse<Void> delete(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
-            @AuthenticationPrincipal Long currentUserId) {
+            @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
-        versioningService.delete(versionUuid, currentUserId, isAdmin);
+        versioningService.delete(versionUuid, user.id(), isAdmin);
         return ApiResponse.success();
     }
 

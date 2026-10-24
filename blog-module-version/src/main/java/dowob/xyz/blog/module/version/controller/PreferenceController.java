@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.version.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.model.dto.request.UpdatePreferenceRequest;
 import dowob.xyz.blog.module.version.model.dto.response.EffectiveConfigResponse;
@@ -49,8 +50,8 @@ public class PreferenceController {
     @GetMapping
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "取得 effective version config")
-    public ApiResponse<EffectiveConfigResponse> get(@AuthenticationPrincipal Long userId) {
-        return ApiResponse.success(preferenceResolver.getEffectiveResponse(userId));
+    public ApiResponse<EffectiveConfigResponse> get(@AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(preferenceResolver.getEffectiveResponse(user.id()));
     }
 
     /**
@@ -61,9 +62,9 @@ public class PreferenceController {
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "更新 user override（partial）")
     public ApiResponse<EffectiveConfigResponse> update(
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdatePreferenceRequest req) {
-        return ApiResponse.success(preferenceResolver.updatePreferences(userId, req));
+        return ApiResponse.success(preferenceResolver.updatePreferences(user.id(), req));
     }
 
     /**
@@ -74,10 +75,10 @@ public class PreferenceController {
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "重置某 key 為系統預設")
     public ApiResponse<EffectiveConfigResponse> reset(
-            @AuthenticationPrincipal Long userId,
+            @AuthenticationPrincipal AuthUser user,
             @PathVariable String key) {
         String fullKey = mapKey(key);
-        return ApiResponse.success(preferenceResolver.resetKey(userId, fullKey));
+        return ApiResponse.success(preferenceResolver.resetKey(user.id(), fullKey));
     }
 
     /**
