@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Queue;
@@ -68,7 +69,7 @@ class ArticleRabbitMqConfigTest {
     @Test
     @DisplayName("ROUTING_KEY_PUBLISHED 仍存在（producer 發布事件、search/recommend 模組訂閱皆需要）")
     void routingKeyPublished_stillExists() {
-        assertThat(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED).isEqualTo("article.published");
+        assertThat(ArticleEventContract.ROUTING_KEY_PUBLISHED).isEqualTo("article.published");
     }
 
     @Test

@@ -1,13 +1,11 @@
-package dowob.xyz.blog.module.article.event;
-
-import dowob.xyz.blog.infrastructure.event.TagInfo;
+package dowob.xyz.blog.infrastructure.event;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * 文章更新事件
+ * 文章更新事件（跨模組共用契約）
  *
  * <p>
  * 已發布文章的內容被修改後，透過 RabbitMQ 廣播此事件，
@@ -15,8 +13,16 @@ import java.util.UUID;
  * 僅在文章狀態為 PUBLISHED 時才發送。
  * </p>
  *
+ * <p><b>過渡欄位（只增不減）</b>：{@code authorId} 保留，現有 consumer 仍讀取；
+ * 發送端同時填入 {@code authorUuid}。Long 欄位將於 M6（article 階段）移除。</p>
+ *
+ * <p>Backward compatibility：升級前的 in-flight 舊 message 沒有 {@code eventId}／{@code authorUuid}，
+ * Jackson 反序列化為 null，consumer 須自行防禦。</p>
+ *
+ * @param eventId        事件 dedup key（producer 每次 publish 時 random gen；舊訊息為 null）
  * @param articleUuid    文章公開 UUID
- * @param authorId       作者資料庫主鍵
+ * @param authorId       作者資料庫主鍵（過渡欄位，將於 M6 移除；search／recommend 目前仍讀取）
+ * @param authorUuid     作者公開 UUID（nullable — 舊 message 或 uuid 查詢失敗時為 null）
  * @param title          文章標題
  * @param publishedAt    發布時間
  * @param slug           文章 URL slug
@@ -27,11 +33,13 @@ import java.util.UUID;
  * @param tags           文章標籤列表
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0（由 article 模組搬到 blog-infrastructure；新增 eventId、authorUuid）
  */
 public record ArticleUpdatedEvent(
+        UUID eventId,
         UUID articleUuid,
         Long authorId,
+        UUID authorUuid,
         String title,
         LocalDateTime publishedAt,
         String slug,

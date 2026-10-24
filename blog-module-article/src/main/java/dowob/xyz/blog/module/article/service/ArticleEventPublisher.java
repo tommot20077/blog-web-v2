@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.service;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -10,7 +11,6 @@ import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
-import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
 import dowob.xyz.blog.module.article.facade.ArticleDataAssembler;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
@@ -95,8 +95,10 @@ public class ArticleEventPublisher {
         try {
             List<TagInfo> tags = articleMapper.findTagsByArticleUuid(article.getUuid());
             ArticleUpdatedEvent event = new ArticleUpdatedEvent(
+                    UUID.randomUUID(),
                     article.getUuid(),
                     article.getAuthorId(),
+                    resolveAuthorUuid(article.getAuthorId()),
                     article.getTitle(),
                     article.getPublishedAt(),
                     article.getSlug(),
@@ -107,7 +109,7 @@ public class ArticleEventPublisher {
                     tags);
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
-                    ArticleRabbitMqConfig.ROUTING_KEY_UPDATED,
+                    ArticleEventContract.ROUTING_KEY_UPDATED,
                     event);
         } catch (Exception e) {
             log.warn("ArticleUpdatedEvent MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
@@ -127,8 +129,10 @@ public class ArticleEventPublisher {
     public void publishPublished(Article article, List<TagInfo> tags) {
         try {
             ArticlePublishedEvent event = new ArticlePublishedEvent(
+                    UUID.randomUUID(),
                     article.getUuid(),
                     article.getAuthorId(),
+                    resolveAuthorUuid(article.getAuthorId()),
                     article.getTitle(),
                     article.getPublishedAt(),
                     article.getSlug(),
@@ -139,7 +143,7 @@ public class ArticleEventPublisher {
                     tags);
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
-                    ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED,
+                    ArticleEventContract.ROUTING_KEY_PUBLISHED,
                     event);
         } catch (Exception e) {
             log.warn("ArticlePublishedEvent MQ 發送失敗（best-effort）: {}", e.getMessage(), e);

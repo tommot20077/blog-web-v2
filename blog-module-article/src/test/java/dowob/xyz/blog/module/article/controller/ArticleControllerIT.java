@@ -1804,7 +1804,7 @@ class ArticleControllerIT {
         /** ES 索引由 published 事件重建（下架時移除、重新發布時重新建立） */
         verify(rabbitTemplate, times(2)).convertAndSend(
                 eq(ArticleEventContract.EXCHANGE),
-                eq(ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED),
+                eq(ArticleEventContract.ROUTING_KEY_PUBLISHED),
                 any(Object.class));
     }
 
