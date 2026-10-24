@@ -17,7 +17,10 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -87,5 +90,25 @@ public class SeriesFacadeImpl implements SeriesFacade {
                 .collect(Collectors.toMap(
                         SeriesMapper.SeriesBasicRow::seriesId,
                         row -> new SeriesBasicInfo(row.seriesUuid(), row.seriesTitle())));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>輸入無上界，故去重後經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生
+     * {@code IN ()}。結果為集合聯集，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Set<UUID> filterExistingUuids(Collection<UUID> uuids) {
+        if (uuids == null) {
+            return Set.of();
+        }
+        List<UUID> distinct = uuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        return BatchedQuery.queryInBatches(distinct, seriesMapper::findExistingUuidsIn).stream()
+                .map(UUID::fromString)
+                .collect(Collectors.toSet());
     }
 }

@@ -615,4 +615,26 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 .collect(Collectors.toSet());
         return candidateIds.stream().filter(readable::contains).toList();
     }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>不分狀態</b>：SQL 不篩 {@code status}，草稿也算存在，與
+     * {@link #filterPublishedUuids(Collection)} 只認 PUBLISHED 不同。輸入無上界，
+     * 故去重後經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
+     * 結果為集合聯集，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Set<UUID> filterExistingUuids(Collection<UUID> uuids) {
+        if (uuids == null) {
+            return Set.of();
+        }
+        List<UUID> distinct = uuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        return BatchedQuery.queryInBatches(distinct, articleMapper::findExistingUuidsIn).stream()
+                .map(UUID::fromString)
+                .collect(Collectors.toSet());
+    }
 }

@@ -6,6 +6,8 @@ import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * Series 跨模組 read facade。
@@ -33,4 +35,17 @@ public interface SeriesFacade {
      * @return series 主鍵 → 基本資訊
      */
     Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(Collection<Long> seriesIds);
+
+    /**
+     * 篩出 uuids 中「仍存在」的系列 UUID。
+     *
+     * <p>系列沒有狀態欄位，存在即回傳；被刪除（查無此列）者不會出現在結果中。
+     * 供其他模組的每日孤兒校正排程判斷「所屬系列是否已刪除」。</p>
+     *
+     * <p>實作端會自行去重並經 {@code BatchedQuery} 切批，caller 可一次傳入任意數量。</p>
+     *
+     * @param uuids 待查證的系列公開 UUID；null 或空集合回傳空集合（不查 DB）；null 元素會被忽略
+     * @return 其中仍存在於 series 表的 UUID 集合
+     */
+    Set<UUID> filterExistingUuids(Collection<UUID> uuids);
 }
