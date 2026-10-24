@@ -1,4 +1,4 @@
-package dowob.xyz.blog.architecture.fixture.eventcontract.alpha.event;
+package dowob.xyz.blog.architecture.fixture.eventcontract.modules.alpha.event;
 
 import java.util.UUID;
 

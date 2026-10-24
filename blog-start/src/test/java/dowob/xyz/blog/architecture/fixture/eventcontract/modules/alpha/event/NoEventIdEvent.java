@@ -1,4 +1,4 @@
-package dowob.xyz.blog.architecture.fixture.eventcontract.alpha.event;
+package dowob.xyz.blog.architecture.fixture.eventcontract.modules.alpha.event;
 
 /**
  * EventContractTest 規則 (a) 的反向驗證 fixture——<b>故意違規</b>：事件缺少 {@code UUID eventId}。
