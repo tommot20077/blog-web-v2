@@ -520,4 +520,21 @@ public interface ArticleMapper {
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")
     List<String> findPublishedUuidsIn(@Param("list") List<UUID> uuids);
+
+    /**
+     * 在給定的 UUID 中篩出「目前仍存在」的文章，<b>不分狀態</b>。
+     *
+     * <p>與 {@link #findPublishedUuidsIn(List)} 的差別：本查詢不篩 {@code status}，
+     * DRAFT／PENDING／REJECTED／PUBLISHED 皆回傳。供其他模組的孤兒校正排程判斷
+     * 「文章是否已被刪除」。回傳型別採 {@code String}（{@code uuid::text}），由 caller 轉回 {@link UUID}。</p>
+     *
+     * @param uuids 待查證的文章公開 UUID（caller 須保證非空，避免 {@code IN ()} 語法錯誤）
+     * @return 其中仍存在的文章 UUID 字串列表
+     */
+    @Select("<script>" +
+            "SELECT uuid::text AS uuid FROM articles " +
+            "WHERE uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<String> findExistingUuidsIn(@Param("list") List<UUID> uuids);
 }

@@ -112,4 +112,20 @@ public interface SeriesMapper {
      * @param seriesTitle series 標題
      */
     record SeriesBasicRow(Long seriesId, java.util.UUID seriesUuid, String seriesTitle) {}
+
+    /**
+     * 在給定的 UUID 中篩出「目前仍存在」的 series。
+     *
+     * <p>供孤兒校正排程判斷系列是否已被刪除。回傳型別採 {@code String}（{@code uuid::text}），
+     * 由 caller 轉回 {@link java.util.UUID}。</p>
+     *
+     * @param uuids 待查證的 series 公開 UUID（caller 須保證非空，避免 {@code IN ()} 語法錯誤）
+     * @return 其中仍存在的 series UUID 字串列表
+     */
+    @Select("<script>" +
+            "SELECT uuid::text AS uuid FROM series " +
+            "WHERE uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<String> findExistingUuidsIn(@Param("list") List<java.util.UUID> uuids);
 }
