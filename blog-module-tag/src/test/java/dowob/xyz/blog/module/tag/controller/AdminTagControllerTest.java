@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.tag.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
 import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
@@ -92,7 +93,7 @@ class AdminTagControllerTest {
         Role.ADMIN.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(1L, null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(1L, new UUID(0L, 1L), Role.ADMIN), null, authorities);
         return authentication(auth);
     }
 
@@ -102,7 +103,7 @@ class AdminTagControllerTest {
         Role.USER.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(2L, null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(2L, new UUID(0L, 2L), Role.USER), null, authorities);
         return authentication(auth);
     }
 

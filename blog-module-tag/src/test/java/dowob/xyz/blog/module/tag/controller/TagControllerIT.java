@@ -1,6 +1,8 @@
 package dowob.xyz.blog.module.tag.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.tag.TestTagApplication;
@@ -167,11 +169,11 @@ class TagControllerIT {
      * 建立模擬認證物件
      *
      * <p>
-     * 使用 {@link UsernamePasswordAuthenticationToken} 以 {@code Long} 型別的 userId 作為 principal，
+     * 使用 {@link UsernamePasswordAuthenticationToken} 以 {@link AuthUser}（id 為 userId、uuid 為固定測試 UUID）作為 principal，
      * 並注入角色與權限作為 {@link org.springframework.security.core.GrantedAuthority}。
      * </p>
      *
-     * @param userId      使用者 ID（Long 型別，對應 {@code @AuthenticationPrincipal Long userId}）
+     * @param userId      使用者 ID（對應 {@code AuthUser#id()}）
      * @param role        角色名稱（不含 ROLE_ 前綴，例如 "USER"、"ADMIN"）
      * @param permissions 額外的權限名稱（例如 "SYSTEM_CONFIG"）
      * @return 認證物件
@@ -182,7 +184,7 @@ class TagControllerIT {
         for (String perm : permissions) {
             authorities.add(new SimpleGrantedAuthority(perm));
         }
-        return new UsernamePasswordAuthenticationToken(userId, null, authorities);
+        return new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), Role.valueOf(role)), null, authorities);
     }
 
     @Test
