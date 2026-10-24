@@ -10,7 +10,6 @@ import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
-import dowob.xyz.blog.module.article.facade.ArticleDataAssembler;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import org.junit.jupiter.api.DisplayName;
@@ -42,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -66,7 +66,7 @@ class ArticleEventPublisherTest {
     private ArticleMapper articleMapper;
 
     @Mock
-    private ArticleDataAssembler articleDataAssembler;
+    private ArticleIdentityResolver identityResolver;
 
     @InjectMocks
     private ArticleEventPublisher publisher;
@@ -83,7 +83,7 @@ class ArticleEventPublisherTest {
             article.setUuid(UUID.randomUUID());
             article.setAuthorId(1L);
             UUID authorUuid = UUID.randomUUID();
-            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
 
             publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.SAVED);
 
@@ -109,7 +109,7 @@ class ArticleEventPublisherTest {
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
             article.setAuthorId(1L);
-            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
 
             publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.PUBLISHED);
 
@@ -150,7 +150,7 @@ class ArticleEventPublisherTest {
                     .thenReturn(List.of(new TagInfo(UUID.randomUUID(), "Java", "java")));
             when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
             when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
-            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
 
             publisher.publishUpdated(article);
 
@@ -173,7 +173,7 @@ class ArticleEventPublisherTest {
             UUID authorUuid = UUID.randomUUID();
             when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
             when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
-            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
 
             publisher.publishPublished(article, List.of());
 
@@ -194,7 +194,7 @@ class ArticleEventPublisherTest {
             Article article = publishedArticle();
             when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
             when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
-            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
 
             publisher.publishPublished(article, List.of());
 
@@ -225,6 +225,118 @@ class ArticleEventPublisherTest {
             assertThat(captor.getValue().eventId()).isNotNull();
             assertThat(captor.getValue().articleId()).isEqualTo(article.getUuid());
             assertThat(captor.getValue().tagIds()).containsExactly(tagId);
+        }
+    }
+
+    @Nested
+    @DisplayName("uuid 過渡欄位的查詢次數與失敗處理")
+    class IdentityResolution {
+
+        private Article publishedArticle() {
+            Article article = new Article();
+            article.setId(100L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(1L);
+            article.setContent("內容");
+            return article;
+        }
+
+        private List<String> warnMessagesWhile(Runnable action) {
+            Logger logger = (Logger) LogManager.getLogger(ArticleEventPublisher.class);
+            Level original = logger.getLevel();
+            logger.setLevel(Level.WARN);
+            CapturingAppender appender = attachAppender();
+            try {
+                action.run();
+                return appender.events.stream()
+                        .filter(e -> e.getLevel() == Level.WARN)
+                        .map(e -> e.getMessage().getFormattedMessage())
+                        .toList();
+            } finally {
+                detachAppender(appender);
+                logger.setLevel(original);
+            }
+        }
+
+        @Test
+        @DisplayName("publishUpdated：authorUuid 查詢失敗不得阻擋事件發送（欄位為 null），warn 帶事件類型與 articleUuid")
+        void publishUpdated_whenUuidLookupFails_shouldStillPublishAndWarnWithContext() {
+            Article article = publishedArticle();
+            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
+            when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
+
+            List<String> warns = warnMessagesWhile(() -> publisher.publishUpdated(article));
+
+            ArgumentCaptor<ArticleUpdatedEvent> captor = ArgumentCaptor.forClass(ArticleUpdatedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_UPDATED), captor.capture());
+            assertThat(captor.getValue().authorUuid()).isNull();
+            assertThat(captor.getValue().authorId()).isEqualTo(1L);
+            assertThat(warns).anySatisfy(m -> assertThat(m)
+                    .contains("ArticleUpdatedEvent").contains(article.getUuid().toString()));
+        }
+
+        @Test
+        @DisplayName("publishDeleted：series 查詢失敗的 warn 帶事件類型與 articleUuid")
+        void publishDeleted_whenSeriesLookupFails_warnShouldCarryContext() {
+            Article article = publishedArticle();
+            when(identityResolver.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
+
+            List<String> warns = warnMessagesWhile(() -> publisher.publishDeleted(article, 200L, List.of(), List.of()));
+
+            assertThat(warns).anySatisfy(m -> assertThat(m)
+                    .contains("ArticleDeletedEvent").contains(article.getUuid().toString()));
+        }
+
+        @Test
+        @DisplayName("publishUpdated：作者查詢恰 1 次，不查 series")
+        void publishUpdated_resolvesAuthorExactlyOnce() {
+            Article article = publishedArticle();
+            publisher.publishUpdated(article);
+
+            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
+            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
+        }
+
+        @Test
+        @DisplayName("publishPublished：作者查詢恰 1 次，不查 series")
+        void publishPublished_resolvesAuthorExactlyOnce() {
+            Article article = publishedArticle();
+            publisher.publishPublished(article, List.of());
+
+            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
+            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
+        }
+
+        @Test
+        @DisplayName("publishContentChanged：作者查詢恰 1 次，不查 series")
+        void publishContentChanged_resolvesAuthorExactlyOnce() {
+            Article article = publishedArticle();
+            publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.SAVED);
+
+            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
+            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
+        }
+
+        @Test
+        @DisplayName("publishDeleted（有系列）：作者 1 次 ＋ 系列 1 次")
+        void publishDeleted_withSeries_resolvesAuthorOnceAndSeriesOnce() {
+            Article article = publishedArticle();
+            publisher.publishDeleted(article, 200L, List.of(), List.of());
+
+            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
+            verify(identityResolver, times(1)).resolveSeriesUuids(anyCollection());
+        }
+
+        @Test
+        @DisplayName("publishDeleted（無系列）：作者 1 次，系列 0 次")
+        void publishDeleted_withoutSeries_resolvesAuthorOnceAndNoSeries() {
+            Article article = publishedArticle();
+            publisher.publishDeleted(article, null, List.of(), List.of());
+
+            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
+            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
         }
     }
 
@@ -293,8 +405,8 @@ class ArticleEventPublisherTest {
             article.setAuthorId(1L);
             UUID authorUuid = UUID.randomUUID();
             UUID seriesUuid = UUID.randomUUID();
-            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
-            when(articleDataAssembler.resolveSeriesUuids(anyCollection())).thenReturn(Map.of(200L, seriesUuid));
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+            when(identityResolver.resolveSeriesUuids(anyCollection())).thenReturn(Map.of(200L, seriesUuid));
 
             publisher.publishDeleted(article, 200L, List.of(), List.of());
 
@@ -322,7 +434,7 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             assertThat(captor.getValue().seriesUuid()).isNull();
-            verify(articleDataAssembler, never()).resolveSeriesUuids(anyCollection());
+            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
         }
 
         @Test
@@ -332,8 +444,8 @@ class ArticleEventPublisherTest {
             article.setId(30L);
             article.setUuid(UUID.randomUUID());
             article.setAuthorId(1L);
-            when(articleDataAssembler.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
-            when(articleDataAssembler.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
+            when(identityResolver.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
 
             publisher.publishDeleted(article, 200L, List.of(), List.of());
 

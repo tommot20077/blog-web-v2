@@ -10,9 +10,7 @@ import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
-import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
-import dowob.xyz.blog.module.article.facade.ArticleDataAssembler;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import lombok.RequiredArgsConstructor;
@@ -46,10 +44,10 @@ public class ArticleEventPublisher {
     private final ArticleMapper articleMapper;
 
     /**
-     * 作者／series uuid 的批次轉換元件（T0a-6 建立；內部以 ObjectProvider 延遲取得 SeriesFacade，
-     * 避開 SeriesFacadeImpl → ArticleFacade 的 bean 循環，本類別不得直接注入 SeriesFacade）
+     * 作者／series uuid 的批次轉換元件（與 ArticleDataAssembler 共用；內部以 ObjectProvider 延遲取得
+     * SeriesFacade，避開 SeriesFacadeImpl → ArticleFacade 的 bean 循環，本類別不得直接注入 SeriesFacade）
      */
-    private final ArticleDataAssembler articleDataAssembler;
+    private final ArticleIdentityResolver identityResolver;
 
     // ──────────────────────────────────────────────
     // ContentChanged（SAVED / PUBLISHED / RESTORED）
@@ -68,7 +66,7 @@ public class ArticleEventPublisher {
                     article.getId(),
                     article.getUuid(),
                     article.getAuthorId(),
-                    resolveAuthorUuid(article.getAuthorId()),
+                    resolveAuthorUuid("ArticleContentChangedEvent", article),
                     action,
                     Instant.now());
             rabbitTemplate.convertAndSend(
@@ -98,7 +96,7 @@ public class ArticleEventPublisher {
                     UUID.randomUUID(),
                     article.getUuid(),
                     article.getAuthorId(),
-                    resolveAuthorUuid(article.getAuthorId()),
+                    resolveAuthorUuid("ArticleUpdatedEvent", article),
                     article.getTitle(),
                     article.getPublishedAt(),
                     article.getSlug(),
@@ -132,7 +130,7 @@ public class ArticleEventPublisher {
                     UUID.randomUUID(),
                     article.getUuid(),
                     article.getAuthorId(),
-                    resolveAuthorUuid(article.getAuthorId()),
+                    resolveAuthorUuid("ArticlePublishedEvent", article),
                     article.getTitle(),
                     article.getPublishedAt(),
                     article.getSlug(),
@@ -182,8 +180,8 @@ public class ArticleEventPublisher {
                 categoryIds != null ? categoryIds : List.of(),
                 tagIds != null ? tagIds : List.of(),
                 Instant.now(),
-                resolveAuthorUuid(article.getAuthorId()),
-                resolveSeriesUuid(seriesId)
+                resolveAuthorUuid("ArticleDeletedEvent", article),
+                resolveSeriesUuid("ArticleDeletedEvent", article, seriesId)
             );
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
@@ -282,39 +280,43 @@ public class ArticleEventPublisher {
      * <p>uuid 欄位是新增的過渡資料，現有 consumer 仍讀 Long 欄位；因此查詢失敗<b>不得</b>阻擋事件發送
      * （尤其刪除／下架事件是移除 ES 索引的唯一觸發），失敗時記 warn 並回傳 null。</p>
      *
-     * @param authorId 作者主鍵；null 回傳 null
+     * @param eventType 事件類型名稱（僅供 warn 日誌，方便維運定位）
+     * @param article   事件所屬文章；作者主鍵為 null 時回傳 null
      * @return 作者 UUID；查無或查詢失敗為 null
      */
-    private UUID resolveAuthorUuid(Long authorId) {
+    private UUID resolveAuthorUuid(String eventType, Article article) {
+        Long authorId = article.getAuthorId();
         if (authorId == null) {
             return null;
         }
         try {
-            return articleDataAssembler.resolveAuthorUuids(List.of(authorId)).get(authorId);
+            return identityResolver.resolveAuthorUuids(List.of(authorId)).get(authorId);
         } catch (Exception e) {
-            log.warn("事件的 authorUuid 查詢失敗，以 null 發送（過渡欄位）：authorId={}, error={}",
-                    authorId, e.getMessage());
+            log.warn("{} 的 authorUuid 查詢失敗，以 null 發送（過渡欄位）：articleUuid={}, authorId={}, error={}",
+                    eventType, article.getUuid(), authorId, e.getMessage());
             return null;
         }
     }
 
     /**
-     * 取得 series 公開 UUID（事件的過渡 uuid 欄位），經 {@link ArticleDataAssembler}，不 JOIN series 表。
+     * 取得 series 公開 UUID（事件的過渡 uuid 欄位），經 {@link ArticleIdentityResolver}，不 JOIN series 表。
      *
-     * <p>失敗處理同 {@link #resolveAuthorUuid(Long)}。</p>
+     * <p>失敗處理同 {@link #resolveAuthorUuid(String, Article)}。</p>
      *
-     * @param seriesId series 主鍵；null（文章不在 series）回傳 null 且不發任何查詢
+     * @param eventType 事件類型名稱（僅供 warn 日誌）
+     * @param article   事件所屬文章（僅供 warn 日誌）
+     * @param seriesId  series 主鍵；null（文章不在 series）回傳 null 且不發任何查詢
      * @return series UUID；查無或查詢失敗為 null
      */
-    private UUID resolveSeriesUuid(Long seriesId) {
+    private UUID resolveSeriesUuid(String eventType, Article article, Long seriesId) {
         if (seriesId == null) {
             return null;
         }
         try {
-            return articleDataAssembler.resolveSeriesUuids(List.of(seriesId)).get(seriesId);
+            return identityResolver.resolveSeriesUuids(List.of(seriesId)).get(seriesId);
         } catch (Exception e) {
-            log.warn("事件的 seriesUuid 查詢失敗，以 null 發送（過渡欄位）：seriesId={}, error={}",
-                    seriesId, e.getMessage());
+            log.warn("{} 的 seriesUuid 查詢失敗，以 null 發送（過渡欄位）：articleUuid={}, seriesId={}, error={}",
+                    eventType, article.getUuid(), seriesId, e.getMessage());
             return null;
         }
     }

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
@@ -47,7 +48,7 @@ class ArticleFacadeSetPredicateTest {
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, null, null, articleService, null, null, null, null, null,
-                new ArticleDataAssembler(articleMapper, seriesFacadeProvider));
+                new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)));
     }
 
     @Nested

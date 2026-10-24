@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
@@ -55,7 +56,7 @@ class ArticleFacadeBatchingTest {
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, null, recommendMapper, articleService, null, null, null, null,
-                null, new ArticleDataAssembler(articleMapper, seriesFacadeProvider));
+                null, new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)));
     }
 
     /** findByUuids 每次收到的批次大小 */
