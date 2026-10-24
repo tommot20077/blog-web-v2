@@ -120,7 +120,7 @@ class SearchControllerIT {
         authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
         Role.ADMIN.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         return SecurityMockMvcRequestPostProcessors.authentication(
-                new UsernamePasswordAuthenticationToken(userId, null, authorities));
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), Role.ADMIN), null, authorities));
     }
 
     /**
