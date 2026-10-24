@@ -1,8 +1,9 @@
 package dowob.xyz.blog.module.article.service;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
-import dowob.xyz.blog.module.article.event.ArticleArchivedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
 import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -74,7 +75,7 @@ class ArticleEventPublisherTest {
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleEventContract.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
                     captor.capture()
             );
@@ -101,7 +102,7 @@ class ArticleEventPublisherTest {
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleEventContract.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
                     captor.capture()
             );
@@ -123,7 +124,7 @@ class ArticleEventPublisherTest {
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
+                    eq(ArticleEventContract.EXCHANGE),
                     eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
                     captor.capture()
             );
@@ -147,7 +148,7 @@ class ArticleEventPublisherTest {
             article.setAuthorId(3L);
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
-                    .convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                    .convertAndSend(eq(ArticleEventContract.EXCHANGE),
                             eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
                             any(Object.class));
 
@@ -174,7 +175,7 @@ class ArticleEventPublisherTest {
             article.setAuthorId(3L);
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
-                    .convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
+                    .convertAndSend(eq(ArticleEventContract.EXCHANGE),
                             eq(ArticleRabbitMqConfig.ROUTING_KEY_DELETED),
                             any(Object.class));
 
@@ -199,8 +200,8 @@ class ArticleEventPublisherTest {
 
             ArgumentCaptor<ArticleArchivedEvent> captor = ArgumentCaptor.forClass(ArticleArchivedEvent.class);
             verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleRabbitMqConfig.EXCHANGE),
-                    eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                    eq(ArticleEventContract.EXCHANGE),
+                    eq(ArticleEventContract.ROUTING_KEY_ARCHIVED),
                     captor.capture()
             );
             ArticleArchivedEvent event = captor.getValue();
@@ -212,7 +213,7 @@ class ArticleEventPublisherTest {
         @Test
         @DisplayName("契約：下架事件不得共用 article.deleted（該 key 另有 series 訂閱並遞減 article_count）")
         void publishArchived_doesNotReuseDeletedRoutingKey() {
-            assertThat(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED)
+            assertThat(ArticleEventContract.ROUTING_KEY_ARCHIVED)
                     .isEqualTo("article.archived")
                     .isNotEqualTo(ArticleRabbitMqConfig.ROUTING_KEY_DELETED);
         }
@@ -226,8 +227,8 @@ class ArticleEventPublisherTest {
             article.setAuthorId(7L);
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
-                    .convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
-                            eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                    .convertAndSend(eq(ArticleEventContract.EXCHANGE),
+                            eq(ArticleEventContract.ROUTING_KEY_ARCHIVED),
                             any(Object.class));
 
             assertThatCode(() -> publisher.publishArchived(article)).doesNotThrowAnyException();
@@ -247,8 +248,8 @@ class ArticleEventPublisherTest {
             article.setAuthorId(7L);
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
-                    .convertAndSend(eq(ArticleRabbitMqConfig.EXCHANGE),
-                            eq(ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED),
+                    .convertAndSend(eq(ArticleEventContract.EXCHANGE),
+                            eq(ArticleEventContract.ROUTING_KEY_ARCHIVED),
                             any(Object.class));
 
             CapturingAppender appender = attachAppender();

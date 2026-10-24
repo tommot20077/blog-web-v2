@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -24,11 +25,6 @@ import java.util.Map;
  */
 @Configuration
 public class ArticleRabbitMqConfig {
-
-    /**
-     * 文章事件 Exchange 名稱
-     */
-    public static final String EXCHANGE = "article.events";
 
     /**
      * 文章已發布 Routing Key
@@ -72,25 +68,6 @@ public class ArticleRabbitMqConfig {
     public static final String ROUTING_KEY_CONTENT_CHANGED = "article.content.changed";
 
     /**
-     * 文章已下架（PUBLISHED → ARCHIVED）Routing Key
-     *
-     * <p>
-     * 與 {@link #ROUTING_KEY_DELETED} 刻意分開：兩者對「文章不再公開」的處置相同
-     * （search 模組移除 ES 索引），但下架的資料列仍在，
-     * {@code article.deleted} 另有 series 模組訂閱並遞減 {@code series.article_count}，
-     * 若共用同一 routing key，下架會讓該反正規化計數多扣一次，
-     * 之後真的刪除時再扣一次而漂移。故本模組另立 routing key，
-     * 由 search 模組宣告專屬 queue 承接（見 {@code SearchRabbitMqConfig#searchIndexArchiveQueue}）。
-     * </p>
-     *
-     * <p>
-     * 本模組僅作為 producer 使用此 routing key（見 {@code ArticleEventPublisher#publishArchived}），
-     * 不在本模組宣告 Queue／Consumer（同 {@link #ROUTING_KEY_PUBLISHED} 的分工）。
-     * </p>
-     */
-    public static final String ROUTING_KEY_ARCHIVED = "article.archived";
-
-    /**
      * 建立死信隊列（DLQ）參數
      *
      * @return 包含死信交換器與路由 Key 的 Map
@@ -108,7 +85,7 @@ public class ArticleRabbitMqConfig {
      */
     @Bean
     public TopicExchange articleEventsExchange() {
-        return new TopicExchange(EXCHANGE);
+        return new TopicExchange(ArticleEventContract.EXCHANGE);
     }
 
     /**

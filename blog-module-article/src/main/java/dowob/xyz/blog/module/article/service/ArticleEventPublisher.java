@@ -1,11 +1,12 @@
 package dowob.xyz.blog.module.article.service;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
-import dowob.xyz.blog.module.article.event.ArticleArchivedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
 import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.event.ArticleUpdatedEvent;
@@ -61,7 +62,7 @@ public class ArticleEventPublisher {
                     action,
                     Instant.now());
             rabbitTemplate.convertAndSend(
-                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleEventContract.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_CONTENT_CHANGED,
                     event);
         } catch (Exception e) {
@@ -95,7 +96,7 @@ public class ArticleEventPublisher {
                     userFacade.getUserNicknameById(article.getAuthorId()).orElse(null),
                     tags);
             rabbitTemplate.convertAndSend(
-                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleEventContract.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_UPDATED,
                     event);
         } catch (Exception e) {
@@ -127,7 +128,7 @@ public class ArticleEventPublisher {
                     userFacade.getUserNicknameById(article.getAuthorId()).orElse(null),
                     tags);
             rabbitTemplate.convertAndSend(
-                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleEventContract.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_PUBLISHED,
                     event);
         } catch (Exception e) {
@@ -169,7 +170,7 @@ public class ArticleEventPublisher {
                 Instant.now()
             );
             rabbitTemplate.convertAndSend(
-                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleEventContract.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_DELETED,
                     event);
         } catch (Exception e) {
@@ -204,8 +205,8 @@ public class ArticleEventPublisher {
                     article.getUuid(),
                     Instant.now());
             rabbitTemplate.convertAndSend(
-                    ArticleRabbitMqConfig.EXCHANGE,
-                    ArticleRabbitMqConfig.ROUTING_KEY_ARCHIVED,
+                    ArticleEventContract.EXCHANGE,
+                    ArticleEventContract.ROUTING_KEY_ARCHIVED,
                     event);
         } catch (Exception e) {
             log.error("文章下架事件發送失敗，Elasticsearch 索引可能未移除，需人工補送："
@@ -227,7 +228,7 @@ public class ArticleEventPublisher {
     public void publishTagged(Article article, List<UUID> tagIds) {
         try {
             rabbitTemplate.convertAndSend(
-                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleEventContract.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_TAGGED,
                     new ArticleTagEvent(UUID.randomUUID(), article.getUuid(), tagIds));
         } catch (Exception e) {
@@ -247,7 +248,7 @@ public class ArticleEventPublisher {
     public void publishViewed(UUID articleUuid) {
         try {
             rabbitTemplate.convertAndSend(
-                    ArticleRabbitMqConfig.EXCHANGE,
+                    ArticleEventContract.EXCHANGE,
                     ArticleRabbitMqConfig.ROUTING_KEY_VIEWED,
                     new ArticleViewedEvent(UUID.randomUUID(), articleUuid, Instant.now()));
         } catch (Exception e) {
