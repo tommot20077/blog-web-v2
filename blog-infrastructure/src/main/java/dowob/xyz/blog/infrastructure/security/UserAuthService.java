@@ -1,7 +1,5 @@
 package dowob.xyz.blog.infrastructure.security;
 
-import dowob.xyz.blog.common.api.enums.UserStatus;
-
 import java.util.Optional;
 import java.util.UUID;
 
@@ -25,10 +23,4 @@ public interface UserAuthService {
      * @return 認證狀態；使用者不存在時為 {@link Optional#empty()}
      */
     Optional<AuthState> findAuthStateByUuid(UUID uuid);
-
-    /**
-     * 簡易用戶詳情 DTO
-     */
-    record SimpleUserDetail(Long id, String email, String role, UserStatus status) {
-    }
 }
