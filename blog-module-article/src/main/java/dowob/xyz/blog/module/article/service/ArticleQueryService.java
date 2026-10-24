@@ -3,6 +3,8 @@ package dowob.xyz.blog.module.article.service;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
@@ -289,22 +291,12 @@ public class ArticleQueryService {
     /**
      * 從 SecurityContextHolder 取得當前登入使用者 ID，未登入時回傳 null。
      *
-     * <p>Principal 為 Long（JwtAuthenticationFilter 寫入的 userId）。</p>
+     * <p>Principal 為 {@link AuthUser}（JwtAuthenticationFilter 寫入），經 {@link SecurityUtils#currentAuthUser} 取出。</p>
      *
      * @return 使用者 DB ID，或 null（匿名 / 未認證）
      */
     private Long currentUserIdOrNull() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated()) {
-            return null;
-        }
-        Object principal = auth.getPrincipal();
-        if ("anonymousUser".equals(principal)) {
-            return null;
-        }
-        if (principal instanceof Long id) {
-            return id;
-        }
-        return null;
+        return SecurityUtils.currentAuthUser(auth).map(AuthUser::id).orElse(null);
     }
 }

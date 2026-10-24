@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
@@ -106,17 +107,17 @@ public class ArticleController {
      *
      * @param slug           文章 URL slug
      * @param request        HTTP 請求（用於取得客戶端 IP）
-     * @param viewerId       當前登入用戶的資料庫主鍵（匿名為 null）
+     * @param user       當前登入者（AuthUser；匿名為 null）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 文章完整資訊
      */
     @GetMapping("/slug/{slug}")
     public ApiResponse<ArticleResponse> getArticleBySlug(@PathVariable String slug,
                                                           HttpServletRequest request,
-                                                          @AuthenticationPrincipal Long viewerId,
+                                                          @AuthenticationPrincipal AuthUser user,
                                                           Authentication authentication) {
         Role viewerRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleQueryService.getArticleBySlug(slug, viewerId, viewerRole, getClientIp(request)));
+        return ApiResponse.success(articleQueryService.getArticleBySlug(slug, (user == null ? null : user.id()), viewerRole, getClientIp(request)));
     }
 
     /**
@@ -135,30 +136,30 @@ public class ArticleController {
      *
      * @param uuid           文章公開 UUID
      * @param request        HTTP 請求（用於取得客戶端 IP）
-     * @param viewerId       當前登入用戶的資料庫主鍵（匿名為 null）
+     * @param user       當前登入者（AuthUser；匿名為 null）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 文章完整資訊
      */
     @GetMapping("/{uuid}")
     public ApiResponse<ArticleResponse> getArticle(@PathVariable UUID uuid, HttpServletRequest request,
-                                                    @AuthenticationPrincipal Long viewerId,
+                                                    @AuthenticationPrincipal AuthUser user,
                                                     Authentication authentication) {
         Role viewerRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleQueryService.getArticleByUuid(uuid, viewerId, viewerRole, getClientIp(request)));
+        return ApiResponse.success(articleQueryService.getArticleByUuid(uuid, (user == null ? null : user.id()), viewerRole, getClientIp(request)));
     }
 
     /**
      * 建立文章（需 AUTHOR 或 ADMIN 角色）
      *
      * @param request  建立文章請求
-     * @param authorId 當前登入用戶的資料庫主鍵（作者 ID）
+     * @param user 當前登入者（AuthUser；作者 ID）
      * @return 建立後的文章完整資訊
      */
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @PostMapping
     public ApiResponse<EditorArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request,
-                                                             @AuthenticationPrincipal Long authorId) {
-        return ApiResponse.success(articleService.createArticle(authorId, request));
+                                                             @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(articleService.createArticle(user.id(), request));
     }
 
     /**
@@ -166,7 +167,7 @@ public class ArticleController {
      *
      * @param uuid           文章公開 UUID
      * @param request        更新請求
-     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param user     當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 更新後的文章完整資訊
      */
@@ -175,42 +176,42 @@ public class ArticleController {
     public ApiResponse<EditorArticleResponse> updateArticle(
             @PathVariable UUID uuid,
             @Valid @RequestBody UpdateArticleRequest request,
-            @AuthenticationPrincipal Long operatorId,
+            @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.updateArticle(operatorId, operatorRole, uuid, request));
+        return ApiResponse.success(articleService.updateArticle(user.id(), operatorRole, uuid, request));
     }
 
     /**
      * 取得文章供 Editor 編輯（需認證，僅作者本人）
      *
      * @param uuid        文章公開 UUID
-     * @param requesterId 當前登入用戶的資料庫主鍵
+     * @param user 當前登入者（AuthUser）
      * @return Editor 用文章資訊
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @GetMapping("/{uuid}/edit")
     public ApiResponse<EditorArticleResponse> getArticleForEdit(
             @PathVariable UUID uuid,
-            @AuthenticationPrincipal Long requesterId) {
-        return ApiResponse.success(articleService.getArticleForEdit(uuid, requesterId));
+            @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(articleService.getArticleForEdit(uuid, user.id()));
     }
 
     /**
      * 刪除文章（需 AUTHOR 本人或 ADMIN）
      *
      * @param uuid           文章公開 UUID
-     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param user     當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 成功回應
      */
     @PreAuthorize("hasAuthority('ARTICLE_DELETE')")
     @DeleteMapping("/{uuid}")
     public ApiResponse<Void> deleteArticle(@PathVariable UUID uuid,
-                                           @AuthenticationPrincipal Long operatorId,
+                                           @AuthenticationPrincipal AuthUser user,
                                            Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        articleService.deleteArticle(operatorId, operatorRole, uuid);
+        articleService.deleteArticle(user.id(), operatorRole, uuid);
         return ApiResponse.success();
     }
 
@@ -220,7 +221,7 @@ public class ArticleController {
      * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
      *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @param status   文章狀態篩選（可選）
-     * @param authorId 當前登入用戶的資料庫主鍵（作者 ID）
+     * @param user 當前登入者（AuthUser；作者 ID）
      * @return 分頁文章摘要列表
      */
     @PreAuthorize("isAuthenticated()")
@@ -228,25 +229,25 @@ public class ArticleController {
     public ApiResponse<PageResult<ArticleSummaryResponse>> getMyArticles(
             PageQuery pageQuery,
             @RequestParam(required = false) ArticleStatus status,
-            @AuthenticationPrincipal Long authorId) {
-        return ApiResponse.success(articleQueryService.getMyArticles(authorId, pageQuery.page(), pageQuery.sizeOrDefault(10), status));
+            @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(articleQueryService.getMyArticles(user.id(), pageQuery.page(), pageQuery.sizeOrDefault(10), status));
     }
 
     /**
      * 提交文章審核（需 AUTHOR 本人或 ADMIN）
      *
      * @param uuid           文章公開 UUID
-     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param user     當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 提交審核後的文章完整資訊
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/submit")
     public ApiResponse<ArticleResponse> submitForReview(@PathVariable UUID uuid,
-                                                         @AuthenticationPrincipal Long operatorId,
+                                                         @AuthenticationPrincipal AuthUser user,
                                                          Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.submitForReview(operatorId, operatorRole, uuid));
+        return ApiResponse.success(articleService.submitForReview(user.id(), operatorRole, uuid));
     }
 
     /**
@@ -263,34 +264,34 @@ public class ArticleController {
      * </p>
      *
      * @param uuid           文章公開 UUID
-     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param user     當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 抽回後的文章完整資訊
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/withdraw")
     public ApiResponse<ArticleResponse> withdrawArticle(@PathVariable UUID uuid,
-                                                        @AuthenticationPrincipal Long operatorId,
+                                                        @AuthenticationPrincipal AuthUser user,
                                                         Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.withdrawArticle(operatorId, operatorRole, uuid));
+        return ApiResponse.success(articleService.withdrawArticle(user.id(), operatorRole, uuid));
     }
 
     /**
      * 發布文章（需 AUTHOR 本人或 ADMIN）
      *
      * @param uuid           文章公開 UUID
-     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param user     當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 發布後的文章完整資訊
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/publish")
     public ApiResponse<ArticleResponse> publishArticle(@PathVariable UUID uuid,
-                                                       @AuthenticationPrincipal Long operatorId,
+                                                       @AuthenticationPrincipal AuthUser user,
                                                        Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.publishArticle(operatorId, operatorRole, uuid));
+        return ApiResponse.success(articleService.publishArticle(user.id(), operatorRole, uuid));
     }
 
     /**
@@ -298,7 +299,7 @@ public class ArticleController {
      *
      * @param uuid           文章公開 UUID
      * @param request        駁回請求（含原因）
-     * @param operatorId     當前登入用戶的資料庫主鍵
+     * @param user     當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 駁回後的文章完整資訊
      */
@@ -307,10 +308,10 @@ public class ArticleController {
     public ApiResponse<ArticleResponse> rejectArticle(
             @PathVariable UUID uuid,
             @RequestBody RejectArticleRequest request,
-            @AuthenticationPrincipal Long operatorId,
+            @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.rejectArticle(operatorId, operatorRole, uuid, request.getReason()));
+        return ApiResponse.success(articleService.rejectArticle(user.id(), operatorRole, uuid, request.getReason()));
     }
 
 
