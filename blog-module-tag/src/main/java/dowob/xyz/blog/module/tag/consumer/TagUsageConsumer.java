@@ -5,7 +5,7 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
-import dowob.xyz.blog.module.tag.event.ArticleTagEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
 import lombok.RequiredArgsConstructor;

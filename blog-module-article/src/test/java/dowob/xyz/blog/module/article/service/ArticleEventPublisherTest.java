@@ -7,6 +7,7 @@ import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.article.facade.ArticleDataAssembler;
@@ -202,6 +203,28 @@ class ArticleEventPublisherTest {
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_PUBLISHED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
             assertThat(captor.getValue().authorId()).isEqualTo(1L);
+        }
+    }
+
+    @Nested
+    @DisplayName("publishTagged")
+    class PublishTagged {
+
+        @Test
+        @DisplayName("正常：以共用契約的 exchange／routing key 發送 ArticleTagEvent（帶 eventId、文章 UUID、標籤 UUID）")
+        void publishTagged_shouldSendSharedArticleTagEvent() {
+            Article article = new Article();
+            article.setUuid(UUID.randomUUID());
+            UUID tagId = UUID.randomUUID();
+
+            publisher.publishTagged(article, List.of(tagId));
+
+            ArgumentCaptor<ArticleTagEvent> captor = ArgumentCaptor.forClass(ArticleTagEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_TAGGED), captor.capture());
+            assertThat(captor.getValue().eventId()).isNotNull();
+            assertThat(captor.getValue().articleId()).isEqualTo(article.getUuid());
+            assertThat(captor.getValue().tagIds()).containsExactly(tagId);
         }
     }
 

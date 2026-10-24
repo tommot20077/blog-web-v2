@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.tag.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -23,9 +24,9 @@ import org.springframework.context.annotation.Configuration;
 public class TagRabbitMqConfig {
 
     /**
-     * 文章事件 Exchange 名稱（與 blog-module-article 共用）
+     * 文章事件 Exchange 名稱（取自共用事件契約 {@link ArticleEventContract#EXCHANGE}）
      */
-    public static final String ARTICLE_EVENTS_EXCHANGE = "article.events";
+    public static final String ARTICLE_EVENTS_EXCHANGE = ArticleEventContract.EXCHANGE;
 
     /**
      * 標籤模組訂閱的文章已標籤事件 Queue 名稱
@@ -33,9 +34,9 @@ public class TagRabbitMqConfig {
     public static final String QUEUE_TAG_ARTICLE_TAGGED = "tag.article.tagged";
 
     /**
-     * 文章已標籤 Routing Key
+     * 文章已標籤 Routing Key（取自共用事件契約 {@link ArticleEventContract#ROUTING_KEY_TAGGED}）
      */
-    public static final String ROUTING_KEY_ARTICLE_TAGGED = "article.tagged";
+    public static final String ROUTING_KEY_ARTICLE_TAGGED = ArticleEventContract.ROUTING_KEY_TAGGED;
 
     /**
      * 建立文章事件 Topic Exchange（宣告式，若已存在則共用）

@@ -245,7 +245,7 @@ public class ArticleEventPublisher {
         try {
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
-                    ArticleRabbitMqConfig.ROUTING_KEY_TAGGED,
+                    ArticleEventContract.ROUTING_KEY_TAGGED,
                     new ArticleTagEvent(UUID.randomUUID(), article.getUuid(), tagIds));
         } catch (Exception e) {
             log.warn("ArticleTagEvent MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
