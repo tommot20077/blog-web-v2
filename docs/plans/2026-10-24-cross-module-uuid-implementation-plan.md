@@ -176,6 +176,16 @@ log 關鍵資訊、MQ 訊息格式全部凍結；不新增功能、不改 queue 
 - 基線綠 → 重構後同樣綠（兩份 log）
 - `grep -rn "basicNack\|basicAck" --include=*.java blog-module-*/src/main` 零命中（無法收斂的特殊 ack 邏輯保留並逐一說明）
 - 既有 consumer 測試若直接 verify(channel).basicAck，改為透過真實 ConsumerExecutor 驗證，不得 mock 掉 executor 後只驗呼叫
+【T0a-1 審查帶來的已知事項】
+- 錯誤 log 的業務上下文（articleUuid、eventId、userId、fileId、seriesId、action）一律用 `execute(name, () -> "<上下文>", channel, tag, body)` 多載保留；
+  ArticleSearchListenerTest 約 230-237 行以 appender 斷言 onArticleArchived 的 log 含 articleUuid、eventId，必須維持綠燈
+- 7 個用 @InjectMocks 的 consumer 測試（ViewCount、Thumbnail、Series、Tag、EmailVerification、PasswordReset、ArticleSearchListener）：
+  以 `@Spy private ConsumerExecutor consumerExecutor = new ConsumerExecutor();` 注入真實實例，**不得 @Mock**；
+  ArticlePublishedConsumerTest、ArticleVersionConsumerTest 手動 new 的地方補建構子參數
+- 提早 ack 的分支（冪等命中、非圖片、seriesId 為 null；ViewCount、TagUsage、SeriesArticleDeleted、Thumbnail）：在 lambda 內 `return` 即可，
+  會計入 processed，可接受
+- ArticleSearchListener 的 4 個方法原本 nack 的 IOException 會外拋，改用 executor 後被吞掉並 log——這是可接受的行為改善，回報中註明
+- 所有模組的 *TestApplication 都掃得到 dowob.xyz.blog.infrastructure，不需改 scan 範圍
 <§1.2 共通回報格式>
 ```
 
