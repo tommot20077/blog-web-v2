@@ -2,8 +2,10 @@ package dowob.xyz.blog.module.search.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
@@ -24,6 +26,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -56,6 +59,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("SearchController 整合測試")
 class SearchControllerIT {
 
+    /** 測試用使用者 uuid（controller 應以 AuthUser.uuid() 呼叫 service） */
+    private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
+
     /**
      * MockMvc，用於發送 HTTP 請求
      */
@@ -86,6 +92,10 @@ class SearchControllerIT {
     @MockitoBean
     private UserAuthService userAuthService;
 
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
+
     /**
      * 建立一般使用者認證 Token
      *
@@ -95,7 +105,7 @@ class SearchControllerIT {
     private RequestPostProcessor userAuth(Long userId) {
         return SecurityMockMvcRequestPostProcessors.authentication(
                 new UsernamePasswordAuthenticationToken(
-                        userId, null,
+                        new AuthUser(userId, USER_UUID, Role.USER), null,
                         List.of(new SimpleGrantedAuthority("ROLE_USER"))));
     }
 
@@ -138,9 +148,9 @@ class SearchControllerIT {
          * 登入使用者搜尋時，Controller 應傳入 userId
          */
         @Test
-        @DisplayName("已登入使用者搜尋，應傳入 userId 至 SearchService")
+        @DisplayName("已登入使用者搜尋，應傳入 user.uuid() 至 SearchService")
         void search_authenticatedUser_passesUserIdToService() throws Exception {
-            when(searchService.search(anyString(), any(), anyString(), anyInt(), anyInt(), eq(1L)))
+            when(searchService.search(anyString(), any(), anyString(), anyInt(), anyInt(), eq(USER_UUID)))
                     .thenReturn(PageResult.of(1, 10, 0L, List.of()));
 
             mockMvc.perform(get("/api/v1/search")
@@ -148,7 +158,7 @@ class SearchControllerIT {
                             .with(userAuth(1L)))
                     .andExpect(status().isOk());
 
-            verify(searchService).search(anyString(), any(), anyString(), anyInt(), anyInt(), eq(1L));
+            verify(searchService).search(anyString(), any(), anyString(), anyInt(), anyInt(), eq(USER_UUID));
         }
 
         /**
@@ -223,7 +233,7 @@ class SearchControllerIT {
         @Test
         @DisplayName("已登入使用者應可取得個人搜尋歷史（200 OK）")
         void getHistory_authenticatedUser_returns200() throws Exception {
-            when(searchService.getHistory(1L)).thenReturn(List.of("spring boot", "java"));
+            when(searchService.getHistory(USER_UUID)).thenReturn(List.of("spring boot", "java"));
 
             mockMvc.perform(get("/api/v1/search/history").with(userAuth(1L)))
                     .andExpect(status().isOk())
@@ -258,7 +268,7 @@ class SearchControllerIT {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.code").value("00000"));
 
-            verify(searchService).clearHistory(1L);
+            verify(searchService).clearHistory(USER_UUID);
         }
     }
 

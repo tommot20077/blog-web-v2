@@ -115,9 +115,6 @@ class PrincipalTypeTest {
     /** 規則 (a) 例外的清除說明：T0b-3 逐 controller 純型別替換 */
     private static final String T0B3_PARAM = "T0b-3：controller 純型別替換，@AuthenticationPrincipal Long 改為 AuthUser";
 
-    /** 規則 (a) 例外的清除說明：AuthController／SearchController 的 service 簽章已在 T0b-2 改收 UUID，故由 T0b-2 一併替換 */
-    private static final String T0B2_PARAM = "T0b-2：認證鏈 Task 因 service 簽章改收 UUID 一併替換為 AuthUser";
-
     /** 規則 (b) 例外的清除說明 */
     private static final String T0B3_PRINCIPAL_READ = "T0b-3：改用 SecurityUtils.currentAuthUser(Authentication)";
 
@@ -207,13 +204,6 @@ class PrincipalTypeTest {
                     T0B3_PARAM),
             Map.entry("dowob.xyz.blog.module.reading.controller.ReadingProgressController#update[1]",
                     T0B3_PARAM),
-            // SearchController
-            Map.entry("dowob.xyz.blog.module.search.controller.SearchController#clearHistory[0]",
-                    T0B2_PARAM),
-            Map.entry("dowob.xyz.blog.module.search.controller.SearchController#getHistory[0]",
-                    T0B2_PARAM),
-            Map.entry("dowob.xyz.blog.module.search.controller.SearchController#search[4]",
-                    T0B2_PARAM),
             // SeriesController
             Map.entry("dowob.xyz.blog.module.series.controller.SeriesController#addArticle[2]",
                     T0B3_PARAM),
@@ -234,9 +224,6 @@ class PrincipalTypeTest {
                     T0B3_PARAM),
             Map.entry("dowob.xyz.blog.module.tag.controller.TagController#unfollowTag[1]",
                     T0B3_PARAM),
-            // AuthController
-            Map.entry("dowob.xyz.blog.module.user.controller.AuthController#logout[0]",
-                    T0B2_PARAM),
             // UserController
             Map.entry("dowob.xyz.blog.module.user.controller.UserController#changePassword[0]",
                     T0B3_PARAM),

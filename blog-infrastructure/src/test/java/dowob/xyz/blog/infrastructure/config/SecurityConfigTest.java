@@ -2,6 +2,7 @@ package dowob.xyz.blog.infrastructure.config;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import org.junit.jupiter.api.DisplayName;
@@ -69,6 +70,10 @@ class SecurityConfigTest {
 
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
 
     /**
      * 測試用 Controller，提供各路徑端點以驗證安全規則

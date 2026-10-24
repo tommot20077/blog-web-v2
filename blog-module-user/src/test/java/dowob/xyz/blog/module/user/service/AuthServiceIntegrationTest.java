@@ -78,8 +78,8 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     void cleanUp() {
         userRepository.findByEmail(TEST_EMAIL).ifPresent(user -> {
             userRepository.delete(user);
-            redisTemplate.delete(RedisKeyConstant.getUserAuthKey(user.getId()));
-            redisTemplate.delete(RedisKeyConstant.getUserRefreshKey(user.getId()));
+            redisTemplate.delete(RedisKeyConstant.getUserAuthKey(user.getUuid()));
+            redisTemplate.delete(RedisKeyConstant.getUserRefreshKey(user.getUuid()));
         });
     }
 
@@ -105,14 +105,14 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     }
 
     /**
-     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{id}} 應包含
+     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{uuid}} 應包含
      * {@code version} 與 {@code status} 兩個欄位，且 status 應為 ACTIVE。
      */
     @Test
     @DisplayName("login → 應將 version 與 status 寫入 Redis Hash")
     void login_shouldSetVersionInRedis() {
         User user = buildAndSaveUser(UserStatus.ACTIVE);
-        String redisKey = RedisKeyConstant.getUserAuthKey(user.getId());
+        String redisKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
@@ -123,14 +123,31 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     }
 
     /**
-     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{id}} 應包含 {@code role} 欄位，
+     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{uuid}} 應包含 {@code id} 欄位，
+     * 值為資料庫主鍵——缺 id 的 hash 會被 {@code AuthStateLoader} 視為 miss。
+     */
+    @Test
+    @DisplayName("login → 整合測試：auth hash 以 uuid 為鍵且包含 id 欄位")
+    void login_shouldWriteIdIntoAuthHashKeyedByUuid() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        Map<Object, Object> entries = redisTemplate.opsForHash()
+                .entries(RedisKeyConstant.getUserAuthKey(user.getUuid()));
+        assertThat(entries.get(RedisKeyConstant.FIELD_ID)).isEqualTo(String.valueOf(user.getId()));
+        assertThat(redisTemplate.hasKey("user:auth:" + user.getId())).isFalse();
+    }
+
+    /**
+     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{uuid}} 應包含 {@code role} 欄位，
      * 且值為該用戶的實際角色。此欄位供 {@code /refresh} 沿用，避免刷新時角色被降級為 USER。
      */
     @Test
     @DisplayName("login → 應將 role 寫入 Redis Hash（供 refresh 沿用，避免角色降級）")
     void login_shouldSetRoleInRedis() {
         User user = buildAndSaveUser(UserStatus.ACTIVE, Role.AUTHOR);
-        String redisKey = RedisKeyConstant.getUserAuthKey(user.getId());
+        String redisKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
@@ -185,15 +202,15 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
 
     /**
      * 驗證：changePassword() 後，應撤銷該用戶所有 session——DB tokenVersion 升為 v2，
-     * 且 Redis {@code user:auth:{id}} 與 refresh ZSet 均清空，使既有 access token
+     * 且 Redis {@code user:auth:{uuid}} 與 refresh ZSet 均清空，使既有 access token
      * 與被盜的 refresh token 立即失效。
      */
     @Test
     @DisplayName("changePassword → 整合測試：應撤銷所有 session（DB 版本升 v2、清 auth 與 refresh）")
     void changePassword_shouldRevokeAllSessions() {
         User user = buildAndSaveUser(UserStatus.ACTIVE);
-        String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
-        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());
 
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, UserStatus.ACTIVE.name());
@@ -208,14 +225,14 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     }
 
     /**
-     * 驗證：deleteAccount() 後，Redis 中 user:auth:{id} 與 refresh:token:{id} 兩個鍵應被清除。
+     * 驗證：deleteAccount() 後，Redis 中 user:auth:{uuid} 與 user:refresh:{uuid} 兩個鍵應被清除。
      */
     @Test
-    @DisplayName("deleteAccount → 整合測試：Redis user:auth:{id} 與 refresh:token:{id} 應被清除")
+    @DisplayName("deleteAccount → 整合測試：Redis user:auth:{uuid} 與 user:refresh:{uuid} 應被清除")
     void deleteAccount_shouldClearRedisCache() {
         User user = buildAndSaveUser(UserStatus.ACTIVE);
-        String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
-        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());
 
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
         redisTemplate.opsForValue().set(refreshKey, "some-refresh-token");
@@ -228,15 +245,15 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
 
     /**
      * 驗證：resetPassword()（忘記密碼救援）後，應撤銷該用戶所有 session——
-     * Redis {@code user:auth:{id}} 與 refresh ZSet 均清空，使被盜的 access/refresh token
+     * Redis {@code user:auth:{uuid}} 與 refresh ZSet 均清空，使被盜的 access/refresh token
      * 立即失效。這是帳號救援的核心安全保證：重設密碼必須讓攻擊者現有 session 全數失效。
      */
     @Test
     @DisplayName("resetPassword → 整合測試：應撤銷所有 session（清 auth 與 refresh）")
     void resetPassword_shouldRevokeAllSessions() {
         User user = buildAndSaveUser(UserStatus.ACTIVE);
-        String authKey = RedisKeyConstant.getUserAuthKey(user.getId());
-        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getId());
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());
 
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, UserStatus.ACTIVE.name());

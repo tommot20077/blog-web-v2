@@ -105,7 +105,7 @@ public class SearchServiceImpl implements SearchService {
      */
     @Override
     public PageResult<SearchResultResponse> search(
-            String q, String tag, String sort, int page, int size, Long userId) {
+            String q, String tag, String sort, int page, int size, UUID userUuid) {
 
         BoolQuery.Builder boolQuery = new BoolQuery.Builder();
 
@@ -156,7 +156,7 @@ public class SearchServiceImpl implements SearchService {
 
         /** 記錄搜尋關鍵字至 Redis */
         if (StringUtils.hasText(q)) {
-            recordSearch(q, userId);
+            recordSearch(q, userUuid);
         }
 
         return PageResult.of(page, size, total, results);
@@ -188,9 +188,9 @@ public class SearchServiceImpl implements SearchService {
      * {@inheritDoc}
      */
     @Override
-    public List<String> getHistory(Long userId) {
+    public List<String> getHistory(UUID userUuid) {
         List<String> history = redisTemplate.opsForList()
-                .range(RedisKeyConstant.getSearchHistoryKey(userId), 0, HISTORY_MAX_SIZE - 1);
+                .range(RedisKeyConstant.getSearchHistoryKey(userUuid), 0, HISTORY_MAX_SIZE - 1);
         return history == null ? List.of() : history;
     }
 
@@ -198,8 +198,8 @@ public class SearchServiceImpl implements SearchService {
      * {@inheritDoc}
      */
     @Override
-    public void clearHistory(Long userId) {
-        redisTemplate.delete(RedisKeyConstant.getSearchHistoryKey(userId));
+    public void clearHistory(UUID userUuid) {
+        redisTemplate.delete(RedisKeyConstant.getSearchHistoryKey(userUuid));
     }
 
     /**
@@ -425,9 +425,9 @@ public class SearchServiceImpl implements SearchService {
      * 記錄搜尋關鍵字至 Redis 熱門榜與個人歷史
      *
      * @param keyword 搜尋關鍵字
-     * @param userId  用戶 ID（匿名為 null）
+     * @param userUuid 用戶 UUID（匿名為 null）
      */
-    private void recordSearch(String keyword, Long userId) {
+    private void recordSearch(String keyword, UUID userUuid) {
         String lower = keyword.toLowerCase();
         /** 更新熱門搜尋 ZSet（分數遞增），限制最多 500 個成員避免無限增長 */
         redisTemplate.opsForZSet().incrementScore(RedisKeyConstant.SEARCH_HOT_KEY, lower, 1.0);
@@ -437,8 +437,8 @@ public class SearchServiceImpl implements SearchService {
         }
 
         /** 記錄個人搜尋歷史 */
-        if (userId != null) {
-            String historyKey = RedisKeyConstant.getSearchHistoryKey(userId);
+        if (userUuid != null) {
+            String historyKey = RedisKeyConstant.getSearchHistoryKey(userUuid);
             redisTemplate.opsForList().leftPush(historyKey, lower);
             redisTemplate.opsForList().trim(historyKey, 0, HISTORY_MAX_SIZE - 1);
             redisTemplate.expire(historyKey, RedisKeyConstant.SEARCH_HISTORY_TTL_DAYS, java.util.concurrent.TimeUnit.DAYS);

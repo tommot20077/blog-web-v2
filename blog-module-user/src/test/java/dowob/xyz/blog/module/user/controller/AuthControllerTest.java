@@ -2,8 +2,12 @@ package dowob.xyz.blog.module.user.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.security.AuthState;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
@@ -30,9 +34,10 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
@@ -80,6 +85,13 @@ class AuthControllerTest {
     /** Mock：用戶認證服務（JwtAuthenticationFilter 所需） */
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
+
+    /** 測試用使用者 uuid */
+    private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
     /** 測試用電子信箱 */
     private static final String TEST_EMAIL = "test@example.com";
@@ -282,15 +294,19 @@ class AuthControllerTest {
     @DisplayName("POST /logout → 已登入用戶 → 應回傳 200 並清除 Cookie")
     void logout_authenticatedUser_shouldReturn200AndClearCookie() throws Exception {
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                1L, null, List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
+                new AuthUser(1L, USER_UUID, Role.USER), null,
+                List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
 
-        doNothing().when(authService).logout(anyLong(), any());
+        doNothing().when(authService).logout(any(UUID.class), any());
 
         mockMvc.perform(post("/api/v1/auth/logout")
+                        .cookie(new Cookie("refreshToken", "some.refresh.token"))
                         .with(authentication(auth)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(header().exists("Set-Cookie"));
+
+        verify(authService).logout(USER_UUID, "some.refresh.token");
     }
 
     // =========================================================================
@@ -652,7 +668,7 @@ class AuthControllerTest {
         @SuppressWarnings("unchecked")
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
+        when(jwtService.getUserUuidFromToken("valid.refresh.token")).thenReturn(USER_UUID);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.score(anyString(), anyString())).thenReturn(null);
 
@@ -663,47 +679,54 @@ class AuthControllerTest {
     }
 
     /**
-     * 驗證：帳號已被停權時 refresh 應回傳 ACCOUNT_SUSPENDED 錯誤碼。
+     * 驗證：帳號已被停權（BANNED）時 refresh 應回傳 ACCOUNT_SUSPENDED 錯誤碼，且不簽發新 token。
      */
     @Test
     @DisplayName("POST /refresh → 帳號已停權 → 應回傳 ACCOUNT_SUSPENDED 錯誤碼")
     void refresh_accountSuspended_shouldReturnAccountSuspendedError() throws Exception {
-        @SuppressWarnings("unchecked")
-        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
-        @SuppressWarnings("unchecked")
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
-
-        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
-        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
-        when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList("v1", "SUSPENDED", null));
+        givenRefreshTokenInZSet();
+        when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
+                new AuthState(1L, USER_UUID, UserStatus.BANNED, Role.USER, "v1")));
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.ACCOUNT_SUSPENDED.getCode()));
+
+        verify(jwtService, never()).generateAccessToken(any(UUID.class), anyString(), anyString());
     }
 
     /**
-     * 驗證：Token 有效且帳號正常時 refresh 應回傳新的 Access Token（role 與 version 皆有值）。
+     * 驗證：refresh 只接受 ACTIVE——PENDING_VERIFICATION（filter 放行、refresh 不放行）與 DELETED 都被拒絕。
+     * 此政策維持現狀，不因改用 loader 而放寬。
      */
     @Test
-    @DisplayName("POST /refresh → Token 有效且帳號正常（role/version 皆存在）→ 應回傳新 Access Token")
-    void refresh_validToken_shouldReturnNewAccessToken() throws Exception {
-        @SuppressWarnings("unchecked")
-        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
-        @SuppressWarnings("unchecked")
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+    @DisplayName("POST /refresh → 帳號為 PENDING_VERIFICATION 或 DELETED → 仍回傳 ACCOUNT_SUSPENDED（只接受 ACTIVE）")
+    void refresh_nonActiveStatuses_shouldBeRejected() throws Exception {
+        givenRefreshTokenInZSet();
 
-        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
-        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
-        when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList("v1", "ACTIVE", "USER"));
-        when(jwtService.generateAccessToken(anyLong(), anyString(), anyString()))
+        for (UserStatus status : List.of(UserStatus.PENDING_VERIFICATION, UserStatus.DELETED)) {
+            when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
+                    new AuthState(1L, USER_UUID, status, Role.USER, "v1")));
+
+            mockMvc.perform(post("/api/v1/auth/refresh")
+                            .cookie(new Cookie("refreshToken", "valid.refresh.token")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(UserErrorCode.ACCOUNT_SUSPENDED.getCode()));
+        }
+        verify(jwtService, never()).generateAccessToken(any(UUID.class), anyString(), anyString());
+    }
+
+    /**
+     * 驗證：Token 有效且帳號正常時 refresh 應回傳新的 Access Token。
+     */
+    @Test
+    @DisplayName("POST /refresh → Token 有效且帳號正常 → 應回傳新 Access Token")
+    void refresh_validToken_shouldReturnNewAccessToken() throws Exception {
+        givenRefreshTokenInZSet();
+        when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
+                new AuthState(1L, USER_UUID, UserStatus.ACTIVE, Role.USER, "v1")));
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString()))
                 .thenReturn("new.access.token");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
@@ -714,25 +737,22 @@ class AuthControllerTest {
     }
 
     /**
-     * 驗證：Token 有效但 Redis auth hash 缺 role 欄位時，refresh 應從 DB 補回用戶實際角色，
-     * 而非降級為預設 "USER"。此為 refresh 角色降級 bug 的迴歸測試。
+     * SEC-26 迴歸：Redis auth hash 被刪除（或過期）後 refresh 不得誤判為 ACCOUNT_SUSPENDED。
+     *
+     * <p>舊行為：controller 直接讀 hash，欄位全為 null 時 status 不是 ACTIVE，被當成停權。
+     * 新行為：改走 loader，miss 時由 loader 查 DB 並回填，refresh 成功且角色取自 DB 的實際角色。</p>
      */
     @Test
-    @DisplayName("POST /refresh → Redis 缺 role 欄位 → 應從 DB 補角色而非降級為 USER")
-    void refresh_roleMissingInRedis_shouldFallBackToDbRole() throws Exception {
-        @SuppressWarnings("unchecked")
-        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
-        @SuppressWarnings("unchecked")
+    @DisplayName("SEC-26：POST /refresh → Redis auth hash 已被刪除 → 由 loader 回填後仍成功（不誤判停權）")
+    @SuppressWarnings("unchecked")
+    void refresh_redisAuthHashDeleted_shouldSucceedViaLoader() throws Exception {
+        givenRefreshTokenInZSet();
         HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
-
-        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
-        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
-        when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList("v1", "ACTIVE", null));
-        when(authService.resolveUserRole(1L)).thenReturn("AUTHOR");
-        when(jwtService.generateAccessToken(eq(1L), eq("AUTHOR"), eq("v1")))
+        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList(null, null, null));
+        when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
+                new AuthState(1L, USER_UUID, UserStatus.ACTIVE, Role.AUTHOR, "v7")));
+        when(jwtService.generateAccessToken(eq(USER_UUID), eq("AUTHOR"), eq("v7")))
                 .thenReturn("new.access.token.author");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
@@ -741,37 +761,54 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.accessToken").value("new.access.token.author"));
 
-        verify(jwtService).generateAccessToken(1L, "AUTHOR", "v1");
+        verify(jwtService).generateAccessToken(USER_UUID, "AUTHOR", "v7");
     }
 
     /**
-     * 驗證：Token 有效但 Redis auth hash 缺 version 欄位時，refresh 應以預設版本 "v1"
-     * 產生新 Access Token（`version != null ? version : "v1"` 分支的迴歸覆蓋）。
+     * 驗證：loader 在 Redis 與 DB 都查不到使用者時，refresh 回傳 401 未認證（而非 500 或停權）。
      */
     @Test
-    @DisplayName("POST /refresh → Redis 缺 version 欄位 → 應以預設 v1 產生新 Access Token")
-    void refresh_versionMissingInRedis_shouldUseV1Default() throws Exception {
-        @SuppressWarnings("unchecked")
-        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
-        @SuppressWarnings("unchecked")
-        HashOperations<String, Object, Object> hashOps = mock(HashOperations.class);
+    @DisplayName("POST /refresh → loader 查無使用者 → 應回傳 401 未認證錯誤")
+    void refresh_userNotFound_shouldReturnUnauthenticated() throws Exception {
+        givenRefreshTokenInZSet();
+        when(authStateLoader.load(USER_UUID)).thenReturn(Optional.empty());
 
-        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
-        when(jwtService.getUserIdFromToken("valid.refresh.token")).thenReturn("1");
-        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
-        when(zSetOps.score(anyString(), anyString())).thenReturn(1.0);
-        when(redisTemplate.opsForHash()).thenReturn(hashOps);
-        when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList(null, "ACTIVE", "USER"));
-        when(jwtService.generateAccessToken(eq(1L), eq("USER"), eq("v1")))
-                .thenReturn("new.access.token.v1default");
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .cookie(new Cookie("refreshToken", "valid.refresh.token")))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("A0005"));
+    }
+
+    /**
+     * 驗證：新 Access Token 的版本號取自 loader（DB／快取的最新 tokenVersion），而不是寫死的預設值。
+     */
+    @Test
+    @DisplayName("POST /refresh → 新 Access Token 使用 loader 回傳的 tokenVersion")
+    void refresh_shouldUseTokenVersionFromLoader() throws Exception {
+        givenRefreshTokenInZSet();
+        when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
+                new AuthState(1L, USER_UUID, UserStatus.ACTIVE, Role.USER, "v3")));
+        when(jwtService.generateAccessToken(eq(USER_UUID), eq("USER"), eq("v3")))
+                .thenReturn("new.access.token.v3");
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("00000"))
-                .andExpect(jsonPath("$.data.accessToken").value("new.access.token.v1default"));
+                .andExpect(jsonPath("$.data.accessToken").value("new.access.token.v3"));
 
-        verify(jwtService).generateAccessToken(1L, "USER", "v1");
+        verify(jwtService).generateAccessToken(USER_UUID, "USER", "v3");
+    }
+
+    /**
+     * 準備「refresh token 有效且仍在該使用者的 refresh ZSet 內」的前置條件。
+     */
+    @SuppressWarnings("unchecked")
+    private void givenRefreshTokenInZSet() {
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(jwtService.validateRefreshToken("valid.refresh.token")).thenReturn(true);
+        when(jwtService.getUserUuidFromToken("valid.refresh.token")).thenReturn(USER_UUID);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.score(eq("user:refresh:" + USER_UUID), eq("valid.refresh.token"))).thenReturn(1.0);
     }
 
     // =========================================================================

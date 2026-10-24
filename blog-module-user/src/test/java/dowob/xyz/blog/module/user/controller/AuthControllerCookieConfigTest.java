@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.user.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.user.model.dto.request.LoginRequest;
@@ -52,6 +53,10 @@ class AuthControllerCookieConfigTest {
 
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
 
     @Test
     @DisplayName("POST /login → app.cookie.secure=false → Set-Cookie 不含 Secure flag")

@@ -58,6 +58,10 @@ class UserServiceTest {
     /** 測試用用戶 ID */
     private static final Long TEST_USER_ID = 1L;
 
+    /** 測試用用戶 UUID（session 撤銷以 uuid 為鍵） */
+    private static final java.util.UUID TEST_USER_UUID =
+            java.util.UUID.fromString("11111111-2222-3333-4444-555555555555");
+
     /** 測試用密碼 */
     private static final String TEST_PASSWORD = "password123";
 
@@ -271,7 +275,7 @@ class UserServiceTest {
 
         userService.changePassword(TEST_USER_ID, TEST_PASSWORD, "newPassword");
 
-        verify(sessionRevoker).revokeAllSessions(TEST_USER_ID);
+        verify(sessionRevoker).revokeAllSessions(TEST_USER_UUID);
     }
 
     /* =========================================================================
@@ -336,7 +340,7 @@ class UserServiceTest {
 
         userService.deleteAccount(TEST_USER_ID, TEST_PASSWORD);
 
-        verify(sessionRevoker).revokeAllSessions(TEST_USER_ID);
+        verify(sessionRevoker).revokeAllSessions(TEST_USER_UUID);
     }
 
     /* =========================================================================
@@ -404,6 +408,7 @@ class UserServiceTest {
     private User buildActiveUser() {
         User user = new User();
         user.setId(TEST_USER_ID);
+        user.setUuid(TEST_USER_UUID);
         user.setEmail("test@example.com");
         user.setPasswordHash("encodedPassword");
         user.setNickname(TEST_NICKNAME);
