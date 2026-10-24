@@ -442,7 +442,7 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 2. RED：先寫失敗測試，至少涵蓋
    - repository／mapper 以 uuid 讀寫（IT）
    - **回填 IT**：比照 blog-module-comment 的 CommentArticleUuidMigrationIT——Flyway 固定在 V<N-1>、灌資料、再跑 V<N>，斷言 uuid 回填正確、舊欄位已移除
-   - **寫入時的存在性檢查仍成立**：對不存在的 article／series uuid 寫入 → 仍回 404 且不落任何列（FK 拿掉後這是唯一防線）
+   - **寫入時的存在性檢查仍成立**：對不存在的 article／series uuid 寫入 → 回應狀態碼與錯誤碼與改造前相同（`BusinessException` 一律 400，例如 A0201）且不落任何列（FK 拿掉後這是唯一防線）
    - 刪除連動（僅限原本有 FK CASCADE／SET NULL 者）：收到共用事件後資料被刪除或設 NULL；重複收到同一事件不出錯
    - 校正排程子類別：孤兒被移除、非孤兒保留（IT）
    - T2 條目：同一請求重複兩次 → 回 200 且計數只變一次（IT，真 Postgres，不得 mock 約束）

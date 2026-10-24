@@ -3,6 +3,7 @@ package dowob.xyz.blog.infrastructure.reconciliation;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.Tags;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -153,6 +154,20 @@ public abstract class OrphanReconciliationJob {
 
     /** gauge 是否已註冊（module()／table() 為抽象方法，不在建構子中呼叫） */
     private final AtomicBoolean gaugeRegistered = new AtomicBoolean();
+
+    /**
+     * 以預設頁大小、單次頁數上限與<b>全域 registry</b>（{@link Metrics#globalRegistry}）建立。
+     *
+     * <p>供不想注入 {@link MeterRegistry} 的子類別使用：沒有 actuator 的模組（例如各模組的測試應用程式）
+     * 不會有 {@code MeterRegistry} bean，強制注入會讓每個模組都得自己補一個。正式環境 Spring Boot 會把
+     * 自動配置的 registry 綁到全域 registry（{@code management.metrics.use-global-registry} 預設 true），
+     * 指標照常輸出；全域 registry 尚未掛任何子 registry 時，指標呼叫為 no-op，不影響校正行為。</p>
+     *
+     * @param redis Redis 操作模板（鎖與游標）
+     */
+    protected OrphanReconciliationJob(StringRedisTemplate redis) {
+        this(redis, Metrics.globalRegistry);
+    }
 
     /**
      * 以預設頁大小與單次頁數上限建立。

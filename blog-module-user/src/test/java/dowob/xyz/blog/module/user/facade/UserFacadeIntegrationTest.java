@@ -4,6 +4,8 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.user.mapper.UserMapper;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.repository.UserRepository;
@@ -84,6 +86,61 @@ class UserFacadeIntegrationTest extends AbstractIntegrationTest {
             assertThat(row.getPasswordHash()).isNull();
             assertThat(row.getEmail()).isNull();
         });
+    }
+
+    @Test
+    @DisplayName("getDisplayInfoByUuids → 真實 SQL 回傳正確的 uuid、nickname、avatarUrl，重複與查無的 uuid 不影響結果")
+    void getDisplayInfoByUuids_realDatabase_returnsProjectionKeyedByUuid() {
+        User alice = createUser("alice-display", "Alice");
+        alice.setAvatarUrl("https://img.example.com/alice.png");
+        userRepository.save(alice);
+        User bob = createUser("bob-display", "Bob");
+
+        Map<UUID, UserDisplayInfo> result = userFacade.getDisplayInfoByUuids(
+                List.of(alice.getUuid(), bob.getUuid(), alice.getUuid(), UUID.randomUUID()));
+
+        assertThat(result).containsOnlyKeys(alice.getUuid(), bob.getUuid());
+        assertThat(result.get(alice.getUuid()))
+                .isEqualTo(new UserDisplayInfo(alice.getUuid(), "Alice", "https://img.example.com/alice.png"));
+        assertThat(result.get(bob.getUuid()))
+                .isEqualTo(new UserDisplayInfo(bob.getUuid(), "Bob", null));
+    }
+
+    @Test
+    @DisplayName("getDisplayInfoByUuids → 不依 status 過濾：停權與軟刪除使用者仍回傳暱稱與頭像（與先前 LEFT JOIN users 行為相同）")
+    void getDisplayInfoByUuids_bannedAndDeletedUsers_areStillReturned() {
+        User banned = createUser("banned-display", "Banned");
+        banned.setStatus(UserStatus.BANNED);
+        banned.setAvatarUrl("https://img.example.com/banned.png");
+        userRepository.save(banned);
+        User deleted = createUser("deleted-display", "Deleted");
+        deleted.setStatus(UserStatus.DELETED);
+        userRepository.save(deleted);
+
+        Map<UUID, UserDisplayInfo> result = userFacade.getDisplayInfoByUuids(
+                List.of(banned.getUuid(), deleted.getUuid()));
+
+        assertThat(result).containsOnlyKeys(banned.getUuid(), deleted.getUuid());
+        assertThat(result.get(banned.getUuid()).nickname()).isEqualTo("Banned");
+        assertThat(result.get(banned.getUuid()).avatarUrl()).isEqualTo("https://img.example.com/banned.png");
+        assertThat(result.get(deleted.getUuid()).nickname()).isEqualTo("Deleted");
+    }
+
+    @Test
+    @DisplayName("getDisplayInfoByUuids → 超過批次上限的 uuid 仍能完整查回（切批後結果不遺漏）")
+    void getDisplayInfoByUuids_moreThanBatchSize_returnsAllExistingUsers() {
+        User alice = createUser("alice-batch-display", "Alice");
+        User bob = createUser("bob-batch-display", "Bob");
+        List<UUID> input = new ArrayList<>();
+        for (int i = 0; i < BatchedQuery.BATCH_SIZE + 50; i++) {
+            input.add(UUID.randomUUID());
+        }
+        input.set(0, alice.getUuid());
+        input.set(input.size() - 1, bob.getUuid());
+
+        Map<UUID, UserDisplayInfo> result = userFacade.getDisplayInfoByUuids(input);
+
+        assertThat(result).containsOnlyKeys(alice.getUuid(), bob.getUuid());
     }
 
     /**

@@ -1,10 +1,11 @@
 package dowob.xyz.blog.module.comment.service;
 
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
-import dowob.xyz.blog.module.comment.model.CommentWithAuthor;
+import dowob.xyz.blog.module.comment.model.CommentRow;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,7 +22,6 @@ import java.util.stream.IntStream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -46,6 +46,7 @@ class CommentBatchingTest {
 
     @Mock private CommentMapper commentMapper;
     @Mock private ArticleFacade articleFacade;
+    @Mock private UserFacade userFacade;
     @Mock private CommentMarkdownRenderer renderer;
     @InjectMocks private CommentService commentService;
 
@@ -61,8 +62,8 @@ class CommentBatchingTest {
      * @param id 留言主鍵
      * @return 留言列
      */
-    private CommentWithAuthor topLevel(long id) {
-        CommentWithAuthor c = new CommentWithAuthor();
+    private CommentRow topLevel(long id) {
+        CommentRow c = new CommentRow();
         c.setId(id);
         return c;
     }
@@ -72,23 +73,24 @@ class CommentBatchingTest {
     void bothInQueriesSplitIntoBatches() {
         int total = BatchedQuery.BATCH_SIZE + 100;
         UUID articleUuid = UUID.randomUUID();
+        UUID viewerUuid = UUID.randomUUID();
 
         when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                new ArticleData(1L, articleUuid, 9L, "PUBLISHED", null, null)));
-        when(commentMapper.findTopLevelByArticle(anyLong(), anyString(), anyInt(), anyInt()))
+                new ArticleData(1L, articleUuid, 9L, "PUBLISHED", null, null, UUID.randomUUID(), null)));
+        when(commentMapper.findTopLevelByArticle(eq(articleUuid), anyString(), anyInt(), anyInt()))
                 .thenReturn(IntStream.rangeClosed(1, total).mapToObj(i -> topLevel(i)).toList());
         when(commentMapper.findRepliesByParentIds(anyList())).thenAnswer(invocation -> {
             List<Long> batch = invocation.getArgument(0);
             replyBatchSizes.add(batch.size());
-            return List.<CommentWithAuthor>of();
+            return List.<CommentRow>of();
         });
-        when(commentMapper.findLikedCommentIdsByUser(eq(5L), anyList())).thenAnswer(invocation -> {
+        when(commentMapper.findLikedCommentIdsByUser(eq(viewerUuid), anyList())).thenAnswer(invocation -> {
             List<Long> batch = invocation.getArgument(1);
             likedBatchSizes.add(batch.size());
             return List.<Long>of();
         });
 
-        commentService.listComments(articleUuid, 5L, false, "newest", 1, total);
+        commentService.listComments(articleUuid, viewerUuid, false, "newest", 1, total);
 
         assertThat(replyBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
         assertThat(likedBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);

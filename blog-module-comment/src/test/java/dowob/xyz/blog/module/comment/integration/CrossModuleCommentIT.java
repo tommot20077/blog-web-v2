@@ -18,7 +18,14 @@ import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.model.CommentLike;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
 import dowob.xyz.blog.module.comment.repository.CommentLikeRepository;
+import dowob.xyz.blog.module.comment.consumer.CommentArticleDeletedConsumer;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
+import dowob.xyz.blog.module.comment.support.SeededUsers;
+import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
+import org.mockito.Mockito;
+import org.springframework.jdbc.core.JdbcTemplate;
+import java.time.Instant;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -60,7 +67,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ol>
  *     <li>文章 commentCount / likeCount 反映 API 操作後狀態</li>
  *     <li>ArticleSummaryResponse.liked 反映當前使用者按讚狀態</li>
- *     <li>文章物理刪除連帶清 comments + article_likes（FK CASCADE）</li>
+ *     <li>文章物理刪除：article_likes 由 FK CASCADE 清除；comments（與 comment_likes）已無 FK，改由 CommentArticleDeletedConsumer 處理刪除事件後清除</li>
  *     <li>留言物理刪除連帶清 comment_likes（FK CASCADE）</li>
  * </ol>
  *
@@ -97,6 +104,8 @@ class CrossModuleCommentIT {
     @Autowired private ArticleLikeRepository articleLikeRepo;
     @Autowired private CommentRepository commentRepo;
     @Autowired private CommentLikeRepository commentLikeRepo;
+    @Autowired private CommentArticleDeletedConsumer consumer;
+    @Autowired private JdbcTemplate jdbc;
 
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
@@ -107,8 +116,9 @@ class CrossModuleCommentIT {
     /** article 模組的 ArticleFileBinder 依賴 FileFacade，其實作在 blog-module-file（未被本測試 scan） */
     @MockitoBean private FileFacade fileFacade;
 
-    private static final Long USER_ID = 1L;
-    private static final Long OTHER_USER_ID = 2L;
+    private static final Long USER_ID = SeededUsers.USER_ID;
+    private static final Long OTHER_USER_ID = SeededUsers.OTHER_USER_ID;
+    private static final UUID USER_UUID = SeededUsers.USER_UUID;
     private UUID articleUuid;
     private Long articleId;
 
@@ -146,11 +156,12 @@ class CrossModuleCommentIT {
      * <p>同時注入角色及其對應的 Permission authorities。</p>
      */
     private RequestPostProcessor asUser(Long userId, Role role) {
+        UUID userUuid = new UUID(0L, userId);     // 與 seed 的固定 uuid（00000000-0000-0000-0000-00000000000N）一致
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, userUuid, role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -206,21 +217,26 @@ class CrossModuleCommentIT {
         assertThat(articleRepo.findByUuid(articleUuid).orElseThrow().getLikeCount()).isEqualTo(1);
     }
 
-    // ─── Test 3: 文章硬刪除 CASCADE comments + article_likes ──────────────────
+    // ─── Test 3: 文章刪除 → consumer 清 comments + comment_likes；article_likes 仍由 FK CASCADE ─────
 
     @Test
-    @DisplayName("Article 物理刪除連帶清 comments + article_likes (FK CASCADE)")
-    void deleteArticle_cascadeDeletesCommentsAndLikes() {
+    @DisplayName("Article 物理刪除：comments 與 comment_likes 由 CommentArticleDeletedConsumer 處理事件後清除；article_likes 仍由 FK CASCADE 清除")
+    void deleteArticle_consumerRemovesCommentsAndLikes_fkCascadesArticleLikes() throws Exception {
         // 直接寫入 Comment（不走 Service，避免影響 commentCount）
         Comment c = new Comment();
         c.setUuid(UUID.randomUUID());
-        c.setArticleId(articleId);
         c.setArticleUuid(articleUuid);
-        c.setUserId(USER_ID);
+        c.setUserUuid(USER_UUID);
         c.setContent("cascade test");
         c.setContentHtml("<p>cascade test</p>");
         c.setLikeCount(0);
         Comment savedComment = commentRepo.save(c);
+
+        CommentLike commentLike = new CommentLike();
+        commentLike.setUserUuid(USER_UUID);
+        commentLike.setCommentId(savedComment.getId());
+        commentLike.setCreatedAt(LocalDateTime.now());
+        commentLikeRepo.save(commentLike);
 
         // 直接寫入 ArticleLike
         ArticleLike like = new ArticleLike();
@@ -232,12 +248,21 @@ class CrossModuleCommentIT {
         assertThat(commentRepo.findByUuid(savedComment.getUuid())).isPresent();
         assertThat(articleLikeRepo.findByUserIdAndArticleId(USER_ID, articleId)).isPresent();
 
-        // 物理刪除文章 → 應觸發 FK CASCADE
+        // 物理刪除文章：comments 已無指向 articles 的 FK，不會連帶刪除；article_likes 的 FK CASCADE（非本模組）仍生效
         articleRepo.deleteById(articleId);
 
-        // 驗證 cascade：comments 與 article_likes 均已清除
-        assertThat(commentRepo.findByUuid(savedComment.getUuid())).isEmpty();
+        assertThat(commentRepo.findByUuid(savedComment.getUuid()))
+                .as("FK 已移除：僅刪文章不會連帶刪留言，須等 consumer 處理事件").isPresent();
         assertThat(articleLikeRepo.findByUserIdAndArticleId(USER_ID, articleId)).isEmpty();
+
+        // 處理文章刪除事件 → 留言與留言讚消失（留言讚經模組內 FK 隨留言 CASCADE）
+        Channel channel = Mockito.mock(Channel.class);
+        consumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleId, articleUuid, USER_ID, null,
+                List.of(), List.of(), Instant.now(), SeededUsers.USER_UUID, null), channel, 1L);
+
+        assertThat(commentRepo.findByUuid(savedComment.getUuid())).isEmpty();
+        Integer remainingLikes = jdbc.queryForObject("SELECT COUNT(*) FROM comment_likes", Integer.class);
+        assertThat(remainingLikes).isZero();
     }
 
     // ─── Test 4: 留言硬刪除 CASCADE comment_likes ─────────────────────────────
@@ -248,9 +273,8 @@ class CrossModuleCommentIT {
         // 直接寫入 Comment
         Comment c = new Comment();
         c.setUuid(UUID.randomUUID());
-        c.setArticleId(articleId);
         c.setArticleUuid(articleUuid);
-        c.setUserId(USER_ID);
+        c.setUserUuid(USER_UUID);
         c.setContent("cl cascade");
         c.setContentHtml("<p>cl cascade</p>");
         c.setLikeCount(0);
@@ -259,17 +283,17 @@ class CrossModuleCommentIT {
 
         // 直接寫入 CommentLike
         CommentLike cl = new CommentLike();
-        cl.setUserId(USER_ID);
+        cl.setUserUuid(USER_UUID);
         cl.setCommentId(savedCommentId);
         cl.setCreatedAt(LocalDateTime.now());
         commentLikeRepo.save(cl);
 
-        assertThat(commentLikeRepo.findByUserIdAndCommentId(USER_ID, savedCommentId)).isPresent();
+        assertThat(commentLikeRepo.findByUserUuidAndCommentId(USER_UUID, savedCommentId)).isPresent();
 
         // 物理刪除留言 → 應觸發 FK CASCADE
         commentRepo.deleteById(savedCommentId);
 
         // 驗證 cascade：comment_likes 已清除
-        assertThat(commentLikeRepo.findByUserIdAndCommentId(USER_ID, savedCommentId)).isEmpty();
+        assertThat(commentLikeRepo.findByUserUuidAndCommentId(USER_UUID, savedCommentId)).isEmpty();
     }
 }
