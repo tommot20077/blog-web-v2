@@ -3,7 +3,10 @@ package dowob.xyz.blog.module.user.controller;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.security.AuthState;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
@@ -31,7 +34,6 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -57,6 +59,9 @@ public class AuthController {
 
     /** Redis 操作模板，用於 Refresh Token 比對 */
     private final StringRedisTemplate redisTemplate;
+
+    /** 認證狀態載入器（與 JwtAuthenticationFilter 共用，Redis miss 時查 DB 回填） */
+    private final AuthStateLoader authStateLoader;
 
     /** Cookie Secure flag；dev 環境設 false 以支援 http + Firefox/Safari */
     @Value("${app.cookie.secure:true}")
@@ -109,7 +114,8 @@ public class AuthController {
     /**
      * 刷新 Access Token
      *
-     * <p>從 Cookie 取得 Refresh Token，驗證有效性後發放新的 Access Token。</p>
+     * <p>從 Cookie 取得 Refresh Token，驗證有效性後發放新的 Access Token。帳號狀態與角色經
+     * {@link AuthStateLoader} 取得（Redis 優先，miss 回填 DB），只有 ACTIVE 帳號可以續期。</p>
      *
      * @param refreshToken Cookie 中的 Refresh Token
      * @return 含新 Access Token 的認證回應
@@ -134,22 +140,18 @@ public class AuthController {
             throw unauthenticatedRefresh();
         }
 
-        /** 單次 multiGet 取回 version/status/role 三個欄位，避免對同一把 key 連做三次往返 */
-        List<Object> authFields = redisTemplate.opsForHash().multiGet(
-                RedisKeyConstant.getUserAuthKey(userUuid),
-                List.of(RedisKeyConstant.FIELD_VERSION, RedisKeyConstant.FIELD_STATUS, RedisKeyConstant.FIELD_ROLE));
-        String version = (String) authFields.get(0);
-        String status = (String) authFields.get(1);
-        String roleStr = (String) authFields.get(2);
+        /** 與 JwtAuthenticationFilter 共用 loader：Redis 命中即用，miss 查 DB 回填（修正 SEC-26：miss 不再誤判停權） */
+        AuthState authState = authStateLoader.load(userUuid).orElseThrow(this::unauthenticatedRefresh);
 
-        if (!"ACTIVE".equals(status)) {
+        /** 政策維持現狀：refresh 只接受 ACTIVE（比 filter 嚴格，PENDING_VERIFICATION 不可續期） */
+        if (authState.status() != UserStatus.ACTIVE) {
             throw new BusinessException(UserErrorCode.ACCOUNT_SUSPENDED);
         }
 
         String newAccessToken = jwtService.generateAccessToken(
                 userUuid,
-                roleStr != null ? roleStr : authService.resolveUserRole(userUuid),
-                version != null ? version : "v1"
+                authState.role().name(),
+                authState.tokenVersion()
         );
 
         return ApiResponse.success(new AuthResponse(newAccessToken));
