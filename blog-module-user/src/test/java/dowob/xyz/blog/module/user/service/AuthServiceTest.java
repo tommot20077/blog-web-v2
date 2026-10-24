@@ -30,6 +30,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -280,7 +281,8 @@ class AuthServiceTest {
 
         assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
         assertThat(result.refreshToken()).isEqualTo(MOCK_REFRESH_TOKEN);
-        verify(hashOperations, times(4)).put(anyString(), anyString(), anyString());
+        verify(hashOperations).putAll(eq("user:auth:" + USER_UUID), anyMap());
+        verify(hashOperations, never()).put(anyString(), anyString(), anyString());
         verify(zSetOps).add(anyString(), eq(MOCK_REFRESH_TOKEN), anyDouble());
     }
 
@@ -1622,7 +1624,8 @@ class AuthServiceTest {
      * 驗證：login 寫入的 auth hash 必須含 id（欄位值為資料庫主鍵），且 key 以 uuid 為鍵。
      */
     @Test
-    @DisplayName("login → auth hash 以 uuid 為鍵，且寫入 id／version／status／role 四個欄位")
+    @DisplayName("login → auth hash 以 uuid 為鍵，且以一次 putAll 寫入 id／version／status／role 四個欄位")
+    @SuppressWarnings("unchecked")
     void login_shouldWriteIdIntoAuthHashKeyedByUuid() {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
@@ -1639,11 +1642,13 @@ class AuthServiceTest {
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
-        String authKey = "user:auth:" + USER_UUID;
-        verify(hashOperations).put(authKey, RedisKeyConstant.FIELD_ID, "1");
-        verify(hashOperations).put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
-        verify(hashOperations).put(authKey, RedisKeyConstant.FIELD_STATUS, "ACTIVE");
-        verify(hashOperations).put(authKey, RedisKeyConstant.FIELD_ROLE, "AUTHOR");
+        ArgumentCaptor<Map<String, String>> fields = ArgumentCaptor.forClass(Map.class);
+        verify(hashOperations).putAll(eq("user:auth:" + USER_UUID), fields.capture());
+        assertThat(fields.getValue()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                RedisKeyConstant.FIELD_ID, "1",
+                RedisKeyConstant.FIELD_VERSION, "v1",
+                RedisKeyConstant.FIELD_STATUS, "ACTIVE",
+                RedisKeyConstant.FIELD_ROLE, "AUTHOR"));
     }
 
     /**

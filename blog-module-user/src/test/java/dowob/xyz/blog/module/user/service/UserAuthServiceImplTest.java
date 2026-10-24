@@ -201,6 +201,18 @@ class UserAuthServiceImplTest {
         assertThat(userAuthServiceImpl.findAuthStateByUuid(TEST_USER_UUID)).isEmpty();
     }
 
+    /**
+     * 驗證：users.token_version 欄位可為 NULL，遇到 null 時不得建出缺欄位的 AuthState，改回 empty。
+     */
+    @Test
+    @DisplayName("findAuthStateByUuid → tokenVersion 為 null → 應回傳 empty（不建 AuthState）")
+    void findAuthStateByUuid_nullTokenVersion_shouldReturnEmpty() {
+        User user = buildUser(UserStatus.ACTIVE, null);
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(user));
+
+        assertThat(userAuthServiceImpl.findAuthStateByUuid(TEST_USER_UUID)).isEmpty();
+    }
+
     /* =========================================================================
        測試輔助方法
        ========================================================================= */

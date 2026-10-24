@@ -28,6 +28,11 @@ import java.util.concurrent.TimeUnit;
  * <p>本類只負責「取資料」，不判斷哪些狀態可以通過——該政策留在呼叫端
  * （filter 接受 ACTIVE 與 PENDING_VERIFICATION，refresh 只接受 ACTIVE）。</p>
  *
+ * <p><b>已知競態（既有，本類未處理）</b>：撤銷（{@code SessionRevoker} 於 afterCommit 刪除 auth key）
+ * 與併發請求之間仍存在 BUG-2026-002 型競態——併發請求若在提交前以「舊的 DB 讀值」開始回填，
+ * 回填寫入可能落在 afterCommit 刪 key 之後，使舊版本快取復活。現況與改造前的 filter 行為相同，
+ * 根治方案另案處理。</p>
+ *
  * @author Yuan
  * @version 1.0
  */

@@ -26,6 +26,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -220,10 +221,12 @@ public class AuthService {
 
         /** auth hash 以 uuid 為鍵；id 欄位供 JwtAuthenticationFilter 組出 AuthUser（缺 id 的 hash 會被視為 miss） */
         String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
-        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ID, String.valueOf(user.getId()));
-        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, user.getTokenVersion());
-        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, user.getStatus().name());
-        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ROLE, user.getRole().name());
+        /** 一次 putAll 寫入四個欄位（與 AuthStateLoader 回填一致，避免寫到一半留下半殘 hash） */
+        redisTemplate.opsForHash().putAll(authKey, Map.of(
+                RedisKeyConstant.FIELD_ID, String.valueOf(user.getId()),
+                RedisKeyConstant.FIELD_VERSION, user.getTokenVersion(),
+                RedisKeyConstant.FIELD_STATUS, user.getStatus().name(),
+                RedisKeyConstant.FIELD_ROLE, user.getRole().name()));
         redisTemplate.expire(authKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
 
         String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());

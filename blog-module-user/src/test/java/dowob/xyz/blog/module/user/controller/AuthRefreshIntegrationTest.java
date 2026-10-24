@@ -109,6 +109,22 @@ class AuthRefreshIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    @DisplayName("Redis hash 缺 version、DB 的 version 為 v3 → refresh 新發的 access token 帶 v3，hash 回填 v3")
+    void refresh_hashMissingVersionAndDbVersionV3_shouldIssueTokenWithV3() {
+        User user = saveUser(UserStatus.ACTIVE, Role.USER);
+        LoginResult login = authService.login(TEST_EMAIL, TEST_PASSWORD);
+        user.setTokenVersion("v3");
+        userRepository.save(user);
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        redisTemplate.opsForHash().delete(authKey, RedisKeyConstant.FIELD_VERSION);
+
+        ApiResponse<AuthResponse> response = authController.refresh(login.refreshToken());
+
+        assertThat(jwtService.getVersionFromToken(response.getData().getAccessToken())).isEqualTo("v3");
+        assertThat(redisTemplate.opsForHash().get(authKey, RedisKeyConstant.FIELD_VERSION)).isEqualTo("v3");
+    }
+
+    @Test
     @DisplayName("Redis auth hash 被刪除且帳號已 BANNED → refresh 仍被拒絕（ACCOUNT_SUSPENDED）")
     void refresh_afterAuthHashDeletedAndUserBanned_shouldBeRejected() {
         User user = saveUser(UserStatus.ACTIVE, Role.USER);
