@@ -497,7 +497,7 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 | M4 | series | 1～2 個 | 發送 `SeriesDeletedEvent`（放 infrastructure/event，帶 seriesUuid＋eventId）；**article 端的接收與清空 `series_uuid` 留到 M6**——本階段 `articles.series_id` 的 FK `ON DELETE SET NULL` 仍在，行為不變。以 series uuid 查文章用 T0a-6 的過渡 API |
 | M5 | file | 1 個 | DROP `files` 整張表前再 grep 一次零讀寫並附在回報；`file_metadata.article_uuid` 不新增刪除連動 |
 | M6 | article | **M6-a** 儲存層：`author_uuid`、`series_uuid` migration、mapper（含推薦 XML）、index 重建（含 partial `idx_articles_series_position`）／**M6-b** 服務與連動：訂閱 `SeriesDeletedEvent` 清空 series_uuid（OrphanReconciliationJob 子類別的 removeOrphans 為**設 NULL**，絕不可刪文章）、`countPublishedByAuthor`、`getPublishedStatsByAuthor` 內部改用 author_uuid／**M6-c** 事件：移除 article 所發事件的 Long 過渡欄位，並**同 PR 最小修改** search 鏡像 DTO（listener/dto/*Message）與 recommend consumer 改讀 uuid | M6 會連動 comment、reading、series、version 的 IT（各模組 *TestApplication 掃描 article 真實碼、seed 資料）——每個 Task 都要跑這 4 個模組的 IT |
-| M7 | search／recommend／tag | **M7-search**：ES 文件改存 `author.uuid`、移除 `id` 與 `username`，PR 說明寫明部署後要執行 admin reindex；搜尋結果拿掉逐頁批次作者查詢／**M7-recommend**：剩餘 Long 與 JOIN users／**M7-tag**：DROP `article_tags` → `articles(uuid)` 的 FK、改事件刪除＋校正；RACE-08 | 三個 Task 各自獨立 |
+| M7 | search／recommend／tag | **M7-search**：ES 文件改存 `author.uuid`、移除 `id` 與 `username`，PR 說明寫明部署後要執行 admin reindex；搜尋結果拿掉逐頁批次作者查詢；順帶修既有 bug：search 的 `ArticleDeletedMessage.deletedAt` 對應不到事件欄位 `occurredAt`，永遠為 null（T0a-5 審查發現）／**M7-recommend**：剩餘 Long 與 JOIN users／**M7-tag**：DROP `article_tags` → `articles(uuid)` 的 FK、改事件刪除＋校正；RACE-08 | 三個 Task 各自獨立 |
 | M8 | user | 1 個 | 模組內事件（註冊、重設密碼）改 uuid＋eventId；`UserFacade` 全面 UUID；若 Q8 尚未完成，RACE-02/03 在此處理。驗收的 `from users` grep **排除 user 模組自己的 UserMapper** |
 
 ---
