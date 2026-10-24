@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.user.facade;
 
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.user.mapper.UserMapper;
 import dowob.xyz.blog.module.user.model.User;
@@ -99,5 +100,27 @@ public class UserFacadeImpl implements UserFacade {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         return BatchedQuery.queryInBatches(distinctIds, userMapper::findAuthorInfoByIds).stream()
                 .collect(Collectors.toMap(User::getId, user -> new AuthorInfo(user.getUuid(), user.getNickname())));
+    }
+
+    /**
+     * 以使用者公開 UUID 批次取得顯示投影（uuid ＋ nickname ＋ avatarUrl）
+     *
+     * <p>做法比照 {@link #getAuthorInfoByIds}：先去重再查，經 {@link BatchedQuery} 切批，
+     * 結果收成 Map（跨批可合併）。<b>不依 status／軟刪除過濾</b>，停權或已刪除的使用者仍回傳。</p>
+     *
+     * @param userUuids 使用者公開 UUID 集合
+     * @return 使用者 UUID → 顯示投影；查無的 UUID 不出現在結果中
+     */
+    @Override
+    public Map<UUID, UserDisplayInfo> getDisplayInfoByUuids(Collection<UUID> userUuids) {
+        if (userUuids == null) {
+            return Map.of();
+        }
+        Set<UUID> distinctUuids = userUuids.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return BatchedQuery.queryInBatches(distinctUuids, userMapper::findDisplayInfoByUuids).stream()
+                .collect(Collectors.toMap(User::getUuid,
+                        user -> new UserDisplayInfo(user.getUuid(), user.getNickname(), user.getAvatarUrl())));
     }
 }

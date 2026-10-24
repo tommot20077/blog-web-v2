@@ -539,6 +539,34 @@ public interface ArticleMapper {
     List<String> findExistingUuidsIn(@Param("list") List<UUID> uuids);
 
     /**
+     * 文章是否存在，<b>不分狀態</b>（供 comment 模組建立留言前的存在性檢查）。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 存在為 true
+     */
+    @Select("SELECT EXISTS (SELECT 1 FROM articles WHERE uuid = #{uuid}::uuid)")
+    boolean existsByUuid(@Param("uuid") UUID uuid);
+
+    /**
+     * 以公開 UUID 原子性遞增文章留言計數（{@link #incrementCommentCount(Long)} 的 UUID 版）。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 受影響列數（文章不存在為 0）
+     */
+    @Update("UPDATE articles SET comment_count = comment_count + 1 WHERE uuid = #{uuid}::uuid")
+    int incrementCommentCountByUuid(@Param("uuid") UUID uuid);
+
+    /**
+     * 以公開 UUID 原子性遞減文章留言計數，守衛 {@code > 0} 防 underflow
+     * （{@link #decrementCommentCount(Long)} 的 UUID 版）。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 受影響列數（文章不存在或計數已為 0 時為 0）
+     */
+    @Update("UPDATE articles SET comment_count = comment_count - 1 WHERE uuid = #{uuid}::uuid AND comment_count > 0")
+    int decrementCommentCountByUuid(@Param("uuid") UUID uuid);
+
+    /**
      * 批次查詢使用者主鍵對應的公開 UUID（供 {@code ArticleDataAssembler} 填 {@code authorUuid}，設計 §3.1 過渡 API）。
      *
      * <p>{@code users} 為 reference data，依 {@code architecture.md} 可直接讀取。

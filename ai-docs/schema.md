@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V18 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V25 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V18**
+> 最後更新版本：**V25**
 
 ---
 
@@ -283,10 +283,9 @@ PRIMARY KEY (user_id, tag_id)
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
 | uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | |
-| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | V12 補 NOT NULL；ARCH-30 P4 將移除（由 article_uuid 取代） |
-| article_uuid | UUID | NOT NULL REFERENCES articles(uuid) ON DELETE CASCADE | V24 新增並由 article_id 回填；ARCH-30 P2 起與 article_id 雙寫 |
+| article_uuid | UUID | NOT NULL | V24 新增並由 article_id 回填；V25 起為文章的唯一識別（舊 `article_id` 已 DROP）。**無 FK**（跨模組不得有 FK），文章刪除由 `CommentArticleDeletedConsumer` 事件＋`CommentOrphanReconciliationJob` 每日校正清除 |
 | parent_id | BIGINT | REFERENCES comments(id) ON DELETE CASCADE | NULL = 頂層；2 層上限由 service 強制 |
-| user_id | BIGINT | NOT NULL REFERENCES users(id) | V12 補 NOT NULL；user 軟刪除不 cascade |
+| user_uuid | UUID | NOT NULL | V25 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK**；user 為軟刪除，不連帶 |
 | content | TEXT | NOT NULL | 原始 Markdown |
 | content_html | TEXT | NOT NULL DEFAULT '' | V13 新增；Sanitized HTML |
 | like_count | INTEGER | NOT NULL DEFAULT 0 | V13 新增；反正規化計數 |
@@ -301,17 +300,16 @@ PRIMARY KEY (user_id, tag_id)
 **Indexes:**
 - `comments_pkey`（auto）on id
 - `comments_uuid_key`（auto, UNIQUE）on uuid
-- `idx_comments_article_top_level`（V13, partial）on (article_id, created_at DESC) WHERE parent_id IS NULL
-- `idx_comments_article_uuid_top_level`（V24, partial）on (article_uuid, created_at DESC) WHERE parent_id IS NULL
-- `idx_comments_article_uuid`（V24）on (article_uuid)——涵蓋含回覆的所有列，供 FK CASCADE 與 `countByArticle`；舊 article_id 無對應索引（既有缺口，P4 隨舊欄位移除）
+- `idx_comments_article_uuid_top_level`（V24, partial）on (article_uuid, created_at DESC) WHERE parent_id IS NULL——列出文章頂層留言
+- `idx_comments_article_uuid`（V24）on (article_uuid)——涵蓋含回覆的所有列，供 `countByArticle` 與文章刪除連動（`deleteByArticleUuid`）
 - `idx_comments_replies`（V13, partial）on (parent_id, created_at) WHERE parent_id IS NOT NULL
-- `idx_comments_user_created`（V13）on (user_id, created_at DESC)
+- `idx_comments_user_created`（V13；V25 以 user_uuid 重建，名稱不變）on (user_uuid, created_at DESC)
+
+> V25 移除：`idx_comments_article_top_level`（隨 `article_id` 欄位 DROP；不重建，由 V24 的 `idx_comments_article_uuid_top_level` 取代）
 
 **Foreign keys:**
-- `article_id` → `articles(id)` ON DELETE CASCADE
-- `comments_article_uuid_fkey`（V24）：`article_uuid` → `articles(uuid)` ON DELETE CASCADE
-- `parent_id` → `comments(id)` ON DELETE CASCADE（自我參照）
-- `user_id` → `users(id)`（NO ACTION，user 軟刪除不連帶）
+- `parent_id` → `comments(id)` ON DELETE CASCADE（自我參照；模組內部關聯）
+- 沒有任何指向其他模組（users、articles）的 FK——V25 已移除 `article_id` → `articles(id)`、`comments_article_uuid_fkey`（V24）、`user_id` → `users(id)`
 
 ---
 
@@ -320,20 +318,20 @@ PRIMARY KEY (user_id, tag_id)
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
-| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
-| comment_id | BIGINT | NOT NULL REFERENCES comments(id) ON DELETE CASCADE | |
+| user_uuid | UUID | NOT NULL | V25 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK** |
+| comment_id | BIGINT | NOT NULL REFERENCES comments(id) ON DELETE CASCADE | 模組內部關聯 |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 
 **Constraints:**
-- `uq_comment_likes_user_comment` UNIQUE (user_id, comment_id)
+- `uq_comment_likes_user_comment` UNIQUE (user_uuid, comment_id)（V25 於 user_uuid 上以同名重建；`INSERT ... ON CONFLICT (user_uuid, comment_id) DO NOTHING` 依賴它）
 
 **Indexes:**
 - `comment_likes_pkey`（auto）on id
-- `uq_comment_likes_user_comment`（auto, UNIQUE constraint）on (user_id, comment_id)
+- `uq_comment_likes_user_comment`（auto, UNIQUE constraint）on (user_uuid, comment_id)
 
 **Foreign keys:**
-- `user_id` → `users(id)`（NO ACTION）
-- `comment_id` → `comments(id)` ON DELETE CASCADE
+- `comment_id` → `comments(id)` ON DELETE CASCADE（模組內部關聯）
+- 沒有指向其他模組的 FK（V25 已移除 `user_id` → `users(id)`）
 
 ---
 
@@ -586,6 +584,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V22** | `articles` 新增 partial index `idx_articles_published_latest` on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'（公開列表改伺服器端排序的預設排序；兼供 PERF-08 的 `findPublishedAfter` 範圍掃描）；刻意不為 view_count / comment_count 建排序索引 |
 | **V23** | 資料遷移＋約束：正規化 `categories.slug`（轉小寫、非 [a-z0-9] 連續字元→`-`、去頭尾 `-`；空→`category-{id}`；撞名附加 `-{id}`；≤ 60 字，逐筆 RAISE NOTICE 記錄），**會改變不合格分類的網址且不留轉址**（Yuan 決定）；新增 CHECK `ck_categories_slug_format` |
 | **V24** | ARCH-30 第 2 段 P1（Expand）：`comments` 新增 `article_uuid UUID`，由 `article_id` 回填後 `SET NOT NULL`；新 FK `comments_article_uuid_fkey` → `articles(uuid)` ON DELETE CASCADE；新 partial index `idx_comments_article_uuid_top_level`，以及涵蓋所有列的 `idx_comments_article_uuid`（FK CASCADE／含回覆計數）。舊 `article_id` 欄位／FK／索引保留（P4 移除） |
+| **V25** | 跨模組識別全面改 UUID（comment 模組）：`comments` 新增 `user_uuid UUID`、`comment_likes` 新增 `user_uuid UUID`，皆由 `users.uuid` 回填後 `SET NOT NULL`（找不到使用者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP `comments_article_uuid_fkey`（V24）；DROP 欄位 `comments.article_id`、`comments.user_id`、`comment_likes.user_id`（連帶移除各自的 FK、`idx_comments_article_top_level`、`idx_comments_user_created`、舊 `uq_comment_likes_user_comment`）；以 `user_uuid` 重建 `idx_comments_user_created` (user_uuid, created_at DESC) 與 `uq_comment_likes_user_comment` UNIQUE (user_uuid, comment_id)。新 uuid 欄位不建 FK；`parent_id`、`comment_id` 模組內部關聯不動 |
 
 ---
 
@@ -599,4 +598,4 @@ PRIMARY KEY (user_id, tag_id)
 | `deleted_by_role VARCHAR(20) NULL` | 記錄刪除者角色（AUTHOR / ADMIN），僅 comments 使用 |
 | 反正規化計數 | `articles.{view_count, like_count, comment_count}`、`comments.like_count`、`tags.usage_count`；由 service 層原子 UPDATE 維護 |
 | Naming: UNIQUE constraint | 明確命名 `uq_{table}_{purpose}`（例 `uq_article_likes_user_article`）；避免靠 PG 自動命名 |
-| Naming: B-tree index | `idx_{table}_{purpose}`（例 `idx_comments_article_top_level`）；複合索引用語意名而非欄位串接 |
+| Naming: B-tree index | `idx_{table}_{purpose}`（例 `idx_comments_article_uuid_top_level`）；複合索引用語意名而非欄位串接 |

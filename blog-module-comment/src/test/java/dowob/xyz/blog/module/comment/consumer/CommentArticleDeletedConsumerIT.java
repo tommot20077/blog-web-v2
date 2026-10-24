@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.support.CommentCleanupITSupport;
+import dowob.xyz.blog.module.comment.support.SeededUsers;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -25,9 +26,10 @@ import static org.mockito.Mockito.verify;
 /**
  * {@link CommentArticleDeletedConsumer} 整合測試（真實 Postgres；直接呼叫處理方法，不需要真 RabbitMQ）。
  *
- * <p>此階段 FK 仍在，故資料庫的 CASCADE 與 consumer 是兩道並行機制；
- * 本測試單獨驗證 consumer 的刪除語意：事件處理後該文章的 comments 與 comment_likes 全部消失、
- * 其他文章的留言保留。事件處理的對象是「文章仍在、僅收到事件」的情境，以隔離出 consumer 本身的效果。</p>
+ * <p>V25 起 {@code comments} 沒有指向 {@code articles} 的 FK，consumer 是「文章刪除 → 留言刪除」的唯一即時機制
+ * （每日校正排程為事件遺失時的第二道保險）。本測試驗證 consumer 的刪除語意：事件處理後該文章的
+ * comments 與 comment_likes（經模組內 FK CASCADE）全部消失、其他文章的留言保留。
+ * 測試中文章仍在、僅收到事件，以隔離出 consumer 本身的效果。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -51,10 +53,10 @@ class CommentArticleDeletedConsumerIT extends CommentCleanupITSupport {
         Article other = createArticle(ArticleStatus.PUBLISHED);
         Comment top = createComment(target, null);
         Comment reply = createComment(target, top.getId());
-        createLike(top.getId(), 1L);
-        createLike(reply.getId(), 2L);
+        createLike(top.getId(), SeededUsers.USER_UUID);
+        createLike(reply.getId(), SeededUsers.OTHER_USER_UUID);
         Comment otherComment = createComment(other, null);
-        createLike(otherComment.getId(), 1L);
+        createLike(otherComment.getId(), SeededUsers.USER_UUID);
         Channel channel = Mockito.mock(Channel.class);
 
         consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);

@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.comment.mapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.comment.support.CommentCleanupITSupport;
+import dowob.xyz.blog.module.comment.support.SeededUsers;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,7 +36,7 @@ class CommentArticleCleanupMapperIT extends CommentCleanupITSupport {
     void findDistinctArticleUuidsAfter_pagesDistinctInDatabaseOrder() {
         // 固定兩個極值 UUID：Java 的 UUID.compareTo（高低 64 位元各自以有號數比較）會把 ffff... 排在 0000...01 之前，
         // 而 PostgreSQL 的 uuid 以無號位元組比較，排在其後——兩者順序必然不同，才能驗出排序確實由資料庫決定。
-        // 這兩個 UUID 沒有對應文章，以 insertOrphanComment 寫入（停用 FK 觸發器，寫完立即還原）。
+        // 這兩個 UUID 沒有對應文章，以 insertOrphanComment 寫入（V25 起無 FK，可直接寫入）。
         UUID lowest = UUID.fromString("00000000-0000-0000-0000-000000000001");
         UUID highest = UUID.fromString("ffffffff-ffff-ffff-ffff-ffffffffffff");
         assertThat(highest.compareTo(lowest)).as("前置條件：Java 排序與 PG 排序不同").isNegative();
@@ -46,8 +47,8 @@ class CommentArticleCleanupMapperIT extends CommentCleanupITSupport {
             createComment(article, null);
         }
         createComment(articles.get(0), null); // 同一篇兩則留言，結果只能出現一次
-        insertOrphanComment(lowest, articles.get(0).getId(), null);
-        insertOrphanComment(highest, articles.get(0).getId(), null);
+        insertOrphanComment(lowest, null);
+        insertOrphanComment(highest, null);
         List<UUID> expected = new ArrayList<>(articles.stream().map(Article::getUuid).toList());
         expected.add(lowest);
         expected.add(highest);
@@ -76,7 +77,7 @@ class CommentArticleCleanupMapperIT extends CommentCleanupITSupport {
         Article a = createArticle(ArticleStatus.PUBLISHED);
         Article b = createArticle(ArticleStatus.PUBLISHED);
         Article keep = createArticle(ArticleStatus.PUBLISHED);
-        createLike(createComment(a, null).getId(), 1L);
+        createLike(createComment(a, null).getId(), SeededUsers.USER_UUID);
         createComment(b, null);
         createComment(b, null);
         createComment(keep, null);

@@ -60,13 +60,13 @@ public class CommentController {
      * <ol>
      *   <li>路徑 {@code GET /api/v1/articles/{uuid}/comments} 於 {@code SecurityConfig} 以明確清單 {@code permitAll}
      *       （UUID 形狀比對，非萬用字元；見 {@code SecurityConfig.PUBLIC_ARTICLE_COMMENTS}）；</li>
-     *   <li>{@code currentUserId} 允許為 null，僅用於選填個人化（如「已按讚」標記）；</li>
+     *   <li>{@code currentUserUuid} 允許為 null，僅用於選填個人化（如「已按讚」標記）；</li>
      *   <li>本 JavaDoc 即為所需的豁免標註。</li>
      * </ol>
      *
      * <p>「匿名可到達」不等於「內容公開」：文章本身若非公開（含 <b>ARCHIVED 下架</b>），
      * {@link CommentService#listComments} 會回 200 + 空清單，僅作者本人與 ADMIN 讀得到。
-     * {@code currentUserId} 與 {@code isAdmin} 即為該判斷的輸入。</p>
+     * {@code currentUserUuid} 與 {@code isAdmin} 即為該判斷的輸入。</p>
      *
      * @param articleUuid   文章公開 UUID
      * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
@@ -84,7 +84,7 @@ public class CommentController {
             @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(
-                commentService.listComments(articleUuid, (user == null ? null : user.id()), isAdmin, sort, pageQuery.page(), pageQuery.sizeOrDefault(20)));
+                commentService.listComments(articleUuid, (user == null ? null : user.uuid()), isAdmin, sort, pageQuery.page(), pageQuery.sizeOrDefault(20)));
     }
 
     @PostMapping("/articles/{articleUuid}/comments")
@@ -94,7 +94,7 @@ public class CommentController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateCommentRequest req) {
-        return ApiResponse.success(commentService.createComment(articleUuid, user.id(), req));
+        return ApiResponse.success(commentService.createComment(articleUuid, user.uuid(), req));
     }
 
     @PutMapping("/comments/{uuid}")
@@ -105,7 +105,7 @@ public class CommentController {
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody EditCommentRequest req) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        return ApiResponse.success(commentService.editComment(uuid, user.id(), isAdmin, req));
+        return ApiResponse.success(commentService.editComment(uuid, user.uuid(), isAdmin, req));
     }
 
     @DeleteMapping("/comments/{uuid}")
@@ -115,7 +115,7 @@ public class CommentController {
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        commentService.deleteComment(uuid, user.id(), isAdmin);
+        commentService.deleteComment(uuid, user.uuid(), isAdmin);
         return ApiResponse.success();
     }
 }
