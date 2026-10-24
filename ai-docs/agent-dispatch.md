@@ -3,14 +3,14 @@
 > 讀者:在此 repo 工作的任何 AI session(含較小模型)。目標:把貴的 context 花在判斷上,把便宜的 context 花在廣度上。
 > 姊妹檔:前端 repo `D:\backup\backup\程式\workspace\vue\blog-web-v2-front-end\ai-docs\agent-dispatch.md`(獨立維護,不要求逐字同步)。
 
-## 現役模型速查(2026-07 查證;會過時,調度前先確認實際可用型號,查不到就寫「待查」,不要憑記憶編)
+## 現役模型速查(2026-10 更新;會過時,調度前先確認實際可用型號,查不到就寫「待查」,不要憑記憶編)
 
 | 模型 | 定位 | 用在 |
 |------|------|------|
-| Fable 5(`claude-fable-5`) | 最高階、額度稀缺 | 立制度、架構級判斷、一次性難題;不做日常任務 |
-| Opus 4.8(`claude-opus-4-8`) | 高階 | 複雜實作、跨模組重構、難 bug 根因 |
-| Sonnet 5(`claude-sonnet-5`) | 日常主力 | 單模組實作、測試修復、review、文件 |
-| Haiku 4.5(`claude-haiku-4-5-20251001`) | 便宜快速 | 批次 grep/掃描、機械性套用已知模式、格式整理 |
+| Fable 5.1(`claude-fable-5-1`) | 最高階、額度稀缺 | 立制度、架構級判斷、一次性難題;不做日常任務 |
+| Opus 5.5(`claude-opus-5-5`) | 高階 | 複雜實作、跨模組重構、難 bug 根因 |
+| Sonnet 5.5(`claude-sonnet-5-5`) | 日常主力 | 單模組實作、測試修復、review、文件 |
+| Haiku 5.5(`claude-haiku-5-5`) | 便宜快速 | 批次 grep/掃描、機械性套用已知模式、格式整理 |
 
 ## 分工原則:指揮官不下場
 

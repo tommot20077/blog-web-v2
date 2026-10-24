@@ -5,6 +5,10 @@
 - **涉及 repo**: 本 repo（後端）＋ `blog-web-v2-front-end`
 - **交付順序**: 後端 PR 合併 → 前端整份重抓 `openapi.json` → 前端 PR
 - **相關**: SEC-04 第 2 段（`ai-docs/backlog/2026-09-25-sec04-stage2-frontend-handoff.md`）的 ArticleList 改造併入本案前端 PR
+- **2026-10-24 修訂**（Yuan 同意，見 `docs/plans/2026-10-24-cross-module-uuid-design.md` §5.1）：
+  - `GET /api/v1/authors` 改由 **user 模組**實作，契約不變：`ArticleFacade.countPublishedByAuthor()` 回傳 `Map<UUID, Long>`（傳輸量與作者人數成正比，JavaDoc 標註「作者超過約 1,000 人時重新評估」），user 模組以 nickname 篩選、依篇數排序、取前 20。下方 §2、§4 中「article 模組 JOIN users」的寫法作廢
+  - 新增的 facade 一律使用 UUID 簽章：`ArticleFacade.getPublishedStatsByAuthor(UUID authorUuid)`
+  - 實作時機：UUID 改造第 0 階段合併後，可與模組 PR 並行
 
 ---
 
