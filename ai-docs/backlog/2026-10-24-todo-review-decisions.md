@@ -110,3 +110,5 @@
 - **`findings.md` 狀態嚴重過時**：本次確認 Q4、Q5、Q6（含 AUTH-01、DATA-03）、Q7 皆已做完卻仍標待決策 → 需排一次「登記簿對帳」
 - ES 文件 `ArticleDocument.author` 存有 `username`（登入識別符），目前未輸出但不應存（Q10 落地後重建索引時一併移除）
 - 前端 ArticleList 左欄 Tags 以標籤**名稱**組 `/tags/${tag}` 連結，TagView 預期 slug——名稱含大寫或空白時可能連到空頁，待查證
+- **認證快取回填競態（BUG-2026-002 型，既有）**：撤銷 afterCommit 刪 `user:auth:{uuid}` 後，併發請求若在 commit 前讀到舊 DB 狀態，會以舊值回填快取（TTL 7 天），舊 access token 仍可通過。T0b-2 後 `/auth/refresh` 也會回填，多一個進入點（但需先通過 refresh ZSet 檢查，窗口很窄）。根治方向：回填帶版本比對的原子寫入（Lua）或回填短 TTL。（T0b-2 審查 F1）
+- **refresh token 可被當 access token 送進 filter（既有）**：`JwtService.validateToken` 不檢查 token type；目前因 refresh token 無 role claim 被 filter 的 catch 偶然擋下。應在 filter 明確檢查 type=access 並補測試。（T0b-2 審查）
