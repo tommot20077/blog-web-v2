@@ -9,8 +9,8 @@ import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent.Action;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
@@ -219,9 +219,11 @@ class CrossModuleVersionIT {
         // 2. 直接呼叫 consumer.onContentChanged 模擬 SAVED event
         //    AutoSnapshotPolicy 第一次（無先前快照）會回 true
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
+                UUID.randomUUID(),
                 article.getId(),
                 article.getUuid(),
                 AUTHOR_ID,
+                null,
                 Action.SAVED,
                 Instant.now()
         );
@@ -249,9 +251,11 @@ class CrossModuleVersionIT {
 
         // 2. 呼叫 consumer.onContentChanged with PUBLISHED action
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
+                UUID.randomUUID(),
                 article.getId(),
                 article.getUuid(),
                 AUTHOR_ID,
+                null,
                 Action.PUBLISHED,
                 Instant.now()
         );
@@ -332,7 +336,7 @@ class CrossModuleVersionIT {
         // 6. 驗證事件：DRAFT 還原應發 ContentChanged(RESTORED) 但不發 publishUpdated
         //    （否則 search listener 會把文章 re-index 為 PUBLISHED 殘留索引）
         verify(articleEventPublisher).publishContentChanged(any(Article.class),
-                eq(dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action.RESTORED));
+                eq(dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent.Action.RESTORED));
         verify(articleEventPublisher, org.mockito.Mockito.never()).publishUpdated(any(Article.class));
     }
 
@@ -421,9 +425,11 @@ class CrossModuleVersionIT {
 
         // 3. 呼叫 consumer.onContentChanged with SAVED
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
+                UUID.randomUUID(),
                 article.getId(),
                 article.getUuid(),
                 AUTHOR_ID,
+                null,
                 Action.SAVED,
                 Instant.now()
         );

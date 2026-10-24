@@ -299,4 +299,20 @@ public interface ArticleFacade {
      * @return 可見的文章主鍵，順序與輸入一致
      */
     List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, boolean isAdmin);
+
+    /**
+     * 篩出 uuids 中「仍存在」的文章 UUID，<b>不分狀態</b>。
+     *
+     * <p>與 {@link #filterPublishedUuids(Collection)} 的差別：後者只認 PUBLISHED，
+     * 本方法只問「這篇文章還在不在」——DRAFT、PENDING、REJECTED、PUBLISHED 一律算存在，
+     * 僅有被硬刪（查無此列）者不會出現在結果中。供其他模組的每日孤兒校正排程使用：
+     * 校正的判準是「owner 是否已刪除」，若誤用 {@code filterPublishedUuids}，
+     * 草稿文章的相關資料會被當成孤兒清掉。</p>
+     *
+     * <p>實作端會自行去重並經 {@code BatchedQuery} 切批，caller 可一次傳入任意數量。</p>
+     *
+     * @param uuids 待查證的文章公開 UUID；null 或空集合回傳空集合（不查 DB）；null 元素會被忽略
+     * @return 其中仍存在於 articles 表的 UUID 集合（不分狀態）
+     */
+    Set<UUID> filterExistingUuids(Collection<UUID> uuids);
 }

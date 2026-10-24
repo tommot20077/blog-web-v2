@@ -17,7 +17,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -114,14 +114,24 @@ public class ArticleFacadeImpl implements ArticleFacade {
     private final ArticleFileBinder articleFileBinder;
 
     /**
+     * ArticleData 組裝元件（設計 §3.1 過渡 API：批次填入 authorUuid / seriesUuid；
+     * SeriesFacade 在其內以 ObjectProvider 延遲取得，避免與 SeriesFacadeImpl 形成 bean 循環）
+     */
+    private final ArticleDataAssembler articleDataAssembler;
+
+    /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
      *
      * @return 已發布文章的索引資料列表
      */
     @Override
     public List<ArticleIndexData> findAllPublishedForIndex() {
-        return articleMapper.findAllPublished().stream()
-                .map(this::toIndexData)
+        List<Article> articles = articleMapper.findAllPublished();
+        /** authorUuid 整批一次取得（設計 §3.1），不隨文章逐筆查詢 */
+        Map<Long, UUID> authorUuids = articleDataAssembler.resolveAuthorUuids(
+                articles.stream().map(Article::getAuthorId).toList());
+        return articles.stream()
+                .map(article -> toIndexData(article, authorUuids))
                 .toList();
     }
 
@@ -211,15 +221,17 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * 將文章實體轉換為索引資料 DTO（供搜尋模組使用）
      *
-     * @param article 文章實體
+     * @param article     文章實體
+     * @param authorUuids 作者主鍵 → 公開 UUID（整批一次取得）
      * @return ArticleIndexData
      */
-    private ArticleIndexData toIndexData(Article article) {
+    private ArticleIndexData toIndexData(Article article, Map<Long, UUID> authorUuids) {
         List<TagInfo> tags = articleMapper.findTagsByArticleUuid(article.getUuid());
         List<ArticleIndexData.TagData> tagData = tags.stream()
                 .map(t -> new ArticleIndexData.TagData(t.id(), t.name(), t.slug()))
                 .toList();
 
+        ArticleDataAssembler.warnIfAuthorUuidMissing(article.getId(), article.getAuthorId(), authorUuids);
         return new ArticleIndexData(
                 article.getUuid(),
                 article.getTitle(),
@@ -232,7 +244,8 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 article.getPublishedAt(),
                 article.getViewCount(),
                 article.getLikeCount(),
-                tagData);
+                tagData,
+                authorUuids.get(article.getAuthorId()));
     }
 
     /**
@@ -313,7 +326,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
      */
     @Override
     public Optional<ArticleData> findByUuid(UUID articleUuid) {
-        return articleService.findByUuid(articleUuid).map(this::toArticleData);
+        return articleService.findByUuid(articleUuid).map(articleDataAssembler::toArticleData);
     }
 
     /**
@@ -321,7 +334,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
      */
     @Override
     public Optional<ArticleData> findById(Long articleId) {
-        return articleService.findById(articleId).map(this::toArticleData);
+        return articleService.findById(articleId).map(articleDataAssembler::toArticleData);
     }
 
     /**
@@ -329,9 +342,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
      */
     @Override
     public List<ArticleData> findByIds(List<Long> articleIds) {
-        return articleService.findByIds(articleIds).stream()
-                .map(this::toArticleData)
-                .toList();
+        return articleDataAssembler.toArticleDataList(articleService.findByIds(articleIds));
     }
 
     /**
@@ -339,9 +350,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
      */
     @Override
     public List<ArticleData> findBySeriesIdOrderByPosition(Long seriesId) {
-        return articleService.findBySeriesIdOrderByPosition(seriesId).stream()
-                .map(this::toArticleData)
-                .toList();
+        return articleDataAssembler.toArticleDataList(articleService.findBySeriesIdOrderByPosition(seriesId));
     }
 
     // ─── SP-B 新增 5 write method（純 delegate）───
@@ -384,25 +393,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
     @Override
     public void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
         articleService.updateSeriesAssignment(articleId, seriesId, seriesPosition);
-    }
-
-    /**
-     * 將文章實體轉換為跨模組 ArticleData DTO
-     *
-     * <p>status 使用 {@code .name()} 字串化，避免跨模組直接 import article enum。</p>
-     *
-     * @param article 文章實體
-     * @return ArticleData record
-     */
-    private ArticleData toArticleData(Article article) {
-        return new ArticleData(
-                article.getId(),
-                article.getUuid(),
-                article.getAuthorId(),
-                article.getStatus() != null ? article.getStatus().name() : null,
-                article.getSeriesId(),
-                article.getSeriesPosition()
-        );
     }
 
     // ─── SP-D 新增：findContentById + applyRestoreContent ───
@@ -549,6 +539,10 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * @return ArticleContentData record
      */
     private ArticleContentData toContentData(Article article) {
+        Map<Long, UUID> authorUuids = articleDataAssembler.resolveAuthorUuids(
+                article.getAuthorId() == null ? List.of() : List.of(article.getAuthorId()));
+        ArticleDataAssembler.warnIfAuthorUuidMissing(article.getId(), article.getAuthorId(), authorUuids);
+        UUID authorUuid = article.getAuthorId() == null ? null : authorUuids.get(article.getAuthorId());
         return new ArticleContentData(
                 article.getId(),
                 article.getUuid(),
@@ -558,7 +552,8 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 article.getContent(),
                 article.getSummary(),
                 article.getCoverImageUrl(),
-                article.getStatus() != null ? article.getStatus().name() : null
+                article.getStatus() != null ? article.getStatus().name() : null,
+                authorUuid
         );
     }
 
@@ -614,5 +609,27 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 .map(ArticleMapper.ArticleVisibilityRow::id)
                 .collect(Collectors.toSet());
         return candidateIds.stream().filter(readable::contains).toList();
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>不分狀態</b>：SQL 不篩 {@code status}，草稿也算存在，與
+     * {@link #filterPublishedUuids(Collection)} 只認 PUBLISHED 不同。輸入無上界，
+     * 故去重後經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
+     * 結果為集合聯集，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Set<UUID> filterExistingUuids(Collection<UUID> uuids) {
+        if (uuids == null) {
+            return Set.of();
+        }
+        List<UUID> distinct = uuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        return BatchedQuery.queryInBatches(distinct, articleMapper::findExistingUuidsIn).stream()
+                .map(UUID::fromString)
+                .collect(Collectors.toSet());
     }
 }

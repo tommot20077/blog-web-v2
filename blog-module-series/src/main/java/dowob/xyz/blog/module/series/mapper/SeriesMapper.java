@@ -112,4 +112,51 @@ public interface SeriesMapper {
      * @param seriesTitle series 標題
      */
     record SeriesBasicRow(Long seriesId, java.util.UUID seriesUuid, String seriesTitle) {}
+
+    /**
+     * 在給定的 UUID 中篩出「目前仍存在」的 series。
+     *
+     * <p>供孤兒校正排程判斷系列是否已被刪除。回傳型別採 {@code String}（{@code uuid::text}），
+     * 由 caller 轉回 {@link java.util.UUID}。</p>
+     *
+     * @param uuids 待查證的 series 公開 UUID（caller 須保證非空，避免 {@code IN ()} 語法錯誤）
+     * @return 其中仍存在的 series UUID 字串列表
+     */
+    @Select("<script>" +
+            "SELECT uuid::text AS uuid FROM series " +
+            "WHERE uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<String> findExistingUuidsIn(@Param("list") List<java.util.UUID> uuids);
+
+    /**
+     * 批次取得 series 主鍵對應的公開 UUID（供 {@code SeriesFacade.findUuidsByIds}，設計 §3.1 過渡 API）。
+     *
+     * <p>只投影 id 與 uuid 兩欄，不載入 title 等其他欄位。</p>
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應，
+     * SELECT 欄位順序（seriesId, seriesUuid）必須與 {@link SeriesUuidRow} 的元件順序一致，不可調整。</p>
+     *
+     * @param seriesIds series 主鍵集合（不得為空，由 caller 保證）
+     * @return 每個存在的 series 的主鍵與 UUID
+     */
+    @Select({
+        "<script>",
+        "SELECT id AS seriesId, uuid AS seriesUuid",
+        "  FROM series",
+        " WHERE id IN",
+        "<foreach collection='seriesIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        "</script>"
+    })
+    List<SeriesUuidRow> findUuidsByIds(@Param("seriesIds") Collection<Long> seriesIds);
+
+    /**
+     * {@link #findUuidsByIds} 的投影列。
+     *
+     * @param seriesId   series 主鍵
+     * @param seriesUuid series 公開 UUID
+     */
+    record SeriesUuidRow(Long seriesId, java.util.UUID seriesUuid) {}
 }

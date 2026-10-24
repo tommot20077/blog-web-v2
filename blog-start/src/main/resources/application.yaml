@@ -8,6 +8,13 @@ spring:
     pathmatch:
       matching-strategy: ant_path_matcher
 
+  # 排程池（findings PERF-16）：預設只有 1 條執行緒，flush／trending 等 fixedDelay job 與
+  # 每日孤兒校正 job 會互相等待；孤兒校正框架另有單次頁數上限避免長掃描佔住執行緒。
+  task:
+    scheduling:
+      pool:
+        size: 4
+
   # Database
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/blogv2}

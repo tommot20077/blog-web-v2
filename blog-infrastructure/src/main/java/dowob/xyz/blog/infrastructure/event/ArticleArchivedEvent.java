@@ -1,4 +1,4 @@
-package dowob.xyz.blog.module.article.event;
+package dowob.xyz.blog.infrastructure.event;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -12,14 +12,14 @@ import java.util.UUID;
  *
  * <p><b>刻意不共用 {@code article.deleted} routing key</b>：該 key 另有 series 模組訂閱並遞減
  * {@code series.article_count}，下架若走同一條路會讓該計數多扣一次（見
- * {@code ArticleRabbitMqConfig#ROUTING_KEY_ARCHIVED} 的說明）。</p>
+ * {@link ArticleEventContract#ROUTING_KEY_ARCHIVED} 的說明）。</p>
  *
  * @param eventId     事件 dedup key（producer 每次 publish 時 random gen，供 consumer 冪等使用）
  * @param articleUuid 文章公開 UUID（即 Elasticsearch document id）
  * @param occurredAt  事件發生時間
  *
  * @author Yuan
- * @version 1.0
+ * @version 1.1（由 article 模組搬到 blog-infrastructure 作為跨模組共用契約）
  */
 public record ArticleArchivedEvent(
     UUID eventId,

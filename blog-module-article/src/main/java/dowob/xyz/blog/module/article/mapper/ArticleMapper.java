@@ -520,4 +520,57 @@ public interface ArticleMapper {
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")
     List<String> findPublishedUuidsIn(@Param("list") List<UUID> uuids);
+
+    /**
+     * 在給定的 UUID 中篩出「目前仍存在」的文章，<b>不分狀態</b>。
+     *
+     * <p>與 {@link #findPublishedUuidsIn(List)} 的差別：本查詢不篩 {@code status}，
+     * DRAFT／PENDING／REJECTED／PUBLISHED 皆回傳。供其他模組的孤兒校正排程判斷
+     * 「文章是否已被刪除」。回傳型別採 {@code String}（{@code uuid::text}），由 caller 轉回 {@link UUID}。</p>
+     *
+     * @param uuids 待查證的文章公開 UUID（caller 須保證非空，避免 {@code IN ()} 語法錯誤）
+     * @return 其中仍存在的文章 UUID 字串列表
+     */
+    @Select("<script>" +
+            "SELECT uuid::text AS uuid FROM articles " +
+            "WHERE uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<String> findExistingUuidsIn(@Param("list") List<UUID> uuids);
+
+    /**
+     * 批次查詢使用者主鍵對應的公開 UUID（供 {@code ArticleDataAssembler} 填 {@code authorUuid}，設計 §3.1 過渡 API）。
+     *
+     * <p>{@code users} 為 reference data，依 {@code architecture.md} 可直接讀取。
+     * 軟刪除的使用者仍有 uuid，故不加狀態過濾（與 {@code articles.author_id} 的 JOIN 語意一致）。
+     * M6 把 {@code articles.author_id} 改為 {@code author_uuid} 欄位後，本查詢即可移除。</p>
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（userId, userUuid）必須與 {@link UserUuidRow} 的元件順序一致，不可調整。</p>
+     *
+     * @param userIds 使用者主鍵集合（不得為空，由 caller 保證）
+     * @return 每個存在的使用者的主鍵與 UUID
+     */
+    @Select({
+        "<script>",
+        "SELECT id AS userId, uuid AS userUuid",
+        "  FROM users",
+        " WHERE id IN",
+        "<foreach collection='userIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        "</script>"
+    })
+    List<UserUuidRow> findUserUuidsByIds(@Param("userIds") Collection<Long> userIds);
+
+    /**
+     * {@link #findUserUuidsByIds} 的投影列。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（userId, userUuid）必須與此 record 的元件順序一致，不可調整。</p>
+     *
+     * @param userId   使用者主鍵
+     * @param userUuid 使用者公開 UUID
+     */
+    record UserUuidRow(Long userId, UUID userUuid) {}
 }

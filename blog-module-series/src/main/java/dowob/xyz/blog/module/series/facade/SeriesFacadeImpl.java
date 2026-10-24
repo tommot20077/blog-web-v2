@@ -17,7 +17,11 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.LinkedHashSet;
 import java.util.stream.Collectors;
 
 /**
@@ -87,5 +91,55 @@ public class SeriesFacadeImpl implements SeriesFacade {
                 .collect(Collectors.toMap(
                         SeriesMapper.SeriesBasicRow::seriesId,
                         row -> new SeriesBasicInfo(row.seriesUuid(), row.seriesTitle())));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>輸入無上界，故去重後經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生
+     * {@code IN ()}。結果為集合聯集，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Set<UUID> filterExistingUuids(Collection<UUID> uuids) {
+        if (uuids == null) {
+            return Set.of();
+        }
+        List<UUID> distinct = uuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        return BatchedQuery.queryInBatches(distinct, seriesMapper::findExistingUuidsIn).stream()
+                .map(UUID::fromString)
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<Long> findIdByUuid(UUID seriesUuid) {
+        if (seriesUuid == null) {
+            return Optional.empty();
+        }
+        return seriesRepo.findByUuid(seriesUuid).map(Series::getId);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>先去重並濾掉 null，再經 {@link BatchedQuery} 切批；各批 key 不重疊，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Map<Long, UUID> findUuidsByIds(Collection<Long> seriesIds) {
+        if (seriesIds == null || seriesIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Set<Long> distinctIds = seriesIds.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return BatchedQuery.queryInBatches(distinctIds, seriesMapper::findUuidsByIds).stream()
+                .collect(Collectors.toMap(
+                        SeriesMapper.SeriesUuidRow::seriesId,
+                        SeriesMapper.SeriesUuidRow::seriesUuid));
     }
 }

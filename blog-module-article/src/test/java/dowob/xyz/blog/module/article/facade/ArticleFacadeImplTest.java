@@ -1,9 +1,11 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
@@ -13,7 +15,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -36,6 +38,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -93,6 +96,13 @@ class ArticleFacadeImplTest {
     @Mock
     private FileFacade fileFacade;
 
+    /** 過渡期 UUID 欄位：SeriesFacade 以 ObjectProvider 延遲取得（本測試不關心其回傳值） */
+    @Mock
+    private ObjectProvider<SeriesFacade> seriesFacadeProvider;
+
+    @Mock
+    private SeriesFacade seriesFacade;
+
     private ArticleFacadeImpl facade;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
@@ -110,8 +120,13 @@ class ArticleFacadeImplTest {
         facade = new ArticleFacadeImpl(
             articleMapper, userFacade, recommendMapper, articleService,
             articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
-            articleFileBinder
+            articleFileBinder,
+            new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider))
         );
+
+        /** 過渡期 UUID 欄位的依賴：本測試類不驗證 UUID 值（見 ArticleFacadeUuidFieldsTest），回傳空即可 */
+        when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
+        when(seriesFacade.findUuidsByIds(any())).thenReturn(java.util.Map.of());
 
         /** 讓 mock 的 TransactionTemplate 直接執行 callback，使受測方法主體照常運行 */
         when(transactionTemplate.execute(any())).thenAnswer(invocation -> {

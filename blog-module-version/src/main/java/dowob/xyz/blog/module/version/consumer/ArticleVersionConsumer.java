@@ -1,7 +1,8 @@
 package dowob.xyz.blog.module.version.consumer;
 
 import com.rabbitmq.client.Channel;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.version.config.VersionRabbitMqConfig;
 import dowob.xyz.blog.module.version.service.AutoSnapshotPolicy;
 import dowob.xyz.blog.module.version.service.VersioningService;
@@ -12,13 +13,11 @@ import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-
 /**
  * Article content changed 事件消費者 — 觸發 version 模組寫快照。
  *
- * <p>共用 {@code rabbitListenerContainerFactory} 為 MANUAL ACK，必須手動 basicAck/basicNack；
- * 失敗一律 basicNack(requeue=false) 送 DLQ，避免重試風暴。</p>
+ * <p>共用 {@code rabbitListenerContainerFactory} 為 MANUAL ACK，ack／nack 統一交由
+ * {@link ConsumerExecutor} 處理；失敗一律 nack（requeue=false）送 DLQ，避免重試風暴。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -28,14 +27,20 @@ import java.io.IOException;
 @Slf4j
 public class ArticleVersionConsumer {
 
+    /** consumer 識別名（作為 ConsumerExecutor 指標與日誌的 consumer tag） */
+    public static final String CONSUMER_NAME = "version.snapshot";
+
     private final VersioningService versioningService;
     private final AutoSnapshotPolicy autoSnapshotPolicy;
+
+    /** MQ consumer 共用 ack/nack 包裝與計數 */
+    private final ConsumerExecutor consumerExecutor;
 
     /**
      * 消費 article.content.changed 事件，依 action 觸發對應的快照流程。
      *
      * @param event       文章內容變更事件
-     * @param channel     RabbitMQ Channel，用於手動 ACK
+     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
      * @param deliveryTag 訊息遞送標籤
      */
     @RabbitListener(queues = VersionRabbitMqConfig.QUEUE_VERSION_SNAPSHOT)
@@ -43,27 +48,20 @@ public class ArticleVersionConsumer {
             ArticleContentChangedEvent event,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        try {
-            switch (event.action()) {
-                case SAVED -> {
-                    if (autoSnapshotPolicy.shouldSnapshot(event.articleId())) {
-                        versioningService.recordAutoSnapshot(event.articleId());
+        consumerExecutor.execute(CONSUMER_NAME,
+                () -> "articleId=" + event.articleId() + ", action=" + event.action(),
+                channel, deliveryTag, () -> {
+                    switch (event.action()) {
+                        case SAVED -> {
+                            if (autoSnapshotPolicy.shouldSnapshot(event.articleId())) {
+                                versioningService.recordAutoSnapshot(event.articleId());
+                            }
+                        }
+                        case PUBLISHED -> versioningService.freezePublished(event.articleId());
+                        case RESTORED -> {
+                            /* no-op：restore 已在 VersioningService 內部寫過 stash */
+                        }
                     }
-                }
-                case PUBLISHED -> versioningService.freezePublished(event.articleId());
-                case RESTORED -> {
-                    /* no-op：restore 已在 VersioningService 內部寫過 stash */
-                }
-            }
-            channel.basicAck(deliveryTag, false);
-        } catch (Exception e) {
-            log.error("處理 ArticleContentChangedEvent 失敗 articleId={} action={}，訊息送往 DLQ",
-                event.articleId(), event.action(), e);
-            try {
-                channel.basicNack(deliveryTag, false, false);
-            } catch (IOException nackException) {
-                log.error("NACK 亦失敗 articleId={}", event.articleId(), nackException);
-            }
-        }
+                });
     }
 }

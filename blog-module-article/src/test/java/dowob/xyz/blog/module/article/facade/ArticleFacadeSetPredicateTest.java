@@ -1,16 +1,23 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
+
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -29,7 +36,39 @@ import static org.mockito.Mockito.when;
 class ArticleFacadeSetPredicateTest {
 
     @Mock private ArticleMapper articleMapper;
-    @InjectMocks private ArticleFacadeImpl facade;
+    @Mock private ArticleService articleService;
+    @Mock private ObjectProvider<SeriesFacade> seriesFacadeProvider;
+    private ArticleFacadeImpl facade;
+
+    /**
+     * 手動建構 facade 並注入「真實」的 {@link ArticleDataAssembler}（包裝 mock 的 mapper 與 provider）。
+     * 不用 {@code @InjectMocks}：它會把 assembler 注入為 null，日後任何測試觸及 findByIds 等方法就會 NPE。
+     * 本測試不關心的其餘依賴傳 null（與先前 {@code @InjectMocks} 的行為一致）。
+     */
+    @BeforeEach
+    void setUp() {
+        facade = new ArticleFacadeImpl(articleMapper, null, null, articleService, null, null, null, null, null,
+                new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)));
+    }
+
+    @Nested
+    class AssemblerWiring {
+
+        @Test
+        @DisplayName("facade 內的 ArticleDataAssembler 為真實物件：findByIds 不得因 assembler 為 null 而 NPE")
+        void findByIds_withRealAssembler_returnsArticleData() {
+            Article article = new Article();
+            article.setId(1L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(7L);
+            when(articleService.findByIds(List.of(1L))).thenReturn(List.of(article));
+
+            List<ArticleData> result = facade.findByIds(List.of(1L));
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).authorId()).isEqualTo(7L);
+        }
+    }
 
     @Nested
     class CountPublishedBySeriesIds {

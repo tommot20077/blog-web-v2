@@ -1,6 +1,6 @@
 # Backlog: ArchUnit 架構守衛測試(源自 BUG-2026-001 預防措施)
 
-**狀態**:部分完成 — 三個守衛中，項目 3（跨模組業務表守衛）已完成；項目 1（Transaction+MQ 守衛）待實作；項目 2（`@PreAuthorize` 守衛）阻塞中（見下）
+**狀態**:已完成（2026-10-24 對帳更正）— 三個守衛皆已落地：項目 3（守衛 #5）於 2026-09-05；項目 1（守衛 #6）與項目 2（守衛 #7）於 2026-09-06 由 `29cbc09` 落地。本檔先前的「待實作／阻塞中」為未同步的舊狀態。項目 2 的實作範圍比原描述窄，見該項附註
 **來源**:`ai-docs/bug-reports/2026-03-21-p0-security-txmq-fixes.md` Preventive Measures(程式類,2026-07-07 制度化時分流至此)
 
 ## 待實作項目
@@ -8,8 +8,11 @@
 1. **Transaction+MQ 守衛**:ArchUnit 測試驗證所有 `@Transactional` 方法(含 class-level)不得呼叫 `rabbitTemplate.convertAndSend()`。
    - 規範依據:`ai-docs/code-standards.md` §「Transaction + MQ 時序」
    - 建議位置:`blog-common` 或 `blog-start` 的 architecture test 套件
+   - ✅ **DONE**（2026-09-06，`29cbc09`，守衛 #6）：`blog-start/src/test/java/dowob/xyz/blog/architecture/TransactionMqBoundaryTest.java`，涵蓋方法層與類層 `@Transactional`，並以 fixture 做反向驗證（`fixture/TransactionalMqViolationFixture.java`、`fixture/ClassLevelTransactionalMqFixture.java`）
 2. **@PreAuthorize 守衛**:ArchUnit 測試驗證所有 Controller 中非公開端點(不在 `ai-docs/security.md` Public Endpoints 表內)的 handler method 都有 `@PreAuthorize`。
    - 規範依據:`ai-docs/security.md` 原則 1、7
+   - ✅ **DONE**（2026-09-06，`29cbc09`，守衛 #7）：`blog-start/src/test/java/dowob/xyz/blog/architecture/EndpointAuthorizationTest.java`，含反向驗證與「豁免清單不得有死條目」的防腐測試。
+     **範圍附註（2026-10-24 對帳）**：實作的判準是「取用 `@AuthenticationPrincipal` 的 handler 必須有 `@PreAuthorize`」（原則 7 的 8 個豁免以白名單記錄，各自綁定 Public Endpoints 表的路徑），**比本項原描述窄**——不取用 principal 的非公開 handler 不在守衛範圍內，那一類目前只靠 URL 層 `anyRequest().authenticated()`（SEC-09 收窄後）兜底
 3. **跨模組業務表守衛（守衛 #5）** — ✅ **DONE**（2026-09-05，隨 ARCH-13 修復一併引入）
    - `blog-start/src/test/java/dowob/xyz/blog/architecture/CrossModuleBoundaryTest.java`
    - ArchUnit 依賴本次首度引入（`blog-start/pom.xml`，`archunit-junit5:1.3.0`），項目 1、2 現在有現成基礎設施可用
@@ -44,6 +47,8 @@
 > 項目 2（`@PreAuthorize` 守衛）仍**阻塞**：白名單來源 `security.md` Public Endpoints 表
 > 與 `SecurityConfig` 三處對不上（SEC-27），且受 D1 收窄決策影響。
 > 順序須為：拍板 D2 修文件 → 拍板 D1 → 才寫得出守衛。見 `audits/2026-09-04/triage.md` T3。
+>
+> **2026-10-24 對帳**：上述阻塞已解除——SEC-27（文件校正）與 SEC-09（收窄 permitAll）皆由 `6ab7d34` 完成，守衛 #7 隨後於 `29cbc09` 落地。
 
 ## 驗收條件
 

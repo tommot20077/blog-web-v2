@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.search.listener;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.search.config.SearchRabbitMqConfig;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.listener.dto.ArticleArchivedMessage;
@@ -14,7 +15,6 @@ import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -24,6 +24,7 @@ import java.util.stream.Collectors;
  * <p>
  * 消費 RabbitMQ 隊列，接收文章發布、更新、刪除、下架事件，
  * 同步維護 Elasticsearch 索引。
+ * ack／nack 與失敗計數統一交由 {@link ConsumerExecutor} 處理。
  * </p>
  *
  * @author Yuan
@@ -34,33 +35,46 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ArticleSearchListener {
 
+    /** 發布事件 consumer 識別名（ConsumerExecutor 指標的 consumer tag） */
+    public static final String CONSUMER_NAME_INDEX = "search.index";
+
+    /** 更新事件 consumer 識別名（ConsumerExecutor 指標的 consumer tag） */
+    public static final String CONSUMER_NAME_INDEX_UPDATE = "search.index-update";
+
+    /** 刪除事件 consumer 識別名（ConsumerExecutor 指標的 consumer tag） */
+    public static final String CONSUMER_NAME_INDEX_DELETE = "search.index-delete";
+
+    /** 下架事件 consumer 識別名（ConsumerExecutor 指標的 consumer tag） */
+    public static final String CONSUMER_NAME_INDEX_ARCHIVE = "search.index-archive";
+
     /**
      * 搜尋服務
      */
     private final SearchService searchService;
 
     /**
+     * MQ consumer 共用 ack/nack 包裝與計數
+     */
+    private final ConsumerExecutor consumerExecutor;
+
+    /**
      * 接收文章發布事件，建立 Elasticsearch 索引
      *
      * @param message     文章發布訊息
-     * @param channel     RabbitMQ Channel
+     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
      * @param deliveryTag 訊息標籤
-     * @throws IOException 處理 ACK/NACK 時的 IO 異常
      */
     @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX, containerFactory = "rabbitListenerContainerFactory")
     public void onArticlePublished(ArticlePublishedMessage message,
             Channel channel,
-            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         log.info("收到文章發布事件，開始建立索引：uuid={}", message.getArticleUuid());
-        try {
-            ArticleDocument document = toDocument(message);
-            searchService.indexArticle(document);
-            channel.basicAck(deliveryTag, false);
-            log.debug("文章索引建立成功並已 ACK：uuid={}", message.getArticleUuid());
-        } catch (Exception e) {
-            log.error("文章索引失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
-            channel.basicNack(deliveryTag, false, false);
-        }
+        consumerExecutor.execute(CONSUMER_NAME_INDEX, () -> "articleUuid=" + message.getArticleUuid(),
+                channel, deliveryTag, () -> {
+                    ArticleDocument document = toDocument(message);
+                    searchService.indexArticle(document);
+                    log.debug("文章索引建立成功：uuid={}", message.getArticleUuid());
+                });
     }
 
     /**
@@ -72,47 +86,39 @@ public class ArticleSearchListener {
      * </p>
      *
      * @param message     文章更新訊息（結構同發布訊息）
-     * @param channel     RabbitMQ Channel
+     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
      * @param deliveryTag 訊息標籤
-     * @throws IOException 處理 ACK/NACK 時的 IO 異常
      */
     @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_UPDATE, containerFactory = "rabbitListenerContainerFactory")
     public void onArticleUpdated(ArticlePublishedMessage message,
             Channel channel,
-            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         log.info("收到文章更新事件，重新索引：uuid={}", message.getArticleUuid());
-        try {
-            ArticleDocument document = toDocument(message);
-            searchService.indexArticle(document);
-            channel.basicAck(deliveryTag, false);
-            log.debug("文章索引更新成功並已 ACK：uuid={}", message.getArticleUuid());
-        } catch (Exception e) {
-            log.error("文章索引更新失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
-            channel.basicNack(deliveryTag, false, false);
-        }
+        consumerExecutor.execute(CONSUMER_NAME_INDEX_UPDATE, () -> "articleUuid=" + message.getArticleUuid(),
+                channel, deliveryTag, () -> {
+                    ArticleDocument document = toDocument(message);
+                    searchService.indexArticle(document);
+                    log.debug("文章索引更新成功：uuid={}", message.getArticleUuid());
+                });
     }
 
     /**
      * 接收文章刪除事件，從 Elasticsearch 移除索引
      *
      * @param message     文章刪除訊息
-     * @param channel     RabbitMQ Channel
+     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
      * @param deliveryTag 訊息標籤
-     * @throws IOException 處理 ACK/NACK 時的 IO 異常
      */
     @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_DELETE, containerFactory = "rabbitListenerContainerFactory")
     public void onArticleDeleted(ArticleDeletedMessage message,
             Channel channel,
-            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         log.info("收到文章刪除事件，移除索引：uuid={}", message.getArticleUuid());
-        try {
-            searchService.deleteIndex(message.getArticleUuid().toString());
-            channel.basicAck(deliveryTag, false);
-            log.debug("文章索引移除成功並已 ACK：uuid={}", message.getArticleUuid());
-        } catch (Exception e) {
-            log.error("文章索引移除失敗：uuid={}, error={}", message.getArticleUuid(), e.getMessage(), e);
-            channel.basicNack(deliveryTag, false, false);
-        }
+        consumerExecutor.execute(CONSUMER_NAME_INDEX_DELETE, () -> "articleUuid=" + message.getArticleUuid(),
+                channel, deliveryTag, () -> {
+                    searchService.deleteIndex(message.getArticleUuid().toString());
+                    log.debug("文章索引移除成功：uuid={}", message.getArticleUuid());
+                });
     }
 
     /**
@@ -132,29 +138,25 @@ public class ArticleSearchListener {
      * </p>
      *
      * @param message     文章下架訊息
-     * @param channel     RabbitMQ Channel
+     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
      * @param deliveryTag 訊息標籤
-     * @throws IOException 處理 ACK/NACK 時的 IO 異常
      */
     @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_ARCHIVE, containerFactory = "rabbitListenerContainerFactory")
     public void onArticleArchived(ArticleArchivedMessage message,
             Channel channel,
-            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) throws IOException {
+            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         log.info("收到文章下架事件，移除索引：uuid={}", message.getArticleUuid());
-        try {
-            searchService.deleteIndex(message.getArticleUuid().toString());
-            channel.basicAck(deliveryTag, false);
-            log.debug("已下架文章索引移除成功並已 ACK：uuid={}", message.getArticleUuid());
-        } catch (Exception e) {
-            /*
-             * requeue=false ⇒ 直入 DLQ，沒有自動重試。下架是合規動作，這條路徑失敗
-             * 代表文章仍留在搜尋索引裡，故日誌必須帶足人工補送所需的上下文：
-             * articleUuid（要刪哪一篇）與 eventId（對得回 producer 端的那筆事件）。
-             */
-            log.error("已下架文章索引移除失敗，訊息已進 DLQ 需人工處理：articleUuid={}, eventId={}, error={}",
-                    message.getArticleUuid(), message.getEventId(), e.getMessage(), e);
-            channel.basicNack(deliveryTag, false, false);
-        }
+        /*
+         * requeue=false ⇒ 直入 DLQ，沒有自動重試。下架是合規動作，這條路徑失敗
+         * 代表文章仍留在搜尋索引裡，故失敗日誌（由 ConsumerExecutor 輸出）必須帶足人工補送所需的上下文：
+         * articleUuid（要刪哪一篇）與 eventId（對得回 producer 端的那筆事件）。
+         */
+        consumerExecutor.execute(CONSUMER_NAME_INDEX_ARCHIVE,
+                () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
+                channel, deliveryTag, () -> {
+                    searchService.deleteIndex(message.getArticleUuid().toString());
+                    log.debug("已下架文章索引移除成功：uuid={}", message.getArticleUuid());
+                });
     }
 
     /**

@@ -8,8 +8,8 @@ import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent;
-import dowob.xyz.blog.module.article.event.ArticleContentChangedEvent.Action;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent.Action;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.version.config.VersionTestApplication;
@@ -148,9 +148,11 @@ class ArticleVersionConsumerIT {
     @DisplayName("SAVED action: 無先前快照時應寫入 AUTO 版本")
     void onContentChanged_savedAction_writesAutoVersion() {
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
+                UUID.randomUUID(),
                 testArticle.getId(),
                 testArticle.getUuid(),
                 AUTHOR_ID,
+                null,
                 Action.SAVED,
                 Instant.now()
         );
@@ -190,9 +192,11 @@ class ArticleVersionConsumerIT {
 
         // 觸發 PUBLISHED action
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
+                UUID.randomUUID(),
                 testArticle.getId(),
                 testArticle.getUuid(),
                 AUTHOR_ID,
+                null,
                 Action.PUBLISHED,
                 Instant.now()
         );
@@ -216,9 +220,11 @@ class ArticleVersionConsumerIT {
         assertThat(countBefore).isZero();
 
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
+                UUID.randomUUID(),
                 testArticle.getId(),
                 testArticle.getUuid(),
                 AUTHOR_ID,
+                null,
                 Action.RESTORED,
                 Instant.now()
         );

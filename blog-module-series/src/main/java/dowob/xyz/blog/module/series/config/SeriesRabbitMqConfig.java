@@ -1,6 +1,6 @@
 package dowob.xyz.blog.module.series.config;
 
-import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -34,7 +34,7 @@ public class SeriesRabbitMqConfig {
         return BindingBuilder
                 .bind(seriesArticleDeletedQueue)
                 .to(articleEventsExchange)
-                .with(ArticleRabbitMqConfig.ROUTING_KEY_DELETED);
+                .with(ArticleEventContract.ROUTING_KEY_DELETED);
     }
 
     private Map<String, Object> dlqArgs() {

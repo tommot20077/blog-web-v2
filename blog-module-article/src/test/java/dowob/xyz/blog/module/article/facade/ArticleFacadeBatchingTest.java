@@ -1,16 +1,23 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
+import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -36,7 +43,21 @@ import static org.mockito.Mockito.when;
 class ArticleFacadeBatchingTest {
 
     @Mock private ArticleRecommendMapper recommendMapper;
-    @InjectMocks private ArticleFacadeImpl facade;
+    @Mock private ArticleService articleService;
+    @Mock private ArticleMapper articleMapper;
+    @Mock private ObjectProvider<SeriesFacade> seriesFacadeProvider;
+    private ArticleFacadeImpl facade;
+
+    /**
+     * 手動建構 facade 並注入「真實」的 {@link ArticleDataAssembler}（包裝 mock 的 mapper 與 provider）。
+     * 不用 {@code @InjectMocks}：它會把 assembler 注入為 null，日後任何測試觸及 findByIds 等方法就會 NPE。
+     * 本測試不關心的其餘依賴傳 null（與先前 {@code @InjectMocks} 的行為一致）。
+     */
+    @BeforeEach
+    void setUp() {
+        facade = new ArticleFacadeImpl(articleMapper, null, recommendMapper, articleService, null, null, null, null,
+                null, new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)));
+    }
 
     /** findByUuids 每次收到的批次大小 */
     private final List<Integer> uuidBatchSizes = new ArrayList<>();
@@ -72,5 +93,20 @@ class ArticleFacadeBatchingTest {
         assertThat(uuidBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
         assertThat(tagBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
         assertThat(result).hasSize(total);
+    }
+
+    @Test
+    @DisplayName("facade 內的 ArticleDataAssembler 為真實物件：findByIds 不得因 assembler 為 null 而 NPE")
+    void findByIds_withRealAssembler_returnsArticleData() {
+        Article article = new Article();
+        article.setId(1L);
+        article.setUuid(UUID.randomUUID());
+        article.setAuthorId(7L);
+        when(articleService.findByIds(List.of(1L))).thenReturn(List.of(article));
+
+        List<ArticleData> result = facade.findByIds(List.of(1L));
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).authorId()).isEqualTo(7L);
     }
 }
