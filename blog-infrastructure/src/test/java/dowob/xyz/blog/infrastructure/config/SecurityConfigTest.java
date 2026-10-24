@@ -1,10 +1,12 @@
 package dowob.xyz.blog.infrastructure.config;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
 import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -708,7 +710,7 @@ class SecurityConfigTest {
         Role.ADMIN.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         return authentication(
-                new UsernamePasswordAuthenticationToken(1L, null, authorities));
+                new UsernamePasswordAuthenticationToken(new AuthUser(1L, new UUID(0L, 1L), Role.ADMIN), null, authorities));
     }
 
     private static RequestPostProcessor asUser() {
@@ -717,7 +719,7 @@ class SecurityConfigTest {
         Role.USER.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         return authentication(
-                new UsernamePasswordAuthenticationToken(2L, null, authorities));
+                new UsernamePasswordAuthenticationToken(new AuthUser(2L, new UUID(0L, 2L), Role.USER), null, authorities));
     }
 
     private static RequestPostProcessor asAuthor() {
@@ -726,6 +728,6 @@ class SecurityConfigTest {
         Role.AUTHOR.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         return authentication(
-                new UsernamePasswordAuthenticationToken(3L, null, authorities));
+                new UsernamePasswordAuthenticationToken(new AuthUser(3L, new UUID(0L, 3L), Role.AUTHOR), null, authorities));
     }
 }
