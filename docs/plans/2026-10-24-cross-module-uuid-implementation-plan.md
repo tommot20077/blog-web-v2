@@ -491,7 +491,7 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 
 | 階段 | 模組 | 建議切法 | 補充 |
 |---|---|---|---|
-| M1 | comment | 1 個 Task（可再拆：儲存層／服務） | `comments.article_uuid` 已存在且雙寫（V24）：DROP `article_id` 與 `comments_article_uuid_fkey`、移除雙寫；`comment_likes.comment_id`、`comments.parent_id` 是模組內部關聯，維持 Long。留言數加減在 ArticleFacade 新增 UUID 版。授權判斷改用 T0a-6 的 `ArticleData.authorUuid` |
+| M1 | comment | 1 個 Task（可再拆：儲存層／服務） | `comments.article_uuid` 已存在且雙寫（V24）：DROP `article_id` 與 `comments_article_uuid_fkey`、移除雙寫；`comment_likes.comment_id`、`comments.parent_id` 是模組內部關聯，維持 Long。留言數加減在 ArticleFacade 新增 UUID 版。授權判斷改用 T0a-6 的 `ArticleData.authorUuid`。`ArticleFacade.filterReadableIds(…, Long viewerId, …)` 尚無 UUID 版（T0a-6 審查 F3），用到時於本階段新增 |
 | M2 | reading | 2 個：4 張表的儲存層／服務與 facade | 閱讀進度 Redis key 目前 `userId:articleUuid`（ReadingProgressFlushJob 以 parseLong 解析），改 uuid（無正式環境，舊 key 不遷移）；`getSummariesByUuids` 回傳的 DTO 放 facade dto，reading 回應 JSON 逐欄位與現在相同（加測試比對）；ReadingFacade 6 個方法改 UUID |
 | M3 | version | 2 個：`article_versions`／`user_preferences` 與渲染職責 | `user_preferences.user_id`（→ users，CASCADE）為第 18 個欄位：轉 `user_uuid`、拿掉 FK（使用者只軟刪除，CASCADE 從未觸發，行為不變）。restore 改由 article 渲染後，VersionControllerIT 既有的凍結守衛與權限案例必須仍成立 |
 | M4 | series | 1～2 個 | 發送 `SeriesDeletedEvent`（放 infrastructure/event，帶 seriesUuid＋eventId）；**article 端的接收與清空 `series_uuid` 留到 M6**——本階段 `articles.series_id` 的 FK `ON DELETE SET NULL` 仍在，行為不變。以 series uuid 查文章用 T0a-6 的過渡 API |
