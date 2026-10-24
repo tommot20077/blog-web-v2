@@ -4,6 +4,7 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import lombok.experimental.UtilityClass;
 
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 文章可見性判斷工具類
@@ -57,5 +58,43 @@ public class ArticleVisibility {
      */
     public static boolean isReadableBy(ArticleStatus status, Long authorId, Long viewerId, boolean isAdmin) {
         return isReadableBy(status == null ? null : status.name(), authorId, viewerId, isAdmin);
+    }
+
+    /**
+     * 判斷指定檢視者是否可讀取該文章（UUID 過渡版，語意與 Long 版 {@link #isReadableBy(String, Long, Long, boolean)} 完全相同）。
+     *
+     * <p>設計 §3.1「過渡 API」：跨模組識別全面改為 UUID 的各模組階段改呼叫本方法，
+     * 不必等 owner 模組改造完成。Z1 收尾階段 Long 版移除後，本方法成為唯一版本。</p>
+     *
+     * <p><b>呼叫注意</b>：若兩個識別參數都傳字面值 {@code null}，編譯器無法區分 Long 與 UUID 版而報 ambiguous；
+     * 請傳有型別的變數或加型別轉型。</p>
+     *
+     * @param statusName 文章狀態名稱（跨模組以 String 流通，可為 null；null／未知字串視為不公開）
+     * @param authorUuid 文章作者公開 UUID（可為 null）
+     * @param viewerUuid 檢視者公開 UUID；匿名為 null
+     * @param isAdmin    檢視者是否為 ADMIN
+     * @return 可讀取回傳 true
+     */
+    public static boolean isReadableBy(String statusName, UUID authorUuid, UUID viewerUuid, boolean isAdmin) {
+        if (ArticleStatus.isPubliclyVisible(statusName)) {
+            return true;
+        }
+        if (isAdmin) {
+            return true;
+        }
+        return viewerUuid != null && Objects.equals(authorUuid, viewerUuid);
+    }
+
+    /**
+     * 判斷指定檢視者是否可讀取該文章（UUID 過渡版的 enum 變體）。
+     *
+     * @param status     文章狀態（可為 null；視為不公開）
+     * @param authorUuid 文章作者公開 UUID（可為 null）
+     * @param viewerUuid 檢視者公開 UUID；匿名為 null
+     * @param isAdmin    檢視者是否為 ADMIN
+     * @return 可讀取回傳 true
+     */
+    public static boolean isReadableBy(ArticleStatus status, UUID authorUuid, UUID viewerUuid, boolean isAdmin) {
+        return isReadableBy(status == null ? null : status.name(), authorUuid, viewerUuid, isAdmin);
     }
 }
