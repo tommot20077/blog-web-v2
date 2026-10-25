@@ -114,4 +114,5 @@
 - **`comment_likes` 缺以 `comment_id` 開頭的索引（既有）**：UNIQUE 為 (user_uuid, comment_id)，刪除留言時 FK CASCADE 找讚列需全表掃描。V25 前即存在（舊 UNIQUE 同樣以 user_id 開頭），不在 M1 授權內。修法：新 migration 加 `idx_comment_likes_comment(comment_id)`。（M1-b 回報）
 - **寫入與文章刪除的窗口（M1-b 起，設計接受）**：寫入端在 `existsByUuid` 與 INSERT 之間文章被刪，會留下孤兒列，直到每日 `OrphanReconciliationJob` 子類別清除；FK 拿掉後的固有代價。適用：留言（M1-b）、按讚與收藏（M2-b）、劃線（M2-c）。（M1-b、M2-b 回報）
 - **comment 列表作者欄位缺端到端測試**：comment 模組 IT 一律 mock `UserFacade`，`UserFacadeImpl` 端由 `UserFacadeIntegrationTest` 覆蓋，兩端以 `Map<UUID, UserDisplayInfo>` 契約銜接，但沒有測試走過「真實 UserFacade → listComments → JSON」。併入 TEST-10 E2E 進 CI gate 時補 author 斷言。（M1-b 審查 MEDIUM）
+- **刪除連動 queue 缺真 broker 的 binding 測試**：`comment.article-deleted`、`reading.article-deleted` 只有 config 單元測試與 ContextSmokeTest（context 能啟動），沒有測試以真 RabbitMQ 發布 `ArticleDeletedEvent` 後證明 consumer 收到。Z3（打開 MQ 重試）前補一個 blog-start 層的 Testcontainers RabbitMQ IT 涵蓋全部刪除連動 queue。（M2-b 審查）
 - **refresh token 可被當 access token 送進 filter（既有）**：`JwtService.validateToken` 不檢查 token type；目前因 refresh token 無 role claim 被 filter 的 catch 偶然擋下。應在 filter 明確檢查 type=access 並補測試。（T0b-2 審查）
