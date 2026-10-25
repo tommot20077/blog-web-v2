@@ -1,4 +1,4 @@
-package dowob.xyz.blog.module.article.model.dto.response;
+package dowob.xyz.blog.infrastructure.facade.dto;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import lombok.Builder;
