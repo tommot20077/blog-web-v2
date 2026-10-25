@@ -19,14 +19,16 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * {@link ReadingProgressFlushJob} 整合測試（真實 Redis、真實 Postgres；進度的更新走真實 {@link ReadingProgressService}）。
  *
- * <p><b>RACE-13／DATA-08</b>：舊流程是「讀 hash → upsert → 最後才 SREM」。讀 hash 之後、SREM 之前若有新的
+ * <p><b>RACE-13／DATA-08</b>：舊流程是「讀 hash → upsert → 無條件 SREM」。讀 hash 之後、SREM 之前若有新的
  * update，新值寫進 hash，但 dirty set 已含該成員、SADD 是 no-op，隨後的 SREM 把 dirty 標記抹掉——
- * 新進度不會再被 flush，hash 的 TTL 到期後讀回 DB 的舊值（進度回退）。新流程「先 SREM 該成員，再讀 hash 與
- * upsert」，之後任何新的 update 都會重新 SADD，下一輪必被 flush。</p>
+ * 新進度不會再被 flush，hash 的 TTL 到期後讀回 DB 的舊值（進度回退）。新流程「讀 hash（記下 updatedAt）→
+ * upsert → Lua compare-and-remove」：updatedAt 沒變才 SREM，期間有新 update 就保留成員；upsert 失敗或 JVM
+ * 在 upsert 與 CAS 之間終止時成員本來就還在（at-least-once）。</p>
  *
  * <p>交錯以 {@link HookingMapper} 重現：它把 {@code upsert} 委派給真實 mapper（真實 Postgres），並在
  * upsert 之後執行 hook。upsert 一定發生在「讀完 hash 之後、flush 結束之前」，hook 在這個位置插入一次新的
@@ -94,6 +96,22 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
         redis.delete(RedisKeyConstant.READING_DIRTY_KEY);
     }
 
+    /** 讓 updatedAt（毫秒時間戳）必定與前一次 update 不同，避免同一毫秒的版本碰撞讓測試不穩定。 */
+    private static void sleepToAdvanceMillis() {
+        try {
+            Thread.sleep(5);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 模擬 JVM 被終止：Error 不會被 job 的 catch (Exception) 吞掉，會直接穿出 flush()。 */
+    private static final class SimulatedJvmAbort extends Error {
+        private SimulatedJvmAbort() {
+            super("simulated JVM abort");
+        }
+    }
+
     private String memberOf(UUID userUuid, UUID articleUuid) {
         return userUuid + ":" + articleUuid;
     }
@@ -122,8 +140,10 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
         progressService.update(USER_UUID, articleUuid, new BigDecimal("0.30"), "first");
 
         // upsert 完成時 flush 已讀完 hash（舊值 0.30）；此刻插入一次新的 update
-        hookingMapper.afterNextUpsert = () ->
-                progressService.update(USER_UUID, articleUuid, new BigDecimal("0.60"), "second");
+        hookingMapper.afterNextUpsert = () -> {
+            sleepToAdvanceMillis();
+            progressService.update(USER_UUID, articleUuid, new BigDecimal("0.60"), "second");
+        };
 
         job.flush();
 
@@ -140,8 +160,8 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
     }
 
     @Test
-    @DisplayName("upsert 失敗：成員被補回 dirty set、hash 保留，下一輪成功寫入")
-    void flush_upsertFails_restoresDirtyAndRetriesNextRound() {
+    @DisplayName("upsert 失敗：成員仍在 dirty set（從未被移除）、hash 保留，下一輪成功寫入")
+    void flush_upsertFails_keepsDirtyAndRetriesNextRound() {
         Article article = createArticle(ArticleStatus.PUBLISHED);
         UUID articleUuid = article.getUuid();
         progressService.update(USER_UUID, articleUuid, new BigDecimal("0.40"), "h");
@@ -149,7 +169,7 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
 
         job.flush();
 
-        assertThat(isDirty(USER_UUID, articleUuid)).as("失敗後成員補回 dirty").isTrue();
+        assertThat(isDirty(USER_UUID, articleUuid)).as("失敗後成員仍在 dirty").isTrue();
         assertThat(hashProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.40");
         assertThat(dbProgress(USER_UUID, articleUuid)).isNull();
 
@@ -157,6 +177,61 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
 
         assertThat(dbProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.40");
         assertThat(isDirty(USER_UUID, articleUuid)).isFalse();
+    }
+
+    @Test
+    @DisplayName("upsert 之後、compare-and-remove 之前 JVM 被終止：成員仍在 dirty set，下一輪 flush 會重新寫入（at-least-once）")
+    void flush_jvmAbortsAfterUpsertBeforeCas_memberStaysAndNextRoundWrites() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        progressService.update(USER_UUID, articleUuid, new BigDecimal("0.30"), "first");
+        hookingMapper.afterNextUpsert = () -> {
+            throw new SimulatedJvmAbort();
+        };
+
+        assertThatThrownBy(() -> job.flush()).isInstanceOf(SimulatedJvmAbort.class);
+
+        assertThat(isDirty(USER_UUID, articleUuid)).as("CAS 沒有機會執行，成員必須還在").isTrue();
+        assertThat(hashProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.30");
+        jdbc.update("UPDATE user_reading_progress SET progress = 0 WHERE user_uuid = ? AND article_uuid = ?",
+                USER_UUID, articleUuid);
+
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).as("下一輪 flush 重新寫入").isEqualByComparingTo("0.30");
+        assertThat(isDirty(USER_UUID, articleUuid)).isFalse();
+    }
+
+    @Test
+    @DisplayName("hash 在 upsert 之後過期（CAS 時 hash 不存在）：保留成員，下一輪讀到空 hash 才移除")
+    void flush_hashExpiresAfterUpsert_keepsMemberUntilNextRound() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        progressService.update(USER_UUID, articleUuid, new BigDecimal("0.30"), "first");
+        hookingMapper.afterNextUpsert = () -> redis.delete(
+                RedisKeyConstant.READING_PROGRESS_PREFIX + memberOf(USER_UUID, articleUuid));
+
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.30");
+        assertThat(isDirty(USER_UUID, articleUuid)).as("hash 已不存在，CAS 不相等，保留成員").isTrue();
+
+        job.flush();
+
+        assertThat(isDirty(USER_UUID, articleUuid)).as("下一輪讀到空 hash，成員移除").isFalse();
+    }
+
+    @Test
+    @DisplayName("hash 已過期且期間沒有新 update：成員被移除")
+    void flush_hashAlreadyExpired_removesMember() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, memberOf(USER_UUID, articleUuid));
+
+        job.flush();
+
+        assertThat(isDirty(USER_UUID, articleUuid)).isFalse();
+        assertThat(countProgress(articleUuid)).isZero();
     }
 
     @Test
