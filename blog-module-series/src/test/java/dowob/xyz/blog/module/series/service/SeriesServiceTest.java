@@ -417,7 +417,7 @@ class SeriesServiceTest {
         List<ArticleData> articles = List.of(articleData);
         when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
 
-        var summary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
+        var summary = dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse.builder()
                 .uuid(uuidA).title("A").seriesPosition(1).build();
         when(articleQueryService.getArticleSummariesByIds(List.of(1L), false)).thenReturn(List.of(summary));
 
@@ -453,7 +453,7 @@ class SeriesServiceTest {
         );
         when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
 
-        var publishedSummary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
+        var publishedSummary = dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse.builder()
                 .uuid(publishedUuid).title("A").seriesPosition(1).build();
         when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
 
@@ -494,7 +494,7 @@ class SeriesServiceTest {
         );
         when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
 
-        var publishedSummary = dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse.builder()
+        var publishedSummary = dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse.builder()
                 .uuid(publishedUuid).title("A").seriesPosition(1).build();
         when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
 

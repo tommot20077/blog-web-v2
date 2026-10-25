@@ -1,7 +1,7 @@
 package dowob.xyz.blog.module.series.model.dto.response;
 
 import dowob.xyz.blog.common.api.dto.AuthorSummary;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import lombok.Data;
 
 import java.time.LocalDateTime;

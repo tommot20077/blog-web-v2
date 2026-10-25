@@ -2,7 +2,7 @@ package dowob.xyz.blog.module.reading.service;
 
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
