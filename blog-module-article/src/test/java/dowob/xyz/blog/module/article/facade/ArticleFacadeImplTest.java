@@ -121,7 +121,8 @@ class ArticleFacadeImplTest {
             articleMapper, userFacade, recommendMapper, articleService,
             articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
             articleFileBinder,
-            new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider))
+            new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)),
+            null
         );
 
         /** 過渡期 UUID 欄位的依賴：本測試類不驗證 UUID 值（見 ArticleFacadeUuidFieldsTest），回傳空即可 */

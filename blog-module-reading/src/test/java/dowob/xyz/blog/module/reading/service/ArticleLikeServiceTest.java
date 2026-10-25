@@ -53,7 +53,7 @@ class ArticleLikeServiceTest {
         service.likeArticle(userId, articleId);
 
         verify(likeRepo, never()).save(any());
-        verify(articleFacade, never()).incrementLikeCount(any());
+        verify(articleFacade, never()).incrementLikeCount(any(Long.class));
     }
 
     @Test
@@ -75,7 +75,7 @@ class ArticleLikeServiceTest {
         service.unlikeArticle(userId, articleId);
 
         verify(likeRepo, times(1)).deleteByUserIdAndArticleId(userId, articleId);
-        verify(articleFacade, never()).decrementLikeCount(any());
+        verify(articleFacade, never()).decrementLikeCount(any(Long.class));
     }
 
     @Test
