@@ -24,12 +24,12 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * 按讚／收藏的刪除連動、校正排程與併發整合測試的共用基底。
+ * reading 各表（按讚、收藏、劃線、閱讀進度）的刪除連動、校正排程與併發整合測試的共用基底。
  *
  * <p>以<b>單例</b> Postgres／Redis 容器（static 區塊啟動、不隨測試類別停止，由 Testcontainers 的 Ryuk 收尾）：
  * 多個 IT 類別共用同一個 Spring context 快取時，若容器逐類別重啟，快取中的 context 會指向已關閉的容器。</p>
  *
- * <p>提供建立文章、直接以 SQL 寫入按讚／收藏（含「指向不存在文章」的孤兒列）與計數的輔助方法；
+ * <p>提供建立文章、直接以 SQL 寫入按讚／收藏／劃線／閱讀進度（含「指向不存在文章」的孤兒列）與計數的輔助方法；
  * 每個測試結束後清空 reading 相關表與 articles。</p>
  *
  * @author Yuan
@@ -152,6 +152,28 @@ public abstract class ReadingCleanupITSupport {
     }
 
     /**
+     * 直接以 SQL 寫入一筆劃線（不經 service）。V27 起 {@code user_highlights} 沒有指向 users／articles 的 FK。
+     *
+     * @param userUuid    劃線者公開 UUID
+     * @param articleUuid 文章公開 UUID
+     */
+    protected void insertHighlight(UUID userUuid, UUID articleUuid) {
+        jdbc.update("INSERT INTO user_highlights (user_uuid, article_uuid, snippet) VALUES (?, ?, 'snippet')",
+                userUuid, articleUuid);
+    }
+
+    /**
+     * 直接以 SQL 寫入一筆閱讀進度（不經 service）。同一組 (user, article) 只能有一列（UNIQUE）。
+     *
+     * @param userUuid    讀者公開 UUID
+     * @param articleUuid 文章公開 UUID
+     */
+    protected void insertProgress(UUID userUuid, UUID articleUuid) {
+        jdbc.update("INSERT INTO user_reading_progress (user_uuid, article_uuid, progress) VALUES (?, ?, 0.5)",
+                userUuid, articleUuid);
+    }
+
+    /**
      * 計算某文章 UUID 底下的按讚數。
      *
      * @param articleUuid 文章 UUID
@@ -169,6 +191,26 @@ public abstract class ReadingCleanupITSupport {
      */
     protected int countBookmarks(UUID articleUuid) {
         return count("SELECT COUNT(*) FROM user_bookmarks WHERE article_uuid = ?", articleUuid);
+    }
+
+    /**
+     * 計算某文章 UUID 底下的劃線數。
+     *
+     * @param articleUuid 文章 UUID
+     * @return 劃線列數
+     */
+    protected int countHighlights(UUID articleUuid) {
+        return count("SELECT COUNT(*) FROM user_highlights WHERE article_uuid = ?", articleUuid);
+    }
+
+    /**
+     * 計算某文章 UUID 底下的閱讀進度列數。
+     *
+     * @param articleUuid 文章 UUID
+     * @return 閱讀進度列數
+     */
+    protected int countProgress(UUID articleUuid) {
+        return count("SELECT COUNT(*) FROM user_reading_progress WHERE article_uuid = ?", articleUuid);
     }
 
     /**

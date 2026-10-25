@@ -208,11 +208,6 @@ public class ArticleQueryService {
         Map<UUID, Long> uuidToId = idRows.stream()
                 .collect(Collectors.toMap(Article::getUuid, Article::getId));
 
-        List<Long> articleIds = uuids.stream()
-                .map(uuidToId::get)
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.toList());
-
         Map<Long, Long> articleIdToSeriesId = idRows.stream()
                 .filter(a -> a.getSeriesId() != null)
                 .collect(Collectors.toMap(Article::getId, Article::getSeriesId));
@@ -244,16 +239,16 @@ public class ArticleQueryService {
             return;
         }
 
-        // 按讚／收藏已改為 UUID 識別（M2-b）；閱讀進度仍用 Long 主鍵（M2-c 才改）
+        // 按讚／收藏（M2-b）與閱讀進度（M2-c）都以 UUID 識別
         Set<UUID> likedUuids = readingFacade.batchIsLiked(userUuid, uuids);
         Set<UUID> bookmarkedUuids = readingFacade.batchIsBookmarked(userUuid, uuids);
-        Map<Long, BigDecimal> progressMap = readingFacade.batchGetProgress(userId, articleIds);
+        Map<UUID, BigDecimal> progressMap = readingFacade.batchGetProgress(userUuid, uuids);
 
         records.forEach(r -> {
             Long id = uuidToId.get(r.getUuid());
             r.setLiked(id != null && likedUuids.contains(r.getUuid()));
             r.setBookmarked(id != null && bookmarkedUuids.contains(r.getUuid()));
-            r.setLastReadProgress(id != null ? progressMap.get(id) : null);
+            r.setLastReadProgress(id != null ? progressMap.get(r.getUuid()) : null);
         });
     }
 
@@ -287,7 +282,7 @@ public class ArticleQueryService {
         resp.setLiked(articleId != null && readingFacade.isLiked(userUuid, resp.getUuid()));
         resp.setBookmarked(articleId != null && readingFacade.isBookmarked(userUuid, resp.getUuid()));
         if (resp.getUuid() != null) {
-            resp.setLastReadProgress(readingFacade.getProgress(userId, resp.getUuid()));
+            resp.setLastReadProgress(readingFacade.getProgress(userUuid, resp.getUuid()));
         }
     }
 
@@ -307,7 +302,7 @@ public class ArticleQueryService {
      * 從 SecurityContextHolder 取得當前登入使用者 UUID，未登入時回傳 null。
      *
      * <p>與 {@link #currentUserIdOrNull()} 同源（{@link AuthUser}）。按讚／收藏的查詢已改以 UUID 識別（M2-b），
-     * 閱讀進度尚未（M2-c），因此兩者並存。</p>
+     * 閱讀進度（M2-c）亦已改為 UUID；{@link #currentUserIdOrNull()} 僅剩判斷是否登入之用。</p>
      *
      * @return 使用者公開 UUID，或 null（匿名 / 未認證）
      */

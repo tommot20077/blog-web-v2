@@ -10,6 +10,7 @@ import org.springframework.data.relational.core.mapping.Table;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 /**
  * 閱讀進度（user_reading_progress 表映射）。
@@ -17,7 +18,7 @@ import java.time.LocalDateTime;
  * <p>Redis 主要儲存，DB 為 5 分鐘 flush 後的備份。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @Data
 @NoArgsConstructor
@@ -27,11 +28,13 @@ public class UserReadingProgress {
     @Id
     private Long id;
 
-    @Column("user_id")
-    private Long userId;
+    /** 讀者的公開 UUID（跨模組識別；V27 起無 FK） */
+    @Column("user_uuid")
+    private UUID userUuid;
 
-    @Column("article_id")
-    private Long articleId;
+    /** 文章公開 UUID（跨模組識別；V27 起無 FK，文章刪除由事件＋校正排程連動刪除） */
+    @Column("article_uuid")
+    private UUID articleUuid;
 
     private BigDecimal progress;
 

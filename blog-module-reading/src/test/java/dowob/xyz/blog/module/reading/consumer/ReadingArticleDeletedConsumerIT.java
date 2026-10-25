@@ -49,6 +49,8 @@ class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
     void dropFailureTrigger() {
         jdbc.execute("DROP TRIGGER IF EXISTS trg_fail_bookmark_delete ON user_bookmarks");
         jdbc.execute("DROP FUNCTION IF EXISTS fail_bookmark_delete()");
+        jdbc.execute("DROP TRIGGER IF EXISTS trg_fail_progress_delete ON user_reading_progress");
+        jdbc.execute("DROP FUNCTION IF EXISTS fail_progress_delete()");
     }
 
     @Test
@@ -71,6 +73,52 @@ class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
         assertThat(countBookmarks(other.getUuid())).isEqualTo(1);
         verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
         verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("處理事件：該文章的劃線與閱讀進度也一併消失，其他文章的保留")
+    void onArticleDeleted_removesOnlyThatArticlesHighlightsAndProgress() throws Exception {
+        Article target = createArticle(ArticleStatus.PUBLISHED);
+        Article other = createArticle(ArticleStatus.PUBLISHED);
+        insertHighlight(USER_UUID, target.getUuid());
+        insertHighlight(OTHER_USER_UUID, target.getUuid());
+        insertProgress(USER_UUID, target.getUuid());
+        insertProgress(OTHER_USER_UUID, target.getUuid());
+        insertHighlight(USER_UUID, other.getUuid());
+        insertProgress(USER_UUID, other.getUuid());
+        Channel channel = Mockito.mock(Channel.class);
+
+        consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);
+
+        assertThat(countHighlights(target.getUuid())).isZero();
+        assertThat(countProgress(target.getUuid())).isZero();
+        assertThat(countHighlights(other.getUuid())).isEqualTo(1);
+        assertThat(countProgress(other.getUuid())).isEqualTo(1);
+        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
+    }
+
+    @Test
+    @DisplayName("閱讀進度表刪除失敗：前三張表（含劃線）的刪除一併回滾，並 nack 送往 DLQ")
+    void onArticleDeleted_progressTableFails_rollsBackEarlierTables() throws Exception {
+        Article target = createArticle(ArticleStatus.PUBLISHED);
+        insertLike(USER_UUID, target.getUuid());
+        insertBookmark(USER_UUID, target.getUuid());
+        insertHighlight(USER_UUID, target.getUuid());
+        insertProgress(USER_UUID, target.getUuid());
+        jdbc.execute("CREATE FUNCTION fail_progress_delete() RETURNS trigger AS $$ "
+                + "BEGIN RAISE EXCEPTION 'progress delete blocked by test'; END; $$ LANGUAGE plpgsql");
+        jdbc.execute("CREATE TRIGGER trg_fail_progress_delete BEFORE DELETE ON user_reading_progress "
+                + "FOR EACH ROW EXECUTE FUNCTION fail_progress_delete()");
+        Channel channel = Mockito.mock(Channel.class);
+
+        consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);
+
+        assertThat(countLikes(target.getUuid())).isEqualTo(1);
+        assertThat(countBookmarks(target.getUuid())).isEqualTo(1);
+        assertThat(countHighlights(target.getUuid())).as("劃線的刪除已隨交易回滾").isEqualTo(1);
+        assertThat(countProgress(target.getUuid())).isEqualTo(1);
+        verify(channel, never()).basicAck(anyLong(), anyBoolean());
+        verify(channel, times(1)).basicNack(DELIVERY_TAG, false, false);
     }
 
     @Test

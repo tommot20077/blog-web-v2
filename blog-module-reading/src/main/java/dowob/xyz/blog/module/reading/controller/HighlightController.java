@@ -45,7 +45,7 @@ public class HighlightController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateHighlightRequest req) {
-        return ApiResponse.success(highlightService.create(articleUuid, user.id(), req));
+        return ApiResponse.success(highlightService.create(articleUuid, user.uuid(), req));
     }
 
     @GetMapping("/articles/{articleUuid}/highlights")
@@ -54,7 +54,7 @@ public class HighlightController {
     public ApiResponse<List<HighlightResponse>> list(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user) {
-        return ApiResponse.success(highlightService.getByArticle(articleUuid, user.id()));
+        return ApiResponse.success(highlightService.getByArticle(articleUuid, user.uuid()));
     }
 
     @PutMapping("/highlights/{uuid}")
@@ -64,7 +64,7 @@ public class HighlightController {
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdateHighlightRequest req) {
-        return ApiResponse.success(highlightService.update(uuid, user.id(), req));
+        return ApiResponse.success(highlightService.update(uuid, user.uuid(), req));
     }
 
     @DeleteMapping("/highlights/{uuid}")
@@ -73,7 +73,7 @@ public class HighlightController {
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user) {
-        highlightService.delete(uuid, user.id());
+        highlightService.delete(uuid, user.uuid());
         return ApiResponse.success();
     }
 }

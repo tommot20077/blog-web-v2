@@ -91,6 +91,39 @@ class ReadingArticleDeletedConsumerTest {
     }
 
     @Test
+    @DisplayName("收到事件：同一交易內四張表（按讚、收藏、劃線、閱讀進度）依序刪除後才 commit 與 ack")
+    void onArticleDeleted_deletesAllFourTablesInOneTransactionBeforeCommit() throws Exception {
+        UUID articleUuid = UUID.randomUUID();
+        when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
+
+        consumer.onArticleDeleted(event(articleUuid), channel, DELIVERY_TAG);
+
+        InOrder order = inOrder(transactionManager, cleanupMapper, channel);
+        order.verify(transactionManager).getTransaction(any());
+        order.verify(cleanupMapper).deleteLikesByArticleUuid(articleUuid);
+        order.verify(cleanupMapper).deleteBookmarksByArticleUuid(articleUuid);
+        order.verify(cleanupMapper).deleteHighlightsByArticleUuid(articleUuid);
+        order.verify(cleanupMapper).deleteProgressByArticleUuid(articleUuid);
+        order.verify(transactionManager).commit(transactionStatus);
+        order.verify(channel).basicAck(DELIVERY_TAG, false);
+    }
+
+    @Test
+    @DisplayName("最後一張表（閱讀進度）刪除拋例外：交易回滾（不 commit）、nack（requeue=false），不 ack")
+    void onArticleDeleted_progressDeleteThrows_rollsBackAndNacks() throws Exception {
+        UUID articleUuid = UUID.randomUUID();
+        when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
+        doThrow(new RuntimeException("DB down")).when(cleanupMapper).deleteProgressByArticleUuid(articleUuid);
+
+        consumer.onArticleDeleted(event(articleUuid), channel, DELIVERY_TAG);
+
+        verify(transactionManager).rollback(transactionStatus);
+        verify(transactionManager, never()).commit(any());
+        verify(channel, never()).basicAck(anyLong(), anyBoolean());
+        verify(channel, times(1)).basicNack(DELIVERY_TAG, false, false);
+    }
+
+    @Test
     @DisplayName("舊 payload 缺 articleUuid：不開交易、不刪除、仍 ack（避免無限重送）")
     void onArticleDeleted_nullArticleUuid_doesNotDeleteAndAcks() throws Exception {
         consumer.onArticleDeleted(event(null), channel, DELIVERY_TAG);

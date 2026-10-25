@@ -14,8 +14,9 @@ import java.util.UUID;
  *
  * <p><b>每張表一組方法</b>：consumer 在同一個交易內依序呼叫各表的 {@code deleteXxxByArticleUuid}，
  * 每個 job 只用自己那張表的 {@code findDistinctXxxArticleUuidsAfter}／{@code deleteXxxByArticleUuids}。
- * 目前涵蓋 {@code user_article_likes}、{@code user_bookmarks}；M2-c 把 {@code user_highlights}、
- * {@code user_reading_progress} 改為 uuid 後，各加一組方法即可。每個方法都是單一 SQL 敘述，本身即原子。</p>
+ * 涵蓋 reading 模組四張表：{@code user_article_likes}、{@code user_bookmarks}、
+ * {@code user_highlights}、{@code user_reading_progress}（V26／V27 起皆以 {@code article_uuid} 識別文章、無 FK）。
+ * 每個方法都是單一 SQL 敘述，本身即原子。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -114,4 +115,92 @@ public interface ReadingArticleCleanupMapper {
         "</script>"
     })
     int deleteBookmarksByArticleUuids(@Param("articleUuids") List<UUID> articleUuids);
+
+    // ───────────────────────── user_highlights ─────────────────────────
+
+    /**
+     * 刪除某篇文章的所有劃線。天然冪等：已無劃線時刪除 0 筆，不會出錯。
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return 刪除的劃線筆數
+     */
+    @Delete("DELETE FROM user_highlights WHERE article_uuid = #{articleUuid}::uuid")
+    int deleteHighlightsByArticleUuid(@Param("articleUuid") UUID articleUuid);
+
+    /**
+     * 以 keyset 分頁取得 {@code user_highlights} 中被參照的不重複文章 UUID（語意同
+     * {@link #findDistinctLikeArticleUuidsAfter}）。
+     *
+     * @param after 游標（不含）；null 表示從頭開始，此時不加條件
+     * @param limit 本頁筆數上限
+     * @return 升冪、去重的文章 UUID 字串
+     */
+    @Select({
+        "<script>",
+        "SELECT t.u::text FROM (",
+        "  SELECT DISTINCT article_uuid AS u FROM user_highlights",
+        "  <if test='after != null'>WHERE article_uuid &gt; #{after}::uuid</if>",
+        "  ORDER BY u LIMIT #{limit}",
+        ") t ORDER BY t.u",
+        "</script>"
+    })
+    List<String> findDistinctHighlightArticleUuidsAfter(@Param("after") UUID after, @Param("limit") int limit);
+
+    /**
+     * 刪除多篇文章的所有劃線。呼叫端須保證集合非空，避免產生 {@code IN ()} 語法錯誤。
+     *
+     * @param articleUuids 文章公開 UUID，至少一筆
+     * @return 刪除的劃線筆數
+     */
+    @Delete({
+        "<script>",
+        "DELETE FROM user_highlights WHERE article_uuid IN",
+        "<foreach collection='articleUuids' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>",
+        "</script>"
+    })
+    int deleteHighlightsByArticleUuids(@Param("articleUuids") List<UUID> articleUuids);
+
+    // ───────────────────────── user_reading_progress ─────────────────────────
+
+    /**
+     * 刪除某篇文章的所有閱讀進度。天然冪等：已無閱讀進度時刪除 0 筆，不會出錯。
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return 刪除的閱讀進度筆數
+     */
+    @Delete("DELETE FROM user_reading_progress WHERE article_uuid = #{articleUuid}::uuid")
+    int deleteProgressByArticleUuid(@Param("articleUuid") UUID articleUuid);
+
+    /**
+     * 以 keyset 分頁取得 {@code user_reading_progress} 中被參照的不重複文章 UUID（語意同
+     * {@link #findDistinctLikeArticleUuidsAfter}）。
+     *
+     * @param after 游標（不含）；null 表示從頭開始，此時不加條件
+     * @param limit 本頁筆數上限
+     * @return 升冪、去重的文章 UUID 字串
+     */
+    @Select({
+        "<script>",
+        "SELECT t.u::text FROM (",
+        "  SELECT DISTINCT article_uuid AS u FROM user_reading_progress",
+        "  <if test='after != null'>WHERE article_uuid &gt; #{after}::uuid</if>",
+        "  ORDER BY u LIMIT #{limit}",
+        ") t ORDER BY t.u",
+        "</script>"
+    })
+    List<String> findDistinctProgressArticleUuidsAfter(@Param("after") UUID after, @Param("limit") int limit);
+
+    /**
+     * 刪除多篇文章的所有閱讀進度。呼叫端須保證集合非空，避免產生 {@code IN ()} 語法錯誤。
+     *
+     * @param articleUuids 文章公開 UUID，至少一筆
+     * @return 刪除的閱讀進度筆數
+     */
+    @Delete({
+        "<script>",
+        "DELETE FROM user_reading_progress WHERE article_uuid IN",
+        "<foreach collection='articleUuids' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>",
+        "</script>"
+    })
+    int deleteProgressByArticleUuids(@Param("articleUuids") List<UUID> articleUuids);
 }

@@ -99,9 +99,10 @@ class ReadingProgressControllerIT {
     @MockitoBean private UserAuthService userAuthService;
 
     private static final Long USER_ID = 1L;
+    /** asUser 以 {@code new UUID(0L, userId)} 作為登入者 UUID；進度表已無 users FK，不需要 seed 使用者 */
+    private static final UUID USER_UUID = new UUID(0L, USER_ID);
 
     private UUID articleUuid;
-    private Long articleId;
 
     @BeforeEach
     void setup() {
@@ -120,7 +121,6 @@ class ReadingProgressControllerIT {
         article.setUpdatedAt(LocalDateTime.now());
         Article saved = articleRepo.save(article);
         articleUuid = saved.getUuid();
-        articleId = saved.getId();
     }
 
     @AfterEach
@@ -164,10 +164,12 @@ class ReadingProgressControllerIT {
                 .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isOk());
 
-        String key = RedisKeyConstant.READING_PROGRESS_PREFIX + USER_ID + ":" + articleUuid;
+        String key = RedisKeyConstant.READING_PROGRESS_PREFIX + USER_UUID + ":" + articleUuid;
         Map<Object, Object> hash = redisTemplate.opsForHash().entries(key);
         assertThat(hash).containsKey("progress");
         assertThat(hash.get("progress").toString()).isEqualTo("0.6");
+        assertThat(redisTemplate.opsForSet().isMember(RedisKeyConstant.READING_DIRTY_KEY, USER_UUID + ":" + articleUuid))
+                .as("dirty 成員為 {userUuid}:{articleUuid}").isTrue();
     }
 
     @Test
@@ -183,9 +185,9 @@ class ReadingProgressControllerIT {
                 .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isOk());
 
-        String key = RedisKeyConstant.READING_PROGRESS_PREFIX + USER_ID + ":" + articleUuid;
+        String key = RedisKeyConstant.READING_PROGRESS_PREFIX + USER_UUID + ":" + articleUuid;
         assertThat(redisTemplate.opsForHash().entries(key)).isEmpty();
-        assertThat(progressRepo.findByUserIdAndArticleId(USER_ID, articleId)).isPresent();
+        assertThat(progressRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isPresent();
     }
 
     @Test
@@ -203,6 +205,62 @@ class ReadingProgressControllerIT {
                 .with(asUser(USER_ID, Role.USER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.progress").value(0.5));
+    }
+
+    @Test
+    @DisplayName("PUT /progress - 文章不存在：200、靜默略過（Redis 與 DB 都不落資料，與改造前相同）")
+    void put_articleNotFound_returns200_andWritesNothing() throws Exception {
+        UUID missing = UUID.randomUUID();
+        UpdateProgressRequest req = new UpdateProgressRequest();
+        req.setProgress(new BigDecimal("0.6"));
+
+        mockMvc.perform(put("/api/v1/articles/{uuid}/progress", missing)
+                .with(asUser(USER_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk());
+        req.setProgress(new BigDecimal("1.0"));
+        mockMvc.perform(put("/api/v1/articles/{uuid}/progress", missing)
+                .with(asUser(USER_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk());
+
+        assertThat(redisTemplate.opsForHash().entries(
+                RedisKeyConstant.READING_PROGRESS_PREFIX + USER_UUID + ":" + missing)).isEmpty();
+        assertThat(redisTemplate.opsForSet().members(RedisKeyConstant.READING_DIRTY_KEY)).isNullOrEmpty();
+        assertThat(progressRepo.findByUserUuidAndArticleUuid(USER_UUID, missing)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("GET /progress - 文章不存在：200 且 data 為 null（與改造前相同）")
+    void get_articleNotFound_returnsNullData() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/{uuid}/progress", UUID.randomUUID())
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /progress - Redis 沒有時從 DB 讀回並回填 Redis")
+    void get_redisMiss_fallsBackToDbAndRecaches() throws Exception {
+        UpdateProgressRequest req = new UpdateProgressRequest();
+        req.setProgress(new BigDecimal("1.0"));
+        req.setLastHeading("end");
+        mockMvc.perform(put("/api/v1/articles/{uuid}/progress", articleUuid)
+                .with(asUser(USER_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/{uuid}/progress", articleUuid)
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.progress").value(1.0))
+                .andExpect(jsonPath("$.data.lastHeading").value("end"));
+
+        assertThat(redisTemplate.opsForHash().entries(
+                RedisKeyConstant.READING_PROGRESS_PREFIX + USER_UUID + ":" + articleUuid)).containsKey("progress");
     }
 
     @Test

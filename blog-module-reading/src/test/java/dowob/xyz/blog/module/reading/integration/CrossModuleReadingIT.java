@@ -75,8 +75,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li>ArticleResponse.lastReadProgress - PUT progress 後反映</li>
  *   <li>匿名查詢 bookmarked=false, progress 為 null</li>
  *   <li>ArticleResponse.liked - 按讚後反映</li>
- *   <li>Article 物理刪除：highlights／progress 仍由 FK CASCADE 清除（M2-c 才改）；
- *       likes／bookmarks 已無 FK，改由 {@code ReadingArticleDeletedConsumer} 處理事件後清除</li>
+ *   <li>Article 物理刪除：reading 四張表（likes／bookmarks／highlights／progress）都已無指向 articles 的 FK
+ *       （V26／V27），刪文章後資料仍在，須由 {@code ReadingArticleDeletedConsumer} 處理刪除事件後才清除</li>
  * </ul>
  * </p>
  *
@@ -227,9 +227,9 @@ class CrossModuleReadingIT {
     }
 
     @Test
-    @DisplayName("Article 物理刪除：highlights／progress 由 FK CASCADE 清除；likes／bookmarks 須等 consumer 處理刪除事件才清除")
-    void deleteArticle_fkCascadesHighlightsAndProgress_consumerRemovesLikesAndBookmarks() throws Exception {
-        // 建 bookmark 與 like（V26 起這兩張表沒有指向 articles 的 FK）
+    @DisplayName("Article 物理刪除：四張表的資料刪文章後仍在（FK 已全數移除），須等 consumer 處理刪除事件才清除")
+    void deleteArticle_consumerRemovesAllReadingState() throws Exception {
+        // 四張表都沒有指向 articles 的 FK（V26／V27）
         UserBookmark bm = new UserBookmark();
         bm.setUserUuid(USER_UUID); bm.setArticleUuid(articleUuid); bm.setCreatedAt(LocalDateTime.now());
         bookmarkRepo.save(bm);
@@ -237,35 +237,38 @@ class CrossModuleReadingIT {
         like.setUserUuid(USER_UUID); like.setArticleUuid(articleUuid); like.setCreatedAt(LocalDateTime.now());
         likeRepo.save(like);
 
-        // 建 highlight（仍是 FK，M2-c 才改）
         UserHighlight h = new UserHighlight();
         h.setUuid(UUID.randomUUID());
-        h.setUserId(USER_ID); h.setArticleId(articleId);
+        h.setUserUuid(USER_UUID); h.setArticleUuid(articleUuid);
         h.setSnippet("seed"); h.setPrefix(""); h.setSuffix(""); h.setColor("#FFEB3B");
         highlightRepo.save(h);
 
-        // 建 progress (DB 直接，繞過 service)；仍是 FK，M2-c 才改
+        // progress 直接寫 DB（繞過 service）
         UserReadingProgress p = new UserReadingProgress();
-        p.setUserId(USER_ID); p.setArticleId(articleId);
+        p.setUserUuid(USER_UUID); p.setArticleUuid(articleUuid);
         p.setProgress(new BigDecimal("0.5"));
         progressRepo.save(p);
 
         // 物理刪除 article
         articleRepo.deleteById(articleId);
 
-        assertThat(highlightRepo.findByUserIdAndArticleIdOrderByCreatedAtAsc(USER_ID, articleId)).isEmpty();
-        assertThat(progressRepo.findByUserIdAndArticleId(USER_ID, articleId)).isEmpty();
         assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid))
                 .as("FK 已移除：僅刪文章不會連帶刪收藏，須等 consumer 處理事件").isPresent();
         assertThat(likeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid))
                 .as("FK 已移除：僅刪文章不會連帶刪按讚，須等 consumer 處理事件").isPresent();
+        assertThat(highlightRepo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(USER_UUID, articleUuid))
+                .as("FK 已移除（V27）：僅刪文章不會連帶刪劃線，須等 consumer 處理事件").hasSize(1);
+        assertThat(progressRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid))
+                .as("FK 已移除（V27）：僅刪文章不會連帶刪閱讀進度，須等 consumer 處理事件").isPresent();
 
-        // 處理文章刪除事件 → 收藏與按讚消失
+        // 處理文章刪除事件 → 四張表的資料都消失
         Channel channel = Mockito.mock(Channel.class);
         articleDeletedConsumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleId, articleUuid,
                 USER_ID, null, List.of(), List.of(), Instant.now(), null, null), channel, 1L);
 
         assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
         assertThat(likeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
+        assertThat(highlightRepo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(USER_UUID, articleUuid)).isEmpty();
+        assertThat(progressRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
     }
 }

@@ -358,7 +358,7 @@ class ArticleFacadeReadingUuidIT {
         when(readingFacade.batchIsLiked(any(), anyList())).thenReturn(Set.of(a));
         when(readingFacade.batchIsBookmarked(any(), anyList())).thenReturn(Set.of(b));
         when(readingFacade.batchGetProgress(any(), anyList()))
-                .thenReturn(Map.of(idOf(c), new BigDecimal("0.50")));
+                .thenReturn(Map.of(c, new BigDecimal("0.50")));
 
         List<ArticleSummaryResponse> byUuid =
                 articleFacade.getSummariesByUuids(List.of(c, UUID.randomUUID(), a, b));

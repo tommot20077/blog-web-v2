@@ -294,7 +294,7 @@ public class SeriesService {
      *
      * <p>
      * articles sub-list 透過 articleQueryService.getArticleSummariesByIds 取得 enrich 後的 summary
-     * （含作者與標籤）。myProgress 僅在 currentUserId != null（已登入）時計算；
+     * （含作者與標籤）。myProgress 僅在 currentUserUuid != null（已登入）時計算；
      * progress >= 0.95 視為已讀完。
      * </p>
      *
@@ -314,12 +314,12 @@ public class SeriesService {
      * </p>
      *
      * @param slug          Series URL slug
-     * @param currentUserId 當前使用者 ID（未登入為 null）
+     * @param currentUserUuid 當前使用者公開 UUID（未登入為 null）；僅用於查閱讀進度
      * @return Series 詳情 response
      * @throws BusinessException {@code S0101} 當 slug 對應的 series 不存在
      */
     @Transactional(readOnly = true)
-    public SeriesDetailResponse getSeriesDetail(String slug, Long currentUserId) {
+    public SeriesDetailResponse getSeriesDetail(String slug, UUID currentUserUuid) {
         SeriesWithAuthor row = mapper.findBySlugWithAuthor(slug);
         if (row == null) {
             throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
@@ -331,9 +331,9 @@ public class SeriesService {
 
         SeriesDetailResponse resp = toDetailResponse(row, articles);
 
-        if (currentUserId != null) {
-            List<Long> articleIds = articles.stream().map(ArticleData::id).toList();
-            Map<Long, BigDecimal> progressMap = readingFacade.batchGetProgress(currentUserId, articleIds);
+        if (currentUserUuid != null) {
+            List<UUID> articleUuids = articles.stream().map(ArticleData::uuid).toList();
+            Map<UUID, BigDecimal> progressMap = readingFacade.batchGetProgress(currentUserUuid, articleUuids);
 
             BigDecimal threshold = new BigDecimal("0.95");
             int readCount = (int) progressMap.values().stream()
@@ -341,7 +341,7 @@ public class SeriesService {
 
             UUID nextUnread = articles.stream()
                     .filter(a -> {
-                        BigDecimal p = progressMap.get(a.id());
+                        BigDecimal p = progressMap.get(a.uuid());
                         return p == null || p.compareTo(threshold) < 0;
                     })
                     .map(ArticleData::uuid)
