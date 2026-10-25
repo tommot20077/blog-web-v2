@@ -44,8 +44,8 @@ public class ArticleLikeController {
     @Operation(summary = "按讚文章（idempotent）")
     public ApiResponse<Void> like(@AuthenticationPrincipal AuthUser user,
                                     @PathVariable UUID articleUuid) {
-        Long articleId = resolveArticleId(articleUuid);
-        likeService.likeArticle(user.id(), articleId);
+        requireArticleExists(articleUuid);
+        likeService.likeArticle(user.uuid(), articleUuid);
         return ApiResponse.success();
     }
 
@@ -54,16 +54,23 @@ public class ArticleLikeController {
     @Operation(summary = "取消按讚（idempotent）")
     public ApiResponse<Void> unlike(@AuthenticationPrincipal AuthUser user,
                                       @PathVariable UUID articleUuid) {
-        Long articleId = resolveArticleId(articleUuid);
-        likeService.unlikeArticle(user.id(), articleId);
+        requireArticleExists(articleUuid);
+        likeService.unlikeArticle(user.uuid(), articleUuid);
         return ApiResponse.success();
     }
 
-    private Long resolveArticleId(UUID articleUuid) {
-        Long articleId = articleFacade.findIdByUuid(articleUuid);
-        if (articleId == null) {
+    /**
+     * 確認文章存在（不分狀態），不存在時以 {@code A0201} 回應（HTTP 400，與解耦前相同）。
+     *
+     * <p>必須在寫入前呼叫：不存在的文章不得落任何列、也不得動計數。
+     * 與寫入之間若文章剛好被刪除，殘留的列由 {@code ReadingArticleDeletedConsumer} 與每日校正排程清除。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @throws BusinessException {@code ARTICLE_NOT_FOUND} 若查無此文章
+     */
+    private void requireArticleExists(UUID articleUuid) {
+        if (!articleFacade.existsByUuid(articleUuid)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }
-        return articleId;
     }
 }

@@ -355,8 +355,8 @@ class ArticleFacadeReadingUuidIT {
         UUID c = seeded.get(2);
         long viewerId = author2Id;
         loginAs(viewerId, author2Uuid, Role.AUTHOR);
-        when(readingFacade.batchIsLiked(any(), anyList())).thenReturn(Set.of(idOf(a)));
-        when(readingFacade.batchIsBookmarked(any(), anyList())).thenReturn(Set.of(idOf(b)));
+        when(readingFacade.batchIsLiked(any(), anyList())).thenReturn(Set.of(a));
+        when(readingFacade.batchIsBookmarked(any(), anyList())).thenReturn(Set.of(b));
         when(readingFacade.batchGetProgress(any(), anyList()))
                 .thenReturn(Map.of(idOf(c), new BigDecimal("0.50")));
 

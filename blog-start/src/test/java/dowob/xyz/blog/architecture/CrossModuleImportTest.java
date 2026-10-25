@@ -100,11 +100,6 @@ class CrossModuleImportTest {
      * 現存跨模組依賴的例外清單：{@code 來源類別 -> 目標類別} → 「階段：說明」。
      */
     private static final Map<String, String> EXEMPT = Map.ofEntries(
-            // 預計 M2（reading 階段）：改走 ArticleFacade.getSummariesByUuids，回應 JSON 不變
-            // （ArticleSummaryResponse 已於 M2-a 搬至 blog-infrastructure，對它的條目隨之移除）
-            Map.entry("dowob.xyz.blog.module.reading.service.BookmarkQueryService"
-                    + ARROW + "dowob.xyz.blog.module.article.service.ArticleQueryService",
-                    "M2：reading 階段改走 ArticleFacade"),
             // 預計 M4（series 階段）：移除對 ArticleQueryService 的直接依賴，改走 ArticleFacade
             // （ArticleSummaryResponse 已於 M2-a 搬至 blog-infrastructure，對它的條目隨之移除）
             Map.entry("dowob.xyz.blog.module.series.service.SeriesService"

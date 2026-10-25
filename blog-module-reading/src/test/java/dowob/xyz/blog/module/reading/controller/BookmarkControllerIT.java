@@ -10,7 +10,10 @@ import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.reading.config.ReadingTestApplication;
+import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
 import dowob.xyz.blog.module.reading.repository.UserBookmarkRepository;
+import dowob.xyz.blog.module.reading.support.SeededReadingUsers;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +23,8 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
@@ -36,12 +41,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -82,6 +89,8 @@ class BookmarkControllerIT {
     @Autowired private MockMvc mockMvc;
     @Autowired private ArticleRepository articleRepo;
     @Autowired private UserBookmarkRepository bookmarkRepo;
+    @Autowired private ArticleLikeRepository likeRepo;
+    @Autowired private StringRedisTemplate redisTemplate;
 
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
@@ -91,9 +100,9 @@ class BookmarkControllerIT {
     @MockitoBean private FileFacade fileFacade;
     @MockitoBean private UserAuthService userAuthService;
 
-    private static final Long USER_ID = 1L;
+    private static final Long USER_ID = SeededReadingUsers.USER_ID;
+    private static final UUID USER_UUID = SeededReadingUsers.USER_UUID;
     private UUID articleUuid;
-    private Long articleId;
 
     @BeforeEach
     void setup() {
@@ -112,13 +121,18 @@ class BookmarkControllerIT {
         article.setUpdatedAt(LocalDateTime.now());
         Article saved = articleRepo.save(article);
         articleUuid = saved.getUuid();
-        articleId = saved.getId();
     }
 
     @AfterEach
     void cleanUp() {
         bookmarkRepo.deleteAll();
+        likeRepo.deleteAll();
         articleRepo.deleteAll();
+        Set<String> keys = redisTemplate.keys(RedisKeyConstant.READING_PROGRESS_PREFIX + "*");
+        if (keys != null && !keys.isEmpty()) {
+            redisTemplate.delete(keys);
+        }
+        redisTemplate.delete(RedisKeyConstant.READING_DIRTY_KEY);
     }
 
     /**
@@ -132,7 +146,7 @@ class BookmarkControllerIT {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
-        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, SeededReadingUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -144,7 +158,7 @@ class BookmarkControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
-        assertThat(bookmarkRepo.findByUserIdAndArticleId(USER_ID, articleId)).isPresent();
+        assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isPresent();
     }
 
     @Test
@@ -155,7 +169,8 @@ class BookmarkControllerIT {
         mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", articleUuid)
                 .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
 
-        assertThat(bookmarkRepo.findByUserIdAndArticleId(USER_ID, articleId)).isPresent();
+        assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isPresent();
+        assertThat(bookmarkRepo.count()).as("雙擊後仍只有 1 列").isEqualTo(1L);
     }
 
     @Test
@@ -169,7 +184,7 @@ class BookmarkControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
-        assertThat(bookmarkRepo.findByUserIdAndArticleId(USER_ID, articleId)).isEmpty();
+        assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
     }
 
     @Test
@@ -213,10 +228,22 @@ class BookmarkControllerIT {
      * @return 已存檔的 Article
      */
     private Article createArticle(Long authorId, ArticleStatus status) {
+        return createArticle(authorId, status, "Bookmark IT " + status);
+    }
+
+    /**
+     * 建立指定作者、狀態與標題的文章。
+     *
+     * @param authorId 作者資料庫主鍵
+     * @param status   文章狀態
+     * @param title    標題
+     * @return 已存檔的 Article
+     */
+    private Article createArticle(Long authorId, ArticleStatus status, String title) {
         Article a = new Article();
         a.setUuid(UUID.randomUUID());
         a.setAuthorId(authorId);
-        a.setTitle("Bookmark IT " + status);
+        a.setTitle(title);
         a.setSlug("bookmark-it-" + UUID.randomUUID());
         a.setContent("test");
         a.setContentHtml("<p>test</p>");
@@ -294,5 +321,88 @@ class BookmarkControllerIT {
                 .with(asUser(ADMIN_ID, Role.ADMIN)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.records.length()").value(1));
+    }
+
+    // ─── 文章不存在（狀態碼與錯誤碼不變）───
+
+    @Test
+    @DisplayName("POST /bookmark - 文章不存在：400＋A0201，不落任何列")
+    void bookmark_articleNotFound_returns400A0201_andWritesNothing() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", UUID.randomUUID())
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+
+        assertThat(bookmarkRepo.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("DELETE /bookmark - 文章不存在：400＋A0201")
+    void unbookmark_articleNotFound_returns400A0201() throws Exception {
+        mockMvc.perform(delete("/api/v1/articles/{uuid}/bookmark", UUID.randomUUID())
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+    }
+
+    // ─── 列表內容與順序（收藏列表解耦後，回應 JSON 必須與解耦前逐欄位相同）───
+
+    @Test
+    @DisplayName("GET /me/bookmarks - 列表內容與順序：最新收藏優先，liked／bookmarked／lastReadProgress 補值正確")
+    void myBookmarks_contentAndOrder_newestFirstWithEnrichment() throws Exception {
+        Article older = createArticle(OTHER_AUTHOR_ID, ArticleStatus.PUBLISHED, "older article");
+        Article middle = createArticle(OTHER_AUTHOR_ID, ArticleStatus.PUBLISHED, "middle article");
+        // 收藏順序：older → middle → articleUuid（setup 建立、作者為本人），預期列表順序相反
+        for (UUID uuid : List.of(older.getUuid(), middle.getUuid(), articleUuid)) {
+            mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", uuid)
+                    .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+        }
+        mockMvc.perform(post("/api/v1/articles/{uuid}/like", middle.getUuid())
+                .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+        mockMvc.perform(put("/api/v1/articles/{uuid}/progress", older.getUuid())
+                .with(asUser(USER_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"progress\":0.5}")).andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/users/me/bookmarks")
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(3))
+                .andExpect(jsonPath("$.data.pages").value(1))
+                .andExpect(jsonPath("$.data.records.length()").value(3))
+                .andExpect(jsonPath("$.data.records[0].uuid").value(articleUuid.toString()))
+                .andExpect(jsonPath("$.data.records[0].title").value("Bookmark IT"))
+                .andExpect(jsonPath("$.data.records[0].bookmarked").value(true))
+                .andExpect(jsonPath("$.data.records[0].liked").value(false))
+                .andExpect(jsonPath("$.data.records[0].lastReadProgress").doesNotExist())
+                .andExpect(jsonPath("$.data.records[1].uuid").value(middle.getUuid().toString()))
+                .andExpect(jsonPath("$.data.records[1].title").value("middle article"))
+                .andExpect(jsonPath("$.data.records[1].bookmarked").value(true))
+                .andExpect(jsonPath("$.data.records[1].liked").value(true))
+                .andExpect(jsonPath("$.data.records[2].uuid").value(older.getUuid().toString()))
+                .andExpect(jsonPath("$.data.records[2].title").value("older article"))
+                .andExpect(jsonPath("$.data.records[2].bookmarked").value(true))
+                .andExpect(jsonPath("$.data.records[2].liked").value(false))
+                .andExpect(jsonPath("$.data.records[2].lastReadProgress").value(0.5));
+    }
+
+    @Test
+    @DisplayName("GET /me/bookmarks - 分頁：第 2 頁取到最舊的一筆，total／pages 以可見收藏數計")
+    void myBookmarks_secondPage_returnsOldestWithCorrectTotals() throws Exception {
+        Article older = createArticle(OTHER_AUTHOR_ID, ArticleStatus.PUBLISHED, "older article");
+        Article draft = createArticle(OTHER_AUTHOR_ID, ArticleStatus.DRAFT, "someone's draft");
+        for (UUID uuid : List.of(older.getUuid(), draft.getUuid(), articleUuid)) {
+            mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", uuid)
+                    .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+        }
+
+        mockMvc.perform(get("/api/v1/users/me/bookmarks")
+                .param("page", "2").param("size", "1")
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.pages").value(2))
+                .andExpect(jsonPath("$.data.records.length()").value(1))
+                .andExpect(jsonPath("$.data.records[0].uuid").value(older.getUuid().toString()));
     }
 }

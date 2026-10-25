@@ -67,7 +67,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ol>
  *     <li>文章 commentCount / likeCount 反映 API 操作後狀態</li>
  *     <li>ArticleSummaryResponse.liked 反映當前使用者按讚狀態</li>
- *     <li>文章物理刪除：article_likes 由 FK CASCADE 清除；comments（與 comment_likes）已無 FK，改由 CommentArticleDeletedConsumer 處理刪除事件後清除</li>
+ *     <li>文章物理刪除：comments（與 comment_likes）已無 FK，改由 CommentArticleDeletedConsumer 處理刪除事件後清除；
+ *         user_article_likes（reading 模組）V26 起同樣沒有 FK，刪文章後仍在，其清除改由 reading 的
+ *         ReadingArticleDeletedConsumer 負責（由 reading 模組的 IT 驗證，不在本 IT 範圍）</li>
  *     <li>留言物理刪除連帶清 comment_likes（FK CASCADE）</li>
  * </ol>
  *
@@ -117,8 +119,8 @@ class CrossModuleCommentIT {
     @MockitoBean private FileFacade fileFacade;
 
     private static final Long USER_ID = SeededUsers.USER_ID;
-    private static final Long OTHER_USER_ID = SeededUsers.OTHER_USER_ID;
     private static final UUID USER_UUID = SeededUsers.USER_UUID;
+    private static final UUID OTHER_USER_UUID = SeededUsers.OTHER_USER_UUID;
     private UUID articleUuid;
     private Long articleId;
 
@@ -202,10 +204,10 @@ class CrossModuleCommentIT {
                 .andExpect(status().isOk());
 
         // user1 有按讚紀錄 → present
-        assertThat(articleLikeRepo.findByUserIdAndArticleId(USER_ID, articleId)).isPresent();
+        assertThat(articleLikeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isPresent();
 
         // user2 無按讚紀錄 → empty
-        assertThat(articleLikeRepo.findByUserIdAndArticleId(OTHER_USER_ID, articleId)).isEmpty();
+        assertThat(articleLikeRepo.findByUserUuidAndArticleUuid(OTHER_USER_UUID, articleUuid)).isEmpty();
 
         // article likeCount 更新為 1
         assertThat(articleRepo.findByUuid(articleUuid).orElseThrow().getLikeCount()).isEqualTo(1);
@@ -217,11 +219,11 @@ class CrossModuleCommentIT {
         assertThat(articleRepo.findByUuid(articleUuid).orElseThrow().getLikeCount()).isEqualTo(1);
     }
 
-    // ─── Test 3: 文章刪除 → consumer 清 comments + comment_likes；article_likes 仍由 FK CASCADE ─────
+    // ─── Test 3: 文章刪除 → consumer 清 comments + comment_likes；user_article_likes 不再由 FK 清除 ─────
 
     @Test
-    @DisplayName("Article 物理刪除：comments 與 comment_likes 由 CommentArticleDeletedConsumer 處理事件後清除；article_likes 仍由 FK CASCADE 清除")
-    void deleteArticle_consumerRemovesCommentsAndLikes_fkCascadesArticleLikes() throws Exception {
+    @DisplayName("Article 物理刪除：comments 與 comment_likes 由 CommentArticleDeletedConsumer 處理事件後清除；user_article_likes 已無 FK，刪文章後仍在")
+    void deleteArticle_consumerRemovesCommentsAndLikes_articleLikesNoLongerCascade() throws Exception {
         // 直接寫入 Comment（不走 Service，避免影響 commentCount）
         Comment c = new Comment();
         c.setUuid(UUID.randomUUID());
@@ -240,20 +242,26 @@ class CrossModuleCommentIT {
 
         // 直接寫入 ArticleLike
         ArticleLike like = new ArticleLike();
-        like.setUserId(USER_ID);
-        like.setArticleId(articleId);
+        like.setUserUuid(USER_UUID);
+        like.setArticleUuid(articleUuid);
         like.setCreatedAt(LocalDateTime.now());
         articleLikeRepo.save(like);
 
         assertThat(commentRepo.findByUuid(savedComment.getUuid())).isPresent();
-        assertThat(articleLikeRepo.findByUserIdAndArticleId(USER_ID, articleId)).isPresent();
+        assertThat(articleLikeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isPresent();
 
-        // 物理刪除文章：comments 已無指向 articles 的 FK，不會連帶刪除；article_likes 的 FK CASCADE（非本模組）仍生效
+        // 物理刪除文章：comments 與 user_article_likes 都已無指向 articles 的 FK，皆不會連帶刪除
         articleRepo.deleteById(articleId);
 
         assertThat(commentRepo.findByUuid(savedComment.getUuid()))
                 .as("FK 已移除：僅刪文章不會連帶刪留言，須等 consumer 處理事件").isPresent();
-        assertThat(articleLikeRepo.findByUserIdAndArticleId(USER_ID, articleId)).isEmpty();
+        /**
+         * user_article_likes 的清除改由 reading 模組的 ReadingArticleDeletedConsumer 負責，
+         * 並由 reading 的 IT 驗證（ReadingArticleDeletedConsumerIT、CrossModuleReadingIT）；
+         * 這裡只確認「FK CASCADE 已不存在」。收尾時由 @AfterEach 的 deleteAll 清掉。
+         */
+        assertThat(articleLikeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid))
+                .as("FK 已移除：刪文章後 user_article_likes 仍在（清除改由 reading 的 consumer 負責）").isPresent();
 
         // 處理文章刪除事件 → 留言與留言讚消失（留言讚經模組內 FK 隨留言 CASCADE）
         Channel channel = Mockito.mock(Channel.class);
