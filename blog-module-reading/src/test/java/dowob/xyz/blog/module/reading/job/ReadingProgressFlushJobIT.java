@@ -13,13 +13,19 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.math.BigDecimal;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 /**
  * {@link ReadingProgressFlushJob} 整合測試（真實 Redis、真實 Postgres；進度的更新走真實 {@link ReadingProgressService}）。
@@ -96,20 +102,15 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
         redis.delete(RedisKeyConstant.READING_DIRTY_KEY);
     }
 
-    /** 讓 updatedAt（毫秒時間戳）必定與前一次 update 不同，避免同一毫秒的版本碰撞讓測試不穩定。 */
-    private static void sleepToAdvanceMillis() {
-        try {
-            Thread.sleep(5);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
     /** 模擬 JVM 被終止：Error 不會被 job 的 catch (Exception) 吞掉，會直接穿出 flush()。 */
     private static final class SimulatedJvmAbort extends Error {
         private SimulatedJvmAbort() {
             super("simulated JVM abort");
         }
+    }
+
+    private String hashKeyOf(UUID userUuid, UUID articleUuid) {
+        return RedisKeyConstant.READING_PROGRESS_PREFIX + memberOf(userUuid, articleUuid);
     }
 
     private String memberOf(UUID userUuid, UUID articleUuid) {
@@ -140,10 +141,8 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
         progressService.update(USER_UUID, articleUuid, new BigDecimal("0.30"), "first");
 
         // upsert 完成時 flush 已讀完 hash（舊值 0.30）；此刻插入一次新的 update
-        hookingMapper.afterNextUpsert = () -> {
-            sleepToAdvanceMillis();
-            progressService.update(USER_UUID, articleUuid, new BigDecimal("0.60"), "second");
-        };
+        hookingMapper.afterNextUpsert = () ->
+                progressService.update(USER_UUID, articleUuid, new BigDecimal("0.60"), "second");
 
         job.flush();
 
@@ -171,6 +170,71 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
 
         assertThat(isDirty(USER_UUID, articleUuid)).as("失敗後成員仍在 dirty").isTrue();
         assertThat(hashProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.40");
+        assertThat(dbProgress(USER_UUID, articleUuid)).isNull();
+
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.40");
+        assertThat(isDirty(USER_UUID, articleUuid)).isFalse();
+    }
+
+    @Test
+    @DisplayName("同一毫秒、進度不同的兩次 update：CAS 比對內容（progress、lastHeading、updatedAt），新進度的 dirty 標記不得被抹掉")
+    void flush_updateInSameMillisecondWithDifferentProgress_isNotLost() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        progressService.update(USER_UUID, articleUuid, new BigDecimal("0.30"), "first");
+        String sameUpdatedAt = redis.opsForHash().get(hashKeyOf(USER_UUID, articleUuid), "updatedAt").toString();
+        hookingMapper.afterNextUpsert = () -> {
+            redis.opsForHash().putAll(hashKeyOf(USER_UUID, articleUuid),
+                    Map.of("progress", "0.60", "lastHeading", "second", "updatedAt", sameUpdatedAt));
+            redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, memberOf(USER_UUID, articleUuid));
+        };
+
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.30");
+        assertThat(isDirty(USER_UUID, articleUuid)).as("updatedAt 相同但內容不同，不得 SREM").isTrue();
+
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).as("下一輪寫入新進度").isEqualByComparingTo("0.60");
+        assertThat(isDirty(USER_UUID, articleUuid)).isFalse();
+    }
+
+    @Test
+    @DisplayName("同一毫秒、progress 相同但 lastHeading 不同：同樣不得抹掉 dirty 標記")
+    void flush_updateInSameMillisecondWithDifferentHeading_isNotLost() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        progressService.update(USER_UUID, articleUuid, new BigDecimal("0.30"), "first");
+        String sameUpdatedAt = redis.opsForHash().get(hashKeyOf(USER_UUID, articleUuid), "updatedAt").toString();
+        hookingMapper.afterNextUpsert = () -> {
+            redis.opsForHash().putAll(hashKeyOf(USER_UUID, articleUuid),
+                    Map.of("progress", "0.30", "lastHeading", "second", "updatedAt", sameUpdatedAt));
+            redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, memberOf(USER_UUID, articleUuid));
+        };
+
+        job.flush();
+
+        assertThat(isDirty(USER_UUID, articleUuid)).isTrue();
+    }
+
+    @Test
+    @DisplayName("讀到空 hash 之後、compare-and-remove 之前才有新的 update：新寫入的成員仍留在 dirty set，下一輪寫入 DB")
+    void flush_updateArrivesAfterEmptyHashRead_keepsMember() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, memberOf(USER_UUID, articleUuid));
+        StringRedisTemplate spyRedis = spy(redis);
+        doAnswer(invocation -> {
+            progressService.update(USER_UUID, articleUuid, new BigDecimal("0.40"), "x");
+            return invocation.callRealMethod();
+        }).when(spyRedis).execute(any(RedisScript.class), anyList(), any(Object[].class));
+
+        new ReadingProgressFlushJob(spyRedis, articleFacade, hookingMapper).flush();
+
+        assertThat(isDirty(USER_UUID, articleUuid)).as("空 hash 讀取後才有的新 update，標記不得被抹掉").isTrue();
         assertThat(dbProgress(USER_UUID, articleUuid)).isNull();
 
         job.flush();

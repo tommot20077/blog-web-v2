@@ -25,19 +25,20 @@ import java.util.UUID;
  * <p>每 5 分鐘掃 {@code reading:dirty} Set（成員 {@code {userUuid}:{articleUuid}}），
  * 把待持久化的 progress 寫到 DB。</p>
  *
- * <p><b>處理順序（RACE-13／DATA-08，at-least-once）</b>：對每個成員「讀 hash（記下 {@code updatedAt}）→ upsert →
- * Lua compare-and-remove」。Lua 在 Redis 內原子地檢查 {@code HGET key updatedAt} 是否仍等於剛才讀到的值，
- * 相等才 {@code SREM} 該成員；不相等（讀取之後又有新的 update）或 hash 已不存在時保留成員，留給下一輪。
+ * <p><b>處理順序（RACE-13／DATA-08，at-least-once）</b>：對每個成員「讀 hash（記下 {@code progress}、{@code lastHeading}、{@code updatedAt}）→ upsert →
+ * Lua compare-and-remove」。Lua 在 Redis 內原子地檢查這三個欄位是否仍全部等於剛才讀到的值，
+ * 全部相等才 {@code SREM} 該成員；任一不同（讀取之後又有新的 update）或 hash 已不存在時保留成員，留給下一輪。
  * 舊流程「讀 hash → upsert → 無條件 SREM」會把讀取之後的新 update 的 dirty 標記一併抹掉
  * （新 update 的 SADD 是 no-op），hash TTL 到期後進度回退。</p>
  *
  * <p>upsert 失敗、JVM 在 upsert 與 CAS 之間被終止、CAS 本身失敗時，成員都還在 dirty set，下一輪會重新寫入
  * （upsert 冪等，最壞情況只是多寫一次相同的值）；不需要「失敗時補回」，也就沒有補回本身失敗而遺失標記的路徑。
- * hash 已過期（讀到空）時，同一段 Lua 以空字串為期望值，僅在 hash 仍不存在時才 {@code SREM}，
+ * hash 已過期（讀到空）時，三個欄位都以空字串為期望值，僅在 hash 仍不存在時才 {@code SREM}，
  * 避免與剛好寫入的新 update 交錯而抹掉其標記。</p>
  *
- * <p>已知限制：{@code updatedAt} 是毫秒時間戳；同一毫秒內的兩次 update 版本相同，CAS 會把較晚者當成已 flush
- * （需要同一使用者在同一毫秒對同一篇文章送出兩個不同進度，且恰好落在 flush 的讀取與 CAS 之間）。</p>
+ * <p>為什麼比對內容而不只比 {@code updatedAt}：{@code updatedAt} 是毫秒時間戳，同一毫秒內進度不同的兩次 update
+ * 版本相同，只比它會把較晚者當成已 flush。三個欄位一起比時，進度或標題不同的更新必然被擋下；
+ * 三個欄位完全相同（含 A→B→A）代表 DB 剛 upsert 的就是這個值，移除標記是正確的。</p>
  *
  * <p><b>文章存在性（PERF-31）</b>：進度表沒有指向 articles 的 FK（V27），不存在的文章不能 upsert（會寫出孤兒列）。
  * 整輪所有成員的文章 UUID 以 {@link ArticleFacade#filterExistingUuids} <b>一次</b>批次檢查，不逐筆查詢。
@@ -49,7 +50,7 @@ import java.util.UUID;
  * <p>已知限制：{@code SMEMBERS} 一次取回整個 dirty set，成員數無上限（PERF-31 的另一半，不在 M2-c 處理）。</p>
  *
  * @author Yuan
- * @version 3.0
+ * @version 4.0
  */
 @Slf4j
 @Component
@@ -57,14 +58,16 @@ import java.util.UUID;
 public class ReadingProgressFlushJob {
 
     /**
-     * compare-and-remove：僅當 {@code HGET KEYS[1] updatedAt} 等於 {@code ARGV[1]} 才 {@code SREM KEYS[2] ARGV[2]}。
-     * hash 不存在（或沒有 updatedAt 欄位）時 HGET 為 false，視為空字串，只與空字串期望值相等。
-     * 回傳 1 代表已移除，0 代表保留。
+     * compare-and-remove：僅當 {@code HMGET KEYS[1] progress lastHeading updatedAt} 的三個值依序等於
+     * {@code ARGV[1..3]} 才 {@code SREM KEYS[2] ARGV[4]}。不存在的欄位（Lua 回 false）一律視為空字串，
+     * 因此 hash 不存在時只與三個空字串的期望值相等。回傳 1 代表已移除，0 代表保留。
      */
     static final RedisScript<Long> COMPARE_AND_REMOVE_SCRIPT = new DefaultRedisScript<>(
-            "local current = redis.call('HGET', KEYS[1], 'updatedAt') "
-                    + "if current == false then current = '' end "
-                    + "if current == ARGV[1] then return redis.call('SREM', KEYS[2], ARGV[2]) else return 0 end",
+            "local c = redis.call('HMGET', KEYS[1], 'progress', 'lastHeading', 'updatedAt') "
+                    + "for i = 1, 3 do if c[i] == false then c[i] = '' end end "
+                    + "if c[1] == ARGV[1] and c[2] == ARGV[2] and c[3] == ARGV[3] then "
+                    + "return redis.call('SREM', KEYS[2], ARGV[4]) end "
+                    + "return 0",
             Long.class);
 
     private final StringRedisTemplate redisTemplate;
@@ -162,17 +165,17 @@ public class ReadingProgressFlushJob {
         try {
             Map<Object, Object> hash = redisTemplate.opsForHash().entries(hashKey);
             if (hash.isEmpty()) {
-                compareAndRemove(hashKey, member, "");
+                compareAndRemove(hashKey, member, "", "", "");
                 return;
             }
-            Object updatedAtVal = hash.get("updatedAt");
-            String expectedUpdatedAt = updatedAtVal != null ? updatedAtVal.toString() : "";
-            BigDecimal progress = new BigDecimal(hash.get("progress").toString());
-            Object hVal = hash.get("lastHeading");
-            String lastHeading = (hVal != null && !hVal.toString().isEmpty()) ? hVal.toString() : null;
+            String rawProgress = hash.get("progress").toString();
+            String rawHeading = valueOrEmpty(hash.get("lastHeading"));
+            String rawUpdatedAt = valueOrEmpty(hash.get("updatedAt"));
+            BigDecimal progress = new BigDecimal(rawProgress);
+            String lastHeading = rawHeading.isEmpty() ? null : rawHeading;
 
             progressMapper.upsert(entry.userUuid(), entry.articleUuid(), progress, lastHeading);
-            compareAndRemove(hashKey, member, expectedUpdatedAt);
+            compareAndRemove(hashKey, member, rawProgress, rawHeading, rawUpdatedAt);
         } catch (Exception e) {
             log.warn("flush 失敗，成員仍在 dirty set，下輪重試 - {}", member, e);
         }
@@ -181,12 +184,20 @@ public class ReadingProgressFlushJob {
     /**
      * 以 Lua 原子地執行 compare-and-remove，見 {@link #COMPARE_AND_REMOVE_SCRIPT}。
      *
-     * @param hashKey           進度 hash 的 key
-     * @param member            dirty set 成員
-     * @param expectedUpdatedAt 讀取 hash 時記下的 updatedAt；hash 為空時傳空字串
+     * @param hashKey          進度 hash 的 key
+     * @param member           dirty set 成員
+     * @param expectedProgress 讀取 hash 時的 progress 原始字串；hash 為空時傳空字串
+     * @param expectedHeading  讀取 hash 時的 lastHeading 原始字串；缺少或 hash 為空時傳空字串
+     * @param expectedUpdated  讀取 hash 時的 updatedAt 原始字串；缺少或 hash 為空時傳空字串
      */
-    private void compareAndRemove(String hashKey, String member, String expectedUpdatedAt) {
+    private void compareAndRemove(String hashKey, String member, String expectedProgress,
+                                  String expectedHeading, String expectedUpdated) {
         redisTemplate.execute(COMPARE_AND_REMOVE_SCRIPT,
-                List.of(hashKey, RedisKeyConstant.READING_DIRTY_KEY), expectedUpdatedAt, member);
+                List.of(hashKey, RedisKeyConstant.READING_DIRTY_KEY),
+                expectedProgress, expectedHeading, expectedUpdated, member);
+    }
+
+    private static String valueOrEmpty(Object value) {
+        return value != null ? value.toString() : "";
     }
 }
