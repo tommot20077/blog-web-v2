@@ -115,4 +115,7 @@
 - **寫入與文章刪除的窗口（M1-b 起，設計接受）**：寫入端在 `existsByUuid` 與 INSERT 之間文章被刪，會留下孤兒列，直到每日 `OrphanReconciliationJob` 子類別清除；FK 拿掉後的固有代價。適用：留言（M1-b）、按讚與收藏（M2-b）、劃線（M2-c）。（M1-b、M2-b 回報）
 - **comment 列表作者欄位缺端到端測試**：comment 模組 IT 一律 mock `UserFacade`，`UserFacadeImpl` 端由 `UserFacadeIntegrationTest` 覆蓋，兩端以 `Map<UUID, UserDisplayInfo>` 契約銜接，但沒有測試走過「真實 UserFacade → listComments → JSON」。併入 TEST-10 E2E 進 CI gate 時補 author 斷言。（M1-b 審查 MEDIUM）
 - **刪除連動 queue 缺真 broker 的 binding 測試**：`comment.article-deleted`、`reading.article-deleted` 只有 config 單元測試與 ContextSmokeTest（context 能啟動），沒有測試以真 RabbitMQ 發布 `ArticleDeletedEvent` 後證明 consumer 收到。Z3（打開 MQ 重試）前補一個 blog-start 層的 Testcontainers RabbitMQ IT 涵蓋全部刪除連動 queue。（M2-b 審查）
+- **閱讀進度以舊值覆寫 DB（既有，M2-c 審查實測）**：(a) update 0.5 寫 hash → update 0.98（≥ 完讀門檻）直寫 DB 並刪 hash；flush 若在兩者之間讀到 0.5，之後 upsert 會把 DB 覆寫回 0.5。(b) 多實例時兩個 flush 的 upsert 順序無保證，同樣可能回退。base（M2-c 前）同樣存在，M2-c 未使其惡化。修法：upsert 加版本守衛（以 hash `updatedAt` 與 DB `updated_at` 比對，僅較新者寫入）——會動時間欄位語意，另開 Task。
+- **`ReadingProgressService.update` 在交易內先 DEL 快取（既有，違反 security.md 原則 10）**：DB upsert 尚未 commit 時併發 `get()` 會 cache miss、讀到舊 DB 值並回填 Redis（TTL 數天）。修法：DEL 改 `afterCommit`，或移除不必要的 `@Transactional`。（M2-c 審查）
+- **`ReadingProgressFlushJob` 的 `SMEMBERS` 無界（PERF-31 剩餘部分）**：M2-c 已把逐筆 `findIdByUuid` 改為整輪一次 `filterExistingUuids`；dirty set 一次全讀仍未處理，改 `SSCAN` 分批。
 - **refresh token 可被當 access token 送進 filter（既有）**：`JwtService.validateToken` 不檢查 token type；目前因 refresh token 無 role claim 被 filter 的 catch 偶然擋下。應在 filter 明確檢查 type=access 並補測試。（T0b-2 審查）
