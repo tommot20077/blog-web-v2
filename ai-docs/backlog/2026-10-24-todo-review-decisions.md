@@ -115,7 +115,13 @@
 - **寫入與文章刪除的窗口（M1-b 起，設計接受）**：寫入端在 `existsByUuid` 與 INSERT 之間文章被刪，會留下孤兒列，直到每日 `OrphanReconciliationJob` 子類別清除；FK 拿掉後的固有代價。適用：留言（M1-b）、按讚與收藏（M2-b）、劃線（M2-c）。（M1-b、M2-b 回報）
 - **comment 列表作者欄位缺端到端測試**：comment 模組 IT 一律 mock `UserFacade`，`UserFacadeImpl` 端由 `UserFacadeIntegrationTest` 覆蓋，兩端以 `Map<UUID, UserDisplayInfo>` 契約銜接，但沒有測試走過「真實 UserFacade → listComments → JSON」。併入 TEST-10 E2E 進 CI gate 時補 author 斷言。（M1-b 審查 MEDIUM）
 - **刪除連動 queue 缺真 broker 的 binding 測試**：`comment.article-deleted`、`reading.article-deleted` 只有 config 單元測試與 ContextSmokeTest（context 能啟動），沒有測試以真 RabbitMQ 發布 `ArticleDeletedEvent` 後證明 consumer 收到。Z3（打開 MQ 重試）前補一個 blog-start 層的 Testcontainers RabbitMQ IT 涵蓋全部刪除連動 queue。（M2-b 審查）
-- **閱讀進度以舊值覆寫 DB（既有，M2-c 審查實測）**：(a) update 0.5 寫 hash → update 0.98（≥ 完讀門檻）直寫 DB 並刪 hash；flush 若在兩者之間讀到 0.5，之後 upsert 會把 DB 覆寫回 0.5。(b) 多實例時兩個 flush 的 upsert 順序無保證，同樣可能回退。base（M2-c 前）同樣存在，M2-c 未使其惡化。修法：upsert 加版本守衛（以 hash `updatedAt` 與 DB `updated_at` 比對，僅較新者寫入）——會動時間欄位語意，另開 Task。
+- **閱讀進度一致性（既有，M2-c 審查以 PoC 重現；建議合併為一個 Task）**：M2-c 已修 RACE-13（flush 改 Lua compare-and-remove，at-least-once），以下仍未處理，PoC 測試存於 `ai-docs/backlog/poc/2026-10-25-reading-progress-Review2PocIT.java.txt`：
+  - (a) 兩個 flusher 交錯（多實例、無 ShedLock）：F1 讀舊值停頓、F2 寫新值並清標記、F1 再寫舊值 → DB 回退（poc2）
+  - (b) 完成路徑（≥ 門檻直寫 DB 並 DEL hash）與 flush 交錯 → DB 被 flush 讀到的舊值覆寫（poc3）
+  - (a)(b) 修法：upsert 加單調守衛 `WHERE user_reading_progress.updated_at <= EXCLUDED.updated_at`，`updated_at` 改傳 hash 的 `updatedAt`（動到時間欄位語意），或 flush 加 Redis 鎖
+  - (c) `update` 的 HMSET／EXPIRE／SADD 為三個獨立指令，EXPIRE 失敗或 JVM 中止時 hash 為新值卻無 dirty 標記 → 改單一 Lua
+  - (d) `get()` 快取 miss 回填無條件 HMSET，可能覆蓋併發 update 的新值 → 改 HSETNX 語意的 Lua
+  - (e) hash 缺 `progress` 欄位會成 poison pill（目前無寫入路徑會產生）；(f) Redis Cluster 下 key 無 hash tag 會 CROSSSLOT（目前單機）
 - **`ReadingProgressService.update` 在交易內先 DEL 快取（既有，違反 security.md 原則 10）**：DB upsert 尚未 commit 時併發 `get()` 會 cache miss、讀到舊 DB 值並回填 Redis（TTL 數天）。修法：DEL 改 `afterCommit`，或移除不必要的 `@Transactional`。（M2-c 審查）
 - **`ReadingProgressFlushJob` 的 `SMEMBERS` 無界（PERF-31 剩餘部分）**：M2-c 已把逐筆 `findIdByUuid` 改為整輪一次 `filterExistingUuids`；dirty set 一次全讀仍未處理，改 `SSCAN` 分批。
 - **refresh token 可被當 access token 送進 filter（既有）**：`JwtService.validateToken` 不檢查 token type；目前因 refresh token 無 role claim 被 filter 的 catch 偶然擋下。應在 filter 明確檢查 type=access 並補測試。（T0b-2 審查）
