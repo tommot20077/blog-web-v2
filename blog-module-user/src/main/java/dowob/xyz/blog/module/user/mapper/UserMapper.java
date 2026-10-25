@@ -65,4 +65,32 @@ public interface UserMapper {
             "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach>" +
             "</script>")
     List<User> findAuthorInfoByIds(@Param("ids") List<Long> ids);
+
+    /**
+     * 以公開 UUID 批次查詢使用者顯示投影
+     *
+     * <p>只撈 {@code uuid / nickname / avatar_url} 三欄，不讀 {@code password_hash} 等欄位。
+     * <b>刻意不篩 {@code status}</b>：停權、軟刪除的使用者仍要回傳，
+     * 其過往留言才能維持原樣顯示（與先前各模組 {@code LEFT JOIN users} 的行為相同）。
+     * 回傳的 {@link User} 僅這三個欄位有值，<b>不得</b>當作完整實體使用或回存。</p>
+     *
+     * <p>參數明確指定 {@code UUIDTypeHandler}，不依賴全域 {@code type-handlers-package} 的註冊（user 模組的測試設定沒有）。
+     * 呼叫端須自行切批（見 {@code BatchedQuery}）；空清單會產生語法非法的 {@code IN ()}。</p>
+     *
+     * @param uuids 使用者公開 UUID 列表，非空且長度不超過 {@code BatchedQuery.BATCH_SIZE}
+     * @return 僅 uuid / nickname / avatarUrl 有值的使用者列表，順序不保證
+     */
+    @Results(id = "displayInfoMap", value = {
+            @Result(property = "uuid", column = "uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class),
+            @Result(property = "nickname", column = "nickname"),
+            @Result(property = "avatarUrl", column = "avatar_url")
+    })
+    @Select("<script>" +
+            "SELECT uuid, nickname, avatar_url FROM users " +
+            "WHERE uuid IN " +
+            "<foreach collection='uuids' item='uuid' open='(' separator=',' close=')'>" +
+            "#{uuid, javaType=java.util.UUID, typeHandler=dowob.xyz.blog.infrastructure.config.UUIDTypeHandler}" +
+            "</foreach>" +
+            "</script>")
+    List<User> findDisplayInfoByUuids(@Param("uuids") List<UUID> uuids);
 }

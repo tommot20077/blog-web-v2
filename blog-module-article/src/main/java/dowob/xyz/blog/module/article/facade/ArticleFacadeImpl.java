@@ -632,4 +632,28 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 .map(UUID::fromString)
                 .collect(Collectors.toSet());
     }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean existsByUuid(UUID articleUuid) {
+        return articleUuid != null && articleMapper.existsByUuid(articleUuid);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void incrementCommentCount(UUID articleUuid) {
+        articleMapper.incrementCommentCountByUuid(articleUuid);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void decrementCommentCount(UUID articleUuid) {
+        articleMapper.decrementCommentCountByUuid(articleUuid);
+    }
 }

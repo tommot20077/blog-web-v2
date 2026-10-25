@@ -36,7 +36,7 @@ public class CommentLikeController {
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "按讚留言（idempotent；軟刪除留言阻擋 C0104）")
     public ApiResponse<Void> like(@AuthenticationPrincipal AuthUser user, @PathVariable UUID uuid) {
-        likeService.likeComment(uuid, user.id());
+        likeService.likeComment(uuid, user.uuid());
         return ApiResponse.success();
     }
 
@@ -44,7 +44,7 @@ public class CommentLikeController {
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "取消按讚（idempotent）")
     public ApiResponse<Void> unlike(@AuthenticationPrincipal AuthUser user, @PathVariable UUID uuid) {
-        likeService.unlikeComment(uuid, user.id());
+        likeService.unlikeComment(uuid, user.uuid());
         return ApiResponse.success();
     }
 }
