@@ -43,22 +43,22 @@ public interface ReadingFacade {
     /**
      * 批次查詢指定使用者的閱讀進度。
      *
-     * <p>userId 為 null 時回傳空 Map（未登入）。進度值為 0.00 ~ 1.00。</p>
+     * <p>userUuid 為 null 時回傳空 Map（未登入）。進度值為 0.00 ~ 1.00。M2-c 起跨模組識別一律為 UUID。</p>
      *
-     * @param userId     使用者資料庫主鍵（可為 null）
-     * @param articleIds 文章資料庫主鍵列表
-     * @return articleId → progress 對應 Map（無紀錄則不含該 key）
+     * @param userUuid     使用者公開 UUID（可為 null）
+     * @param articleUuids 文章公開 UUID 列表
+     * @return articleUuid → progress 對應 Map（無紀錄則不含該 key）
      */
-    Map<Long, BigDecimal> batchGetProgress(Long userId, List<Long> articleIds);
+    Map<UUID, BigDecimal> batchGetProgress(UUID userUuid, List<UUID> articleUuids);
 
     /**
      * 查詢單篇文章的閱讀進度。
      *
-     * @param userId      使用者資料庫主鍵
+     * @param userUuid    使用者公開 UUID
      * @param articleUuid 文章公開 UUID
      * @return 閱讀進度（0.00 ~ 1.00），無紀錄時回傳 null
      */
-    BigDecimal getProgress(Long userId, UUID articleUuid);
+    BigDecimal getProgress(UUID userUuid, UUID articleUuid);
 
     /**
      * 批次查詢使用者按讚過的文章 UUID。

@@ -45,13 +45,13 @@ public class ReadingFacadeImpl implements ReadingFacade {
     }
 
     @Override
-    public Map<Long, BigDecimal> batchGetProgress(Long userId, List<Long> articleIds) {
-        return readingProgressService.batchGetProgress(userId, articleIds);
+    public Map<UUID, BigDecimal> batchGetProgress(UUID userUuid, List<UUID> articleUuids) {
+        return readingProgressService.batchGetProgress(userUuid, articleUuids);
     }
 
     @Override
-    public BigDecimal getProgress(Long userId, UUID articleUuid) {
-        Optional<ProgressResponse> opt = readingProgressService.get(userId, articleUuid);
+    public BigDecimal getProgress(UUID userUuid, UUID articleUuid) {
+        Optional<ProgressResponse> opt = readingProgressService.get(userUuid, articleUuid);
         return opt.map(ProgressResponse::getProgress).orElse(null);
     }
 

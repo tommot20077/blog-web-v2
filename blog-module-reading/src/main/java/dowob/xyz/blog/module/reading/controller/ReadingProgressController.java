@@ -41,7 +41,7 @@ public class ReadingProgressController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdateProgressRequest req) {
-        progressService.update(user.id(), articleUuid, req.getProgress(), req.getLastHeading());
+        progressService.update(user.uuid(), articleUuid, req.getProgress(), req.getLastHeading());
         return ApiResponse.success();
     }
 
@@ -51,6 +51,6 @@ public class ReadingProgressController {
     public ApiResponse<ProgressResponse> get(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user) {
-        return ApiResponse.success(progressService.get(user.id(), articleUuid).orElse(null));
+        return ApiResponse.success(progressService.get(user.uuid(), articleUuid).orElse(null));
     }
 }

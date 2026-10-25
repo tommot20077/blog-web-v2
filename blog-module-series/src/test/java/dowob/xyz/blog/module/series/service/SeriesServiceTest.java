@@ -69,6 +69,8 @@ class SeriesServiceTest {
     }
 
     private final Long userId = 1L;
+    /** 登入者公開 UUID：getSeriesDetail 的閱讀進度以 UUID 查詢（M2-c） */
+    private final UUID userUuid = UUID.randomUUID();
     private final Long seriesId = 100L;
     private final UUID seriesUuid = UUID.randomUUID();
 
@@ -359,13 +361,14 @@ class SeriesServiceTest {
         );
         when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
 
-        Map<Long, BigDecimal> progressMap = Map.of(
-                1L, new BigDecimal("0.98"),
-                2L, new BigDecimal("0.50")
+        Map<UUID, BigDecimal> progressMap = Map.of(
+                uuidA, new BigDecimal("0.98"),
+                uuidB, new BigDecimal("0.50")
         );
-        lenient().when(readingFacade.batchGetProgress(eq(userId), any())).thenReturn(progressMap);
+        lenient().when(readingFacade.batchGetProgress(eq(userUuid), eq(List.of(uuidA, uuidB, uuidC))))
+                .thenReturn(progressMap);
 
-        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userId);
+        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userUuid);
 
         assertThat(resp.getMyProgress()).isNotNull();
         // article 1 進度 0.98 >= 0.95 → 算已讀；article 2 = 0.50 / article 3 無紀錄 → 未讀
@@ -458,10 +461,10 @@ class SeriesServiceTest {
         when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
 
         // 唯一的 PUBLISHED 文章已讀完，故公開視角下沒有下一篇未讀
-        lenient().when(readingFacade.batchGetProgress(eq(userId), any()))
-                .thenReturn(Map.of(1L, new BigDecimal("0.98")));
+        lenient().when(readingFacade.batchGetProgress(eq(userUuid), any()))
+                .thenReturn(Map.of(publishedUuid, new BigDecimal("0.98")));
 
-        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userId);
+        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userUuid);
 
         // 非 PUBLISHED 不得進入 enrich 查詢，否則 title/slug/summary/content 會流到匿名訪客
         verify(articleQueryService).getArticleSummariesByIds(List.of(1L), false);

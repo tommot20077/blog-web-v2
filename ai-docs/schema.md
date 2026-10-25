@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V26 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V27 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V26**
+> 最後更新版本：**V27**
 
 ---
 
@@ -416,14 +416,14 @@ PRIMARY KEY (user_id, tag_id)
 
 ### user_highlights
 
-> V14 新增。使用者對文章段落劃線，附私人顏色標記與 note。
+> V14 新增。使用者對文章段落劃線，附私人顏色標記與 note。V27 起使用者與文章一律以 UUID 識別，不再有 Long 欄位與 FK。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
 | uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | 對外暴露的 ID |
-| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
-| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | |
+| user_uuid | UUID | NOT NULL | V27 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK** |
+| article_uuid | UUID | NOT NULL | V27 新增（取代已 DROP 的 `article_id`，由 `articles.uuid` 回填）。**無 FK** |
 | snippet | TEXT | NOT NULL | 被劃線的原文片段 |
 | prefix | VARCHAR(64) | NOT NULL DEFAULT '' | 劃線前文（定位用） |
 | suffix | VARCHAR(64) | NOT NULL DEFAULT '' | 劃線後文（定位用） |
@@ -438,40 +438,38 @@ PRIMARY KEY (user_id, tag_id)
 **Indexes:**
 - `user_highlights_pkey`（auto）on id
 - `user_highlights_uuid_key`（auto, UNIQUE）on uuid
-- `idx_user_highlights_article_for_user`（V14）on (user_id, article_id)
-- `idx_user_highlights_user_recent`（V14）on (user_id, created_at DESC)
+- `idx_user_highlights_article_for_user`（V14；V27 以 uuid 重建，名稱不變）on (user_uuid, article_uuid)
+- `idx_user_highlights_user_recent`（V14；V27 以 uuid 重建，名稱不變）on (user_uuid, created_at DESC)
+- `idx_user_highlights_article_uuid` on (article_uuid)（V27 新增；文章刪除連動與每日孤兒校正以 `article_uuid` 查詢，上列索引都以 `user_uuid` 開頭無法支援）
 
-**Foreign keys:**
-- `user_id` → `users(id)`（NO ACTION）
-- `article_id` → `articles(id)`（ON DELETE CASCADE）
+**Foreign keys:** 無（V27 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 劃線刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `HighlightOrphanReconciliationJob`（每日校正）負責。
 
 ---
 
 ### user_reading_progress
 
-> V14 新增。使用者對文章的閱讀進度（0.000–1.000 NUMERIC）。
+> V14 新增。使用者對文章的閱讀進度（0.000–1.000 NUMERIC）。V27 起使用者與文章一律以 UUID 識別，不再有 Long 欄位與 FK。Redis 為主要儲存（key `reading:progress:{userUuid}:{articleUuid}`），DB 為 `ReadingProgressFlushJob` 的備份。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
-| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
-| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | |
+| user_uuid | UUID | NOT NULL | V27 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK** |
+| article_uuid | UUID | NOT NULL | V27 新增（取代已 DROP 的 `article_id`，由 `articles.uuid` 回填）。**無 FK** |
 | progress | NUMERIC(4,3) | NOT NULL | 0.000–1.000；CHECK constraint 驗證範圍 |
 | last_heading_anchor | VARCHAR(255) | NULL | 最後停留的標題 anchor（如 `#section-2`） |
 | updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 
 **Constraints:**
-- `uq_user_reading_progress_user_article`: UNIQUE (user_id, article_id)
+- `uq_user_reading_progress_user_article`: UNIQUE (user_uuid, article_uuid)（V27 於 uuid 欄位上以同名重建；`INSERT ... ON CONFLICT (user_uuid, article_uuid) DO UPDATE` 依賴它）
 - `chk_user_reading_progress_range`: `progress >= 0 AND progress <= 1`
 
 **Indexes:**
 - `user_reading_progress_pkey`（auto）on id
-- `uq_user_reading_progress_user_article`（UNIQUE constraint）on (user_id, article_id)
-- `idx_user_reading_progress_user_recent`（V14）on (user_id, updated_at DESC)
+- `uq_user_reading_progress_user_article`（UNIQUE constraint）on (user_uuid, article_uuid)
+- `idx_user_reading_progress_user_recent`（V14；V27 以 uuid 重建，名稱不變）on (user_uuid, updated_at DESC)
+- `idx_user_reading_progress_article_uuid` on (article_uuid)（V27 新增；文章刪除連動與每日孤兒校正以 `article_uuid` 查詢）
 
-**Foreign keys:**
-- `user_id` → `users(id)`（NO ACTION）
-- `article_id` → `articles(id)`（ON DELETE CASCADE）
+**Foreign keys:** 無（V27 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 閱讀進度刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `ReadingProgressOrphanReconciliationJob`（每日校正）負責；Redis 端殘留的 hash 由 `ReadingProgressFlushJob` 在確認文章已不存在時清除。
 
 ---
 
@@ -587,6 +585,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V24** | ARCH-30 第 2 段 P1（Expand）：`comments` 新增 `article_uuid UUID`，由 `article_id` 回填後 `SET NOT NULL`；新 FK `comments_article_uuid_fkey` → `articles(uuid)` ON DELETE CASCADE；新 partial index `idx_comments_article_uuid_top_level`，以及涵蓋所有列的 `idx_comments_article_uuid`（FK CASCADE／含回覆計數）。舊 `article_id` 欄位／FK／索引保留（P4 移除） |
 | **V25** | 跨模組識別全面改 UUID（comment 模組）：`comments` 新增 `user_uuid UUID`、`comment_likes` 新增 `user_uuid UUID`，皆由 `users.uuid` 回填後 `SET NOT NULL`（找不到使用者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP `comments_article_uuid_fkey`（V24）；DROP 欄位 `comments.article_id`、`comments.user_id`、`comment_likes.user_id`（連帶移除各自的 FK、`idx_comments_article_top_level`、`idx_comments_user_created`、舊 `uq_comment_likes_user_comment`）；以 `user_uuid` 重建 `idx_comments_user_created` (user_uuid, created_at DESC) 與 `uq_comment_likes_user_comment` UNIQUE (user_uuid, comment_id)。新 uuid 欄位不建 FK；`parent_id`、`comment_id` 模組內部關聯不動 |
 | **V26** | 跨模組識別全面改 UUID（reading 模組：按讚與收藏）：`user_article_likes`、`user_bookmarks` 各新增 `user_uuid UUID`、`article_uuid UUID`，分別由 `users.uuid`、`articles.uuid` 回填後 `SET NOT NULL`（找不到使用者或文章時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `user_id`、`article_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE——與舊 UNIQUE）；以 uuid 欄位同名重建 `uq_user_article_likes_user_article`、`uq_user_bookmarks_user_article` UNIQUE (user_uuid, article_uuid)；新增 `idx_user_article_likes_article_uuid`、`idx_user_bookmarks_article_uuid`（article_uuid 單欄，供刪除連動與校正）。新 uuid 欄位不建 FK；`user_highlights`、`user_reading_progress` 不在本次遷移內（M2-c） |
+| **V27** | 跨模組識別全面改 UUID（reading 模組：劃線與閱讀進度）：`user_highlights`、`user_reading_progress` 各新增 `user_uuid UUID`、`article_uuid UUID`，分別由 `users.uuid`、`articles.uuid` 回填後 `SET NOT NULL`（找不到使用者或文章時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `user_id`、`article_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE——與含該欄位的索引／舊 UNIQUE）；以 uuid 欄位同名重建 `idx_user_highlights_article_for_user` (user_uuid, article_uuid)、`idx_user_highlights_user_recent` (user_uuid, created_at DESC)、`uq_user_reading_progress_user_article` UNIQUE (user_uuid, article_uuid)、`idx_user_reading_progress_user_recent` (user_uuid, updated_at DESC)；新增 `idx_user_highlights_article_uuid`、`idx_user_reading_progress_article_uuid`（article_uuid 單欄，供刪除連動與校正）。新 uuid 欄位不建 FK。至此 reading 模組四張表都不再有跨模組 Long 欄位與 FK |
 
 ---
 

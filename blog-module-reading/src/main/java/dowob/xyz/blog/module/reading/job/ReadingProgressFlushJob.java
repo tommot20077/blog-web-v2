@@ -39,7 +39,7 @@ public class ReadingProgressFlushJob {
         for (String entry : dirtyEntries) {
             try {
                 String[] parts = entry.split(":", 2);
-                Long userId = Long.parseLong(parts[0]);
+                UUID userUuid = UUID.fromString(parts[0]);
                 UUID articleUuid = UUID.fromString(parts[1]);
                 String key = RedisKeyConstant.READING_PROGRESS_PREFIX + entry;
 
@@ -49,8 +49,7 @@ public class ReadingProgressFlushJob {
                     continue;
                 }
 
-                Long articleId = articleFacade.findIdByUuid(articleUuid);
-                if (articleId == null) {
+                if (!articleFacade.existsByUuid(articleUuid)) {
                     redisTemplate.delete(key);
                     redisTemplate.opsForSet().remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
                     continue;
@@ -60,7 +59,7 @@ public class ReadingProgressFlushJob {
                 Object hVal = hash.get("lastHeading");
                 String lastHeading = (hVal != null && !hVal.toString().isEmpty()) ? hVal.toString() : null;
 
-                progressMapper.upsert(userId, articleId, progress, lastHeading);
+                progressMapper.upsert(userUuid, articleUuid, progress, lastHeading);
                 redisTemplate.opsForSet().remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
             } catch (Exception e) {
                 log.warn("flush 跳過無效 entry，下次重試 - {}", entry, e);

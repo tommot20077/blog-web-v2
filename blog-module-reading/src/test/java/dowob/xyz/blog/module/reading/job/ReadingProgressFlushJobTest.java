@@ -35,6 +35,8 @@ class ReadingProgressFlushJobTest {
     @Mock private ReadingProgressMapper progressMapper;
     @InjectMocks private ReadingProgressFlushJob job;
 
+    private final UUID userUuid = UUID.randomUUID();
+
     @BeforeEach
     @SuppressWarnings({"unchecked", "rawtypes"})
     void setUp() {
@@ -45,24 +47,24 @@ class ReadingProgressFlushJobTest {
     @Test
     void flush_dirtyEntries_upsertedAndRemovedFromDirty() {
         UUID articleUuid = UUID.randomUUID();
-        String entry = "1:" + articleUuid;
+        String entry = userUuid + ":" + articleUuid;
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
 
         Map<Object, Object> hash = new HashMap<>();
         hash.put("progress", "0.6");
         hash.put("lastHeading", "intro");
         when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(100L);
+        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
 
         job.flush();
 
-        verify(progressMapper).upsert(eq(1L), eq(100L), eq(new BigDecimal("0.6")), eq("intro"));
+        verify(progressMapper).upsert(eq(userUuid), eq(articleUuid), eq(new BigDecimal("0.6")), eq("intro"));
         verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
     }
 
     @Test
     void flush_redisKeyExpiredButDirtyExists_removesDirtyEntry() {
-        String entry = "1:" + UUID.randomUUID();
+        String entry = userUuid + ":" + UUID.randomUUID();
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
         when(hashOps.entries(any(String.class))).thenReturn(Map.of());
 
@@ -75,12 +77,12 @@ class ReadingProgressFlushJobTest {
     @Test
     void flush_dbErrorOnSingleEntry_keepsItInDirtyForRetry() {
         UUID articleUuid = UUID.randomUUID();
-        String entry = "1:" + articleUuid;
+        String entry = userUuid + ":" + articleUuid;
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
         Map<Object, Object> hash = new HashMap<>();
         hash.put("progress", "0.6");
         when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(100L);
+        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
         when(progressMapper.upsert(any(), any(), any(), any())).thenThrow(new RuntimeException("DB error"));
 
         job.flush();
@@ -91,12 +93,12 @@ class ReadingProgressFlushJobTest {
     @Test
     void flush_articleAlreadyDeleted_removesDirtyAndKey() {
         UUID articleUuid = UUID.randomUUID();
-        String entry = "1:" + articleUuid;
+        String entry = userUuid + ":" + articleUuid;
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
         Map<Object, Object> hash = new HashMap<>();
         hash.put("progress", "0.6");
         when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
+        when(articleFacade.existsByUuid(articleUuid)).thenReturn(false);
 
         job.flush();
 

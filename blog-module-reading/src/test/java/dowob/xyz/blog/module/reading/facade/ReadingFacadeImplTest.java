@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.facade;
 
+import dowob.xyz.blog.module.reading.model.dto.response.ProgressResponse;
 import dowob.xyz.blog.module.reading.service.ArticleLikeService;
 import dowob.xyz.blog.module.reading.service.BookmarkService;
 import dowob.xyz.blog.module.reading.service.ReadingProgressService;
@@ -10,7 +11,10 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -20,10 +24,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link ReadingFacadeImpl} 單元測試：按讚／收藏的四個查詢方法以 UUID 委派給對應 service。
+ * {@link ReadingFacadeImpl} 單元測試：按讚、收藏與閱讀進度的六個查詢方法以 UUID 委派給對應 service。
  *
  * @author Yuan
- * @version 2.0
+ * @version 3.0
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ReadingFacadeImpl")
@@ -83,5 +87,35 @@ class ReadingFacadeImplTest {
 
         assertThat(facade.isBookmarked(userUuid, a)).isTrue();
         verify(bookmarkService).isBookmarked(userUuid, a);
+    }
+
+    @Test
+    @DisplayName("batchGetProgress 以 UUID 委派給 ReadingProgressService")
+    void batchGetProgress_delegatesToReadingProgressServiceWithUuids() {
+        Map<UUID, BigDecimal> progress = Map.of(a, new BigDecimal("0.40"));
+        when(readingProgressService.batchGetProgress(userUuid, List.of(a, b))).thenReturn(progress);
+
+        Map<UUID, BigDecimal> result = facade.batchGetProgress(userUuid, List.of(a, b));
+
+        assertThat(result).isEqualTo(progress);
+        verify(readingProgressService).batchGetProgress(userUuid, List.of(a, b));
+    }
+
+    @Test
+    @DisplayName("getProgress：有紀錄回傳進度值")
+    void getProgress_present_returnsProgressValue() {
+        ProgressResponse resp = new ProgressResponse();
+        resp.setProgress(new BigDecimal("0.75"));
+        when(readingProgressService.get(userUuid, a)).thenReturn(Optional.of(resp));
+
+        assertThat(facade.getProgress(userUuid, a)).isEqualByComparingTo("0.75");
+    }
+
+    @Test
+    @DisplayName("getProgress：無紀錄回傳 null")
+    void getProgress_absent_returnsNull() {
+        when(readingProgressService.get(userUuid, a)).thenReturn(Optional.empty());
+
+        assertThat(facade.getProgress(userUuid, a)).isNull();
     }
 }

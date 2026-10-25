@@ -353,7 +353,7 @@ class ArticleQueryServiceTest {
                     .thenReturn(Collections.emptySet());
             when(readingFacade.batchIsBookmarked(AUTHOR_UUID, List.of(ARTICLE_UUID)))
                     .thenReturn(Set.of(ARTICLE_UUID));
-            when(readingFacade.batchGetProgress(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+            when(readingFacade.batchGetProgress(AUTHOR_UUID, List.of(ARTICLE_UUID)))
                     .thenReturn(Collections.emptyMap());
 
             SecurityContextHolder.getContext().setAuthentication(
@@ -377,8 +377,8 @@ class ArticleQueryServiceTest {
                     .thenReturn(Collections.emptySet());
             when(readingFacade.batchIsBookmarked(AUTHOR_UUID, List.of(ARTICLE_UUID)))
                     .thenReturn(Collections.emptySet());
-            when(readingFacade.batchGetProgress(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
-                    .thenReturn(Map.of(ARTICLE_DB_ID, progress));
+            when(readingFacade.batchGetProgress(AUTHOR_UUID, List.of(ARTICLE_UUID)))
+                    .thenReturn(Map.of(ARTICLE_UUID, progress));
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
@@ -492,7 +492,7 @@ class ArticleQueryServiceTest {
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
             when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
             when(readingFacade.isBookmarked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
-            when(readingFacade.getProgress(AUTHOR_ID, ARTICLE_UUID)).thenReturn(progress);
+            when(readingFacade.getProgress(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(progress);
             when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.empty());
 
             SecurityContextHolder.getContext().setAuthentication(
