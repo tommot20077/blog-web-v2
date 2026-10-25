@@ -21,24 +21,24 @@ import java.util.UUID;
 public interface ReadingFacade {
 
     /**
-     * 批次查詢指定使用者已收藏的文章 ID 集合。
+     * 批次查詢指定使用者已收藏的文章 UUID 集合。
      *
-     * <p>userId 為 null 時回傳空集合（未登入）。</p>
+     * <p>userUuid 為 null 時回傳空集合（未登入）。M2-b 起跨模組識別一律為 UUID。</p>
      *
-     * @param userId     使用者資料庫主鍵（可為 null）
-     * @param articleIds 文章資料庫主鍵列表
-     * @return 已收藏的 article_id 集合
+     * @param userUuid     使用者公開 UUID（可為 null）
+     * @param articleUuids 文章公開 UUID 列表
+     * @return 已收藏的文章 UUID 集合
      */
-    Set<Long> batchIsBookmarked(Long userId, List<Long> articleIds);
+    Set<UUID> batchIsBookmarked(UUID userUuid, List<UUID> articleUuids);
 
     /**
      * 查詢單篇文章是否已被指定使用者收藏。
      *
-     * @param userId    使用者資料庫主鍵
-     * @param articleId 文章資料庫主鍵
+     * @param userUuid    使用者公開 UUID
+     * @param articleUuid 文章公開 UUID
      * @return 已收藏為 true，否則 false
      */
-    boolean isBookmarked(Long userId, Long articleId);
+    boolean isBookmarked(UUID userUuid, UUID articleUuid);
 
     /**
      * 批次查詢指定使用者的閱讀進度。
@@ -61,22 +61,22 @@ public interface ReadingFacade {
     BigDecimal getProgress(Long userId, UUID articleUuid);
 
     /**
-     * 批次查詢使用者按讚過的文章 ID。
+     * 批次查詢使用者按讚過的文章 UUID。
      *
-     * <p>userId 為 null 時回傳空集合（未登入）。</p>
+     * <p>userUuid 為 null 時回傳空集合（未登入）。M2-b 起跨模組識別一律為 UUID。</p>
      *
-     * @param userId     使用者 ID（null 代表未登入，回 emptySet）
-     * @param articleIds 候選 article id list
-     * @return 已按讚的 article id 集合
+     * @param userUuid     使用者公開 UUID（null 代表未登入，回 emptySet）
+     * @param articleUuids 候選文章公開 UUID 列表
+     * @return 已按讚的文章 UUID 集合
      */
-    Set<Long> batchIsLiked(Long userId, List<Long> articleIds);
+    Set<UUID> batchIsLiked(UUID userUuid, List<UUID> articleUuids);
 
     /**
      * 查詢單篇文章是否被當前使用者按讚。
      *
-     * @param userId    使用者資料庫主鍵
-     * @param articleId 文章資料庫主鍵
+     * @param userUuid    使用者公開 UUID
+     * @param articleUuid 文章公開 UUID
      * @return 已按讚為 true，否則 false
      */
-    boolean isLiked(Long userId, Long articleId);
+    boolean isLiked(UUID userUuid, UUID articleUuid);
 }

@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V25 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V26 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V25**
+> 最後更新版本：**V26**
 
 ---
 
@@ -255,25 +255,24 @@ PRIMARY KEY (user_id, tag_id)
 
 ### user_article_likes
 
-> V15 由 `article_likes` 改名（命名一致化）。
+> V15 由 `article_likes` 改名（命名一致化）。V26 起使用者與文章一律以 UUID 識別，不再有 Long 欄位與 FK。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
-| id | BIGSERIAL | PRIMARY KEY | |
-| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | V12 補 NOT NULL |
-| user_id | BIGINT | NOT NULL REFERENCES users(id) | V12 補 NOT NULL |
+| id | BIGSERIAL | PRIMARY KEY | PK 索引名稱沿用舊表名：`article_likes_pkey`（V15 改表名時未改） |
+| user_uuid | UUID | NOT NULL | V26 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK** |
+| article_uuid | UUID | NOT NULL | V26 新增（取代已 DROP 的 `article_id`，由 `articles.uuid` 回填）。**無 FK** |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 
 **Constraints:**
-- `uq_user_article_likes_user_article` UNIQUE (user_id, article_id)（V15 由 `uq_article_likes_user_article` 改名）
+- `uq_user_article_likes_user_article` UNIQUE (user_uuid, article_uuid)（V26 於 uuid 欄位上以同名重建；`INSERT ... ON CONFLICT (user_uuid, article_uuid) DO NOTHING` 依賴它）
 
 **Indexes:**
-- `user_article_likes_pkey`（auto）on id
-- `uq_user_article_likes_user_article`（auto, UNIQUE constraint）on (user_id, article_id)
+- `article_likes_pkey`（auto）on id
+- `uq_user_article_likes_user_article`（auto, UNIQUE constraint）on (user_uuid, article_uuid)
+- `idx_user_article_likes_article_uuid` on (article_uuid)（V26 新增；文章刪除連動與每日孤兒校正以 `article_uuid` 查詢，UNIQUE 以 `user_uuid` 開頭無法支援）
 
-**Foreign keys:**
-- `article_id` → `articles(id)` ON DELETE CASCADE
-- `user_id` → `users(id)`（NO ACTION）
+**Foreign keys:** 無（V26 已移除 `article_id` → `articles(id)` ON DELETE CASCADE 與 `user_id` → `users(id)`）。文章刪除 → 按讚刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `ArticleLikeOrphanReconciliationJob`（每日校正）負責。
 
 ---
 
@@ -394,22 +393,24 @@ PRIMARY KEY (user_id, tag_id)
 
 ### user_bookmarks
 
-> V14 新增。使用者收藏文章（純 flag，user × article 1:1）。
+> V14 新增。使用者收藏文章（純 flag，user × article 1:1）。V26 起使用者與文章一律以 UUID 識別，不再有 Long 欄位與 FK。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
-| user_id | BIGINT | NOT NULL REFERENCES users(id) | |
-| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | |
+| user_uuid | UUID | NOT NULL | V26 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK** |
+| article_uuid | UUID | NOT NULL | V26 新增（取代已 DROP 的 `article_id`，由 `articles.uuid` 回填）。**無 FK** |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+
+**Constraints:**
+- `uq_user_bookmarks_user_article` UNIQUE (user_uuid, article_uuid)（V26 於 uuid 欄位上以同名重建；`INSERT ... ON CONFLICT (user_uuid, article_uuid) DO NOTHING` 依賴它）
 
 **Indexes:**
 - `user_bookmarks_pkey`（auto）on id
-- `uq_user_bookmarks_user_article`（UNIQUE constraint）on (user_id, article_id)
+- `uq_user_bookmarks_user_article`（UNIQUE constraint）on (user_uuid, article_uuid)
+- `idx_user_bookmarks_article_uuid` on (article_uuid)（V26 新增；文章刪除連動與每日孤兒校正以 `article_uuid` 查詢）
 
-**Foreign keys:**
-- `user_id` → `users(id)`（NO ACTION）
-- `article_id` → `articles(id)`（ON DELETE CASCADE）
+**Foreign keys:** 無（V26 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 收藏刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `BookmarkOrphanReconciliationJob`（每日校正）負責。
 
 ---
 
@@ -585,6 +586,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V23** | 資料遷移＋約束：正規化 `categories.slug`（轉小寫、非 [a-z0-9] 連續字元→`-`、去頭尾 `-`；空→`category-{id}`；撞名附加 `-{id}`；≤ 60 字，逐筆 RAISE NOTICE 記錄），**會改變不合格分類的網址且不留轉址**（Yuan 決定）；新增 CHECK `ck_categories_slug_format` |
 | **V24** | ARCH-30 第 2 段 P1（Expand）：`comments` 新增 `article_uuid UUID`，由 `article_id` 回填後 `SET NOT NULL`；新 FK `comments_article_uuid_fkey` → `articles(uuid)` ON DELETE CASCADE；新 partial index `idx_comments_article_uuid_top_level`，以及涵蓋所有列的 `idx_comments_article_uuid`（FK CASCADE／含回覆計數）。舊 `article_id` 欄位／FK／索引保留（P4 移除） |
 | **V25** | 跨模組識別全面改 UUID（comment 模組）：`comments` 新增 `user_uuid UUID`、`comment_likes` 新增 `user_uuid UUID`，皆由 `users.uuid` 回填後 `SET NOT NULL`（找不到使用者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP `comments_article_uuid_fkey`（V24）；DROP 欄位 `comments.article_id`、`comments.user_id`、`comment_likes.user_id`（連帶移除各自的 FK、`idx_comments_article_top_level`、`idx_comments_user_created`、舊 `uq_comment_likes_user_comment`）；以 `user_uuid` 重建 `idx_comments_user_created` (user_uuid, created_at DESC) 與 `uq_comment_likes_user_comment` UNIQUE (user_uuid, comment_id)。新 uuid 欄位不建 FK；`parent_id`、`comment_id` 模組內部關聯不動 |
+| **V26** | 跨模組識別全面改 UUID（reading 模組：按讚與收藏）：`user_article_likes`、`user_bookmarks` 各新增 `user_uuid UUID`、`article_uuid UUID`，分別由 `users.uuid`、`articles.uuid` 回填後 `SET NOT NULL`（找不到使用者或文章時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `user_id`、`article_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE——與舊 UNIQUE）；以 uuid 欄位同名重建 `uq_user_article_likes_user_article`、`uq_user_bookmarks_user_article` UNIQUE (user_uuid, article_uuid)；新增 `idx_user_article_likes_article_uuid`、`idx_user_bookmarks_article_uuid`（article_uuid 單欄，供刪除連動與校正）。新 uuid 欄位不建 FK；`user_highlights`、`user_reading_progress` 不在本次遷移內（M2-c） |
 
 ---
 
