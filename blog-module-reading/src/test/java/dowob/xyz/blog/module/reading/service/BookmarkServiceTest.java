@@ -6,10 +6,12 @@ import dowob.xyz.blog.module.reading.repository.UserBookmarkRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -44,22 +46,36 @@ class BookmarkServiceTest {
     @Test
     @DisplayName("收藏：以單一 INSERT ... ON CONFLICT DO NOTHING 寫入，不先 find、不經 repository.save（RACE-04）")
     void bookmark_insertsWithOnConflictDoNothing() {
-        when(mapper.insertIgnoreConflict(userUuid, articleUuid)).thenReturn(1);
+        when(mapper.insertIgnoreConflict(eq(userUuid), eq(articleUuid), any())).thenReturn(1);
 
         service.bookmark(userUuid, articleUuid);
 
-        verify(mapper, times(1)).insertIgnoreConflict(userUuid, articleUuid);
+        verify(mapper, times(1)).insertIgnoreConflict(eq(userUuid), eq(articleUuid), any());
         verifyNoInteractions(repo);
+    }
+
+    @Test
+    @DisplayName("收藏：傳給 mapper 的 createdAt 是 service 以 JVM 時間產生的（不是 DB 的 CURRENT_TIMESTAMP）")
+    void bookmark_passesServiceGeneratedCreatedAtToMapper() {
+        when(mapper.insertIgnoreConflict(eq(userUuid), eq(articleUuid), any())).thenReturn(1);
+        LocalDateTime before = LocalDateTime.now();
+
+        service.bookmark(userUuid, articleUuid);
+
+        LocalDateTime after = LocalDateTime.now();
+        ArgumentCaptor<LocalDateTime> captor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(mapper).insertIgnoreConflict(eq(userUuid), eq(articleUuid), captor.capture());
+        assertThat(captor.getValue()).isNotNull().isBetween(before, after);
     }
 
     @Test
     @DisplayName("重複收藏：ON CONFLICT 影響 0 列，視為成功（idempotent），不拋例外")
     void bookmark_alreadyBookmarked_isIdempotent() {
-        when(mapper.insertIgnoreConflict(userUuid, articleUuid)).thenReturn(0);
+        when(mapper.insertIgnoreConflict(eq(userUuid), eq(articleUuid), any())).thenReturn(0);
 
         service.bookmark(userUuid, articleUuid);
 
-        verify(mapper, times(1)).insertIgnoreConflict(userUuid, articleUuid);
+        verify(mapper, times(1)).insertIgnoreConflict(eq(userUuid), eq(articleUuid), any());
     }
 
     @Test

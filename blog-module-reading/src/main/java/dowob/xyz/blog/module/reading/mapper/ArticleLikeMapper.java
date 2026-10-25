@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -31,12 +32,15 @@ public interface ArticleLikeMapper {
      *
      * @param userUuid    按讚者公開 UUID
      * @param articleUuid 文章公開 UUID
+     * @param createdAt   建立時間，由 service 以 JVM 的 {@code LocalDateTime.now()} 傳入（與改造前的時間來源一致，
+     *                    避免 JVM 與 DB 時區不同時，新舊資料的 {@code timestamp without time zone} 混在一起排序錯位）
      * @return 實際新增的列數：1 = 這次才按讚，0 = 先前已按過（或並發中對方先寫入）
      */
     @Insert("INSERT INTO user_article_likes (user_uuid, article_uuid, created_at) "
-            + "VALUES (#{userUuid}::uuid, #{articleUuid}::uuid, CURRENT_TIMESTAMP) "
+            + "VALUES (#{userUuid}::uuid, #{articleUuid}::uuid, #{createdAt}) "
             + "ON CONFLICT (user_uuid, article_uuid) DO NOTHING")
-    int insertIgnoreConflict(@Param("userUuid") UUID userUuid, @Param("articleUuid") UUID articleUuid);
+    int insertIgnoreConflict(@Param("userUuid") UUID userUuid, @Param("articleUuid") UUID articleUuid,
+                             @Param("createdAt") LocalDateTime createdAt);
 
     /**
      * 批次查詢「當前使用者按讚過哪些文章」。

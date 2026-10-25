@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -40,14 +41,16 @@ public class ArticleLikeService {
      * 不再先 find 再 save、也不再 catch {@code DataIntegrityViolationException}——後者在 Postgres 會讓
      * 當前交易進入 aborted 狀態並被標成 rollback-only，雙擊落敗者最後得到 500（RACE-01）。</p>
      *
-     * <p>呼叫端（controller）須先確認文章存在；本方法不檢查。</p>
+     * <p>{@code created_at} 由本方法以 JVM 的 {@code LocalDateTime.now()} 產生並傳入，不使用 DB 的
+     * {@code CURRENT_TIMESTAMP}（欄位為 {@code timestamp without time zone}，兩者時區不同時新舊資料會排序錯位）。
+     * 呼叫端（controller）須先確認文章存在；本方法不檢查。</p>
      *
      * @param userUuid    按讚者公開 UUID
      * @param articleUuid 文章公開 UUID
      */
     @Transactional
     public void likeArticle(UUID userUuid, UUID articleUuid) {
-        int inserted = articleLikeMapper.insertIgnoreConflict(userUuid, articleUuid);
+        int inserted = articleLikeMapper.insertIgnoreConflict(userUuid, articleUuid, LocalDateTime.now());
         if (inserted == 1) {
             articleFacade.incrementLikeCount(articleUuid);
         }

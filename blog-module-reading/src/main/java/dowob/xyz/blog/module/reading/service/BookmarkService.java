@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -33,6 +34,7 @@ public class BookmarkService {
      *
      * <p>以單一 {@code INSERT ... ON CONFLICT (user_uuid, article_uuid) DO NOTHING} 寫入：
      * 雙擊時落敗者影響 0 列，仍視為成功，不再因 UNIQUE 衝突而 500（RACE-04）。
+     * {@code created_at} 以 JVM 的 {@code LocalDateTime.now()} 傳入（時間來源與改造前一致，「最新收藏優先」的排序不受 DB 時區影響）。
      * 收藏沒有反正規化計數，故不依回傳值做後續動作。呼叫端（controller）須先確認文章存在。</p>
      *
      * @param userUuid    收藏者公開 UUID
@@ -40,7 +42,7 @@ public class BookmarkService {
      */
     @Transactional
     public void bookmark(UUID userUuid, UUID articleUuid) {
-        mapper.insertIgnoreConflict(userUuid, articleUuid);
+        mapper.insertIgnoreConflict(userUuid, articleUuid, LocalDateTime.now());
     }
 
     /**

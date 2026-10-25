@@ -7,10 +7,12 @@ import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -46,18 +48,32 @@ class ArticleLikeServiceTest {
     @Test
     @DisplayName("首次按讚：INSERT 影響 1 列 → like_count + 1")
     void likeArticle_firstTime_insertsRowAndIncrementsCount() {
-        when(articleLikeMapper.insertIgnoreConflict(userUuid, articleUuid)).thenReturn(1);
+        when(articleLikeMapper.insertIgnoreConflict(eq(userUuid), eq(articleUuid), any())).thenReturn(1);
 
         service.likeArticle(userUuid, articleUuid);
 
-        verify(articleLikeMapper, times(1)).insertIgnoreConflict(userUuid, articleUuid);
+        verify(articleLikeMapper, times(1)).insertIgnoreConflict(eq(userUuid), eq(articleUuid), any());
         verify(articleFacade, times(1)).incrementLikeCount(articleUuid);
+    }
+
+    @Test
+    @DisplayName("按讚：傳給 mapper 的 createdAt 是 service 以 JVM 時間產生的（不是 DB 的 CURRENT_TIMESTAMP）")
+    void likeArticle_passesServiceGeneratedCreatedAtToMapper() {
+        when(articleLikeMapper.insertIgnoreConflict(eq(userUuid), eq(articleUuid), any())).thenReturn(1);
+        LocalDateTime before = LocalDateTime.now();
+
+        service.likeArticle(userUuid, articleUuid);
+
+        LocalDateTime after = LocalDateTime.now();
+        ArgumentCaptor<LocalDateTime> captor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(articleLikeMapper).insertIgnoreConflict(eq(userUuid), eq(articleUuid), captor.capture());
+        assertThat(captor.getValue()).isNotNull().isBetween(before, after);
     }
 
     @Test
     @DisplayName("已按過讚：ON CONFLICT 影響 0 列 → 不增加 like_count（idempotent）")
     void likeArticle_alreadyLiked_isIdempotentNoChange() {
-        when(articleLikeMapper.insertIgnoreConflict(userUuid, articleUuid)).thenReturn(0);
+        when(articleLikeMapper.insertIgnoreConflict(eq(userUuid), eq(articleUuid), any())).thenReturn(0);
 
         service.likeArticle(userUuid, articleUuid);
 
@@ -67,7 +83,7 @@ class ArticleLikeServiceTest {
     @Test
     @DisplayName("RACE-01：按讚不先 find、不經 repository.save，也不依賴 catch DataIntegrityViolationException")
     void likeArticle_doesNotUseFindThenSavePattern() {
-        when(articleLikeMapper.insertIgnoreConflict(userUuid, articleUuid)).thenReturn(1);
+        when(articleLikeMapper.insertIgnoreConflict(eq(userUuid), eq(articleUuid), any())).thenReturn(1);
 
         service.likeArticle(userUuid, articleUuid);
 
