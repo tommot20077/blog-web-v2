@@ -21,7 +21,15 @@ import java.util.UUID;
  *
  * <p>
  * 正規化流程：修剪空白 → 轉小寫 → OpenCC 繁體轉簡體 → 生成 Slug →
- * 查找資料庫 → 已存在則返回，否則建立新標籤並加入 Redis 自動補全集合。
+ * 查找資料庫 → 已存在則返回，否則以 {@code INSERT ... ON CONFLICT DO NOTHING} 建立新標籤並加入
+ * Redis 自動補全集合。
+ * </p>
+ *
+ * <p>
+ * 併發安全（RACE-08）：先 {@code findBySlug} 再 {@code INSERT} 之間可能有別的交易建立同名／同 slug 標籤。
+ * 以 {@code ON CONFLICT DO NOTHING} 建立時，衝突不會拋唯一鍵例外（PostgreSQL 的唯一鍵錯誤會使整個外層交易
+ * 進入失敗狀態，導致發文整筆 rollback），而是新增 0 列，此時改以 slug 重讀既有標籤。
+ * Redis 自動補全只在<b>實際新增</b>時寫入。
  * </p>
  *
  * @author Yuan
@@ -63,16 +71,24 @@ public class TagNormalizationServiceImpl implements TagNormalizationService {
             return existing.get();
         }
 
-        Tag newTag = new Tag();
-        newTag.setId(UUID.randomUUID());
-        newTag.setName(normalized);
-        newTag.setSlug(slug);
-        newTag.setCreatedAt(LocalDateTime.now());
-        newTag.setNew(true);
-        Tag saved = tagRepository.save(newTag);
+        UUID id = UUID.randomUUID();
+        LocalDateTime createdAt = LocalDateTime.now();
+        int inserted = tagRepository.insertIfAbsent(id, normalized, slug, createdAt);
+        if (inserted == 0) {
+            /* 併發下別人先建立了同名／同 slug 的標籤（INSERT ... ON CONFLICT DO NOTHING 新增 0 列）：重讀既有標籤。
+             * 衝突發生時對方交易必已提交（否則本次 INSERT 會等到對方結束），READ COMMITTED 下新的查詢讀得到。 */
+            return tagRepository.findBySlug(slug)
+                    .or(() -> tagRepository.findByName(normalized))
+                    .orElseThrow(() -> new IllegalStateException("標籤建立衝突後仍讀不到既有標籤 slug=" + slug));
+        }
 
+        Tag created = new Tag();
+        created.setId(id);
+        created.setName(normalized);
+        created.setSlug(slug);
+        created.setCreatedAt(createdAt);
         redisTemplate.opsForZSet().add(RedisKeyConstant.TAG_AUTOCOMPLETE_KEY, slug, 0.0);
 
-        return saved;
+        return created;
     }
 }

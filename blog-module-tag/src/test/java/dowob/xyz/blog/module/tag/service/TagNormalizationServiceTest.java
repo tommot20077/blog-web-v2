@@ -13,7 +13,9 @@ import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.UUID;
 
 import dowob.xyz.blog.common.exception.BusinessException;
 
@@ -123,16 +125,60 @@ class TagNormalizationServiceTest {
     }
 
     @Test
-    @DisplayName("findOrCreate: 標籤不存在時，應建立新標籤並加入 Redis 自動補全集合")
+    @DisplayName("findOrCreate: 標籤不存在時，應以 INSERT ... ON CONFLICT DO NOTHING 建立並加入 Redis 自動補全集合")
     void findOrCreate_withNewTag_createsAndAddsToRedis() {
         when(tagRepository.findBySlug(anyString())).thenReturn(Optional.empty());
-        when(tagRepository.save(any(Tag.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(tagRepository.insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class))).thenReturn(1);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
 
         Tag result = normalizationService.findOrCreate("SpringBoot");
 
-        verify(tagRepository).save(any(Tag.class));
+        verify(tagRepository).insertIfAbsent(eq(result.getId()), eq("springboot"), eq("springboot"), any(LocalDateTime.class));
+        verify(tagRepository, never()).save(any());
         verify(zSetOps).add(eq("tag:autocomplete"), anyString(), anyDouble());
-        assertThat(result).isNotNull();
+        assertThat(result.getName()).isEqualTo("springboot");
+        assertThat(result.getSlug()).isEqualTo("springboot");
+        assertThat(result.getId()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("findOrCreate: 併發下 INSERT 沒有新增任何列（別人先建立），應以 slug 重讀並回傳既有標籤，且不寫 Redis")
+    void findOrCreate_insertAffectsNoRow_rereadsBySlugAndSkipsRedis() {
+        Tag winner = new Tag();
+        winner.setId(UUID.randomUUID());
+        winner.setName("java");
+        winner.setSlug("java");
+        when(tagRepository.findBySlug("java")).thenReturn(Optional.empty(), Optional.of(winner));
+        when(tagRepository.insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class))).thenReturn(0);
+
+        Tag result = normalizationService.findOrCreate("Java");
+
+        assertThat(result).isSameAs(winner);
+        verify(redisTemplate, never()).opsForZSet();
+    }
+
+    @Test
+    @DisplayName("findOrCreate: INSERT 沒有新增列、以 slug 讀不到、但以 name 讀得到（只有 name 撞到），應回傳該標籤")
+    void findOrCreate_conflictOnNameOnly_fallsBackToName() {
+        Tag byName = new Tag();
+        byName.setId(UUID.randomUUID());
+        byName.setName("java");
+        byName.setSlug("java-legacy");
+        when(tagRepository.findBySlug("java")).thenReturn(Optional.empty(), Optional.empty());
+        when(tagRepository.findByName("java")).thenReturn(Optional.of(byName));
+        when(tagRepository.insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class))).thenReturn(0);
+
+        assertThat(normalizationService.findOrCreate("Java")).isSameAs(byName);
+    }
+
+    @Test
+    @DisplayName("findOrCreate: INSERT 沒有新增列卻怎麼也讀不到標籤（不應發生），拋 IllegalStateException 而非回傳 null")
+    void findOrCreate_conflictButNothingFound_throwsIllegalState() {
+        when(tagRepository.findBySlug(anyString())).thenReturn(Optional.empty());
+        when(tagRepository.findByName(anyString())).thenReturn(Optional.empty());
+        when(tagRepository.insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class))).thenReturn(0);
+
+        assertThatThrownBy(() -> normalizationService.findOrCreate("Java"))
+                .isInstanceOf(IllegalStateException.class);
     }
 }
