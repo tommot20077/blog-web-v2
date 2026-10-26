@@ -20,6 +20,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -30,55 +33,87 @@ class SeriesFacadeImplTest {
     @Mock private SeriesMapper seriesMapper;
     @InjectMocks private SeriesFacadeImpl facade;
 
-    private final Long articleId = 200L;
-    private final Long seriesId = 100L;
+    private final UUID articleUuid = UUID.randomUUID();
+    private final UUID seriesUuid = UUID.randomUUID();
 
     private Series series() {
         Series s = new Series();
-        s.setId(seriesId);
-        s.setUuid(UUID.randomUUID());
+        s.setId(100L);
+        s.setUuid(seriesUuid);
         s.setTitle("系列");
         s.setSlug("series-slug");
         return s;
     }
 
+    /** 文章在 series 內的位置（過渡期的 Long seriesId 刻意留 null：導覽只該讀 UUID 欄位） */
     private ArticleData articleAt(int position) {
-        return new ArticleData(articleId, UUID.randomUUID(), 42L, "PUBLISHED", seriesId, position);
+        return new ArticleData(200L, articleUuid, 42L, "PUBLISHED", null, position, UUID.randomUUID(), seriesUuid);
     }
 
     @Test
-    @DisplayName("導覽走 ArticleFacade 而非 SeriesMapper")
-    void navigationUsesArticleFacadeNotSeriesMapper() {
+    @DisplayName("導覽走 ArticleFacade 的 UUID 版（findByUuid／prev／next／count），不使用任何 Long 版")
+    void navigationUsesArticleFacadeUuidMethods() {
         UUID prevUuid = UUID.randomUUID();
         UUID nextUuid = UUID.randomUUID();
-        when(articleFacade.findById(articleId)).thenReturn(Optional.of(articleAt(2)));
-        when(seriesRepo.findById(seriesId)).thenReturn(Optional.of(series()));
-        when(articleFacade.findPrevPublishedInSeries(seriesId, 2))
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(articleAt(2)));
+        when(seriesRepo.findByUuid(seriesUuid)).thenReturn(Optional.of(series()));
+        when(articleFacade.findPrevPublishedInSeries(seriesUuid, 2))
                 .thenReturn(Optional.of(new ArticleNavRef(prevUuid, "前篇", "prev")));
-        when(articleFacade.findNextPublishedInSeries(seriesId, 2))
+        when(articleFacade.findNextPublishedInSeries(seriesUuid, 2))
                 .thenReturn(Optional.of(new ArticleNavRef(nextUuid, "後篇", "next")));
-        when(articleFacade.countPublishedBySeriesIds(List.of(seriesId)))
-                .thenReturn(Map.of(seriesId, 5));
+        when(articleFacade.countPublishedBySeriesUuids(List.of(seriesUuid)))
+                .thenReturn(Map.of(seriesUuid, 5));
 
-        SeriesNavigation nav = facade.getSeriesNavigation(articleId).orElseThrow();
+        SeriesNavigation nav = facade.getSeriesNavigation(articleUuid).orElseThrow();
 
         assertThat(nav.getPrev().getUuid()).isEqualTo(prevUuid);
         assertThat(nav.getNext().getUuid()).isEqualTo(nextUuid);
         assertThat(nav.getTotalCount()).isEqualTo(5);
         assertThat(nav.getPosition()).isEqualTo(2);
+        assertThat(nav.getSeriesUuid()).isEqualTo(seriesUuid);
+        verify(articleFacade, never()).findById(any());
+        verify(articleFacade, never()).countPublishedBySeriesIds(any());
+        verify(articleFacade, never()).findPrevPublishedInSeries(any(Long.class), any());
+    }
+
+    @Test
+    @DisplayName("文章不存在 → empty")
+    void unknownArticle_returnsEmpty() {
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        assertThat(facade.getSeriesNavigation(articleUuid)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("文章不在任何 series（seriesUuid 為 null）→ empty，不查 series")
+    void articleWithoutSeries_returnsEmpty() {
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                new ArticleData(200L, articleUuid, 42L, "PUBLISHED", null, null, UUID.randomUUID(), null)));
+
+        assertThat(facade.getSeriesNavigation(articleUuid)).isEmpty();
+        verify(seriesRepo, never()).findByUuid(any());
+    }
+
+    @Test
+    @DisplayName("文章有 seriesUuid 但 series 已不存在 → empty")
+    void seriesGone_returnsEmpty() {
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(articleAt(1)));
+        when(seriesRepo.findByUuid(seriesUuid)).thenReturn(Optional.empty());
+
+        assertThat(facade.getSeriesNavigation(articleUuid)).isEmpty();
     }
 
     @Test
     @DisplayName("首篇的 prev 為 null")
     void firstArticlePrevIsNull() {
-        when(articleFacade.findById(articleId)).thenReturn(Optional.of(articleAt(1)));
-        when(seriesRepo.findById(seriesId)).thenReturn(Optional.of(series()));
-        when(articleFacade.findPrevPublishedInSeries(seriesId, 1)).thenReturn(Optional.empty());
-        when(articleFacade.findNextPublishedInSeries(seriesId, 1)).thenReturn(Optional.empty());
-        when(articleFacade.countPublishedBySeriesIds(List.of(seriesId)))
-                .thenReturn(Map.of(seriesId, 1));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(articleAt(1)));
+        when(seriesRepo.findByUuid(seriesUuid)).thenReturn(Optional.of(series()));
+        when(articleFacade.findPrevPublishedInSeries(seriesUuid, 1)).thenReturn(Optional.empty());
+        when(articleFacade.findNextPublishedInSeries(seriesUuid, 1)).thenReturn(Optional.empty());
+        when(articleFacade.countPublishedBySeriesUuids(List.of(seriesUuid)))
+                .thenReturn(Map.of(seriesUuid, 1));
 
-        SeriesNavigation nav = facade.getSeriesNavigation(articleId).orElseThrow();
+        SeriesNavigation nav = facade.getSeriesNavigation(articleUuid).orElseThrow();
 
         assertThat(nav.getPrev()).isNull();
         assertThat(nav.getNext()).isNull();
@@ -88,13 +123,13 @@ class SeriesFacadeImplTest {
     @Test
     @DisplayName("series 無公開文章時 totalCount 為 0")
     void whenSeriesHasNoPublishedArticles_totalCountIsZero() {
-        when(articleFacade.findById(articleId)).thenReturn(Optional.of(articleAt(1)));
-        when(seriesRepo.findById(seriesId)).thenReturn(Optional.of(series()));
-        when(articleFacade.findPrevPublishedInSeries(seriesId, 1)).thenReturn(Optional.empty());
-        when(articleFacade.findNextPublishedInSeries(seriesId, 1)).thenReturn(Optional.empty());
-        when(articleFacade.countPublishedBySeriesIds(List.of(seriesId))).thenReturn(Map.of());
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(articleAt(1)));
+        when(seriesRepo.findByUuid(seriesUuid)).thenReturn(Optional.of(series()));
+        when(articleFacade.findPrevPublishedInSeries(seriesUuid, 1)).thenReturn(Optional.empty());
+        when(articleFacade.findNextPublishedInSeries(seriesUuid, 1)).thenReturn(Optional.empty());
+        when(articleFacade.countPublishedBySeriesUuids(List.of(seriesUuid))).thenReturn(Map.of());
 
-        SeriesNavigation nav = facade.getSeriesNavigation(articleId).orElseThrow();
+        SeriesNavigation nav = facade.getSeriesNavigation(articleUuid).orElseThrow();
 
         assertThat(nav.getTotalCount()).isZero();
     }

@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V28 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V29 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V28**
+> 最後更新版本：**V29**
 
 ---
 
@@ -227,7 +227,7 @@ PRIMARY KEY (user_id, tag_id)
 
 ### series
 
-> V15 新增。文章系列（連載），一個作者可建立多個系列。
+> V15 新增。文章系列（連載），一個作者可建立多個系列。V29（M4-b）起作者以 `author_uuid` 識別，表上沒有指向其他模組的 Long 欄位與 FK。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
@@ -237,8 +237,8 @@ PRIMARY KEY (user_id, tag_id)
 | slug | VARCHAR(255) | NOT NULL UNIQUE | SEO-friendly URL 段落 |
 | description | TEXT | NULL | 系列描述 |
 | cover_image_url | VARCHAR(512) | NULL | 封面圖 URL |
-| author_id | BIGINT | NOT NULL REFERENCES users(id) | |
-| article_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數；由 service 維護 |
+| author_uuid | UUID | NOT NULL | V29：作者的公開 UUID（取代 `author_id`）；**不建 FK**（跨模組不得有資料庫 FK），作者顯示資訊由 `UserFacade.getDisplayInfoByUuids` 批次解析 |
+| article_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數；由 service 維護（加入／移出以條件式寫入的 affected rows 決定，刪除文章由 `ArticleDeletedEvent` consumer 遞減） |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 | updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 
@@ -246,10 +246,10 @@ PRIMARY KEY (user_id, tag_id)
 - `series_pkey`（auto）on id
 - `series_uuid_key`（auto, UNIQUE）on uuid
 - `series_slug_key`（auto, UNIQUE）on slug
-- `idx_series_author`（V15）on author_id
+- `idx_series_author`（V15 建立於 `author_id`；V29 以同名在 `author_uuid` 上重建）on author_uuid
 
-**Foreign keys:**
-- `author_id` → `users(id)`（NO ACTION）
+**Foreign keys:** 無（V29 已移除 `author_id` → `users(id)`（NO ACTION）；使用者只做軟刪除，該 FK 從未觸發，拿掉後行為不變，故不新增連動）。
+被參照：`articles.series_id` → `series(id)`（ON DELETE SET NULL，article 模組的 FK，M6 才改為 `series_uuid`；刪除 series 時文章脫離系列的行為不變）。
 
 ---
 
@@ -586,6 +586,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V26** | 跨模組識別全面改 UUID（reading 模組：按讚與收藏）：`user_article_likes`、`user_bookmarks` 各新增 `user_uuid UUID`、`article_uuid UUID`，分別由 `users.uuid`、`articles.uuid` 回填後 `SET NOT NULL`（找不到使用者或文章時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `user_id`、`article_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE——與舊 UNIQUE）；以 uuid 欄位同名重建 `uq_user_article_likes_user_article`、`uq_user_bookmarks_user_article` UNIQUE (user_uuid, article_uuid)；新增 `idx_user_article_likes_article_uuid`、`idx_user_bookmarks_article_uuid`（article_uuid 單欄，供刪除連動與校正）。新 uuid 欄位不建 FK；`user_highlights`、`user_reading_progress` 不在本次遷移內（M2-c） |
 | **V27** | 跨模組識別全面改 UUID（reading 模組：劃線與閱讀進度）：`user_highlights`、`user_reading_progress` 各新增 `user_uuid UUID`、`article_uuid UUID`，分別由 `users.uuid`、`articles.uuid` 回填後 `SET NOT NULL`（找不到使用者或文章時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `user_id`、`article_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE——與含該欄位的索引／舊 UNIQUE）；以 uuid 欄位同名重建 `idx_user_highlights_article_for_user` (user_uuid, article_uuid)、`idx_user_highlights_user_recent` (user_uuid, created_at DESC)、`uq_user_reading_progress_user_article` UNIQUE (user_uuid, article_uuid)、`idx_user_reading_progress_user_recent` (user_uuid, updated_at DESC)；新增 `idx_user_highlights_article_uuid`、`idx_user_reading_progress_article_uuid`（article_uuid 單欄，供刪除連動與校正）。新 uuid 欄位不建 FK。至此 reading 模組四張表都不再有跨模組 Long 欄位與 FK |
 | **V28** | 跨模組識別全面改 UUID（version 模組）：`article_versions` 新增 `article_uuid UUID`、`author_uuid UUID`，`user_preferences` 新增 `user_uuid UUID`，分別由 `articles.uuid`、`users.uuid` 回填後 `SET NOT NULL`（找不到文章、作者或使用者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `article_versions.article_id`／`author_id`、`user_preferences.user_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE 與 `user_id` → `users(id)` ON DELETE CASCADE——與含該欄位的索引／舊 UNIQUE）；以 uuid 欄位同名重建 `idx_article_versions_article_created` (article_uuid, created_at DESC)、`idx_article_versions_article_type` (article_uuid, type)、`uq_user_preferences_user_key` UNIQUE (user_uuid, pref_key)。新 uuid 欄位不建 FK；`article_versions.category_id`（快照分類、非 FK）不動。文章刪除 → 版本快照刪除改由事件＋每日校正負責；`user_preferences` 不新增連動 |
+| **V29** | 跨模組識別全面改 UUID（series 模組）：`series` 新增 `author_uuid UUID`，由 `users.uuid` 回填後 `SET NOT NULL`（找不到作者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `author_id`（連帶移除 `series_author_id_fkey` → `users(id)` 與 `idx_series_author` (author_id)）；以同名在 `author_uuid` 上重建 `idx_series_author`。新 uuid 欄位不建 FK；`articles.series_id` → `series(id)` ON DELETE SET NULL 是 article 模組的 FK，到 M6 才動。使用者只做軟刪除，不新增連動 |
 
 ---
 

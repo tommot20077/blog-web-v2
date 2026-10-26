@@ -44,26 +44,32 @@ public class SeriesFacadeImpl implements SeriesFacade {
     private final SeriesRepository seriesRepo;
     private final SeriesMapper seriesMapper;
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>全程使用 {@link ArticleFacade} 的 UUID 版方法（{@code findByUuid}、{@code findPrev/NextPublishedInSeries(UUID, …)}、
+     * {@code countPublishedBySeriesUuids}），不使用任何 Long 版；series 以 {@code ArticleData.seriesUuid} 查自己的表。</p>
+     */
     @Override
-    public Optional<SeriesNavigation> getSeriesNavigation(Long articleId) {
-        Optional<ArticleData> articleOpt = articleFacade.findById(articleId);
+    public Optional<SeriesNavigation> getSeriesNavigation(UUID articleUuid) {
+        Optional<ArticleData> articleOpt = articleFacade.findByUuid(articleUuid);
         if (articleOpt.isEmpty()) return Optional.empty();
         ArticleData article = articleOpt.get();
-        if (article.seriesId() == null || article.seriesPosition() == null) {
+        if (article.seriesUuid() == null || article.seriesPosition() == null) {
             return Optional.empty();
         }
 
-        Optional<Series> seriesOpt = seriesRepo.findById(article.seriesId());
+        Optional<Series> seriesOpt = seriesRepo.findByUuid(article.seriesUuid());
         if (seriesOpt.isEmpty()) return Optional.empty();
         Series series = seriesOpt.get();
 
         Optional<ArticleNavRef> prev =
-                articleFacade.findPrevPublishedInSeries(series.getId(), article.seriesPosition());
+                articleFacade.findPrevPublishedInSeries(series.getUuid(), article.seriesPosition());
         Optional<ArticleNavRef> next =
-                articleFacade.findNextPublishedInSeries(series.getId(), article.seriesPosition());
+                articleFacade.findNextPublishedInSeries(series.getUuid(), article.seriesPosition());
         int totalCount = articleFacade
-                .countPublishedBySeriesIds(List.of(series.getId()))
-                .getOrDefault(series.getId(), 0);
+                .countPublishedBySeriesUuids(List.of(series.getUuid()))
+                .getOrDefault(series.getUuid(), 0);
 
         SeriesNavigation nav = new SeriesNavigation();
         nav.setSeriesUuid(series.getUuid());
@@ -141,5 +147,25 @@ public class SeriesFacadeImpl implements SeriesFacade {
                 .collect(Collectors.toMap(
                         SeriesMapper.SeriesUuidRow::seriesId,
                         SeriesMapper.SeriesUuidRow::seriesUuid));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>先去重並濾掉 null，再經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
+     * 各批 key 不重疊，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Map<UUID, Long> findIdsByUuids(Collection<UUID> seriesUuids) {
+        if (seriesUuids == null || seriesUuids.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Set<UUID> distinctUuids = seriesUuids.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return BatchedQuery.queryInBatches(distinctUuids, seriesMapper::findIdsByUuids).stream()
+                .collect(Collectors.toMap(
+                        SeriesMapper.SeriesUuidRow::seriesUuid,
+                        SeriesMapper.SeriesUuidRow::seriesId));
     }
 }

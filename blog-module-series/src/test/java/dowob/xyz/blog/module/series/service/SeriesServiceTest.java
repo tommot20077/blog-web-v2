@@ -1,16 +1,18 @@
 package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
-import dowob.xyz.blog.module.article.service.ArticleQueryService;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
-import dowob.xyz.blog.module.series.model.SeriesWithAuthor;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
@@ -20,446 +22,741 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
+/**
+ * {@link SeriesService} 單元測試。
+ *
+ * <p>M4-b 起整個 service 只以 UUID 識別使用者與文章：授權以 {@code AuthUser.uuid()} 對 {@code series.author_uuid}、
+ * {@code ArticleData.authorUuid} 比對；作者資訊一頁只呼叫 {@code UserFacade.getDisplayInfoByUuids} 一次；
+ * 文章端的 UUID 版 facade 取代 {@code ArticleQueryService}；是否為新成員由條件式寫入的結果決定（RACE-14）；
+ * slug 唯一性由資料庫約束決定（RACE-15）；刪除於交易 commit 後才發事件。</p>
+ *
+ * @author Yuan
+ * @version 2.0
+ */
 @ExtendWith(MockitoExtension.class)
+@DisplayName("SeriesService")
 class SeriesServiceTest {
 
     @Mock private SeriesRepository repo;
     @Mock private SeriesMapper mapper;
     @Mock private ArticleFacade articleFacade;
-    @Mock private ArticleQueryService articleQueryService;
     @Mock private ReadingFacade readingFacade;
+    @Mock private UserFacade userFacade;
+    @Mock private SeriesEventPublisher eventPublisher;
+
+    /** 交易管理員（mock）：用來驗證 commit／rollback 與事件發送的先後 */
+    private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+
+    /** 真實的 TransactionTemplate（包裝 mock 的交易管理員），callback 會真的被執行 */
+    @Spy private TransactionTemplate transactionTemplate = new TransactionTemplate(txManager);
+
     @InjectMocks private SeriesService service;
 
     private final UUID articleUuid = UUID.randomUUID();
     private final Long articleId = 200L;
-
-    /**
-     * stub create/update 寫入後的 re-fetch。
-     *
-     * <p>createSeries / updateSeries 回傳 SeriesSummaryResponse（對外只出 UUID，
-     * 不再回 entity），故寫入後會以 slug re-fetch 取得 author 欄位。本 helper 讓
-     * 該 re-fetch 回傳一筆對得上的 row；驗證寫入內容的斷言仍以 repo.save 的
-     * ArgumentCaptor 為準，不受影響。</p>
-     */
-    private void stubRefetchBySlug(String slug) {
-        SeriesWithAuthor row = new SeriesWithAuthor();
-        row.setId(seriesId);
-        row.setUuid(seriesUuid);
-        row.setSlug(slug);
-        row.setAuthorUuid(UUID.randomUUID());
-        row.setAuthorNickname("user");
-        lenient().when(mapper.findBySlugWithAuthor(slug)).thenReturn(row);
-    }
-
-    private final Long userId = 1L;
-    /** 登入者公開 UUID：getSeriesDetail 的閱讀進度以 UUID 查詢（M2-c） */
-    private final UUID userUuid = UUID.randomUUID();
     private final Long seriesId = 100L;
     private final UUID seriesUuid = UUID.randomUUID();
 
+    /** 登入者（series 的擁有者）公開 UUID */
+    private final UUID userUuid = UUID.randomUUID();
+
+    /** 另一位使用者的公開 UUID */
+    private final UUID otherUserUuid = UUID.randomUUID();
+
+    // ── 測試資料 helper ─────────────────────────────────────────────────────
+
+    private Series series(UUID authorUuid) {
+        Series s = new Series();
+        s.setId(seriesId);
+        s.setUuid(seriesUuid);
+        s.setTitle("Vue 101");
+        s.setSlug("vue-101");
+        s.setAuthorUuid(authorUuid);
+        s.setArticleCount(0);
+        return s;
+    }
+
+    private ArticleData article(UUID uuid, UUID authorUuid, ArticleStatus status, UUID inSeriesUuid, Integer position) {
+        return new ArticleData(articleId, uuid, 42L, status.name(), null, position, authorUuid, inSeriesUuid);
+    }
+
+    private void stubAuthor(UUID uuid, String nickname) {
+        lenient().when(userFacade.getDisplayInfoByUuids(anyCollection()))
+                .thenReturn(Map.of(uuid, new UserDisplayInfo(uuid, nickname, "https://img/" + nickname)));
+    }
+
+    // ── createSeries（RACE-15：INSERT ... ON CONFLICT DO NOTHING）──────────────
+
     @Test
-    void createSeries_validRequest_savesWithUuidAndDefaults() {
-        when(repo.existsBySlug("vue-101")).thenReturn(false);
-        when(repo.save(any(Series.class))).thenAnswer(inv -> {
-            Series s = inv.getArgument(0);
-            s.setId(seriesId);
-            return s;
+    @DisplayName("createSeries：以 INSERT ON CONFLICT 寫入，author_uuid 為登入者 uuid；不做 existsBySlug 先查")
+    void createSeries_validRequest_insertsWithUuidAndAuthorUuid() {
+        AtomicReference<Series> stored = new AtomicReference<>();
+        when(mapper.insertIfSlugAbsent(any(Series.class))).thenAnswer(inv -> {
+            stored.set(inv.getArgument(0));
+            stored.get().setId(seriesId);
+            return 1;
         });
-        stubRefetchBySlug("vue-101");
+        when(repo.findByUuid(any(UUID.class))).thenAnswer(inv -> Optional.of(stored.get()));
+        stubAuthor(userUuid, "user");
 
         CreateSeriesRequest req = new CreateSeriesRequest();
         req.setTitle("Vue 101");
         req.setSlug("vue-101");
         req.setDescription("intro");
+        LocalDateTime beforeCall = LocalDateTime.now();
 
-        SeriesSummaryResponse resp = service.createSeries(userId, req);
+        SeriesSummaryResponse resp = service.createSeries(userUuid, req);
 
-        ArgumentCaptor<Series> captor = ArgumentCaptor.forClass(Series.class);
-        verify(repo).save(captor.capture());
-        Series saved = captor.getValue();
+        Series saved = stored.get();
         assertThat(saved.getUuid()).isNotNull();
-        assertThat(saved.getAuthorId()).isEqualTo(userId);
+        assertThat(saved.getAuthorUuid()).isEqualTo(userUuid);
         assertThat(saved.getTitle()).isEqualTo("Vue 101");
         assertThat(saved.getSlug()).isEqualTo("vue-101");
-        assertThat(saved.getArticleCount()).isEqualTo(0);
+        assertThat(saved.getDescription()).isEqualTo("intro");
+        assertThat(saved.getArticleCount()).isZero();
+        /* 時間由 Java 傳入（JVM 時鐘），不依賴 DB 的 CURRENT_TIMESTAMP；建立時兩者相同 */
+        assertThat(saved.getCreatedAt()).isNotNull().isBetween(beforeCall, LocalDateTime.now());
+        assertThat(saved.getUpdatedAt()).isEqualTo(saved.getCreatedAt());
+        verify(repo, never()).existsBySlug(any());
+        verify(repo, never()).save(any());
 
-        // 對外只出 UUID（architecture.md）：回傳 DTO 帶 uuid 與 author summary，
-        // 不含內部 Long id / authorId。此斷言在 service 層鎖住「不洩漏」不變量，
-        // 不再只靠 SeriesControllerIT 的 .doesNotExist() 守衛。
-        assertThat(resp).isNotNull();
-        assertThat(resp.getUuid()).isEqualTo(seriesUuid);
-        assertThat(resp.getAuthor()).isNotNull();
+        // 對外只出 UUID（architecture.md）；作者來自 UserFacade
+        assertThat(resp.getUuid()).isEqualTo(saved.getUuid());
+        assertThat(resp.getAuthor().getUuid()).isEqualTo(userUuid);
         assertThat(resp.getAuthor().getNickname()).isEqualTo("user");
     }
 
     @Test
+    @DisplayName("createSeries：slug 已被使用（INSERT 影響 0 列）→ S0104，不再讀取也不查作者")
     void createSeries_duplicateSlug_throwsS0104() {
-        when(repo.existsBySlug("vue-101")).thenReturn(true);
+        when(mapper.insertIfSlugAbsent(any(Series.class))).thenReturn(0);
 
         CreateSeriesRequest req = new CreateSeriesRequest();
         req.setTitle("Vue 101");
         req.setSlug("vue-101");
 
-        assertThatThrownBy(() -> service.createSeries(userId, req))
+        assertThatThrownBy(() -> service.createSeries(userUuid, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.SLUG_ALREADY_USED.getMessage());
 
-        verify(repo, never()).save(any());
+        verify(repo, never()).findByUuid(any());
+        verifyNoInteractions(userFacade);
     }
 
-    /**
-     * 寫入成功但 re-fetch 回傳 null（資料異常）時，應丟 BusinessException 而非 NPE，
-     * 比照 getSeriesDetail 的防禦式寫法（Copilot review 建議）。
-     */
+    /** 寫入成功但 re-fetch 查不到（資料異常）時，應丟 BusinessException 而非 NPE。 */
     @Test
-    void createSeries_refetchReturnsNull_throwsSeriesNotFound() {
-        when(repo.existsBySlug("vue-101")).thenReturn(false);
-        when(repo.save(any(Series.class))).thenAnswer(inv -> {
-            Series s = inv.getArgument(0);
-            s.setId(seriesId);
-            return s;
-        });
-        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(null);
+    @DisplayName("createSeries：寫入後 re-fetch 查無（資料異常）→ SERIES_NOT_FOUND 而非 NPE")
+    void createSeries_refetchReturnsEmpty_throwsSeriesNotFound() {
+        when(mapper.insertIfSlugAbsent(any(Series.class))).thenReturn(1);
+        when(repo.findByUuid(any(UUID.class))).thenReturn(Optional.empty());
 
         CreateSeriesRequest req = new CreateSeriesRequest();
         req.setTitle("Vue 101");
         req.setSlug("vue-101");
 
-        assertThatThrownBy(() -> service.createSeries(userId, req))
+        assertThatThrownBy(() -> service.createSeries(userUuid, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
     }
 
+    // ── updateSeries（RACE-15：單一 UPDATE ＋ 捕捉 DuplicateKeyException）──────────
+
     @Test
-    void updateSeries_byOwner_updatesAllFields() {
-        Series existing = new Series();
-        existing.setId(seriesId); existing.setUuid(seriesUuid);
-        existing.setAuthorId(userId);
-        existing.setTitle("old"); existing.setSlug("old-slug");
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
-        when(repo.existsBySlug("new-slug")).thenReturn(false);
-        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        stubRefetchBySlug("new-slug");
+    @DisplayName("updateSeries：owner 以單一 UPDATE 寫入（不先 existsBySlug），再 re-fetch 回傳")
+    void updateSeries_byOwner_singleUpdateThenRefetch() {
+        Series existing = series(userUuid);
+        Series updated = series(userUuid);
+        updated.setTitle("new");
+        updated.setSlug("new-slug");
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing), Optional.of(updated));
+        when(mapper.updateBasicFields(eq(seriesId), eq("new"), eq("new-slug"), isNull(), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
+        stubAuthor(userUuid, "user");
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("new");
         req.setSlug("new-slug");
+        LocalDateTime beforeCall = LocalDateTime.now();
 
-        SeriesSummaryResponse resp = service.updateSeries(seriesUuid, userId, false, req);
+        SeriesSummaryResponse resp = service.updateSeries(seriesUuid, userUuid, false, req);
 
-        ArgumentCaptor<Series> captor = ArgumentCaptor.forClass(Series.class);
-        verify(repo).save(captor.capture());
-        assertThat(captor.getValue().getTitle()).isEqualTo("new");
-        assertThat(captor.getValue().getSlug()).isEqualTo("new-slug");
-
-        // 對外只出 UUID（architecture.md）：回傳 DTO 帶 uuid 與 author summary，
-        // 不含內部 Long id / authorId。
-        assertThat(resp).isNotNull();
+        ArgumentCaptor<LocalDateTime> updatedAt = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(mapper).updateBasicFields(eq(seriesId), eq("new"), eq("new-slug"), isNull(), isNull(), updatedAt.capture());
+        assertThat(updatedAt.getValue()).as("updated_at 由 Java 傳入（JVM 時鐘）")
+                .isBetween(beforeCall, LocalDateTime.now());
+        verify(repo, never()).existsBySlug(any());
+        verify(repo, never()).save(any());
         assertThat(resp.getUuid()).isEqualTo(seriesUuid);
-        assertThat(resp.getAuthor()).isNotNull();
+        assertThat(resp.getTitle()).isEqualTo("new");
+        assertThat(resp.getSlug()).isEqualTo("new-slug");
         assertThat(resp.getAuthor().getNickname()).isEqualTo("user");
     }
 
-    /**
-     * 更新成功但 re-fetch 回傳 null（資料異常）時，應丟 BusinessException 而非 NPE，
-     * 避免「更新成功卻回 500」（Copilot review 建議）。
-     */
     @Test
-    void updateSeries_refetchReturnsNull_throwsSeriesNotFound() {
-        Series existing = new Series();
-        existing.setId(seriesId); existing.setUuid(seriesUuid);
-        existing.setAuthorId(userId);
-        existing.setTitle("old"); existing.setSlug("old-slug");
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
-        when(repo.existsBySlug("new-slug")).thenReturn(false);
-        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(mapper.findBySlugWithAuthor("new-slug")).thenReturn(null);
+    @DisplayName("updateSeries：slug 撞唯一約束（DuplicateKeyException）→ S0104，且 UPDATE 之後不再有任何 DB 操作")
+    void updateSeries_duplicateKey_throwsS0104AndNoMoreDbOperations() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(mapper.updateBasicFields(any(), any(), any(), any(), any(), any()))
+                .thenThrow(new DuplicateKeyException("series_slug_key"));
+
+        UpdateSeriesRequest req = new UpdateSeriesRequest();
+        req.setSlug("taken");
+
+        assertThatThrownBy(() -> service.updateSeries(seriesUuid, userUuid, false, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SLUG_ALREADY_USED.getMessage());
+
+        // PostgreSQL 的交易在錯誤後即中止：捕捉後不得再執行任何 SQL（含 re-fetch 與查作者）
+        verify(repo, times(1)).findByUuid(seriesUuid);
+        verify(mapper, times(1)).updateBasicFields(any(), any(), any(), any(), any(), any());
+        verifyNoMoreInteractions(repo, mapper);
+        verifyNoInteractions(userFacade);
+    }
+
+    @Test
+    @DisplayName("updateSeries：更新後 re-fetch 查無（資料異常）→ SERIES_NOT_FOUND 而非 NPE")
+    void updateSeries_refetchReturnsEmpty_throwsSeriesNotFound() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)), Optional.empty());
+        when(mapper.updateBasicFields(any(), any(), any(), any(), any(), any())).thenReturn(1);
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("new");
-        req.setSlug("new-slug");
 
-        assertThatThrownBy(() -> service.updateSeries(seriesUuid, userId, false, req))
+        assertThatThrownBy(() -> service.updateSeries(seriesUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
     }
 
     @Test
+    @DisplayName("updateSeries：非 owner 也非 admin → S0102，不寫入（owner 以 uuid 比對）")
     void updateSeries_byNonOwnerNonAdmin_throwsS0102() {
-        Series existing = new Series();
-        existing.setId(seriesId); existing.setUuid(seriesUuid);
-        existing.setAuthorId(999L);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(otherUserUuid)));
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("hijack");
 
-        assertThatThrownBy(() -> service.updateSeries(seriesUuid, userId, false, req))
+        assertThatThrownBy(() -> service.updateSeries(seriesUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.SERIES_ACCESS_DENIED.getMessage());
 
-        verify(repo, never()).save(any());
+        verify(mapper, never()).updateBasicFields(any(), any(), any(), any(), any(), any());
     }
 
     @Test
+    @DisplayName("updateSeries：admin 可更新他人的 series")
     void updateSeries_byAdmin_succeeds() {
-        Series existing = new Series();
-        existing.setId(seriesId); existing.setUuid(seriesUuid);
-        existing.setAuthorId(999L);
-        existing.setSlug("admin-series");
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
-        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        stubRefetchBySlug("admin-series");
+        Series existing = series(otherUserUuid);
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing), Optional.of(existing));
+        when(mapper.updateBasicFields(any(), any(), any(), any(), any(), any())).thenReturn(1);
+        stubAuthor(otherUserUuid, "owner");
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("admin override");
 
-        service.updateSeries(seriesUuid, userId, /* isAdmin */ true, req);
+        service.updateSeries(seriesUuid, userUuid, /* isAdmin */ true, req);
 
-        verify(repo).save(any());
+        verify(mapper).updateBasicFields(eq(seriesId), eq("admin override"), isNull(), isNull(), isNull(),
+                any(LocalDateTime.class));
     }
 
+    // ── deleteSeries（commit 後才發事件）─────────────────────────────────────
+
     @Test
-    void deleteSeries_byOwner_deletes() {
-        Series existing = new Series();
-        existing.setId(seriesId); existing.setUuid(seriesUuid);
-        existing.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing));
+    @DisplayName("deleteSeries：owner 刪除 → 先刪除、交易 commit，之後才發 SeriesDeletedEvent")
+    void deleteSeries_byOwner_deletesThenCommitsThenPublishesEvent() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
 
-        service.deleteSeries(seriesUuid, userId, false);
+        service.deleteSeries(seriesUuid, userUuid, false);
 
-        verify(repo).deleteById(seriesId);
+        InOrder order = inOrder(repo, txManager, eventPublisher);
+        order.verify(repo).deleteById(seriesId);
+        order.verify(txManager).commit(any());
+        order.verify(eventPublisher).publishDeleted(seriesUuid);
         // ON DELETE SET NULL 由 DB 處理；service 不需顯式 update articles
     }
 
-    // ── T11: addArticleToSeries / removeArticleFromSeries ──────────────────
+    @Test
+    @DisplayName("deleteSeries：series 不存在 → S0101，交易 rollback，不發事件")
+    void deleteSeries_notFound_throwsAndPublishesNothing() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deleteSeries(seriesUuid, userUuid, false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
+
+        verify(txManager, never()).commit(any());
+        verifyNoInteractions(eventPublisher);
+    }
 
     @Test
-    void addArticleToSeries_publishedArticle_savesAndIncrementsCount() {
-        Series series = new Series();
-        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+    @DisplayName("deleteSeries：非 owner 也非 admin → S0102，不刪除、不發事件")
+    void deleteSeries_byNonOwner_throwsS0102AndPublishesNothing() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(otherUserUuid)));
 
-        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), null, null);
-        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        assertThatThrownBy(() -> service.deleteSeries(seriesUuid, userUuid, false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_ACCESS_DENIED.getMessage());
 
-        service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 3);
+        verify(repo, never()).deleteById(any());
+        verifyNoInteractions(eventPublisher);
+    }
 
-        verify(articleFacade).updateSeriesAssignment(articleId, seriesId, 3);
+    @Test
+    @DisplayName("deleteSeries：刪除時 DB 失敗（交易 rollback）→ 例外往外拋，不發事件")
+    void deleteSeries_dbFailure_doesNotPublishEvent() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        doThrow(new IllegalStateException("DB down")).when(repo).deleteById(seriesId);
+
+        assertThatThrownBy(() -> service.deleteSeries(seriesUuid, userUuid, false))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(txManager, never()).commit(any());
+        verifyNoInteractions(eventPublisher);
+    }
+
+    // ── addArticleToSeries（RACE-14：由寫入本身決定是否為新成員）─────────────────
+
+    @Test
+    @DisplayName("addArticleToSeries：條件式指派成功（新成員）→ article_count +1，不另外更新位置")
+    void addArticleToSeries_newMember_incrementsCount() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid))
+                .thenReturn(Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 3)).thenReturn(true);
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 3);
+
         verify(mapper).incrementArticleCount(seriesId);
+        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
+        verify(articleFacade, times(1)).findByUuid(articleUuid);
     }
 
     @Test
-    void addArticleToSeries_draftArticle_throwsS0103() {
-        Series series = new Series();
-        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+    @DisplayName("addArticleToSeries：已在同一 series（指派回 false、重讀仍在此 series）→ 以條件式 UPDATE 只更新位置，不 +1，也不走讀改寫")
+    void addArticleToSeries_sameSeries_updatesPositionOnly() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid))
+                .thenReturn(Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+        when(articleFacade.updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5)).thenReturn(true);
 
-        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.DRAFT.name(), null, null);
-        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 5);
 
-        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_PUBLISHED.getMessage());
-
-        verify(articleFacade, never()).updateSeriesAssignment(any(), any(), any());
-    }
-
-    @Test
-    void addArticleToSeries_articleAlreadyInOtherSeries_throwsS0106() {
-        Series series = new Series();
-        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
-
-        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), 999L, 1);
-        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
-
-        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES.getMessage());
-    }
-
-    @Test
-    void addArticleToSeries_sameSeriesUpdatesPosition() {
-        Series series = new Series();
-        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
-
-        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), seriesId, 2);
-        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
-
-        service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 5);
-
-        verify(articleFacade).updateSeriesAssignment(articleId, seriesId, 5);
+        verify(articleFacade).updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5);
+        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
         verify(mapper, never()).incrementArticleCount(any());
     }
 
     @Test
+    @DisplayName("addArticleToSeries：條件式更新位置回 false（文章剛被移出）→ 回到迴圈重新指派，成功才 +1")
+    void addArticleToSeries_positionUpdateLostRace_loopsBackAndAssigns() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)),
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5)).thenReturn(false, true);
+        when(articleFacade.updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 5);
+
+        verify(articleFacade, times(2)).assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5);
+        verify(mapper, times(1)).incrementArticleCount(seriesId);
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：兩次嘗試歸屬都被併發改變 → 回報併發衝突 A0208（不是 S0106），不 +1")
+    void addArticleToSeries_ownershipKeepsChanging_throwsConcurrentUpdate() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid))
+                .thenReturn(Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+        when(articleFacade.updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 5))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getMessage());
+
+        verify(mapper, never()).incrementArticleCount(any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：預讀時文章在另一個 series → S0106，不嘗試指派")
+    void addArticleToSeries_articleAlreadyInOtherSeries_throwsS0106() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                article(articleUuid, userUuid, ArticleStatus.PUBLISHED, UUID.randomUUID(), 1)));
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES.getMessage());
+
+        verify(articleFacade, never()).assignToSeriesIfUnassigned(any(), any(), any());
+        verify(mapper, never()).incrementArticleCount(any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：指派回 false 且重讀發現被併發加入了另一個 series → S0106，不 +1")
+    void addArticleToSeries_lostRaceToOtherSeries_throwsS0106() {
+        UUID otherSeries = UUID.randomUUID();
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)),
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, otherSeries, 1)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES.getMessage());
+
+        verify(mapper, never()).incrementArticleCount(any());
+        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：指派回 false 後重讀發現已被併發移出（無 series）→ 重試一次，成功才 +1")
+    void addArticleToSeries_releasedBetweenAttempts_retriesOnceAndIncrements() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)),
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(false, true);
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1);
+
+        verify(articleFacade, times(2)).assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1);
+        verify(mapper, times(1)).incrementArticleCount(seriesId);
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：重試仍失敗（文章一直被併發移出）→ 併發衝突 A0208，不 +1")
+    void addArticleToSeries_retryAlsoFails_throwsConcurrentUpdate() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)),
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(false, false);
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getMessage());
+
+        verify(mapper, never()).incrementArticleCount(any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：指派回 false 後重讀發現文章已被刪除 → S0107")
+    void addArticleToSeries_articleDeletedBetweenAttempts_throwsS0107() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)),
+                Optional.empty());
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_FOUND.getMessage());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：草稿文章 → S0103，不指派")
+    void addArticleToSeries_draftArticle_throwsS0103() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid))
+                .thenReturn(Optional.of(article(articleUuid, userUuid, ArticleStatus.DRAFT, null, null)));
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_PUBLISHED.getMessage());
+
+        verify(articleFacade, never()).assignToSeriesIfUnassigned(any(), any(), any());
+        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：非 admin 加入他人的文章（authorUuid 不同）→ S0102，不指派")
+    void addArticleToSeries_otherAuthorsArticle_throwsS0102() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, otherUserUuid, ArticleStatus.PUBLISHED, null, null)));
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_ACCESS_DENIED.getMessage());
+
+        verify(articleFacade, never()).assignToSeriesIfUnassigned(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：文章 authorUuid 為 null（資料異常）→ 非 admin 一律拒絕（S0102），不 NPE")
+    void addArticleToSeries_articleWithoutAuthorUuid_isDeniedForNonAdmin() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, null, ArticleStatus.PUBLISHED, null, null)));
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_ACCESS_DENIED.getMessage());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：admin 可加入他人的文章到他人的 series")
+    void addArticleToSeries_admin_canAddOthersArticleToOthersSeries() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(otherUserUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, UUID.randomUUID(), ArticleStatus.PUBLISHED, null, null)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(true);
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userUuid, /* isAdmin */ true, 1);
+
+        verify(mapper).incrementArticleCount(seriesId);
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：series 的 owner 不是登入者 → S0102（以 uuid 比對），不讀文章")
+    void addArticleToSeries_notSeriesOwner_throwsS0102() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(otherUserUuid)));
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_ACCESS_DENIED.getMessage());
+
+        verifyNoInteractions(articleFacade);
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：文章不存在 → S0107")
+    void addArticleToSeries_articleNotFound_throwsS0107() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_FOUND.getMessage());
+    }
+
+    // ── removeArticleFromSeries（RACE-14：條件式移出）────────────────────────────
+
+    @Test
+    @DisplayName("removeArticleFromSeries：條件式移出成功 → article_count -1")
     void removeArticleFromSeries_decrementsCount() {
-        Series series = new Series();
-        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 3)));
+        when(articleFacade.removeFromSeriesIfAssigned(articleUuid, seriesUuid)).thenReturn(true);
 
-        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), seriesId, 3);
-        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        service.removeArticleFromSeries(seriesUuid, articleUuid, userUuid, false);
 
-        service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false);
-
-        verify(articleFacade).updateSeriesAssignment(articleId, null, null);
         verify(mapper).decrementArticleCount(seriesId);
     }
 
     @Test
+    @DisplayName("removeArticleFromSeries：條件式移出回 false（已被併發移出）→ S0105，不 -1")
+    void removeArticleFromSeries_lostRace_throwsS0105AndDoesNotDecrement() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 3)));
+        when(articleFacade.removeFromSeriesIfAssigned(articleUuid, seriesUuid)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userUuid, false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_IN_SERIES.getMessage());
+
+        verify(mapper, never()).decrementArticleCount(any());
+    }
+
+    @Test
+    @DisplayName("removeArticleFromSeries：文章不在這個 series → S0105，不嘗試移出")
     void removeArticleFromSeries_articleNotInThisSeries_throwsS0105() {
-        Series series = new Series();
-        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
 
-        ArticleData article = new ArticleData(articleId, articleUuid, userId, ArticleStatus.PUBLISHED.name(), null, null);
-        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userUuid, false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_IN_SERIES.getMessage());
 
-        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false))
+        verify(articleFacade, never()).removeFromSeriesIfAssigned(any(), any());
+    }
+
+    @Test
+    @DisplayName("removeArticleFromSeries：文章在另一個 series → S0105")
+    void removeArticleFromSeries_articleInOtherSeries_throwsS0105() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                article(articleUuid, userUuid, ArticleStatus.PUBLISHED, UUID.randomUUID(), 1)));
+
+        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userUuid, false))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_IN_SERIES.getMessage());
     }
 
-    // ── T12: getSeriesDetail ───────────────────────────────────────────────
+    @Test
+    @DisplayName("removeArticleFromSeries：文章不存在 → S0107")
+    void removeArticleFromSeries_articleNotFound_throwsS0107() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userUuid, false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_FOUND.getMessage());
+    }
 
     @Test
+    @DisplayName("removeArticleFromSeries：series 的 owner 不是登入者 → S0102（以 uuid 比對）")
+    void removeArticleFromSeries_notSeriesOwner_throwsS0102() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(otherUserUuid)));
+
+        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userUuid, false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_ACCESS_DENIED.getMessage());
+
+        verifyNoInteractions(articleFacade);
+    }
+
+    // ── getSeriesDetail ───────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("getSeriesDetail：已登入 → 含 myProgress（readCount、totalCount、nextUnread）")
     void getSeriesDetail_authenticated_includesMyProgress() {
-        SeriesWithAuthor row = new SeriesWithAuthor();
-        row.setId(seriesId); row.setUuid(seriesUuid);
-        row.setTitle("Vue 101"); row.setSlug("vue-101");
+        Series row = series(userUuid);
         row.setArticleCount(3);
-        row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
-        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
+        when(repo.findBySlug("vue-101")).thenReturn(Optional.of(row));
+        stubAuthor(userUuid, "user");
 
         UUID uuidA = UUID.randomUUID();
         UUID uuidB = UUID.randomUUID();
         UUID uuidC = UUID.randomUUID();
-        List<ArticleData> articles = List.of(
-                new ArticleData(1L, uuidA, userId, ArticleStatus.PUBLISHED.name(), seriesId, 1),
-                new ArticleData(2L, uuidB, userId, ArticleStatus.PUBLISHED.name(), seriesId, 2),
-                new ArticleData(3L, uuidC, userId, ArticleStatus.PUBLISHED.name(), seriesId, 3)
-        );
-        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
-
-        Map<UUID, BigDecimal> progressMap = Map.of(
-                uuidA, new BigDecimal("0.98"),
-                uuidB, new BigDecimal("0.50")
-        );
+        when(articleFacade.findBySeriesUuidOrderByPosition(seriesUuid)).thenReturn(List.of(
+                article(uuidA, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 1),
+                article(uuidB, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2),
+                article(uuidC, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 3)));
+        lenient().when(articleFacade.getSummariesByUuids(anyList())).thenReturn(List.of());
         lenient().when(readingFacade.batchGetProgress(eq(userUuid), eq(List.of(uuidA, uuidB, uuidC))))
-                .thenReturn(progressMap);
+                .thenReturn(Map.of(uuidA, new BigDecimal("0.98"), uuidB, new BigDecimal("0.50")));
 
         SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userUuid);
 
         assertThat(resp.getMyProgress()).isNotNull();
-        // article 1 進度 0.98 >= 0.95 → 算已讀；article 2 = 0.50 / article 3 無紀錄 → 未讀
+        // A 進度 0.98 >= 0.95 → 已讀；B = 0.50 / C 無紀錄 → 未讀
         assertThat(resp.getMyProgress().getReadCount()).isEqualTo(1);
         assertThat(resp.getMyProgress().getTotalCount()).isEqualTo(3);
-        // 第一個未讀完的是 article 2（position=2，進度 0.50）
         assertThat(resp.getMyProgress().getNextUnreadArticleUuid()).isEqualTo(uuidB);
     }
 
-    // ── B: ARTICLE_NOT_FOUND (S0107) ──────────────────────────────────────
-
     @Test
-    void addArticleToSeries_articleNotFound_throwsS0107() {
-        Series series = new Series();
-        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
-        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userId, false, 1))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_FOUND.getMessage());
-    }
-
-    @Test
-    void removeArticleFromSeries_articleNotFound_throwsS0107() {
-        Series series = new Series();
-        series.setId(seriesId); series.setUuid(seriesUuid); series.setAuthorId(userId);
-        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series));
-        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> service.removeArticleFromSeries(seriesUuid, articleUuid, userId, false))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_FOUND.getMessage());
-    }
-
-    // ── C: getSeriesDetail articles 非空 ───────────────────────────────────
-
-    @Test
-    void getSeriesDetail_withArticles_articlesListNotEmpty() {
-        SeriesWithAuthor row = new SeriesWithAuthor();
-        row.setId(seriesId); row.setUuid(seriesUuid);
-        row.setTitle("Vue 101"); row.setSlug("vue-101");
-        row.setArticleCount(1);
-        row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
-        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
-
+    @DisplayName("getSeriesDetail：文章摘要走 ArticleFacade.getSummariesByUuids，並以本 series 覆寫 seriesUuid／seriesTitle")
+    void getSeriesDetail_withArticles_usesSummariesByUuidsAndOverwritesSeriesFields() {
+        when(repo.findBySlug("vue-101")).thenReturn(Optional.of(series(userUuid)));
+        stubAuthor(userUuid, "user");
         UUID uuidA = UUID.randomUUID();
-        ArticleData articleData = new ArticleData(1L, uuidA, userId, ArticleStatus.PUBLISHED.name(), seriesId, 1);
-        List<ArticleData> articles = List.of(articleData);
-        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
-
-        var summary = dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse.builder()
+        when(articleFacade.findBySeriesUuidOrderByPosition(seriesUuid)).thenReturn(List.of(
+                article(uuidA, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 1)));
+        ArticleSummaryResponse summary = ArticleSummaryResponse.builder()
                 .uuid(uuidA).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(List.of(1L), false)).thenReturn(List.of(summary));
+        when(articleFacade.getSummariesByUuids(List.of(uuidA))).thenReturn(List.of(summary));
 
-        lenient().when(readingFacade.batchGetProgress(any(), any())).thenReturn(Map.of());
+        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", null);
 
-        dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse resp =
-                service.getSeriesDetail("vue-101", null);
-
-        assertThat(resp.getArticles()).isNotEmpty();
         assertThat(resp.getArticles()).hasSize(1);
         assertThat(resp.getArticles().get(0).getUuid()).isEqualTo(uuidA);
+        assertThat(resp.getArticles().get(0).getSeriesUuid()).isEqualTo(seriesUuid);
+        assertThat(resp.getArticles().get(0).getSeriesTitle()).isEqualTo("Vue 101");
     }
 
-    // ── D: getSeriesDetail 只對外公開 PUBLISHED ─────────────────────────────
+    @Test
+    @DisplayName("getSeriesDetail：作者只呼叫 UserFacade.getDisplayInfoByUuids 一次，欄位對得上")
+    void getSeriesDetail_resolvesAuthorWithSingleUserFacadeCall() {
+        when(repo.findBySlug("vue-101")).thenReturn(Optional.of(series(userUuid)));
+        stubAuthor(userUuid, "Alice");
+        when(articleFacade.findBySeriesUuidOrderByPosition(seriesUuid)).thenReturn(List.of());
+
+        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", null);
+
+        verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
+        assertThat(resp.getAuthor().getUuid()).isEqualTo(userUuid);
+        assertThat(resp.getAuthor().getNickname()).isEqualTo("Alice");
+        assertThat(resp.getAuthor().getAvatarUrl()).isEqualTo("https://img/Alice");
+    }
 
     @Test
+    @DisplayName("getSeriesDetail：查無作者（與舊 LEFT JOIN 無匹配相同）→ 作者欄位皆為 null")
+    void getSeriesDetail_authorNotFound_authorFieldsAreNull() {
+        when(repo.findBySlug("vue-101")).thenReturn(Optional.of(series(userUuid)));
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of());
+        when(articleFacade.findBySeriesUuidOrderByPosition(seriesUuid)).thenReturn(List.of());
+
+        SeriesDetailResponse resp = service.getSeriesDetail("vue-101", null);
+
+        assertThat(resp.getAuthor()).isNotNull();
+        assertThat(resp.getAuthor().getUuid()).isNull();
+        assertThat(resp.getAuthor().getNickname()).isNull();
+        assertThat(resp.getAuthor().getAvatarUrl()).isNull();
+    }
+
+    @Test
+    @DisplayName("getSeriesDetail：slug 不存在 → S0101")
+    void getSeriesDetail_unknownSlug_throwsS0101() {
+        when(repo.findBySlug("nope")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getSeriesDetail("nope", null))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
+    }
+
+    @Test
+    @DisplayName("getSeriesDetail：只對外公開 PUBLISHED；非公開文章不進 enrich 查詢，進度分母與 nextUnread 只算公開文章")
     void getSeriesDetail_mixedStatuses_exposesPublishedOnly() {
-        SeriesWithAuthor row = new SeriesWithAuthor();
-        row.setId(seriesId); row.setUuid(seriesUuid);
-        row.setTitle("Vue 101"); row.setSlug("vue-101");
+        Series row = series(userUuid);
         row.setArticleCount(5);
-        row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
-        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
+        when(repo.findBySlug("vue-101")).thenReturn(Optional.of(row));
+        stubAuthor(userUuid, "user");
 
         UUID publishedUuid = UUID.randomUUID();
-        UUID draftUuid = UUID.randomUUID();
-        List<ArticleData> articles = List.of(
-                new ArticleData(1L, publishedUuid, userId, ArticleStatus.PUBLISHED.name(), seriesId, 1),
-                new ArticleData(2L, draftUuid, userId, ArticleStatus.DRAFT.name(), seriesId, 2),
-                new ArticleData(3L, UUID.randomUUID(), userId, ArticleStatus.REJECTED.name(), seriesId, 3),
-                new ArticleData(4L, UUID.randomUUID(), userId, ArticleStatus.ARCHIVED.name(), seriesId, 4),
-                new ArticleData(5L, UUID.randomUUID(), userId, ArticleStatus.PENDING_REVIEW.name(), seriesId, 5)
-        );
-        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
-
-        var publishedSummary = dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse.builder()
+        when(articleFacade.findBySeriesUuidOrderByPosition(seriesUuid)).thenReturn(List.of(
+                article(publishedUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 1),
+                article(UUID.randomUUID(), userUuid, ArticleStatus.DRAFT, seriesUuid, 2),
+                article(UUID.randomUUID(), userUuid, ArticleStatus.REJECTED, seriesUuid, 3),
+                article(UUID.randomUUID(), userUuid, ArticleStatus.ARCHIVED, seriesUuid, 4),
+                article(UUID.randomUUID(), userUuid, ArticleStatus.PENDING_REVIEW, seriesUuid, 5)));
+        ArticleSummaryResponse publishedSummary = ArticleSummaryResponse.builder()
                 .uuid(publishedUuid).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
-
+        when(articleFacade.getSummariesByUuids(List.of(publishedUuid))).thenReturn(List.of(publishedSummary));
         // 唯一的 PUBLISHED 文章已讀完，故公開視角下沒有下一篇未讀
         lenient().when(readingFacade.batchGetProgress(eq(userUuid), any()))
                 .thenReturn(Map.of(publishedUuid, new BigDecimal("0.98")));
@@ -467,93 +764,82 @@ class SeriesServiceTest {
         SeriesDetailResponse resp = service.getSeriesDetail("vue-101", userUuid);
 
         // 非 PUBLISHED 不得進入 enrich 查詢，否則 title/slug/summary/content 會流到匿名訪客
-        verify(articleQueryService).getArticleSummariesByIds(List.of(1L), false);
+        verify(articleFacade).getSummariesByUuids(List.of(publishedUuid));
         assertThat(resp.getArticles()).hasSize(1);
         assertThat(resp.getArticles().get(0).getUuid()).isEqualTo(publishedUuid);
-
-        // 分母只算公開文章；nextUnread 若回 draftUuid 等於把未公開文章的 UUID 洩漏出去
         assertThat(resp.getMyProgress().getReadCount()).isEqualTo(1);
         assertThat(resp.getMyProgress().getTotalCount()).isEqualTo(1);
         assertThat(resp.getMyProgress().getNextUnreadArticleUuid()).isNull();
     }
 
-    // ── E: getSeriesDetail articleCount 反映 PUBLISHED 數（finding #1）─────────
-
     @Test
+    @DisplayName("getSeriesDetail：articleCount 反映 PUBLISHED 數，不沿用含非公開文章的 series.article_count（finding #1）")
     void getSeriesDetail_mixedStatuses_articleCountReflectsPublishedOnly() {
-        SeriesWithAuthor row = new SeriesWithAuthor();
-        row.setId(seriesId); row.setUuid(seriesUuid);
-        row.setTitle("Vue 101"); row.setSlug("vue-101");
-        // 非正規化計數欄含非公開文章（此處帶漂移）；response 的 articleCount 不得沿用此值
+        Series row = series(userUuid);
         row.setArticleCount(3);
-        row.setAuthorUuid(UUID.randomUUID()); row.setAuthorNickname("user");
-        when(mapper.findBySlugWithAuthor("vue-101")).thenReturn(row);
+        when(repo.findBySlug("vue-101")).thenReturn(Optional.of(row));
+        stubAuthor(userUuid, "user");
 
         UUID publishedUuid = UUID.randomUUID();
-        List<ArticleData> articles = List.of(
-                new ArticleData(1L, publishedUuid, userId, ArticleStatus.PUBLISHED.name(), seriesId, 1),
-                new ArticleData(2L, UUID.randomUUID(), userId, ArticleStatus.DRAFT.name(), seriesId, 2),
-                new ArticleData(3L, UUID.randomUUID(), userId, ArticleStatus.ARCHIVED.name(), seriesId, 3)
-        );
-        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
-
-        var publishedSummary = dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse.builder()
-                .uuid(publishedUuid).title("A").seriesPosition(1).build();
-        when(articleQueryService.getArticleSummariesByIds(any(), eq(false))).thenReturn(List.of(publishedSummary));
+        when(articleFacade.findBySeriesUuidOrderByPosition(seriesUuid)).thenReturn(List.of(
+                article(publishedUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 1),
+                article(UUID.randomUUID(), userUuid, ArticleStatus.DRAFT, seriesUuid, 2),
+                article(UUID.randomUUID(), userUuid, ArticleStatus.ARCHIVED, seriesUuid, 3)));
+        when(articleFacade.getSummariesByUuids(List.of(publishedUuid)))
+                .thenReturn(List.of(ArticleSummaryResponse.builder().uuid(publishedUuid).title("A").build()));
 
         SeriesDetailResponse resp = service.getSeriesDetail("vue-101", null);
 
-        // articleCount 必須對齊對外可見的文章數，否則讀者看到「count=3 但只列 1 篇」並反推出隱藏文章數
         assertThat(resp.getArticleCount()).isEqualTo(1);
         assertThat(resp.getArticles()).hasSize(1);
     }
 
-    // ── F: getSeriesDetail 無任何 PUBLISHED 文章 → 回 200 空清單（series 仍視為存在，finding #3）─
-
     @Test
+    @DisplayName("getSeriesDetail：無任何 PUBLISHED 文章 → 200 空清單、articleCount 0，且不對未公開內容做任何 enrich 查詢（finding #3）")
     void getSeriesDetail_noPublishedArticles_returnsEmptyArticles() {
-        SeriesWithAuthor row = new SeriesWithAuthor();
-        row.setId(seriesId); row.setUuid(seriesUuid);
-        row.setTitle("Draft Only"); row.setSlug("draft-only");
-        // 反正規化計數 > 0（漂移），但實際無 PUBLISHED
+        Series row = series(userUuid);
+        row.setSlug("draft-only");
         row.setArticleCount(2);
-        when(mapper.findBySlugWithAuthor("draft-only")).thenReturn(row);
+        when(repo.findBySlug("draft-only")).thenReturn(Optional.of(row));
+        stubAuthor(userUuid, "user");
+        when(articleFacade.findBySeriesUuidOrderByPosition(seriesUuid)).thenReturn(List.of(
+                article(UUID.randomUUID(), userUuid, ArticleStatus.DRAFT, seriesUuid, 1),
+                article(UUID.randomUUID(), userUuid, ArticleStatus.PENDING_REVIEW, seriesUuid, 2)));
 
-        List<ArticleData> articles = List.of(
-                new ArticleData(1L, UUID.randomUUID(), userId, ArticleStatus.DRAFT.name(), seriesId, 1),
-                new ArticleData(2L, UUID.randomUUID(), userId, ArticleStatus.PENDING_REVIEW.name(), seriesId, 2)
-        );
-        when(articleFacade.findBySeriesIdOrderByPosition(seriesId)).thenReturn(articles);
-
-        // series 一旦存在即回應（不因零篇公開而 404）：articles 為空、articleCount 為 0
         SeriesDetailResponse resp = service.getSeriesDetail("draft-only", null);
 
-        assertThat(resp.getArticleCount()).isEqualTo(0);
+        assertThat(resp.getArticleCount()).isZero();
         assertThat(resp.getArticles()).isEmpty();
-        // 仍不得對未公開內容做任何 enrich 查詢
-        verify(articleQueryService, never()).getArticleSummariesByIds(any());
+        verify(articleFacade, never()).getSummariesByUuids(any());
     }
 
-    // ── G: listPublic 三段式（Task 5）─────────────────────────────────────
+    // ── listPublic（三段式）──────────────────────────────────────────────
+
+    private Series listRow(UUID uuid, String slug, UUID authorUuid) {
+        Series s = new Series();
+        s.setId((long) slug.hashCode());
+        s.setUuid(uuid);
+        s.setSlug(slug);
+        s.setAuthorUuid(authorUuid);
+        return s;
+    }
 
     @Test
-    @DisplayName("listPublic 只列出有公開文章的 series，且 articleCount 為即時計數")
+    @DisplayName("listPublic：只列出有公開文章的 series，articleCount 為即時計數；作者整頁只查一次")
     void listPublicOnlyListsSeriesWithPublishedArticlesAndArticleCountIsLive() {
-        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
-        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
-                .thenReturn(Map.of(10L, 3, 30L, 1));
-
-        SeriesWithAuthor row10 = new SeriesWithAuthor();
-        row10.setId(10L);
-        row10.setUuid(UUID.randomUUID());
-        row10.setSlug("s10");
-        row10.setAuthorUuid(UUID.randomUUID());
-        SeriesWithAuthor row30 = new SeriesWithAuthor();
-        row30.setId(30L);
-        row30.setUuid(UUID.randomUUID());
-        row30.setSlug("s30");
-        row30.setAuthorUuid(UUID.randomUUID());
-        when(mapper.findByIdsWithAuthor(List.of(10L, 30L))).thenReturn(List.of(row10, row30));
+        UUID s10 = UUID.randomUUID();
+        UUID s20 = UUID.randomUUID();
+        UUID s30 = UUID.randomUUID();
+        UUID authorA = UUID.randomUUID();
+        UUID authorB = UUID.randomUUID();
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of(s10, s20, s30));
+        when(articleFacade.countPublishedBySeriesUuids(List.of(s10, s20, s30)))
+                .thenReturn(Map.of(s10, 3, s30, 1));
+        when(mapper.findByUuids(List.of(s10, s30)))
+                .thenReturn(List.of(listRow(s10, "s10", authorA), listRow(s30, "s30", authorB)));
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
+                authorA, new UserDisplayInfo(authorA, "A", null),
+                authorB, new UserDisplayInfo(authorB, "B", null)));
 
         PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
 
@@ -561,21 +847,45 @@ class SeriesServiceTest {
         assertThat(result.getRecords()).hasSize(2);
         assertThat(result.getRecords().get(0).getArticleCount()).isEqualTo(3);
         assertThat(result.getRecords().get(1).getArticleCount()).isEqualTo(1);
+        assertThat(result.getRecords().get(0).getAuthor().getNickname()).isEqualTo("A");
+        assertThat(result.getRecords().get(1).getAuthor().getNickname()).isEqualTo("B");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Collection<UUID>> captor = ArgumentCaptor.forClass(Collection.class);
+        verify(userFacade, times(1)).getDisplayInfoByUuids(captor.capture());
+        assertThat(captor.getValue()).containsExactlyInAnyOrder(authorA, authorB);
     }
 
     @Test
-    @DisplayName("listPublic 第二頁只取該頁的 id")
-    void listPublicSecondPageOnlyTakesIdsOfThatPage() {
-        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
-        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
-                .thenReturn(Map.of(10L, 1, 20L, 1, 30L, 1));
+    @DisplayName("listPublic：同一作者的多個 series → 作者去重後只送出一個 uuid")
+    void listPublicDeduplicatesAuthorsBeforeSingleUserFacadeCall() {
+        UUID s10 = UUID.randomUUID();
+        UUID s20 = UUID.randomUUID();
+        UUID author = UUID.randomUUID();
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of(s10, s20));
+        when(articleFacade.countPublishedBySeriesUuids(List.of(s10, s20))).thenReturn(Map.of(s10, 1, s20, 1));
+        when(mapper.findByUuids(List.of(s10, s20)))
+                .thenReturn(List.of(listRow(s10, "s10", author), listRow(s20, "s20", author)));
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of());
 
-        SeriesWithAuthor row30 = new SeriesWithAuthor();
-        row30.setId(30L);
-        row30.setUuid(UUID.randomUUID());
-        row30.setSlug("s30");
-        row30.setAuthorUuid(UUID.randomUUID());
-        when(mapper.findByIdsWithAuthor(List.of(30L))).thenReturn(List.of(row30));
+        service.listPublic(1, 20);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Collection<UUID>> captor = ArgumentCaptor.forClass(Collection.class);
+        verify(userFacade, times(1)).getDisplayInfoByUuids(captor.capture());
+        assertThat(captor.getValue()).containsExactly(author);
+    }
+
+    @Test
+    @DisplayName("listPublic：第二頁只取該頁的 uuid")
+    void listPublicSecondPageOnlyTakesUuidsOfThatPage() {
+        UUID s10 = UUID.randomUUID();
+        UUID s20 = UUID.randomUUID();
+        UUID s30 = UUID.randomUUID();
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of(s10, s20, s30));
+        when(articleFacade.countPublishedBySeriesUuids(List.of(s10, s20, s30)))
+                .thenReturn(Map.of(s10, 1, s20, 1, s30, 1));
+        when(mapper.findByUuids(List.of(s30))).thenReturn(List.of(listRow(s30, "s30", UUID.randomUUID())));
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of());
 
         PageResult<SeriesSummaryResponse> result = service.listPublic(2, 2);
 
@@ -584,23 +894,38 @@ class SeriesServiceTest {
     }
 
     @Test
-    @DisplayName("listPublic 全無公開文章時回空頁，且不查明細")
-    void listPublicWhenNoPublishedArticles_returnsEmptyPageWithoutDetailQuery() {
-        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L));
-        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L))).thenReturn(Map.of());
+    @DisplayName("listPublic：全無公開文章時回空頁，且不查明細也不查作者")
+    void listPublicWhenNoPublishedArticles_returnsEmptyPageWithoutDetailOrAuthorQuery() {
+        UUID s10 = UUID.randomUUID();
+        UUID s20 = UUID.randomUUID();
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of(s10, s20));
+        when(articleFacade.countPublishedBySeriesUuids(List.of(s10, s20))).thenReturn(Map.of());
 
         PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
 
         assertThat(result.getTotal()).isZero();
         assertThat(result.getRecords()).isEmpty();
-        verify(mapper, never()).findByIdsWithAuthor(anyList());
+        verify(mapper, never()).findByUuids(anyList());
+        verifyNoInteractions(userFacade);
     }
 
     @Test
-    @DisplayName("listPublic 超出範圍的頁回空清單，但 total 不變")
+    @DisplayName("listPublic：沒有任何 series 時回空頁，不呼叫 article／user facade")
+    void listPublicWithoutAnySeries_returnsEmptyPageWithoutFacadeCalls() {
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of());
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
+
+        assertThat(result.getTotal()).isZero();
+        verifyNoInteractions(articleFacade, userFacade);
+    }
+
+    @Test
+    @DisplayName("listPublic：超出範圍的頁回空清單，但 total 不變")
     void listPublicOutOfRangePageReturnsEmptyListButTotalUnchanged() {
-        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L));
-        when(articleFacade.countPublishedBySeriesIds(List.of(10L))).thenReturn(Map.of(10L, 1));
+        UUID s10 = UUID.randomUUID();
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of(s10));
+        when(articleFacade.countPublishedBySeriesUuids(List.of(s10))).thenReturn(Map.of(s10, 1));
 
         PageResult<SeriesSummaryResponse> result = service.listPublic(5, 20);
 
@@ -611,90 +936,61 @@ class SeriesServiceTest {
     /**
      * 鎖住「newest first」的排序契約。
      *
-     * <p>{@code SeriesMapper.findByIdsWithAuthor} 的 JavaDoc 明言回傳順序不保證，SQL 也沒有
-     * ORDER BY；listPublic 之所以仍能保證「最新優先」，全靠依 pageIds 走訪、以
-     * {@code rowById::get} 查表重組順序這個寫法。若改成直接疊代 {@code rowById.values()}，
-     * 順序會退化成 HashMap 的內部疊代順序而非 pageIds 順序。本測試刻意讓 mapper 回傳與
-     * pageIds 相反的順序，若 production code 改用 values()，本測試會抓到（見
-     * fix-wave 報告中的 RED 佐證）。</p>
+     * <p>{@code SeriesMapper.findByUuids} 的回傳順序不保證，listPublic 之所以仍能保證「最新優先」，
+     * 全靠依 pageUuids 走訪、以 map 查表重組順序。本測試刻意讓 mapper 回傳與 pageUuids 相反的順序。</p>
      */
     @Test
-    @DisplayName("listPublic 回傳順序鎖定在 pageIds，即使 mapper 回傳順序相反也不受影響")
-    void listPublicOrdersRecordsByPageIdsRegardlessOfMapperReturnOrder() {
-        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L, 30L));
-        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L, 30L)))
-                .thenReturn(Map.of(10L, 1, 20L, 1, 30L, 1));
-
-        SeriesWithAuthor row10 = new SeriesWithAuthor();
-        row10.setId(10L);
-        row10.setUuid(UUID.randomUUID());
-        row10.setSlug("s10");
-        row10.setAuthorUuid(UUID.randomUUID());
-        SeriesWithAuthor row20 = new SeriesWithAuthor();
-        row20.setId(20L);
-        row20.setUuid(UUID.randomUUID());
-        row20.setSlug("s20");
-        row20.setAuthorUuid(UUID.randomUUID());
-        SeriesWithAuthor row30 = new SeriesWithAuthor();
-        row30.setId(30L);
-        row30.setUuid(UUID.randomUUID());
-        row30.setSlug("s30");
-        row30.setAuthorUuid(UUID.randomUUID());
-
-        // mapper 刻意回傳與 pageIds（10, 20, 30）相反的順序，模擬「順序不保證」的真實情境。
-        when(mapper.findByIdsWithAuthor(List.of(10L, 20L, 30L)))
-                .thenReturn(List.of(row30, row20, row10));
+    @DisplayName("listPublic：回傳順序鎖定在 pageUuids，即使 mapper 回傳順序相反也不受影響")
+    void listPublicOrdersRecordsByPageUuidsRegardlessOfMapperReturnOrder() {
+        UUID s10 = UUID.randomUUID();
+        UUID s20 = UUID.randomUUID();
+        UUID s30 = UUID.randomUUID();
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of(s10, s20, s30));
+        when(articleFacade.countPublishedBySeriesUuids(List.of(s10, s20, s30)))
+                .thenReturn(Map.of(s10, 1, s20, 1, s30, 1));
+        UUID author = UUID.randomUUID();
+        when(mapper.findByUuids(List.of(s10, s20, s30))).thenReturn(List.of(
+                listRow(s30, "s30", author), listRow(s20, "s20", author), listRow(s10, "s10", author)));
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of());
 
         PageResult<SeriesSummaryResponse> result = service.listPublic(1, 20);
 
-        // 回應順序必須依 pageIds（10 → 20 → 30），不是 mapper 回傳順序（30 → 20 → 10），
-        // 也不是任何 Map 的內部疊代順序。
         assertThat(result.getRecords())
                 .extracting(SeriesSummaryResponse::getSlug)
                 .containsExactly("s10", "s20", "s30");
     }
 
     /**
-     * 鎖住 offset 運算不溢位。
-     *
-     * <p>{@code (page - 1) * size} 若以 int 相乘，在 page 夠大時會溢位成負數；舊寫法
-     * {@code Math.max(0, …)} 會把溢位的負值吞成 0，等於靜默地把 offset 當成 0——之後
-     * {@code subList(0, …)} 仍會撈出「第 1 頁」的內容並正常組出 records，只是回報給呼叫端的
-     * 仍是它送來的巨大 page 號。這裡刻意 stub {@code findByIdsWithAuthor} 回傳第 1 頁的兩筆
-     * row：若 production code 仍是 int 溢位版本，offset 會被吞成 0，records 就會非空
-     * （撈到這兩筆）；long 版本則會讓 offset 正確落在 visibleIds 範圍外，直接回空清單、
-     * 連 {@code findByIdsWithAuthor} 都不會呼叫——這與姊妹端點 {@code BookmarkQueryService}
-     * 對同樣輸入的行為一致。size 固定在 {@code MAX_PAGE_SIZE}（100）之上界時，
-     * page ≈ 21,474,838 即可讓 {@code (page - 1) * size} 以 int 運算溢位；此處取更大的 page
-     * 以確保穩定觸發。</p>
+     * 鎖住 offset 運算不溢位：{@code (page - 1) * size} 若以 int 相乘會溢位成負數，被 {@code Math.max(0, …)}
+     * 吞成 0 而誤回第 1 頁。long 版本讓 offset 落在範圍外，直接回空清單且不查明細。
      */
     @Test
-    @DisplayName("listPublic 給超大 page 時 offset 以 long 運算不溢位，回空清單而非誤回第一頁")
+    @DisplayName("listPublic：給超大 page 時 offset 以 long 運算不溢位，回空清單而非誤回第一頁")
     void listPublicHugePageDoesNotOverflowOffsetArithmetic() {
-        when(mapper.findAllIdsOrderByCreatedAtDesc()).thenReturn(List.of(10L, 20L));
-        when(articleFacade.countPublishedBySeriesIds(List.of(10L, 20L)))
-                .thenReturn(Map.of(10L, 1, 20L, 1));
-
-        // 若 production code 仍是 int 溢位版本，offset 會被 Math.max(0, …) 吞成 0，
-        // 進而以「頁 1」的 id 呼叫這支 mapper 方法；stub 讓那個誤判有真實資料可撈，
-        // 使該分支的錯誤行為在斷言上「看得見」而非被 Mockito 預設空回傳蓋掉。
-        SeriesWithAuthor row10 = new SeriesWithAuthor();
-        row10.setId(10L);
-        row10.setUuid(UUID.randomUUID());
-        row10.setSlug("s10");
-        row10.setAuthorUuid(UUID.randomUUID());
-        SeriesWithAuthor row20 = new SeriesWithAuthor();
-        row20.setId(20L);
-        row20.setUuid(UUID.randomUUID());
-        row20.setSlug("s20");
-        row20.setAuthorUuid(UUID.randomUUID());
-        lenient().when(mapper.findByIdsWithAuthor(List.of(10L, 20L)))
-                .thenReturn(List.of(row10, row20));
+        UUID s10 = UUID.randomUUID();
+        UUID s20 = UUID.randomUUID();
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of(s10, s20));
+        when(articleFacade.countPublishedBySeriesUuids(List.of(s10, s20))).thenReturn(Map.of(s10, 1, s20, 1));
+        lenient().when(mapper.findByUuids(List.of(s10, s20)))
+                .thenReturn(List.of(listRow(s10, "s10", UUID.randomUUID()), listRow(s20, "s20", UUID.randomUUID())));
 
         PageResult<SeriesSummaryResponse> result = service.listPublic(30_000_000, 100);
 
         assertThat(result.getTotal()).isEqualTo(2L);
         assertThat(result.getRecords()).isEmpty();
+        verify(mapper, never()).findByUuids(anyList());
+    }
+
+    @Test
+    @DisplayName("listPublic：size 夾在 [1, 100]，page 最小為 1")
+    void listPublicClampsPageAndSize() {
+        when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of());
+
+        PageResult<SeriesSummaryResponse> result = service.listPublic(-3, 100_000);
+
+        assertThat(result.getCurrent()).isEqualTo(1);
+        assertThat(result.getSize()).isEqualTo(100);
+        verify(mapper, times(1)).findAllUuidsOrderByCreatedAtDesc();
+        verify(articleFacade, never()).countPublishedBySeriesUuids(any());
     }
 }
-

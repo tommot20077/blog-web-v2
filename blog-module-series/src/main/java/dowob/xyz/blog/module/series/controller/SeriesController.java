@@ -5,7 +5,6 @@ import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
-import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.model.dto.request.AddArticleToSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
@@ -95,7 +94,7 @@ public class SeriesController {
     public ApiResponse<SeriesSummaryResponse> create(
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateSeriesRequest req) {
-        return ApiResponse.success(seriesService.createSeries(user.id(), req));
+        return ApiResponse.success(seriesService.createSeries(user.uuid(), req));
     }
 
     @PutMapping("/{uuid}")
@@ -106,7 +105,7 @@ public class SeriesController {
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdateSeriesRequest req) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        return ApiResponse.success(seriesService.updateSeries(uuid, user.id(), isAdmin, req));
+        return ApiResponse.success(seriesService.updateSeries(uuid, user.uuid(), isAdmin, req));
     }
 
     @DeleteMapping("/{uuid}")
@@ -116,7 +115,7 @@ public class SeriesController {
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        seriesService.deleteSeries(uuid, user.id(), isAdmin);
+        seriesService.deleteSeries(uuid, user.uuid(), isAdmin);
         return ApiResponse.success();
     }
 
@@ -129,7 +128,7 @@ public class SeriesController {
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody AddArticleToSeriesRequest req) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        seriesService.addArticleToSeries(uuid, articleUuid, user.id(), isAdmin, req.getPosition());
+        seriesService.addArticleToSeries(uuid, articleUuid, user.uuid(), isAdmin, req.getPosition());
         return ApiResponse.success();
     }
 
@@ -141,7 +140,7 @@ public class SeriesController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        seriesService.removeArticleFromSeries(uuid, articleUuid, user.id(), isAdmin);
+        seriesService.removeArticleFromSeries(uuid, articleUuid, user.uuid(), isAdmin);
         return ApiResponse.success();
     }
 
