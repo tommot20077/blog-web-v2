@@ -16,6 +16,7 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.series.config.SeriesTestApplication;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
+import dowob.xyz.blog.module.series.support.SeededUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -140,7 +141,7 @@ class TransitionUuidApiIT {
         series.setTitle("T " + slug);
         series.setSlug(slug);
         series.setDescription("d");
-        series.setAuthorId(authorId);
+        series.setAuthorUuid(userUuid(authorId));
         series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());

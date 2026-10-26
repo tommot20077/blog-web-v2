@@ -13,7 +13,11 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link ArticleDeletedEvent} 序列化測試：只增不減——原有欄位名稱與型別不變，另含 uuid 過渡欄位。
+ * {@link ArticleDeletedEvent} 序列化測試。
+ *
+ * <p>M4-b 起 {@code articleId}、{@code seriesId} 兩個 Long 過渡欄位已移除（series 是最後一個讀取者，
+ * 已改讀 {@code seriesUuid}）；{@code authorId} 仍保留到 M6。升級當下佇列中含舊欄位的 in-flight 訊息
+ * 必須仍可反序列化（多出的欄位被忽略）。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -23,14 +27,12 @@ class ArticleDeletedEventSerializationTest {
 
     private static ArticleDeletedEvent sample(UUID authorUuid, UUID seriesUuid) {
         return new ArticleDeletedEvent(
-                UUID.randomUUID(), 100L, UUID.randomUUID(), 1L, 200L,
-                List.of(UUID.randomUUID()), List.of(UUID.randomUUID()),
-                Instant.parse("2026-10-24T00:00:00Z"), authorUuid, seriesUuid);
+                UUID.randomUUID(), UUID.randomUUID(), 1L, List.of(UUID.randomUUID()), List.of(UUID.randomUUID()), Instant.parse("2026-10-24T00:00:00Z"), authorUuid, seriesUuid);
     }
 
     @Test
-    @DisplayName("JSON 含原有全部欄位（名稱型別不變）＋ authorUuid／seriesUuid")
-    void serialize_shouldKeepOriginalFieldsAndAddUuidFields() {
+    @DisplayName("JSON 不再含 articleId／seriesId；其餘欄位（含 authorId、authorUuid、seriesUuid）名稱型別不變")
+    void serialize_shouldNotContainRemovedLongFields() {
         UUID authorUuid = UUID.randomUUID();
         UUID seriesUuid = UUID.randomUUID();
         ArticleDeletedEvent event = sample(authorUuid, seriesUuid);
@@ -38,14 +40,13 @@ class ArticleDeletedEventSerializationTest {
         JsonNode json = EventJsonSupport.toJson(event);
 
         assertThat(EventJsonSupport.fieldNames(json)).containsExactlyInAnyOrderElementsOf(Set.of(
-                "eventId", "articleId", "articleUuid", "authorId", "seriesId",
+                "eventId", "articleUuid", "authorId",
                 "categoryIds", "tagIds", "occurredAt", "authorUuid", "seriesUuid"));
+        assertThat(json.has("articleId")).as("articleId 已移除，articleUuid 是唯一的文章識別").isFalse();
+        assertThat(json.has("seriesId")).as("seriesId 已移除，seriesUuid 是唯一的 series 識別").isFalse();
         assertThat(json.get("eventId").asText()).isEqualTo(event.eventId().toString());
-        assertThat(json.get("articleId").isIntegralNumber()).isTrue();
-        assertThat(json.get("articleId").asLong()).isEqualTo(100L);
         assertThat(json.get("articleUuid").asText()).isEqualTo(event.articleUuid().toString());
         assertThat(json.get("authorId").isIntegralNumber()).isTrue();
-        assertThat(json.get("seriesId").asLong()).isEqualTo(200L);
         assertThat(json.get("categoryIds").isArray()).isTrue();
         assertThat(json.get("tagIds").isArray()).isTrue();
         assertThat(json.get("occurredAt").isNumber()).isTrue();
@@ -54,21 +55,19 @@ class ArticleDeletedEventSerializationTest {
     }
 
     @Test
-    @DisplayName("文章不在 series 時 seriesId 與 seriesUuid 皆序列化為 null")
+    @DisplayName("文章不在 series 時 seriesUuid 序列化為 null")
     void serialize_withoutSeries_shouldWriteNulls() {
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-                UUID.randomUUID(), 1L, UUID.randomUUID(), 2L, null,
-                List.of(), List.of(), Instant.parse("2026-10-24T00:00:00Z"), UUID.randomUUID(), null);
+                UUID.randomUUID(), UUID.randomUUID(), 2L, List.of(), List.of(), Instant.parse("2026-10-24T00:00:00Z"), UUID.randomUUID(), null);
 
         JsonNode json = EventJsonSupport.toJson(event);
 
-        assertThat(json.get("seriesId").isNull()).isTrue();
         assertThat(json.get("seriesUuid").isNull()).isTrue();
     }
 
     @Test
-    @DisplayName("升級前（不含 authorUuid／seriesUuid）的舊 JSON 仍可反序列化，新欄位為 null")
-    void deserialize_legacyJsonWithoutUuidFields_shouldSucceed() {
+    @DisplayName("升級前（含 articleId／seriesId、不含 authorUuid／seriesUuid）的舊 JSON 仍可反序列化，多出的欄位被忽略")
+    void deserialize_legacyJsonWithLongFieldsAndWithoutUuidFields_shouldSucceed() {
         UUID eventId = UUID.randomUUID();
         UUID articleUuid = UUID.randomUUID();
         String legacy = "{\"eventId\":\"" + eventId + "\",\"articleId\":7,\"articleUuid\":\"" + articleUuid
@@ -79,10 +78,32 @@ class ArticleDeletedEventSerializationTest {
 
         assertThat(restored).isInstanceOfSatisfying(ArticleDeletedEvent.class, e -> {
             assertThat(e.eventId()).isEqualTo(eventId);
-            assertThat(e.articleId()).isEqualTo(7L);
-            assertThat(e.seriesId()).isEqualTo(9L);
+            assertThat(e.articleUuid()).isEqualTo(articleUuid);
+            assertThat(e.authorId()).isEqualTo(3L);
             assertThat(e.authorUuid()).isNull();
             assertThat(e.seriesUuid()).isNull();
+        });
+    }
+
+    @Test
+    @DisplayName("in-flight 訊息（同時含舊 Long 欄位與 seriesUuid）仍可反序列化，consumer 讀得到 seriesUuid")
+    void deserialize_inFlightJsonWithLongFieldsAndSeriesUuid_shouldReadSeriesUuid() {
+        UUID eventId = UUID.randomUUID();
+        UUID articleUuid = UUID.randomUUID();
+        UUID seriesUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        String inFlight = "{\"eventId\":\"" + eventId + "\",\"articleId\":7,\"articleUuid\":\"" + articleUuid
+                + "\",\"authorId\":3,\"seriesId\":9,\"categoryIds\":[],\"tagIds\":[],"
+                + "\"occurredAt\":1792800000.000000000,\"authorUuid\":\"" + authorUuid
+                + "\",\"seriesUuid\":\"" + seriesUuid + "\"}";
+
+        Object restored = EventJsonSupport.receive(
+                inFlight.getBytes(StandardCharsets.UTF_8), null, ArticleDeletedEvent.class);
+
+        assertThat(restored).isInstanceOfSatisfying(ArticleDeletedEvent.class, e -> {
+            assertThat(e.eventId()).isEqualTo(eventId);
+            assertThat(e.authorUuid()).isEqualTo(authorUuid);
+            assertThat(e.seriesUuid()).isEqualTo(seriesUuid);
         });
     }
 

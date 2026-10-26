@@ -285,8 +285,10 @@ class ArticleCommandSubService {
         checkWritePermission(operatorId, operatorRole, article);
 
         /* delete 前讀取：article 刪除後 FK CASCADE 會清 article_tags / article_categories，
-         * series consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。*/
-        Long seriesId = article.getSeriesId();
+         * series consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。
+         * seriesUuid 是 series 扣 article_count 的唯一依據（事件不再帶 Long seriesId），同樣在刪除前取得：
+         * 查詢失敗時刪除不動手，而不是刪除後才發現、發出 null。*/
+        UUID seriesUuid = articleEventPublisher.resolveSeriesUuidForDelete(article.getSeriesId());
         List<UUID> categoryIds = articleMapper.findCategoryUuidsByArticleId(article.getId());
         List<UUID> tagIds = articleMapper.findTagUuidsByArticleId(article.getId());
 
@@ -302,7 +304,7 @@ class ArticleCommandSubService {
         });
 
         /* DB 已 commit，best-effort 發送 ArticleDeletedEvent（rich payload）*/
-        articleEventPublisher.publishDeleted(article, seriesId, categoryIds, tagIds);
+        articleEventPublisher.publishDeleted(article, seriesUuid, categoryIds, tagIds);
     }
 
     /**

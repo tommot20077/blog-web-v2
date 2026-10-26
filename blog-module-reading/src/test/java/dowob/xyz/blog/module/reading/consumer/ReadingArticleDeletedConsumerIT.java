@@ -40,8 +40,7 @@ class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
     @Autowired private ReadingArticleDeletedConsumer consumer;
 
     private static ArticleDeletedEvent eventOf(UUID articleUuid) {
-        return new ArticleDeletedEvent(UUID.randomUUID(), null, articleUuid, null, null,
-                List.of(), List.of(), Instant.now(), null, null);
+        return new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, null, List.of(), List.of(), Instant.now(), null, null);
     }
 
     /** 確保即使測試中途失敗也不遺留會讓後續測試失敗的觸發器。 */

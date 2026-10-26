@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.series.config.SeriesTestApplication;
+import dowob.xyz.blog.module.series.support.SeededUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -64,9 +65,6 @@ class SeriesFacadeFilterExistingUuidsIT {
         registry.add("spring.data.redis.url", redis::getRedisURI);
     }
 
-    /** testdata seed（R__series_test_seed.sql）建立的作者 */
-    private static final long SEEDED_AUTHOR_ID = 1L;
-
     @Autowired private SeriesFacade seriesFacade;
     @Autowired private JdbcTemplate jdbcTemplate;
 
@@ -91,8 +89,8 @@ class SeriesFacadeFilterExistingUuidsIT {
     private UUID insertSeries() {
         UUID uuid = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO series (uuid, title, slug, author_id) VALUES (?, ?, ?, ?)",
-                uuid, "t-" + uuid, "slug-" + uuid, SEEDED_AUTHOR_ID);
+                "INSERT INTO series (uuid, title, slug, author_uuid) VALUES (?, ?, ?, ?)",
+                uuid, "t-" + uuid, "slug-" + uuid, SeededUsers.USER1_UUID);
         inserted.add(uuid);
         return uuid;
     }

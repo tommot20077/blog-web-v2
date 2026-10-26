@@ -96,8 +96,7 @@ class ArticleEventMirrorCompatibilityTest {
     void deletedEvent_withLegacyTypeId_shouldDeserializeIntoMirrorMessage() {
         UUID articleUuid = UUID.randomUUID();
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-                UUID.randomUUID(), 100L, articleUuid, 1L, 200L, List.of(), List.of(),
-                Instant.parse("2026-10-24T00:00:00Z"), UUID.randomUUID(), UUID.randomUUID());
+                UUID.randomUUID(), articleUuid, 1L, List.of(), List.of(), Instant.parse("2026-10-24T00:00:00Z"), UUID.randomUUID(), UUID.randomUUID());
 
         Object restored = roundTrip(event, "dowob.xyz.blog.module.article.event.ArticleDeletedEvent",
                 ArticleDeletedMessage.class);

@@ -327,8 +327,8 @@ class ArticleFacadeReadingUuidIT {
         UUID c = insertArticle(SEEDED_AUTHOR_ID, "DRAFT", 0);
 
         Long seriesId = jdbcTemplate.queryForObject(
-                "INSERT INTO series (title, slug, author_id) VALUES ('系列', ?, ?) RETURNING id",
-                Long.class, "s-" + UUID.randomUUID(), SEEDED_AUTHOR_ID);
+                "INSERT INTO series (title, slug, author_uuid) VALUES ('系列', ?, ?) RETURNING id",
+                Long.class, "s-" + UUID.randomUUID(), author1Uuid);
         insertedSeries.add(seriesId);
         jdbcTemplate.update("UPDATE articles SET series_id = ?, series_position = 2 WHERE uuid = ?", seriesId, a);
 

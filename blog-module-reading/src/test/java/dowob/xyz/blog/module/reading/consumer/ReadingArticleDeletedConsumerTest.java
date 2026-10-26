@@ -69,8 +69,7 @@ class ReadingArticleDeletedConsumerTest {
     }
 
     private static ArticleDeletedEvent event(UUID articleUuid) {
-        return new ArticleDeletedEvent(UUID.randomUUID(), 100L, articleUuid, 1L, null,
-                List.of(), List.of(), Instant.now(), null, null);
+        return new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, 1L, List.of(), List.of(), Instant.now(), null, null);
     }
 
     @Test

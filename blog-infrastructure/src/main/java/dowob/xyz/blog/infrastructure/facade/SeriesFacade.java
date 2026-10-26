@@ -15,6 +15,10 @@ import java.util.UUID;
  * <p>給 ArticleQueryService 等跨模組讀取 series 導覽資訊用。
  * 對齊 ReadingFacade pattern：interface 在 infrastructure，impl 在 owning module。</p>
  *
+ * <p><b>過渡 API</b>：{@link #batchGetSeriesBasicInfo}、{@link #findIdByUuid}、{@link #findUuidsByIds}、
+ * {@link #findIdsByUuids} 仍以 series 主鍵（Long）往來——article 的 {@code articles.series_id} 到 M6 才改為
+ * {@code series_uuid}，在那之前 article 端需要這些轉換；Z1 收尾階段移除。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -23,10 +27,13 @@ public interface SeriesFacade {
     /**
      * 取得文章在 series 中的導覽（prev/next）。
      *
-     * @param articleId 文章資料庫主鍵
+     * <p>M4-b 起以文章公開 UUID 識別（series 是此 facade 的 owner，直接改簽章，不保留 Long 版）。
+     * 文章不存在、不在任何 series，或所屬 series 已不存在時皆回傳 {@link Optional#empty()}。</p>
+     *
+     * @param articleUuid 文章公開 UUID
      * @return 若文章在 series 中回傳導覽；否則 Optional.empty()
      */
-    Optional<SeriesNavigation> getSeriesNavigation(Long articleId);
+    Optional<SeriesNavigation> getSeriesNavigation(UUID articleUuid);
 
     /**
      * 批次取得多個 series 的基本資訊。

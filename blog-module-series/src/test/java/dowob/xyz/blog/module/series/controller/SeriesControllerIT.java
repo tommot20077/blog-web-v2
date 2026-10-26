@@ -8,16 +8,19 @@ import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.series.config.SeriesTestApplication;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
+import dowob.xyz.blog.module.series.support.SeededUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,11 +42,16 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -133,7 +141,7 @@ class SeriesControllerIT {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
-        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, SeededUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -251,7 +259,7 @@ class SeriesControllerIT {
         series.setTitle("Original");
         series.setSlug("original-slug");
         series.setDescription("desc");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -281,7 +289,7 @@ class SeriesControllerIT {
         series.setTitle("User2 Series");
         series.setSlug("user2-series");
         series.setDescription("desc");
-        series.setAuthorId(USER2_ID);
+        series.setAuthorUuid(SeededUsers.USER2_UUID);
         series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -305,7 +313,7 @@ class SeriesControllerIT {
         series.setUuid(UUID.randomUUID());
         series.setTitle("Series");
         series.setSlug("series-rbac-test");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -330,7 +338,7 @@ class SeriesControllerIT {
         series.setUuid(UUID.randomUUID());
         series.setTitle("Series To Delete");
         series.setSlug("series-to-delete");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -363,7 +371,7 @@ class SeriesControllerIT {
         series.setUuid(UUID.randomUUID());
         series.setTitle("Article Series");
         series.setSlug("article-series");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -396,7 +404,7 @@ class SeriesControllerIT {
         series1.setUuid(UUID.randomUUID());
         series1.setTitle("Series 1");
         series1.setSlug("series-one");
-        series1.setAuthorId(USER1_ID);
+        series1.setAuthorUuid(SeededUsers.USER1_UUID);
         series1.setArticleCount(1);
         series1.setCreatedAt(LocalDateTime.now());
         series1.setUpdatedAt(LocalDateTime.now());
@@ -406,7 +414,7 @@ class SeriesControllerIT {
         series2.setUuid(UUID.randomUUID());
         series2.setTitle("Series 2");
         series2.setSlug("series-two");
-        series2.setAuthorId(USER1_ID);
+        series2.setAuthorUuid(SeededUsers.USER1_UUID);
         series2.setArticleCount(0);
         series2.setCreatedAt(LocalDateTime.now());
         series2.setUpdatedAt(LocalDateTime.now());
@@ -437,7 +445,7 @@ class SeriesControllerIT {
         series.setUuid(UUID.randomUUID());
         series.setTitle("Progress Series");
         series.setSlug("progress-series");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -462,7 +470,7 @@ class SeriesControllerIT {
         series.setUuid(UUID.randomUUID());
         series.setTitle("Anonymous Series");
         series.setSlug("anonymous-series");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -487,7 +495,7 @@ class SeriesControllerIT {
         series.setUuid(UUID.randomUUID());
         series.setTitle("Draft Only Series");
         series.setSlug("draft-only-series");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -511,7 +519,7 @@ class SeriesControllerIT {
         series.setUuid(UUID.randomUUID());
         series.setTitle("Mixed Series");
         series.setSlug("mixed-series");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         series.setArticleCount(2);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -546,7 +554,7 @@ class SeriesControllerIT {
         withPublished.setUuid(UUID.randomUUID());
         withPublished.setTitle("Has Published");
         withPublished.setSlug("has-published");
-        withPublished.setAuthorId(USER1_ID);
+        withPublished.setAuthorUuid(SeededUsers.USER1_UUID);
         withPublished.setArticleCount(1);
         withPublished.setCreatedAt(LocalDateTime.now());
         withPublished.setUpdatedAt(LocalDateTime.now());
@@ -558,7 +566,7 @@ class SeriesControllerIT {
         draftOnly.setUuid(UUID.randomUUID());
         draftOnly.setTitle("Draft Only");
         draftOnly.setSlug("draft-only");
-        draftOnly.setAuthorId(USER1_ID);
+        draftOnly.setAuthorUuid(SeededUsers.USER1_UUID);
         draftOnly.setArticleCount(1);
         draftOnly.setCreatedAt(LocalDateTime.now());
         draftOnly.setUpdatedAt(LocalDateTime.now());
@@ -596,7 +604,7 @@ class SeriesControllerIT {
         series.setUuid(UUID.randomUUID());
         series.setTitle("Mixed Series");
         series.setSlug("mixed-series");
-        series.setAuthorId(USER1_ID);
+        series.setAuthorUuid(SeededUsers.USER1_UUID);
         // 非正規化計數含未發布文章；response 的 articleCount 不該沿用（見 #1）
         series.setArticleCount(2);
         series.setCreatedAt(LocalDateTime.now());
@@ -639,5 +647,132 @@ class SeriesControllerIT {
                 // 進度分母只算公開文章
                 .andExpect(jsonPath("$.data.myProgress.readCount").value(0))
                 .andExpect(jsonPath("$.data.myProgress.totalCount").value(1));
+    }
+
+    // ─── M4-b：作者改由 UserFacade 批次解析（不再 JOIN users） ───────────────
+
+    /** 建立一個指定作者的 series 並放入一篇 PUBLISHED 文章（使其出現在公開列表與詳情）。 */
+    private Series createVisibleSeries(String slug, java.util.UUID authorUuid, Long authorId) {
+        Series series = new Series();
+        series.setUuid(UUID.randomUUID());
+        series.setTitle("Title " + slug);
+        series.setSlug(slug);
+        series.setAuthorUuid(authorUuid);
+        series.setArticleCount(1);
+        series.setCreatedAt(LocalDateTime.now());
+        series.setUpdatedAt(LocalDateTime.now());
+        Series saved = seriesRepo.save(series);
+        createArticleInSeries(authorId, ArticleStatus.PUBLISHED, saved.getId(), 1);
+        return saved;
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode json(String body) throws Exception {
+        return objectMapper.readTree(body);
+    }
+
+    @Test
+    @DisplayName("GET /series - 一頁多個 series、兩位作者 → 只呼叫 UserFacade.getDisplayInfoByUuids 一次，作者欄位對得上")
+    void list_resolvesAllAuthorsOfPageWithSingleUserFacadeCall() throws Exception {
+        createVisibleSeries("author-batch-1", SeededUsers.USER1_UUID, USER1_ID);
+        createVisibleSeries("author-batch-2", SeededUsers.USER1_UUID, USER1_ID);
+        createVisibleSeries("author-batch-3", SeededUsers.USER2_UUID, USER2_ID);
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
+                SeededUsers.USER1_UUID, new UserDisplayInfo(SeededUsers.USER1_UUID, "Alice", "https://img/alice.png"),
+                SeededUsers.USER2_UUID, new UserDisplayInfo(SeededUsers.USER2_UUID, "Bob", null)));
+
+        String body = mockMvc.perform(get("/api/v1/series"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Collection<UUID>> captor = ArgumentCaptor.forClass(Collection.class);
+        verify(userFacade, times(1)).getDisplayInfoByUuids(captor.capture());
+        assertThat(captor.getValue()).as("去重後只送出兩位作者").containsExactlyInAnyOrder(
+                SeededUsers.USER1_UUID, SeededUsers.USER2_UUID);
+        com.fasterxml.jackson.databind.JsonNode records = json(body).at("/data/records");
+        assertThat(records).hasSize(3);
+        records.forEach(r -> {
+            String slug = r.get("slug").asText();
+            boolean bob = slug.equals("author-batch-3");
+            assertThat(r.at("/author/uuid").asText())
+                    .isEqualTo((bob ? SeededUsers.USER2_UUID : SeededUsers.USER1_UUID).toString());
+            assertThat(r.at("/author/nickname").asText()).isEqualTo(bob ? "Bob" : "Alice");
+        });
+    }
+
+    @Test
+    @DisplayName("GET /series/{slug} - 作者資訊來自 UserFacade（uuid、nickname、avatarUrl）")
+    void getSlug_authorComesFromUserFacade() throws Exception {
+        createVisibleSeries("author-detail", SeededUsers.USER1_UUID, USER1_ID);
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
+                SeededUsers.USER1_UUID, new UserDisplayInfo(SeededUsers.USER1_UUID, "Alice", "https://img/alice.png")));
+
+        String body = mockMvc.perform(get("/api/v1/series/{slug}", "author-detail"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(json(body).at("/data/author/uuid").asText()).isEqualTo(SeededUsers.USER1_UUID.toString());
+        assertThat(json(body).at("/data/author/nickname").asText()).isEqualTo("Alice");
+        assertThat(json(body).at("/data/author/avatarUrl").asText()).isEqualTo("https://img/alice.png");
+        verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
+    }
+
+    @Test
+    @DisplayName("GET /series/{slug} - 查無該作者（與舊 LEFT JOIN 無匹配相同）→ 200，作者欄位皆為 null")
+    void getSlug_authorNotFound_authorFieldsAreNull() throws Exception {
+        createVisibleSeries("author-missing", UUID.randomUUID(), USER1_ID);
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of());
+
+        String body = mockMvc.perform(get("/api/v1/series/{slug}", "author-missing"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        com.fasterxml.jackson.databind.JsonNode author = json(body).at("/data/author");
+        assertThat(author.isObject()).isTrue();
+        assertThat(author.path("uuid").isNull() || author.path("uuid").isMissingNode()).isTrue();
+        assertThat(author.path("nickname").isNull() || author.path("nickname").isMissingNode()).isTrue();
+        assertThat(author.path("avatarUrl").isNull() || author.path("avatarUrl").isMissingNode()).isTrue();
+    }
+
+    @Test
+    @DisplayName("POST /series - 回應的作者來自 UserFacade，且 series.author_uuid 存的是登入者的 uuid")
+    void post_authorUuidStoredFromLoginUser_andAuthorFromUserFacade() throws Exception {
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
+                SeededUsers.USER1_UUID, new UserDisplayInfo(SeededUsers.USER1_UUID, "Alice", null)));
+
+        String body = mockMvc.perform(post("/api/v1/series")
+                        .with(asUser(USER1_ID, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(createSeriesPayload("Author Post", "author-post"))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(seriesRepo.findBySlug("author-post").orElseThrow().getAuthorUuid())
+                .isEqualTo(SeededUsers.USER1_UUID);
+        assertThat(json(body).at("/data/author/nickname").asText()).isEqualTo("Alice");
+    }
+
+    @Test
+    @DisplayName("PUT /series/{uuid} - 非 owner 但是 ADMIN → 200；以 uuid 比對 owner（authorUuid 與 AuthUser.uuid()）")
+    void put_byAdmin_succeedsAndOwnerCheckUsesUuid() throws Exception {
+        Series series = new Series();
+        series.setUuid(UUID.randomUUID());
+        series.setTitle("Admin Target");
+        series.setSlug("admin-target");
+        series.setAuthorUuid(SeededUsers.USER2_UUID);
+        series.setArticleCount(0);
+        series.setCreatedAt(LocalDateTime.now());
+        series.setUpdatedAt(LocalDateTime.now());
+        Series saved = seriesRepo.save(series);
+
+        mockMvc.perform(put("/api/v1/series/{uuid}", saved.getUuid())
+                        .with(asUser(ADMIN_ID, Role.ADMIN))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("title", "By Admin"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("By Admin"));
+
+        assertThat(seriesRepo.findByUuid(saved.getUuid()).orElseThrow().getAuthorUuid())
+                .as("更新不得改動作者").isEqualTo(SeededUsers.USER2_UUID);
     }
 }
