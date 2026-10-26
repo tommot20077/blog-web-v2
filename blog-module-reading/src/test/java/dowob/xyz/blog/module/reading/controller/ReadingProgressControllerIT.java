@@ -173,8 +173,8 @@ class ReadingProgressControllerIT {
     }
 
     @Test
-    @DisplayName("PUT /progress 1.0 - 200 + Redis 無 + DB 有")
-    void put_progress_1_0_deletesRedisAndUpsertsDb() throws Exception {
+    @DisplayName("PUT /progress 1.0 - 200 + DB 有 + Redis 為完讀值（不 DEL hash）且不標 dirty")
+    void put_progress_1_0_upsertsDbAndCachesCompletedValueWithoutDirty() throws Exception {
         UpdateProgressRequest req = new UpdateProgressRequest();
         req.setProgress(new BigDecimal("1.0"));
         req.setLastHeading("end");
@@ -186,7 +186,10 @@ class ReadingProgressControllerIT {
                 .andExpect(status().isOk());
 
         String key = RedisKeyConstant.READING_PROGRESS_PREFIX + USER_UUID + ":" + articleUuid;
-        assertThat(redisTemplate.opsForHash().entries(key)).isEmpty();
+        assertThat(redisTemplate.opsForHash().get(key, "progress")).isEqualTo("1.0");
+        assertThat(redisTemplate.opsForHash().get(key, "lastHeading")).isEqualTo("end");
+        assertThat(redisTemplate.opsForSet().isMember(RedisKeyConstant.READING_DIRTY_KEY, USER_UUID + ":" + articleUuid))
+                .as("完讀值已在 DB，不標 dirty").isFalse();
         assertThat(progressRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isPresent();
     }
 
