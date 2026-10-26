@@ -406,6 +406,7 @@ public class RedisKeyConstant {
     /**
      * 閱讀進度 Hash Key 前綴
      * Key: reading:progress:{userUuid}:{articleUuid}
+     * 欄位：progress、lastHeading、updatedAt（使用者送出該進度的 JVM epoch ms，Lua 單調寫入的版本）
      *
      * <p>M2-c 起使用者與文章一律以公開 UUID 識別；舊格式 {@code {Long userId}:{articleUuid}} 的 key 不遷移
      * （無正式環境，TTL 到期自然消失），其 dirty 成員會被 flush job 視為無法解析而移除。</p>
@@ -421,6 +422,6 @@ public class RedisKeyConstant {
     /** Reading progress Redis key TTL（天）*/
     public static final long READING_PROGRESS_TTL_DAYS = 3L;
 
-    /** 視為已讀完的進度門檻（>= 0.95 觸發 DEL Redis + UPSERT DB）*/
+    /** 視為已讀完的進度門檻（>= 0.95 觸發單調 UPSERT DB，並把快取設成完讀值但不標 dirty、不 DEL hash）*/
     public static final java.math.BigDecimal READING_PROGRESS_COMPLETED_THRESHOLD = new java.math.BigDecimal("0.95");
 }

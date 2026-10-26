@@ -12,6 +12,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.DateTimeException;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -47,10 +51,20 @@ import java.util.UUID;
  *
  * <p>無法解析的成員（含舊格式 {@code {Long}:{uuid}}）記 warn 並從 dirty set 移除，不重試。</p>
  *
+ * <p><b>單調 upsert（RP-1）</b>：upsert 的 {@code updatedAt} 取 hash 的 {@code updatedAt}（使用者送出該進度的時間，
+ * epoch ms → {@code ZoneId.systemDefault()} 的 {@code LocalDateTime}），DB 端 {@code ON CONFLICT ... WHERE updated_at <= EXCLUDED.updated_at}
+ * 只接受不比現有舊的寫入。因此兩個 flusher 交錯（F1 讀舊值停頓、F2 寫新值並清標記、F1 再 upsert 舊值），
+ * 或完讀路徑直寫 DB 後舊 flush 才 upsert，舊值都會被守衛擋下，DB 不會回退；被擋下的 flusher 的 CAS
+ * 因 hash 內容已變（或成員已被移除）而不動 dirty，下一輪讀到新值再收斂。</p>
+ *
+ * <p><b>壞資料（poison pill）</b>：hash 缺 {@code progress}、{@code updatedAt}，或兩者無法解析時，不 upsert、
+ * 不拋例外中斷整輪，記 warn 後以讀到的內容做 {@link #COMPARE_AND_DISCARD_SCRIPT}（原子地「內容未變才 SREM 成員並 DEL hash」）；
+ * 內容已變（有新的合法 update）則兩者都保留，交給下一輪。</p>
+ *
  * <p>已知限制：{@code SMEMBERS} 一次取回整個 dirty set，成員數無上限（PERF-31 的另一半，不在 M2-c 處理）。</p>
  *
  * @author Yuan
- * @version 4.0
+ * @version 5.0
  */
 @Slf4j
 @Component
@@ -66,6 +80,20 @@ public class ReadingProgressFlushJob {
             "local c = redis.call('HMGET', KEYS[1], 'progress', 'lastHeading', 'updatedAt') "
                     + "for i = 1, 3 do if c[i] == false then c[i] = '' end end "
                     + "if c[1] == ARGV[1] and c[2] == ARGV[2] and c[3] == ARGV[3] then "
+                    + "return redis.call('SREM', KEYS[2], ARGV[4]) end "
+                    + "return 0",
+            Long.class);
+
+    /**
+     * compare-and-discard：與 {@link #COMPARE_AND_REMOVE_SCRIPT} 相同的三欄位比對；全部相等時
+     * {@code DEL KEYS[1]}（壞資料 hash）並 {@code SREM KEYS[2] ARGV[4]}，兩者在 Redis 內原子完成，
+     * 避免「移除成員後、DEL 前」插入的新 update 被一併刪掉。回傳 1 代表已丟棄，0 代表保留（內容已變）。
+     */
+    static final RedisScript<Long> COMPARE_AND_DISCARD_SCRIPT = new DefaultRedisScript<>(
+            "local c = redis.call('HMGET', KEYS[1], 'progress', 'lastHeading', 'updatedAt') "
+                    + "for i = 1, 3 do if c[i] == false then c[i] = '' end end "
+                    + "if c[1] == ARGV[1] and c[2] == ARGV[2] and c[3] == ARGV[3] then "
+                    + "redis.call('DEL', KEYS[1]) "
                     + "return redis.call('SREM', KEYS[2], ARGV[4]) end "
                     + "return 0",
             Long.class);
@@ -155,7 +183,7 @@ public class ReadingProgressFlushJob {
     }
 
     /**
-     * 讀 hash → upsert → compare-and-remove。任何一步失敗都不動 dirty set，成員留待下一輪。
+     * 讀 hash → upsert → compare-and-remove（壞資料改走 compare-and-discard）。任何一步失敗都不動 dirty set，成員留待下一輪。
      *
      * @param entry 要 flush 的成員
      */
@@ -168,13 +196,20 @@ public class ReadingProgressFlushJob {
                 compareAndRemove(hashKey, member, "", "", "");
                 return;
             }
-            String rawProgress = hash.get("progress").toString();
+            String rawProgress = valueOrEmpty(hash.get("progress"));
             String rawHeading = valueOrEmpty(hash.get("lastHeading"));
             String rawUpdatedAt = valueOrEmpty(hash.get("updatedAt"));
-            BigDecimal progress = new BigDecimal(rawProgress);
+            BigDecimal progress = parseProgress(rawProgress);
+            LocalDateTime updatedAt = parseUpdatedAt(rawUpdatedAt);
+            if (progress == null || updatedAt == null) {
+                log.warn("flush 發現壞資料（progress 或 updatedAt 缺失／無法解析），丟棄且不 upsert - {} progress='{}' updatedAt='{}'",
+                        member, rawProgress, rawUpdatedAt);
+                compareAndDiscard(hashKey, member, rawProgress, rawHeading, rawUpdatedAt);
+                return;
+            }
             String lastHeading = rawHeading.isEmpty() ? null : rawHeading;
 
-            progressMapper.upsert(entry.userUuid(), entry.articleUuid(), progress, lastHeading);
+            progressMapper.upsert(entry.userUuid(), entry.articleUuid(), progress, lastHeading, updatedAt);
             compareAndRemove(hashKey, member, rawProgress, rawHeading, rawUpdatedAt);
         } catch (Exception e) {
             log.warn("flush 失敗，成員仍在 dirty set，下輪重試 - {}", member, e);
@@ -195,6 +230,52 @@ public class ReadingProgressFlushJob {
         redisTemplate.execute(COMPARE_AND_REMOVE_SCRIPT,
                 List.of(hashKey, RedisKeyConstant.READING_DIRTY_KEY),
                 expectedProgress, expectedHeading, expectedUpdated, member);
+    }
+
+    /**
+     * 以 Lua 原子地執行 compare-and-discard，見 {@link #COMPARE_AND_DISCARD_SCRIPT}。
+     *
+     * @param hashKey          進度 hash 的 key
+     * @param member           dirty set 成員
+     * @param expectedProgress 讀取 hash 時的 progress 原始字串；缺少時傳空字串
+     * @param expectedHeading  讀取 hash 時的 lastHeading 原始字串；缺少時傳空字串
+     * @param expectedUpdated  讀取 hash 時的 updatedAt 原始字串；缺少時傳空字串
+     */
+    private void compareAndDiscard(String hashKey, String member, String expectedProgress,
+                                   String expectedHeading, String expectedUpdated) {
+        redisTemplate.execute(COMPARE_AND_DISCARD_SCRIPT,
+                List.of(hashKey, RedisKeyConstant.READING_DIRTY_KEY),
+                expectedProgress, expectedHeading, expectedUpdated, member);
+    }
+
+    /**
+     * 解析 progress。
+     *
+     * @param raw hash 內 progress 的原始字串
+     * @return 進度；缺少（空字串）或無法解析回 null
+     */
+    private static BigDecimal parseProgress(String raw) {
+        if (raw.isEmpty()) return null;
+        try {
+            return new BigDecimal(raw);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 解析 updatedAt（epoch ms）為系統時區的 {@link LocalDateTime}（與 mapper 的時區假設一致）。
+     *
+     * @param raw hash 內 updatedAt 的原始字串
+     * @return 時間；缺少（空字串）或無法解析回 null
+     */
+    private static LocalDateTime parseUpdatedAt(String raw) {
+        if (raw.isEmpty()) return null;
+        try {
+            return LocalDateTime.ofInstant(Instant.ofEpochMilli(Long.parseLong(raw)), ZoneId.systemDefault());
+        } catch (NumberFormatException | DateTimeException e) {
+            return null;
+        }
     }
 
     private static String valueOrEmpty(Object value) {
