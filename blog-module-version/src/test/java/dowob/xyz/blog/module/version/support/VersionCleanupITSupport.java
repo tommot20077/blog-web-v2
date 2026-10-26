@@ -99,7 +99,7 @@ public abstract class VersionCleanupITSupport {
     protected Article createArticle(ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(SeededVersionUsers.USER1_ID);
+        article.setAuthorUuid(SeededVersionUsers.USER1_UUID);
         article.setTitle("version-cleanup-it");
         article.setSlug("version-cleanup-it-" + UUID.randomUUID());
         article.setContent("test");

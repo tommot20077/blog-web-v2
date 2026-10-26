@@ -86,8 +86,8 @@ class ArticleFacadeRestoreUuidIT {
         registry.add("spring.data.redis.url", redis::getRedisURI);
     }
 
-    /** testdata seed（R__article_test_seed.sql）建立的作者 */
-    private static final long SEEDED_AUTHOR_ID = 1L;
+    /** 測試用作者公開 UUID（articles.author_uuid 無 FK，直接寫入固定值） */
+    private static final UUID SEEDED_AUTHOR_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
 
     private static final String MARKDOWN =
             "# 標題\n\n前言\n\n## 第一節\n\n內容\n\n### 第一節之一\n\n細節\n\n## 第二節\n\n結尾";
@@ -123,9 +123,9 @@ class ArticleFacadeRestoreUuidIT {
     private UUID insertArticle(String status) {
         UUID uuid = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO articles (uuid, author_id, title, slug, summary, content_md, content_html, toc, "
+                "INSERT INTO articles (uuid, author_uuid, title, slug, summary, content_md, content_html, toc, "
                         + "cover_image_url, status, reject_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                uuid, SEEDED_AUTHOR_ID, "舊標題-" + uuid, "old-" + uuid, "舊摘要", "舊內容", "<p>舊</p>", "[]",
+                uuid, SEEDED_AUTHOR_UUID, "舊標題-" + uuid, "old-" + uuid, "舊摘要", "舊內容", "<p>舊</p>", "[]",
                 "https://cdn/old.jpg", status, "REJECTED".equals(status) ? "內部評語" : null);
         insertedArticles.add(uuid);
         return uuid;

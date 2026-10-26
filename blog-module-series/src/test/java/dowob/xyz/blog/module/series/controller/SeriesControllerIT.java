@@ -149,7 +149,7 @@ class SeriesControllerIT {
     private Article createPublishedArticle(Long authorId) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededUsers.uuidOf(authorId));
         article.setTitle("Test Article " + UUID.randomUUID());
         article.setSlug("test-article-" + UUID.randomUUID());
         article.setContent("content");
@@ -167,7 +167,7 @@ class SeriesControllerIT {
     private Article createArticleInSeries(Long authorId, ArticleStatus status, Long seriesId, int position) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededUsers.uuidOf(authorId));
         article.setTitle("Test Article " + UUID.randomUUID());
         article.setSlug("test-article-" + UUID.randomUUID());
         article.setContent("content");
@@ -619,7 +619,7 @@ class SeriesControllerIT {
         // 直接屬於同一 series 的 DRAFT（模擬 PUBLISHED 加入後被改回草稿，series_id 未清空）
         Article draft = new Article();
         draft.setUuid(UUID.randomUUID());
-        draft.setAuthorId(USER1_ID);
+        draft.setAuthorUuid(SeededUsers.USER1_UUID);
         draft.setTitle("SECRET DRAFT TITLE");
         draft.setSlug("secret-draft-" + UUID.randomUUID());
         draft.setContent("secret content");
@@ -714,7 +714,11 @@ class SeriesControllerIT {
         assertThat(json(body).at("/data/author/uuid").asText()).isEqualTo(SeededUsers.USER1_UUID.toString());
         assertThat(json(body).at("/data/author/nickname").asText()).isEqualTo("Alice");
         assertThat(json(body).at("/data/author/avatarUrl").asText()).isEqualTo("https://img/alice.png");
-        verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
+        /*
+         * 詳情頁有兩個各自批次的作者解析：series 作者一次，成員文章摘要的作者一次（M6-a 起 article 也改走
+         * getDisplayInfoByUuids，先前走已移除的 Long 版 getAuthorInfoByIds，總數同為 2），兩者都不隨筆數 N+1。
+         */
+        verify(userFacade, times(2)).getDisplayInfoByUuids(anyCollection());
     }
 
     @Test

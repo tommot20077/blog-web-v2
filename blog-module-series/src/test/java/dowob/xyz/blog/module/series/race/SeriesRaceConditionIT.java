@@ -150,7 +150,7 @@ class SeriesRaceConditionIT {
     private Article createPublishedArticle() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(SeededUsers.USER1_ID);
+        article.setAuthorUuid(SeededUsers.USER1_UUID);
         article.setTitle("Race Article " + UUID.randomUUID());
         article.setSlug("race-article-" + UUID.randomUUID());
         article.setContent("content");

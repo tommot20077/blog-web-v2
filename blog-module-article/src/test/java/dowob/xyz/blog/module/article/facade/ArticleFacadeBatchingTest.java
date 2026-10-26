@@ -2,6 +2,8 @@ package dowob.xyz.blog.module.article.facade;
 
 import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.module.article.model.Article;
@@ -25,7 +27,10 @@ import java.util.UUID;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -46,7 +51,11 @@ class ArticleFacadeBatchingTest {
     @Mock private ArticleService articleService;
     @Mock private ArticleMapper articleMapper;
     @Mock private ObjectProvider<SeriesFacade> seriesFacadeProvider;
+    @Mock private UserFacade userFacade;
     private ArticleFacadeImpl facade;
+
+    /** 所有測試列共用的作者（M6-a：作者暱稱改由 UserFacade 整頁批次解析） */
+    private static final UUID AUTHOR_UUID = UUID.randomUUID();
 
     /**
      * 手動建構 facade 並注入「真實」的 {@link ArticleDataAssembler}（包裝 mock 的 mapper 與 provider）。
@@ -55,8 +64,8 @@ class ArticleFacadeBatchingTest {
      */
     @BeforeEach
     void setUp() {
-        facade = new ArticleFacadeImpl(articleMapper, null, recommendMapper, articleService, null, null, null, null,
-                null, new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)), null, null, null);
+        facade = new ArticleFacadeImpl(articleMapper, userFacade, recommendMapper, articleService, null, null, null, null,
+                null, new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)), null, null, null);
     }
 
     /** findByUuids 每次收到的批次大小 */
@@ -71,6 +80,8 @@ class ArticleFacadeBatchingTest {
         int total = BatchedQuery.BATCH_SIZE + 100;
         List<UUID> uuids = IntStream.rangeClosed(1, total)
                 .mapToObj(i -> UUID.randomUUID()).toList();
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(
+                java.util.Map.of(AUTHOR_UUID, new UserDisplayInfo(AUTHOR_UUID, "作者", null)));
 
         when(recommendMapper.findByUuids(anyList())).thenAnswer(invocation -> {
             List<UUID> batch = invocation.getArgument(0);
@@ -79,6 +90,7 @@ class ArticleFacadeBatchingTest {
                 ArticleSummaryRow row = new ArticleSummaryRow();
                 row.setUuid(u.toString());
                 row.setTitle("t");
+                row.setAuthorUuid(AUTHOR_UUID);
                 return row;
             }).toList();
         });
@@ -93,6 +105,8 @@ class ArticleFacadeBatchingTest {
         assertThat(uuidBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
         assertThat(tagBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
         assertThat(result).hasSize(total);
+        /* 作者暱稱整批只查一次：不因結果被切成多批的文章查詢而重複呼叫，也不隨文章數 N+1 */
+        verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
     }
 
     @Test
@@ -101,7 +115,7 @@ class ArticleFacadeBatchingTest {
         Article article = new Article();
         article.setId(1L);
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(7L);
+        article.setAuthorUuid(UUID.randomUUID());
         when(articleService.findByIds(List.of(1L))).thenReturn(List.of(article));
 
         List<ArticleData> result = facade.findByIds(List.of(1L));

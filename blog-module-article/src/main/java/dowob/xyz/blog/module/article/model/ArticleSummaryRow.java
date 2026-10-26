@@ -3,13 +3,14 @@ package dowob.xyz.blog.module.article.model;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 /**
  * 文章摘要查詢結果原始資料
  *
  * <p>
  * 供 ArticleRecommendMapper 使用的中間結果物件，
- * 包含文章基本欄位及作者暱稱（透過 SQL JOIN 取得）。
- * 由 ArticleFacadeImpl 進一步組裝為 ArticleSummaryInfo。
+ * 包含文章基本欄位及作者 UUID（M6-a 起不再關聯 users 表）。
+ * 由 ArticleFacadeImpl 以整頁一次的 UserFacade 批次查詢補上作者暱稱，進一步組裝為 ArticleSummaryInfo。
  * </p>
  *
  * @author Yuan
@@ -44,9 +45,9 @@ public class ArticleSummaryRow {
     private String summary;
 
     /**
-     * 作者暱稱（透過 JOIN users 取得）
+     * 作者公開 UUID（取自 articles.author_uuid；暱稱由 facade 以 UserFacade 整頁批次解析，不再關聯 users 表）
      */
-    private String authorNickname;
+    private UUID authorUuid;
 
     /**
      * 瀏覽次數

@@ -13,13 +13,12 @@
             a.title,
             a.slug,
             a.summary,
-            u.nickname AS authorNickname,
+            a.author_uuid AS authorUuid,
             a.view_count AS viewCount,
             a.like_count AS likeCount,
             a.published_at AS publishedAt
         FROM articles a
         JOIN article_tags at ON a.uuid = at.article_id
-        JOIN users u ON a.author_id = u.id
         WHERE at.tag_id IN
             <foreach item="tagId" collection="tagIds" open="(" separator="," close=")">
                 #{tagId}::uuid
@@ -39,12 +38,11 @@
             a.title,
             a.slug,
             a.summary,
-            u.nickname AS authorNickname,
+            a.author_uuid AS authorUuid,
             a.view_count AS viewCount,
             a.like_count AS likeCount,
             a.published_at AS publishedAt
         FROM articles a
-        JOIN users u ON a.author_id = u.id
         WHERE a.uuid IN
             <foreach item="uuid" collection="uuids" open="(" separator="," close=")">
                 #{uuid}::uuid

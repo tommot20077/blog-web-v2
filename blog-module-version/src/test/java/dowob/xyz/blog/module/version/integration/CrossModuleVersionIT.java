@@ -162,7 +162,7 @@ class CrossModuleVersionIT {
     private Article createDraftArticle(Long authorId, String title, String content) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededVersionUsers.uuidOf(authorId));
         article.setTitle(title);
         article.setSlug("version-it-" + UUID.randomUUID());
         article.setContent(content);

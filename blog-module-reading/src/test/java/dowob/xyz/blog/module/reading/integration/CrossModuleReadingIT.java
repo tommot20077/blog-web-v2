@@ -134,7 +134,7 @@ class CrossModuleReadingIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(USER_ID);
+        article.setAuthorUuid(SeededReadingUsers.uuidOf(USER_ID));
         article.setTitle("Cross IT");
         article.setSlug("cross-it-" + UUID.randomUUID());
         article.setContent("test");

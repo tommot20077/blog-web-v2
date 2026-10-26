@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.facade;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
@@ -9,7 +10,7 @@ import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
-import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleTestApplication;
@@ -86,7 +87,7 @@ class ArticleFacadeReadingUuidIT {
         registry.add("spring.data.redis.url", redis::getRedisURI);
     }
 
-    /** testdata seed（R__article_test_seed.sql）建立的作者 */
+    /** testdata seed（R__article_test_seed.sql）建立的作者（取其 uuid 作為 articles.author_uuid） */
     private static final long SEEDED_AUTHOR_ID = 1L;
 
     @Autowired private ArticleFacade articleFacade;
@@ -155,12 +156,12 @@ class ArticleFacadeReadingUuidIT {
         return id;
     }
 
-    private UUID insertArticle(long authorId, String status, int likeCount) {
+    private UUID insertArticle(UUID authorUuid, String status, int likeCount) {
         UUID uuid = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO articles (uuid, author_id, title, slug, content_md, status, like_count) "
+                "INSERT INTO articles (uuid, author_uuid, title, slug, content_md, status, like_count) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                uuid, authorId, "t-" + uuid, "slug-" + uuid, "內容", status, likeCount);
+                uuid, authorUuid, "t-" + uuid, "slug-" + uuid, "內容", status, likeCount);
         insertedArticles.add(uuid);
         return uuid;
     }
@@ -180,59 +181,60 @@ class ArticleFacadeReadingUuidIT {
                 new UsernamePasswordAuthenticationToken(principal, null, List.of()));
     }
 
-    /** 比照 filterReadableIds 的結果轉成 uuid，作為 filterReadableUuids 的對照基準 */
-    private List<UUID> readableUuidsViaIds(List<UUID> candidates, Long viewerId, boolean isAdmin) {
-        List<UUID> known = candidates.stream().filter(u -> !isUnknown(u)).toList();
-        List<Long> ids = known.stream().map(this::idOf).toList();
-        List<Long> readable = articleFacade.filterReadableIds(ids, viewerId, isAdmin);
-        return known.stream().filter(u -> readable.contains(idOf(u))).toList();
-    }
-
-    private boolean isUnknown(UUID uuid) {
-        return !insertedArticles.contains(uuid);
+    /**
+     * 依單一真相的可見性政策（{@link ArticleVisibility}）與資料庫實際的狀態、作者算出預期可讀的文章，
+     * 保留輸入順序，作為 filterReadableUuids 的對照基準。
+     */
+    private List<UUID> expectedReadable(List<UUID> candidates, UUID viewerUuid, boolean isAdmin) {
+        return candidates.stream()
+                .filter(u -> insertedArticles.contains(u))
+                .filter(u -> ArticleVisibility.isReadableBy(
+                        jdbcTemplate.queryForObject("SELECT status FROM articles WHERE uuid = ?", String.class, u),
+                        jdbcTemplate.queryForObject("SELECT author_uuid FROM articles WHERE uuid = ?", UUID.class, u),
+                        viewerUuid, isAdmin))
+                .toList();
     }
 
     // ─── filterReadableUuids ───
 
     @Test
-    @DisplayName("filterReadableUuids：各種狀態 × 匿名／作者／他人／ADMIN，結果與 filterReadableIds 一致且保留輸入順序")
-    void filterReadableUuids_matchesFilterReadableIds_forEveryViewerAndStatus() {
-        UUID publishedByA1 = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 0);
-        UUID draftByA1 = insertArticle(SEEDED_AUTHOR_ID, "DRAFT", 0);
-        UUID pendingByA1 = insertArticle(SEEDED_AUTHOR_ID, "PENDING_REVIEW", 0);
-        UUID archivedByA1 = insertArticle(SEEDED_AUTHOR_ID, "ARCHIVED", 0);
-        UUID publishedByA2 = insertArticle(author2Id, "PUBLISHED", 0);
-        UUID draftByA2 = insertArticle(author2Id, "DRAFT", 0);
-        UUID rejectedByA2 = insertArticle(author2Id, "REJECTED", 0);
+    @DisplayName("filterReadableUuids：各種狀態 × 匿名／作者／他人／ADMIN，結果與可見性政策（ArticleVisibility）一致且保留輸入順序")
+    void filterReadableUuids_matchesVisibilityPolicy_forEveryViewerAndStatus() {
+        UUID publishedByA1 = insertArticle(author1Uuid, "PUBLISHED", 0);
+        UUID draftByA1 = insertArticle(author1Uuid, "DRAFT", 0);
+        UUID pendingByA1 = insertArticle(author1Uuid, "PENDING_REVIEW", 0);
+        UUID archivedByA1 = insertArticle(author1Uuid, "ARCHIVED", 0);
+        UUID publishedByA2 = insertArticle(author2Uuid, "PUBLISHED", 0);
+        UUID draftByA2 = insertArticle(author2Uuid, "DRAFT", 0);
+        UUID rejectedByA2 = insertArticle(author2Uuid, "REJECTED", 0);
         /** 刻意與建立順序不同，驗證輸出順序以輸入為準 */
         List<UUID> candidates = List.of(rejectedByA2, publishedByA1, draftByA2, archivedByA1,
                 publishedByA2, draftByA1, pendingByA1);
 
         Object[][] viewers = {
-                {null, null, false},
-                {SEEDED_AUTHOR_ID, author1Uuid, false},
-                {author2Id, author2Uuid, false},
-                {author2Id, author2Uuid, true},
+                {null, false},
+                {author1Uuid, false},
+                {author2Uuid, false},
+                {author2Uuid, true},
         };
         for (Object[] v : viewers) {
-            Long viewerId = (Long) v[0];
-            UUID viewerUuid = (UUID) v[1];
-            boolean admin = (Boolean) v[2];
+            UUID viewerUuid = (UUID) v[0];
+            boolean admin = (Boolean) v[1];
 
             List<UUID> byUuid = articleFacade.filterReadableUuids(candidates, viewerUuid, admin);
 
             assertThat(byUuid)
                     .as("viewer=%s admin=%s", viewerUuid, admin)
-                    .containsExactlyElementsOf(readableUuidsViaIds(candidates, viewerId, admin));
+                    .containsExactlyElementsOf(expectedReadable(candidates, viewerUuid, admin));
         }
     }
 
     @Test
     @DisplayName("filterReadableUuids：匿名只看得到 PUBLISHED；作者本人加看自己的非公開；ADMIN 全看得到")
     void filterReadableUuids_explicitExpectations() {
-        UUID publishedByA1 = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 0);
-        UUID draftByA1 = insertArticle(SEEDED_AUTHOR_ID, "DRAFT", 0);
-        UUID draftByA2 = insertArticle(author2Id, "DRAFT", 0);
+        UUID publishedByA1 = insertArticle(author1Uuid, "PUBLISHED", 0);
+        UUID draftByA1 = insertArticle(author1Uuid, "DRAFT", 0);
+        UUID draftByA2 = insertArticle(author2Uuid, "DRAFT", 0);
         List<UUID> candidates = List.of(draftByA2, draftByA1, publishedByA1);
 
         assertThat(articleFacade.filterReadableUuids(candidates, null, false))
@@ -248,7 +250,7 @@ class ArticleFacadeReadingUuidIT {
     @Test
     @DisplayName("filterReadableUuids：查無的 uuid 被略過；null 與空清單回空清單")
     void filterReadableUuids_unknownNullAndEmpty() {
-        UUID published = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 0);
+        UUID published = insertArticle(author1Uuid, "PUBLISHED", 0);
 
         assertThat(articleFacade.filterReadableUuids(List.of(UUID.randomUUID(), published), null, false))
                 .containsExactly(published);
@@ -261,8 +263,8 @@ class ArticleFacadeReadingUuidIT {
     @Test
     @DisplayName("incrementLikeCount(UUID)：只讓該文章 like_count +1，不影響其他文章")
     void incrementLikeCountByUuid_incrementsOnlyTargetArticle() {
-        UUID target = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 2);
-        UUID other = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 5);
+        UUID target = insertArticle(author1Uuid, "PUBLISHED", 2);
+        UUID other = insertArticle(author1Uuid, "PUBLISHED", 5);
 
         articleFacade.incrementLikeCount(target);
 
@@ -273,8 +275,8 @@ class ArticleFacadeReadingUuidIT {
     @Test
     @DisplayName("decrementLikeCount(UUID)：-1，且不影響其他文章")
     void decrementLikeCountByUuid_decrementsOnlyTargetArticle() {
-        UUID target = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 2);
-        UUID other = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 5);
+        UUID target = insertArticle(author1Uuid, "PUBLISHED", 2);
+        UUID other = insertArticle(author1Uuid, "PUBLISHED", 5);
 
         articleFacade.decrementLikeCount(target);
 
@@ -285,7 +287,7 @@ class ArticleFacadeReadingUuidIT {
     @Test
     @DisplayName("decrementLikeCount(UUID)：計數為 0 時守衛 > 0，不會變成負數")
     void decrementLikeCountByUuid_atZero_staysZero() {
-        UUID target = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 0);
+        UUID target = insertArticle(author1Uuid, "PUBLISHED", 0);
 
         articleFacade.decrementLikeCount(target);
 
@@ -295,8 +297,8 @@ class ArticleFacadeReadingUuidIT {
     @Test
     @DisplayName("like count 的 UUID 版與 Long 版結果一致")
     void likeCount_uuidVersionMatchesLongVersion() {
-        UUID viaUuid = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 1);
-        UUID viaId = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 1);
+        UUID viaUuid = insertArticle(author1Uuid, "PUBLISHED", 1);
+        UUID viaId = insertArticle(author1Uuid, "PUBLISHED", 1);
 
         articleFacade.incrementLikeCount(viaUuid);
         articleFacade.incrementLikeCount(idOf(viaId));
@@ -322,9 +324,9 @@ class ArticleFacadeReadingUuidIT {
 
     /** 建立三篇文章（a 屬於 series 且有 tag），並設定作者與 series 的 mock 回應；回傳 [a, b, c] */
     private List<UUID> seedSummaryArticles() {
-        UUID a = insertArticle(SEEDED_AUTHOR_ID, "PUBLISHED", 3);
-        UUID b = insertArticle(author2Id, "PUBLISHED", 1);
-        UUID c = insertArticle(SEEDED_AUTHOR_ID, "DRAFT", 0);
+        UUID a = insertArticle(author1Uuid, "PUBLISHED", 3);
+        UUID b = insertArticle(author2Uuid, "PUBLISHED", 1);
+        UUID c = insertArticle(author1Uuid, "DRAFT", 0);
 
         Long seriesId = jdbcTemplate.queryForObject(
                 "INSERT INTO series (title, slug, author_uuid) VALUES ('系列', ?, ?) RETURNING id",
@@ -338,9 +340,9 @@ class ArticleFacadeReadingUuidIT {
         insertedTags.add(tagId);
         jdbcTemplate.update("INSERT INTO article_tags (article_id, tag_id) VALUES (?, ?)", a, tagId);
 
-        when(userFacade.getAuthorInfoByIds(anyCollection())).thenReturn(Map.of(
-                SEEDED_AUTHOR_ID, new AuthorInfo(author1Uuid, "TestAuthor"),
-                author2Id, new AuthorInfo(author2Uuid, "Author2")));
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
+                author1Uuid, new UserDisplayInfo(author1Uuid, "TestAuthor", null),
+                author2Uuid, new UserDisplayInfo(author2Uuid, "Author2", null)));
         when(seriesFacade.batchGetSeriesBasicInfo(anyCollection())).thenReturn(Map.of(
                 seriesId, new SeriesBasicInfo(UUID.randomUUID(), "系列")));
         return List.of(a, b, c);
@@ -391,7 +393,7 @@ class ArticleFacadeReadingUuidIT {
         verify(readingFacade, times(1)).batchIsBookmarked(any(), anyList());
         verify(readingFacade, times(1)).batchGetProgress(any(), anyList());
         verify(seriesFacade, times(1)).batchGetSeriesBasicInfo(anyCollection());
-        verify(userFacade, times(1)).getAuthorInfoByIds(anyCollection());
+        verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
     }
 
     @Test

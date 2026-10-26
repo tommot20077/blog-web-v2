@@ -224,7 +224,7 @@ class ArticleQueryServiceTest {
         @DisplayName("正常：已登入且已按讚，liked=true")
         void loggedIn_likedTrue() {
             ArticleResponse resp = buildResponse();
-            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
+            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
             when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
 
@@ -232,7 +232,7 @@ class ArticleQueryServiceTest {
                     new UsernamePasswordAuthenticationToken(
                             new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
-            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1");
 
             assertThat(result.getLiked()).isTrue();
         }
@@ -241,7 +241,7 @@ class ArticleQueryServiceTest {
         @DisplayName("正常：已登入但未按讚，liked=false")
         void loggedIn_notLiked() {
             ArticleResponse resp = buildResponse();
-            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
+            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
             when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(false);
 
@@ -249,7 +249,7 @@ class ArticleQueryServiceTest {
                     new UsernamePasswordAuthenticationToken(
                             new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
-            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1");
 
             assertThat(result.getLiked()).isFalse();
         }
@@ -277,7 +277,7 @@ class ArticleQueryServiceTest {
         @DisplayName("正常：已登入且已按讚，liked=true")
         void loggedIn_likedTrue() {
             ArticleResponse resp = buildResponse();
-            when(articleService.getArticleBySlug("test-slug", AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
+            when(articleService.getArticleBySlug("test-slug", AUTHOR_UUID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
             when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
 
@@ -285,7 +285,7 @@ class ArticleQueryServiceTest {
                     new UsernamePasswordAuthenticationToken(
                             new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
-            ArticleResponse result = articleQueryService.getArticleBySlug("test-slug", AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+            ArticleResponse result = articleQueryService.getArticleBySlug("test-slug", AUTHOR_UUID, Role.AUTHOR, "127.0.0.1");
 
             assertThat(result.getLiked()).isTrue();
         }
@@ -302,7 +302,7 @@ class ArticleQueryServiceTest {
         void loggedIn_likedTrue() {
             ArticleSummaryResponse summary = buildSummary();
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
-            when(articleService.getMyArticles(AUTHOR_ID, 1, 10, null)).thenReturn(page);
+            when(articleService.getMyArticles(AUTHOR_UUID, 1, 10, null)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
             when(readingFacade.batchIsLiked(AUTHOR_UUID, List.of(ARTICLE_UUID))).thenReturn(Set.of(ARTICLE_UUID));
 
@@ -310,7 +310,7 @@ class ArticleQueryServiceTest {
                     new UsernamePasswordAuthenticationToken(
                             new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
-            PageResult<ArticleSummaryResponse> result = articleQueryService.getMyArticles(AUTHOR_ID, 1, 10, null);
+            PageResult<ArticleSummaryResponse> result = articleQueryService.getMyArticles(AUTHOR_UUID, 1, 10, null);
 
             assertThat(result.getRecords().get(0).getLiked()).isTrue();
         }
@@ -487,7 +487,7 @@ class ArticleQueryServiceTest {
             BigDecimal progress = new BigDecimal("0.72");
             ArticleResponse resp = buildResponse();
 
-            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1"))
+            when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1"))
                     .thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
             when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
@@ -500,7 +500,7 @@ class ArticleQueryServiceTest {
                             new AuthUser(AUTHOR_ID, new UUID(0L, AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(
-                    ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1");
+                    ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1");
 
             assertThat(result.getLiked()).isTrue();
             assertThat(result.getBookmarked()).isTrue();

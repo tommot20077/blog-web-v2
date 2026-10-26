@@ -183,7 +183,7 @@ class CrossModuleSeriesIT {
     private Article createArticle(Long authorId, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededUsers.uuidOf(authorId));
         article.setTitle("Series IT Article " + UUID.randomUUID());
         article.setSlug("series-it-" + UUID.randomUUID());
         article.setContent("test content");

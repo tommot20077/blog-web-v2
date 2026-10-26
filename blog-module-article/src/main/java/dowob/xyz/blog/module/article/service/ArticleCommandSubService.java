@@ -78,14 +78,14 @@ class ArticleCommandSubService {
     /**
      * 建立文章
      *
-     * @param authorId 作者資料庫主鍵
+     * @param authorUuid 作者公開 UUID
      * @param request  建立文章請求
      * @return 建立後的文章完整資訊
      */
-    public EditorArticleResponse createArticle(Long authorId, CreateArticleRequest request) {
+    public EditorArticleResponse createArticle(UUID authorUuid, CreateArticleRequest request) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(authorUuid);
         article.setTitle(request.getTitle());
         article.setContent(request.getContent());
         RenderResult renderResult = markdownRenderer.render(request.getContent());
@@ -150,16 +150,16 @@ class ArticleCommandSubService {
     /**
      * 更新文章
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @param request      更新請求
      * @return 更新後的文章完整資訊
      */
-    public EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
+    public EditorArticleResponse updateArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid,
             UpdateArticleRequest request) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
-        checkWritePermission(operatorId, operatorRole, article);
+        checkWritePermission(operatorUuid, operatorRole, article);
 
         /*
          * 內容凍結守衛：只有 DRAFT / REJECTED 允許改寫內容，其餘狀態拋 ARTICLE_EDIT_NOT_ALLOWED。
@@ -276,13 +276,13 @@ class ArticleCommandSubService {
     /**
      * 刪除文章
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      */
-    public void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+    public void deleteArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
-        checkWritePermission(operatorId, operatorRole, article);
+        checkWritePermission(operatorUuid, operatorRole, article);
 
         /* delete 前讀取：article 刪除後 FK CASCADE 會清 article_tags / article_categories，
          * series consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。
@@ -310,14 +310,14 @@ class ArticleCommandSubService {
     /**
      * 發布文章
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @return 發布後的文章完整資訊
      */
-    public ArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+    public ArticleResponse publishArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
-        checkWritePermission(operatorId, operatorRole, article);
+        checkWritePermission(operatorUuid, operatorRole, article);
         validateStatusTransition(article.getStatus(), ArticleStatus.PUBLISHED, operatorRole);
 
         article.setStatus(ArticleStatus.PUBLISHED);
@@ -360,14 +360,14 @@ class ArticleCommandSubService {
     /**
      * 駁回文章（僅 ADMIN）
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @param reason       駁回原因
      * @return 駁回後的文章完整資訊
      */
     @Transactional
-    public ArticleResponse rejectArticle(Long operatorId, Role operatorRole, UUID articleUuid, String reason) {
+    public ArticleResponse rejectArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid, String reason) {
         if (operatorRole != Role.ADMIN) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
@@ -392,15 +392,15 @@ class ArticleCommandSubService {
      * 送審成功時一併清空 rejectReason。
      * </p>
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @return 提交審核後的文章完整資訊
      */
     @Transactional
-    public ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
+    public ArticleResponse submitForReview(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
-        checkWritePermission(operatorId, operatorRole, article);
+        checkWritePermission(operatorUuid, operatorRole, article);
         validateStatusTransition(article.getStatus(), ArticleStatus.PENDING_REVIEW, operatorRole);
         article.setStatus(ArticleStatus.PENDING_REVIEW);
         clearRejectReasonIfNotRejected(article);
@@ -439,16 +439,16 @@ class ArticleCommandSubService {
      * {@link #rejectArticle} 對稱。
      * </p>
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色（保留以與其他狀態轉換方法簽章一致；
      *                     抽回為作者本人專屬，刻意不依角色放行）
      * @param articleUuid  文章公開 UUID
      * @return 抽回後的文章完整資訊
      */
     @Transactional
-    public ArticleResponse withdrawArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+    public ArticleResponse withdrawArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
-        checkAuthorOnly(operatorId, article);
+        checkAuthorOnly(operatorUuid, article);
         /*
          * 入口語意守衛（比狀態機更嚴，見 VALID_TRANSITIONS 的「表與入口的分工」）：
          * 抽回專指「收回自己送審中的文章」，故來源必須是 PENDING_REVIEW。
@@ -499,12 +499,12 @@ class ArticleCommandSubService {
      * {@link TransactionTemplate} 收斂 DB 操作，commit 成功後才 best-effort 發事件。
      * </p>
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
      * @param articleUuid  文章公開 UUID
      * @return 下架後的文章完整資訊
      */
-    public ArticleResponse archiveArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+    public ArticleResponse archiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
         if (operatorRole != Role.ADMIN) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
@@ -554,13 +554,13 @@ class ArticleCommandSubService {
      * {@link #submitForReview}、{@link #withdrawArticle} 對稱。
      * </p>
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
      * @param articleUuid  文章公開 UUID
      * @return 復原後的文章完整資訊
      */
     @Transactional
-    public ArticleResponse unarchiveArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
+    public ArticleResponse unarchiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
         if (operatorRole != Role.ADMIN) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
@@ -614,15 +614,15 @@ class ArticleCommandSubService {
     /**
      * 檢查寫入權限：ADMIN 可操作任何文章，AUTHOR 只能操作自己的
      *
-     * @param operatorId   操作者 ID
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param article      目標文章
      */
-    private void checkWritePermission(Long operatorId, Role operatorRole, Article article) {
+    private void checkWritePermission(UUID operatorUuid, Role operatorRole, Article article) {
         if (operatorRole == Role.ADMIN) {
             return;
         }
-        if (!article.getAuthorId().equals(operatorId)) {
+        if (!article.getAuthorUuid().equals(operatorUuid)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
     }
@@ -637,11 +637,11 @@ class ArticleCommandSubService {
      * update / delete / submit / publish 既有的 ADMIN 管理權行為。
      * </p>
      *
-     * @param operatorId 操作者 ID
+     * @param operatorUuid 操作者公開 UUID
      * @param article    目標文章
      */
-    private void checkAuthorOnly(Long operatorId, Article article) {
-        if (!article.getAuthorId().equals(operatorId)) {
+    private void checkAuthorOnly(UUID operatorUuid, Article article) {
+        if (!article.getAuthorUuid().equals(operatorUuid)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
     }

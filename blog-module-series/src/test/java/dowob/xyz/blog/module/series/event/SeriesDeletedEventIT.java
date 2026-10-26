@@ -139,7 +139,7 @@ class SeriesDeletedEventIT {
     private Article createArticleInSeries(UUID seriesUuid, int position) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(SeededUsers.USER1_ID);
+        article.setAuthorUuid(SeededUsers.USER1_UUID);
         article.setTitle("In Series " + UUID.randomUUID());
         article.setSlug("in-series-" + UUID.randomUUID());
         article.setContent("content");

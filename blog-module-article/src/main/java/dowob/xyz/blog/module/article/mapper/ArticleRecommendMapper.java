@@ -19,6 +19,10 @@ import java.util.UUID;
  * 涉及 IN 子句的動態 SQL 使用 XML 映射定義。
  * </p>
  *
+ * <p><b>M6-a</b>：摘要查詢不再以 INNER JOIN 關聯 users 表，改為帶出 {@code author_uuid}，
+ * 作者暱稱由 {@code ArticleFacadeImpl} 以整頁一次的 {@code UserFacade.getDisplayInfoByUuids} 補上，
+ * 且查無作者的文章維持「不出現在推薦結果」的原語意。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -67,11 +71,10 @@ public interface ArticleRecommendMapper {
      */
     @Select("""
             SELECT a.id, a.uuid, a.title, a.slug, a.summary,
-                   u.nickname AS authorNickname,
+                   a.author_uuid AS authorUuid,
                    a.view_count AS viewCount, a.like_count AS likeCount,
                    a.published_at AS publishedAt
             FROM articles a
-            JOIN users u ON a.author_id = u.id
             WHERE a.uuid != #{excludeUuid}::uuid
               AND a.status = 'PUBLISHED'
             ORDER BY a.published_at DESC

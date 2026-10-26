@@ -128,7 +128,7 @@ class CrossModuleCommentIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(USER_ID);
+        article.setAuthorUuid(USER_UUID);
         article.setTitle("Cross-module IT");
         article.setSlug("cross-it-" + UUID.randomUUID());
         article.setContent("test");

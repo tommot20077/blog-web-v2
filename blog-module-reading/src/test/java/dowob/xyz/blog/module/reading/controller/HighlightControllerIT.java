@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.module.reading.support.SeededReadingUsers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
@@ -99,7 +100,7 @@ class HighlightControllerIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(USER_ID);
+        article.setAuthorUuid(SeededReadingUsers.uuidOf(USER_ID));
         article.setTitle("Highlight IT");
         article.setSlug("highlight-it-" + UUID.randomUUID());
         article.setContent("test");

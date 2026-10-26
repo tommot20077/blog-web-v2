@@ -1,8 +1,6 @@
 package dowob.xyz.blog.module.article.service;
 
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
-import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
-import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 
@@ -17,23 +15,20 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * 作者與 series 的「主鍵 → 公開 UUID」批次轉換元件（設計 §3.1「過渡 API」）。
+ * series 的「主鍵 ↔ 公開 UUID」批次轉換元件（設計 §3.1「過渡 API」；M6-b 以 {@code series_uuid} 欄位取代後移除）。
  *
  * <p>由 {@code ArticleDataAssembler}（填 {@code ArticleData} 的 uuid 欄位）與
- * {@link ArticleEventPublisher}（填事件的 uuid 欄位）共用，讓兩處走同一套機制：</p>
- * <ul>
- *   <li>作者 uuid：article 模組內 {@code users} 仍是 reference data，經
- *       {@link ArticleMapper#findUserUuidsByIds} 並以 {@link BatchedQuery} 切批（M6 改為 {@code author_uuid}
- *       欄位後移除）；</li>
- *   <li>series uuid：經 {@link SeriesFacade#findUuidsByIds} 批次轉換，<b>不得</b> JOIN series 表
- *       （跨模組邊界，CrossModuleBoundaryTest 會擋）。</li>
- * </ul>
+ * {@link ArticleEventPublisher}（填事件的 uuid 欄位）共用，讓兩處走同一套機制：
+ * series uuid 經 {@link SeriesFacade#findUuidsByIds} 批次轉換，<b>不得</b> JOIN series 表
+ * （跨模組邊界，CrossModuleBoundaryTest 會擋）。</p>
+ *
+ * <p>作者 uuid 自 M6-a 起直接存於 {@code articles.author_uuid}，不再經本元件轉換。</p>
  *
  * <p><b>bean 循環</b>：{@code SeriesFacadeImpl} 已建構子注入 {@code ArticleFacade}，若在此直接注入
  * {@link SeriesFacade} 會形成循環，故一律以 {@link ObjectProvider} 延遲取得，且只在<b>確實有 series id 要轉換時</b>
  * 才取用。不得改為 field injection 或開啟 {@code allow-circular-references}。</p>
  *
- * <p><b>依賴限制</b>：只依賴 mapper 與 {@link ObjectProvider}，不依賴任何 service／facade，
+ * <p><b>依賴限制</b>：只依賴 {@link ObjectProvider}，不依賴任何 service／facade／mapper，
  * 放在 service 套件是為了讓 facade 與 service 都能單向依賴它而不形成套件循環。</p>
  *
  * @author Yuan
@@ -42,41 +37,16 @@ import java.util.stream.Collectors;
 @Component
 public class ArticleIdentityResolver {
 
-    /** 文章 MyBatis Mapper（讀 users reference data 取作者 uuid） */
-    private final ArticleMapper articleMapper;
-
     /** 延遲取得 SeriesFacade，打斷 SeriesFacadeImpl → ArticleFacade 的 bean 循環 */
     private final ObjectProvider<SeriesFacade> seriesFacadeProvider;
 
     /**
      * 建構子。
      *
-     * @param articleMapper        文章 MyBatis Mapper
      * @param seriesFacadeProvider SeriesFacade 的延遲提供者
      */
-    public ArticleIdentityResolver(ArticleMapper articleMapper, ObjectProvider<SeriesFacade> seriesFacadeProvider) {
-        this.articleMapper = articleMapper;
+    public ArticleIdentityResolver(ObjectProvider<SeriesFacade> seriesFacadeProvider) {
         this.seriesFacadeProvider = seriesFacadeProvider;
-    }
-
-    /**
-     * 批次把使用者主鍵轉成公開 UUID。
-     *
-     * <p>輸入去重並忽略 null，經 {@link BatchedQuery} 切批；查無的使用者不出現在結果中。</p>
-     *
-     * @param userIds 使用者主鍵集合；null 或空集合回傳空 Map 且不發查詢
-     * @return 使用者主鍵 → 公開 UUID
-     */
-    public Map<Long, UUID> resolveAuthorUuids(Collection<Long> userIds) {
-        Set<Long> distinct = distinctNonNull(userIds);
-        if (distinct.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        return BatchedQuery.queryInBatches(distinct, articleMapper::findUserUuidsByIds).stream()
-                .collect(Collectors.toMap(
-                        ArticleMapper.UserUuidRow::userId,
-                        ArticleMapper.UserUuidRow::userUuid,
-                        (first, second) -> first));
     }
 
     /**

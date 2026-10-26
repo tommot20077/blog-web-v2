@@ -223,7 +223,7 @@ class AdminArticleControllerTest {
                 .title("已下架文章")
                 .status(ArticleStatus.ARCHIVED)
                 .build();
-        when(articleService.archiveArticle(1L, Role.ADMIN, uuid)).thenReturn(response);
+        when(articleService.archiveArticle(new UUID(0L, 1L), Role.ADMIN, uuid)).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
                         .with(asAdmin()))
@@ -231,7 +231,7 @@ class AdminArticleControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.status").value("ARCHIVED"));
 
-        verify(articleService).archiveArticle(1L, Role.ADMIN, uuid);
+        verify(articleService).archiveArticle(new UUID(0L, 1L), Role.ADMIN, uuid);
     }
 
     // =========================================================================
@@ -273,7 +273,7 @@ class AdminArticleControllerTest {
                 .title("已復原文章")
                 .status(ArticleStatus.DRAFT)
                 .build();
-        when(articleService.unarchiveArticle(1L, Role.ADMIN, uuid)).thenReturn(response);
+        when(articleService.unarchiveArticle(new UUID(0L, 1L), Role.ADMIN, uuid)).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
                         .with(asAdmin()))
@@ -281,7 +281,7 @@ class AdminArticleControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.status").value("DRAFT"));
 
-        verify(articleService).unarchiveArticle(1L, Role.ADMIN, uuid);
+        verify(articleService).unarchiveArticle(new UUID(0L, 1L), Role.ADMIN, uuid);
     }
 
 }

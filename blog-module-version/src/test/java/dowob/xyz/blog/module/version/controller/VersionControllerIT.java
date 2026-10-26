@@ -139,7 +139,7 @@ class VersionControllerIT {
     private Article createArticle(Long authorId, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededVersionUsers.uuidOf(authorId));
         article.setTitle("Test Article " + UUID.randomUUID());
         article.setSlug("test-article-" + UUID.randomUUID());
         article.setContent("This is test content for versioning.");

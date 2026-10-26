@@ -76,21 +76,22 @@ class ArticleLookupFacadeImplTest {
         lenient().when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
         lenient().when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of());
         articleLookupFacadeImpl = new ArticleLookupFacadeImpl(
-                articleRepository, new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)));
+                articleRepository, new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)));
     }
 
     /**
-     * 驗證：文章存在時應回傳完整對應的 ArticleData（含 authorId 與 status，
+     * 驗證：文章存在時應回傳完整對應的 ArticleData（含 authorUuid 與 status，
      * 這兩個欄位是 file 模組授權判斷的依據）。
      */
     @Test
-    @DisplayName("findByUuid → 文章存在 → 應回傳含 authorId / status 的 ArticleData")
+    @DisplayName("findByUuid → 文章存在 → 應回傳含 authorUuid / status 的 ArticleData")
     void findByUuid_articleExists_shouldReturnArticleData() {
         UUID articleUuid = UUID.randomUUID();
         Article article = new Article();
         article.setId(42L);
         article.setUuid(articleUuid);
-        article.setAuthorId(7L);
+        UUID authorUuid = UUID.randomUUID();
+        article.setAuthorUuid(authorUuid);
         article.setStatus(ArticleStatus.PUBLISHED);
         article.setSeriesId(3L);
         article.setSeriesPosition(2);
@@ -100,6 +101,7 @@ class ArticleLookupFacadeImplTest {
 
         assertThat(result).isPresent();
         ArticleData data = result.get();
+        assertThat(data.authorUuid()).isEqualTo(authorUuid);
         assertThat(data.id()).isEqualTo(42L);
         assertThat(data.uuid()).isEqualTo(articleUuid);
         assertThat(data.status()).isEqualTo("PUBLISHED");
@@ -117,7 +119,7 @@ class ArticleLookupFacadeImplTest {
         Article article = new Article();
         article.setId(1L);
         article.setUuid(articleUuid);
-        article.setAuthorId(1L);
+        article.setAuthorUuid(UUID.randomUUID());
         article.setStatus(null);
         when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
@@ -164,13 +166,11 @@ class ArticleLookupFacadeImplTest {
         Article article = new Article();
         article.setId(42L);
         article.setUuid(articleUuid);
-        article.setAuthorId(7L);
+        article.setAuthorUuid(authorUuid);
         article.setStatus(ArticleStatus.PUBLISHED);
         article.setSeriesId(3L);
         article.setSeriesPosition(2);
         when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
-        when(articleMapper.findUserUuidsByIds(anyCollection()))
-                .thenReturn(List.of(new ArticleMapper.UserUuidRow(7L, authorUuid)));
         when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of(3L, seriesUuid));
 
         ArticleData data = articleLookupFacadeImpl.findByUuid(articleUuid).orElseThrow();
@@ -189,7 +189,7 @@ class ArticleLookupFacadeImplTest {
         Article article = new Article();
         article.setId(42L);
         article.setUuid(articleUuid);
-        article.setAuthorId(7L);
+        article.setAuthorUuid(UUID.randomUUID());
         article.setStatus(ArticleStatus.DRAFT);
         when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 

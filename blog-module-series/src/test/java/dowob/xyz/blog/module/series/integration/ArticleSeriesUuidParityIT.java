@@ -140,7 +140,7 @@ class ArticleSeriesUuidParityIT {
     private Article createArticle(Long seriesId, Integer position, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(AUTHOR_1);
+        article.setAuthorUuid(SeededUsers.uuidOf(AUTHOR_1));
         article.setTitle("Parity IT " + UUID.randomUUID());
         article.setSlug("parity-it-" + UUID.randomUUID());
         article.setContent("content");

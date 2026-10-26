@@ -27,7 +27,7 @@ import java.util.UUID;
  *                       例外：舊 10 參數建構子（僅供過渡期既有呼叫端 / 測試 mock，Z1 移除）產生者恆為 null
  *
  * @author Yuan
- * @version 2.0（M6-a：移除 authorId、authorUsername）
+ * @version 2.0（M6-a：移除 Long 作者主鍵與作者帳號名稱）
  */
 public record ArticleIndexData(
         UUID articleUuid,

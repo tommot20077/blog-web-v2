@@ -73,7 +73,7 @@ class ArticleFacadeSeriesUuidTest {
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, null, null, articleService, null, null, null, null,
-                null, new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)),
+                null, new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)),
                 null, null, null);
     }
 
@@ -86,7 +86,7 @@ class ArticleFacadeSeriesUuidTest {
         Article a = new Article();
         a.setId(id);
         a.setUuid(UUID.randomUUID());
-        a.setAuthorId(7L);
+        a.setAuthorUuid(UUID.randomUUID());
         a.setStatus(ArticleStatus.PUBLISHED);
         a.setSeriesId(seriesId);
         a.setSeriesPosition(position);
@@ -104,8 +104,6 @@ class ArticleFacadeSeriesUuidTest {
             when(seriesFacade.findIdByUuid(SERIES_A)).thenReturn(Optional.of(10L));
             when(articleService.findBySeriesIdOrderByPosition(10L))
                     .thenReturn(List.of(article(1L, 10L, 1), article(2L, 10L, 2), article(3L, 10L, 3)));
-            when(articleMapper.findUserUuidsByIds(anyCollection()))
-                    .thenReturn(List.of(new ArticleMapper.UserUuidRow(7L, UUID.randomUUID())));
             when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of(10L, SERIES_A));
 
             List<ArticleData> result = facade.findBySeriesUuidOrderByPosition(SERIES_A);

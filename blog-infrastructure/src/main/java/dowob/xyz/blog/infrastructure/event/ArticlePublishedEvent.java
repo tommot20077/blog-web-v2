@@ -14,7 +14,7 @@ import java.util.UUID;
  * 避免模組間直接相依。
  * </p>
  *
- * <p><b>M6-a：Long 過渡欄位已移除</b>。原本保留的 {@code authorId}（Long）與登入識別符 {@code authorUsername}
+ * <p><b>M6-a：Long 過渡欄位已移除</b>。原本保留的 Long 作者主鍵與登入識別符（作者帳號名稱）
  * 已從 record 移除——search、recommend 皆已改讀 {@code authorUuid}／{@code authorNickname}。
  * 升級當下佇列中仍含這兩個舊欄位的 in-flight 訊息可正常反序列化（多出的欄位被忽略）。</p>
  *
@@ -33,7 +33,7 @@ import java.util.UUID;
  * @param tags           文章標籤列表
  *
  * @author Yuan
- * @version 3.0（M6-a：移除 authorId、authorUsername；2.0 新增 eventId、authorUuid）
+ * @version 3.0（M6-a：移除 Long 作者主鍵與作者帳號名稱；2.0 新增 eventId、authorUuid）
  */
 public record ArticlePublishedEvent(
         UUID eventId,
