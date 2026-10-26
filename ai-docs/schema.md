@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V29 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V30 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V29**
+> 最後更新版本：**V30**
 
 ---
 
@@ -334,38 +334,9 @@ PRIMARY KEY (user_id, tag_id)
 
 ---
 
-### files
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | BIGSERIAL | PRIMARY KEY | |
-| uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | |
-| uploader_id | BIGINT | NOT NULL REFERENCES users(id) | |
-| original_name | VARCHAR(255) | NOT NULL | |
-| storage_key | VARCHAR(512) | NOT NULL UNIQUE | MinIO object key |
-| content_type | VARCHAR(100) | NOT NULL | |
-| size_bytes | BIGINT | NOT NULL | |
-| category | VARCHAR(20) | NOT NULL | AVATAR / ARTICLE_COVER / ATTACHMENT 等 |
-| reference_id | BIGINT | | 參照的業務實體 ID |
-| reference_type | VARCHAR(50) | | 參照的業務實體類型 |
-| metadata | JSONB | | 額外 metadata |
-| created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
-
-**Indexes:**
-- `files_pkey`（auto）on id
-- `files_uuid_key`（auto, UNIQUE）on uuid
-- `files_storage_key_key`（auto, UNIQUE）on storage_key
-- `idx_files_uploader`（V1）on uploader_id
-- `idx_files_reference`（V1）on (reference_type, reference_id)
-
-**Foreign keys:**
-- `uploader_id` → `users(id)`（NO ACTION）
-
----
-
 ### file_metadata
 
-> V8 新增。與 `files` 表平行存在，用於儲存影像尺寸等 metadata（file module 使用 UUID PK）。
+> V8 新增，取代 V1 建立的舊 `files` 表（V30 已 DROP）；file module 使用 UUID PK，用於儲存影像尺寸等 metadata。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
@@ -587,6 +558,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V27** | 跨模組識別全面改 UUID（reading 模組：劃線與閱讀進度）：`user_highlights`、`user_reading_progress` 各新增 `user_uuid UUID`、`article_uuid UUID`，分別由 `users.uuid`、`articles.uuid` 回填後 `SET NOT NULL`（找不到使用者或文章時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `user_id`、`article_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE——與含該欄位的索引／舊 UNIQUE）；以 uuid 欄位同名重建 `idx_user_highlights_article_for_user` (user_uuid, article_uuid)、`idx_user_highlights_user_recent` (user_uuid, created_at DESC)、`uq_user_reading_progress_user_article` UNIQUE (user_uuid, article_uuid)、`idx_user_reading_progress_user_recent` (user_uuid, updated_at DESC)；新增 `idx_user_highlights_article_uuid`、`idx_user_reading_progress_article_uuid`（article_uuid 單欄，供刪除連動與校正）。新 uuid 欄位不建 FK。至此 reading 模組四張表都不再有跨模組 Long 欄位與 FK |
 | **V28** | 跨模組識別全面改 UUID（version 模組）：`article_versions` 新增 `article_uuid UUID`、`author_uuid UUID`，`user_preferences` 新增 `user_uuid UUID`，分別由 `articles.uuid`、`users.uuid` 回填後 `SET NOT NULL`（找不到文章、作者或使用者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `article_versions.article_id`／`author_id`、`user_preferences.user_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE 與 `user_id` → `users(id)` ON DELETE CASCADE——與含該欄位的索引／舊 UNIQUE）；以 uuid 欄位同名重建 `idx_article_versions_article_created` (article_uuid, created_at DESC)、`idx_article_versions_article_type` (article_uuid, type)、`uq_user_preferences_user_key` UNIQUE (user_uuid, pref_key)。新 uuid 欄位不建 FK；`article_versions.category_id`（快照分類、非 FK）不動。文章刪除 → 版本快照刪除改由事件＋每日校正負責；`user_preferences` 不新增連動 |
 | **V29** | 跨模組識別全面改 UUID（series 模組）：`series` 新增 `author_uuid UUID`，由 `users.uuid` 回填後 `SET NOT NULL`（找不到作者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `author_id`（連帶移除 `series_author_id_fkey` → `users(id)` 與 `idx_series_author` (author_id)）；以同名在 `author_uuid` 上重建 `idx_series_author`。新 uuid 欄位不建 FK；`articles.series_id` → `series(id)` ON DELETE SET NULL 是 article 模組的 FK，到 M6 才動。使用者只做軟刪除，不新增連動 |
+| **V30** | DROP 舊 `files` 表（V1 建立、V8 起被 `file_metadata` 取代，無任何程式碼讀寫；連帶移除 `files_pkey`／`files_uuid_key`／`files_storage_key_key`／`idx_files_uploader`／`idx_files_reference` 與 `uploader_id` → `users(id)` 的 FK）。設計 §4「Migration 授權」明列整張 DROP；`file_metadata` 不動（`uploader_id` 本來就是 UUID，`article_uuid` 依 V20 刻意無 FK） |
 
 ---
 
