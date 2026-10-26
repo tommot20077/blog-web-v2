@@ -83,6 +83,15 @@ public interface SeriesMapper {
     int decrementArticleCount(@Param("id") Long id);
 
     /**
+     * 以公開 UUID 反正規化 -1（守衛 &gt; 0）——供刪除事件 consumer 使用，consumer 不持有 series 主鍵。
+     *
+     * @param uuid series 公開 UUID
+     * @return 受影響列數；series 已不存在或計數已為 0 時為 0
+     */
+    @Update("UPDATE series SET article_count = article_count - 1 WHERE uuid = #{uuid}::uuid AND article_count > 0")
+    int decrementArticleCountByUuid(@Param("uuid") java.util.UUID uuid);
+
+    /**
      * 批次取得 series 基本資訊（給 ArticleQueryService.enrich 用，避免 N+1）。
      *
      * <p>原版本以 articleIds 為入參並跨表取 series_id（ARCH-13 第 7 處）。

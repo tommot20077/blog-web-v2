@@ -265,8 +265,7 @@ class CrossModuleCommentIT {
 
         // 處理文章刪除事件 → 留言與留言讚消失（留言讚經模組內 FK 隨留言 CASCADE）
         Channel channel = Mockito.mock(Channel.class);
-        consumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleId, articleUuid, USER_ID, null,
-                List.of(), List.of(), Instant.now(), SeededUsers.USER_UUID, null), channel, 1L);
+        consumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, USER_ID, List.of(), List.of(), Instant.now(), SeededUsers.USER_UUID, null), channel, 1L);
 
         assertThat(commentRepo.findByUuid(savedComment.getUuid())).isEmpty();
         Integer remainingLikes = jdbc.queryForObject("SELECT COUNT(*) FROM comment_likes", Integer.class);

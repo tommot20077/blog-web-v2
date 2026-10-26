@@ -386,18 +386,16 @@ class ArticleEventPublisherTest {
             );
             ArticleDeletedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
-            assertThat(event.articleId()).isEqualTo(100L);
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
             assertThat(event.authorId()).isEqualTo(1L);
-            assertThat(event.seriesId()).isEqualTo(200L);
             assertThat(event.categoryIds()).containsExactly(categoryUuid);
             assertThat(event.tagIds()).containsExactly(tagUuid);
             assertThat(event.occurredAt()).isNotNull();
         }
 
         @Test
-        @DisplayName("邊界：seriesId 為 null 時 event.seriesId() 應為 null")
-        void publishDeleted_withNullSeriesId_eventSeriesIdIsNull() {
+        @DisplayName("邊界：seriesId 為 null 時 event.seriesUuid() 應為 null")
+        void publishDeleted_withNullSeriesId_eventSeriesUuidIsNull() {
             Article article = new Article();
             article.setId(10L);
             article.setUuid(UUID.randomUUID());
@@ -412,7 +410,7 @@ class ArticleEventPublisherTest {
                     captor.capture()
             );
             ArticleDeletedEvent event = captor.getValue();
-            assertThat(event.seriesId()).isNull();
+            assertThat(event.seriesUuid()).isNull();
             assertThat(event.categoryIds()).isEmpty();
             assertThat(event.tagIds()).isEmpty();
         }
@@ -437,7 +435,6 @@ class ArticleEventPublisherTest {
             ArticleDeletedEvent event = captor.getValue();
             assertThat(event.authorId()).isEqualTo(1L);
             assertThat(event.authorUuid()).isEqualTo(authorUuid);
-            assertThat(event.seriesId()).isEqualTo(200L);
             assertThat(event.seriesUuid()).isEqualTo(seriesUuid);
         }
 

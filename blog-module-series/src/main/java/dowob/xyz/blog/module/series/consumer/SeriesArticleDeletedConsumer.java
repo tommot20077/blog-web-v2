@@ -19,9 +19,12 @@ import org.springframework.stereotype.Component;
  * <p>冪等性：用 IdempotencyService 對 (event_id, consumer_name) 做 dedup，
  * 重送會被 skip 不會多次扣 count。</p>
  *
+ * <p>識別：只讀事件的 {@code seriesUuid}，以 series 公開 UUID 扣計數；{@code articleUuid} 僅用於 log。
+ * 事件的 Long 過渡欄位（articleId、seriesId）已於 M4-b 移除，series 是它們最後一個讀取者。</p>
+ *
  * <p>ACK 策略：手動 ACK，由 {@link ConsumerExecutor} 統一處理，對齊 ViewCountConsumer pattern：
  * <ul>
- *   <li>no-op（seriesId null）→ 提早 return，仍 ack</li>
+ *   <li>no-op（seriesUuid null）→ 提早 return，仍 ack</li>
  *   <li>已處理過（skip）→ 提早 return，仍 ack</li>
  *   <li>成功處理 → ack</li>
  *   <li>例外 → nack（requeue=false）進 DLQ，不 requeue</li>
@@ -50,18 +53,18 @@ public class SeriesArticleDeletedConsumer {
                                  Channel channel,
                                  @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         consumerExecutor.execute(CONSUMER_NAME,
-                () -> "articleId=" + event.articleId() + ", seriesId=" + event.seriesId()
+                () -> "articleUuid=" + event.articleUuid() + ", seriesUuid=" + event.seriesUuid()
                         + ", eventId=" + event.eventId(),
                 channel, deliveryTag, () -> {
-                    /* seriesId null 表示文章不在 series（或舊 payload backward compat）；no-op 也要 ACK */
-                    if (event.seriesId() == null) {
+                    /* seriesUuid null 表示文章不在 series（或舊 payload backward compat）；no-op 也要 ACK */
+                    if (event.seriesUuid() == null) {
                         return;
                     }
                     /* 冪等 check：第一次 INSERT 成功才繼續處理；重送會 skip（已處理過也要 ACK） */
                     if (!idempotencyService.markProcessed(event.eventId(), CONSUMER_NAME)) {
                         return;
                     }
-                    seriesMapper.decrementArticleCount(event.seriesId());
+                    seriesMapper.decrementArticleCountByUuid(event.seriesUuid());
                 });
     }
 }

@@ -161,13 +161,11 @@ class CrossModuleSeriesIT {
      *
      * <p>Channel 用 Mockito mock，deliveryTag 固定為 1L，僅讓 basicAck/basicNack 不拋例外。</p>
      */
-    private void simulateConsumerProcessing(UUID eventId, Long articleId, UUID articleUuid,
-                                            Long authorId, Long seriesId) {
+    private void simulateConsumerProcessing(UUID eventId, UUID articleUuid,
+                                            Long authorId, UUID seriesUuid) {
         try {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
-                eventId, articleId, articleUuid, authorId,
-                seriesId, List.of(), List.of(), Instant.now(), null, null
-            );
+                eventId, articleUuid, authorId, List.of(), List.of(), Instant.now(), null, seriesUuid);
             Channel mockChannel = Mockito.mock(Channel.class);
             seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
         } catch (Exception e) {
@@ -275,7 +273,6 @@ class CrossModuleSeriesIT {
         Series series = createSeries("Count Series", "count-series-it", AUTHOR_ID);
         Article article = createPublishedArticle(AUTHOR_ID);
         UUID articleUuid = article.getUuid();
-        Long articleId = article.getId();
 
         // 2. 透過 API 將文章加入 series（會觸發 incrementArticleCount）
         Map<String, Object> addPayload = Map.of("position", 1);
@@ -298,8 +295,8 @@ class CrossModuleSeriesIT {
                 .andExpect(jsonPath("$.code").value("00000"));
 
         // 4. 模擬 consumer 收到 ArticleDeletedEvent（直接呼叫，繞過 broker）
-        simulateConsumerProcessing(UUID.randomUUID(), articleId, articleUuid,
-                AUTHOR_ID, series.getId());
+        simulateConsumerProcessing(UUID.randomUUID(), articleUuid,
+                AUTHOR_ID, series.getUuid());
 
         // 5. 重查 series，article_count 應為 0
         Series afterDelete = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
@@ -325,9 +322,7 @@ class CrossModuleSeriesIT {
         // 2. 構造一個固定 eventId 的事件（重送 2 次）
         UUID eventId = UUID.randomUUID();
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-            eventId, article.getId(), article.getUuid(), AUTHOR_ID,
-            series.getId(), List.of(), List.of(), Instant.now(), null, null
-        );
+            eventId, article.getUuid(), AUTHOR_ID, List.of(), List.of(), Instant.now(), null, series.getUuid());
 
         // 3. 第一次處理 → article_count 從 1 變 0
         Channel mockChannel = Mockito.mock(Channel.class);
@@ -355,11 +350,9 @@ class CrossModuleSeriesIT {
     @Test
     @DisplayName("Article 不在 series 被刪 → consumer no-op，不寫 processed_events")
     void deleteArticle_notInSeries_noOp() {
-        // 1. 構造 seriesId == null 的事件
+        // 1. 構造 seriesUuid == null 的事件
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-            UUID.randomUUID(), 100L, UUID.randomUUID(), AUTHOR_ID,
-            null, List.of(), List.of(), Instant.now(), null, null
-        );
+            UUID.randomUUID(), UUID.randomUUID(), AUTHOR_ID, List.of(), List.of(), Instant.now(), null, null);
         Channel mockChannel = Mockito.mock(Channel.class);
         seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
 

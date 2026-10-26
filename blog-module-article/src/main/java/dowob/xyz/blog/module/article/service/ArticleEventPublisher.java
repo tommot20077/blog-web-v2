@@ -160,8 +160,8 @@ public class ArticleEventPublisher {
      * 同時成立而無人察覺，正是 warn 蓋不住的狀態；訊息帶 eventId 與 articleUuid，
      * 讓維運可告警並人工補送。</p>
      *
-     * @param article      文章 entity（提供 id / uuid / authorId）
-     * @param seriesId     文章所屬 series id（nullable）
+     * @param article      文章 entity（提供 uuid / authorId）
+     * @param seriesId     文章所屬 series id（nullable；僅用於換算事件的 seriesUuid，事件本身不再帶 Long seriesId）
      * @param categoryIds  文章 categories（caller 在 delete 前讀取；空 list 不可 null）
      * @param tagIds       文章 tags（caller 在 delete 前讀取；空 list 不可 null）
      */
@@ -171,10 +171,8 @@ public class ArticleEventPublisher {
         try {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
                 eventId,
-                article.getId(),
                 article.getUuid(),
                 article.getAuthorId(),
-                seriesId,
                 categoryIds != null ? categoryIds : List.of(),
                 tagIds != null ? tagIds : List.of(),
                 Instant.now(),
