@@ -25,8 +25,9 @@ import static org.mockito.Mockito.verify;
  * <p>V32 起 {@code articles.series_uuid} 沒有指向 {@code series} 的 FK，原本由 {@code ON DELETE SET NULL}
  * 完成的「series 刪除 → 文章脫離系列」改由本 consumer（即時）與每日校正排程負責。測試中 series 並不存在於 DB
  * （article 不依賴 series 模組），只模擬「收到刪除事件」，以隔離出 consumer 本身的效果。
- * 刪除語意不變：文章本身保留，只清空系列歸屬；且<b>與改造前相同，不動 {@code version} 與 {@code updated_at}</b>
- * （FK 的 SET NULL 不會觸發任何額外欄位變更）。</p>
+ * 刪除語意不變：文章本身保留，只清空系列歸屬。與原本 FK 的 {@code ON DELETE SET NULL} 的差異（皆為有意）：
+ * {@code series_position} 一併清空（系列已不存在，位置沒有意義）；{@code version} 遞增（V32 前過期的整筆 save 會被
+ * FK 擋下，之後會把 ghost 歸屬靜默寫回，遞增後過期的 save 會撞樂觀鎖）；{@code updated_at} 不動（與改造前相同）。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -68,8 +69,8 @@ class ArticleSeriesDeletedConsumerIT extends ArticleSeriesITSupport {
     }
 
     @Test
-    @DisplayName("與改造前相同：清空歸屬不遞增 version、不更新 updated_at（原 FK ON DELETE SET NULL 不會動這兩個欄位）")
-    void onSeriesDeleted_doesNotTouchVersionNorUpdatedAt() throws Exception {
+    @DisplayName("清空歸屬遞增 version（過期的整筆 save 會撞樂觀鎖，不會把 ghost 歸屬寫回），但不更新 updated_at（與改造前相同）")
+    void onSeriesDeleted_bumpsVersionButNotUpdatedAt() throws Exception {
         UUID series = UUID.randomUUID();
         LocalDateTime fixed = LocalDateTime.of(2026, 1, 2, 3, 4, 5);
         UUID member = insertArticleWithAudit(series, 3, 4, fixed);
@@ -77,8 +78,21 @@ class ArticleSeriesDeletedConsumerIT extends ArticleSeriesITSupport {
         consumer.onSeriesDeleted(eventOf(series), Mockito.mock(Channel.class), DELIVERY_TAG);
 
         assertThat(seriesUuidOf(member)).isNull();
-        assertThat(versionOf(member)).isEqualTo(4);
+        assertThat(versionOf(member)).isEqualTo(5);
         assertThat(updatedAtOf(member)).isEqualTo(fixed);
+    }
+
+    @Test
+    @DisplayName("同一事件重複處理：第二次沒有成員可清，version 不會再遞增")
+    void onSeriesDeleted_replay_doesNotBumpVersionAgain() throws Exception {
+        UUID series = UUID.randomUUID();
+        UUID member = insertArticleWithAudit(series, 1, 4, LocalDateTime.of(2026, 1, 2, 3, 4, 5));
+        SeriesDeletedEvent event = eventOf(series);
+
+        consumer.onSeriesDeleted(event, Mockito.mock(Channel.class), 1L);
+        consumer.onSeriesDeleted(event, Mockito.mock(Channel.class), 2L);
+
+        assertThat(versionOf(member)).isEqualTo(5);
     }
 
     @Test

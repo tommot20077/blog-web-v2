@@ -227,41 +227,4 @@ class ArticleFacadeSeriesUuidTest {
             verifyNoMoreInteractions(articleMapper);
         }
     }
-
-    @Nested
-    @DisplayName("updateSeriesAssignment(UUID, UUID, Integer)")
-    class UpdateSeriesAssignment {
-
-        private final UUID articleUuid = UUID.randomUUID();
-
-        @Test
-        @DisplayName("文章存在 → 以文章主鍵與 series uuid 委派 service 寫入（不檢查 series 是否存在，由呼叫端負責）")
-        void articleKnown_delegatesWithArticleIdAndSeriesUuid() {
-            when(articleService.findIdByUuid(articleUuid)).thenReturn(5L);
-
-            facade.updateSeriesAssignment(articleUuid, SERIES_A, 4);
-
-            verify(articleService).updateSeriesAssignment(5L, SERIES_A, 4);
-        }
-
-        @Test
-        @DisplayName("seriesUuid 為 null → 移出 series：series 欄位寫 null")
-        void nullSeriesUuid_clearsAssignment() {
-            when(articleService.findIdByUuid(articleUuid)).thenReturn(5L);
-
-            facade.updateSeriesAssignment(articleUuid, null, null);
-
-            verify(articleService).updateSeriesAssignment(5L, (UUID) null, null);
-        }
-
-        @Test
-        @DisplayName("文章不存在 → no-op，不寫入")
-        void unknownArticle_isNoOp() {
-            when(articleService.findIdByUuid(articleUuid)).thenReturn(null);
-
-            facade.updateSeriesAssignment(articleUuid, SERIES_A, 1);
-
-            verify(articleService, never()).updateSeriesAssignment(anyLong(), any(UUID.class), any());
-        }
-    }
 }

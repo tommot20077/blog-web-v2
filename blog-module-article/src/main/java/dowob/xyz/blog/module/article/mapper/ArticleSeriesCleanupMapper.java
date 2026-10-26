@@ -17,9 +17,14 @@ import java.util.UUID;
  * <b>只清空歸屬（{@code series_uuid}、{@code series_position} 設為 NULL），絕不刪除文章</b>：
  * 系列只是文章的可選關聯，文章本身仍是有效資料，所以本 mapper 沒有任何 DELETE 語句。</p>
  *
- * <p>與改造前的 FK 效果相同：<b>不遞增 {@code version}、不更新 {@code updated_at}</b>
- * （FK 的 SET NULL 不會觸發任何其他欄位變更）。每個方法都是單一 SQL 敘述，本身即原子，
- * 且天然冪等（已清空的列不再符合 WHERE 條件）。</p>
+ * <p>與原本 FK 的 {@code ON DELETE SET NULL} 的差異（皆為有意）：</p>
+ * <ul>
+ *   <li>{@code series_position} 一併清空——系列已不存在，位置沒有意義（FK 只會把 series_id 設為 NULL）；</li>
+ *   <li>{@code version} <b>遞增</b>——{@code updateArticle} 在交易外讀實體、再整筆 save；V32 前這筆過期的 save 會被
+ *       FK 擋下，之後會靜默把已清空的 ghost 歸屬寫回。遞增 version 後，過期的 save 會撞到樂觀鎖；</li>
+ *   <li>{@code updated_at} <b>不動</b>（與改造前相同）——清空歸屬不是內容變更，不應影響「最後更新時間」。</li>
+ * </ul>
+ * <p>每個方法都是單一 SQL 敘述，本身即原子，且天然冪等（已清空的列不再符合 WHERE 條件，version 不會重複遞增）。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -33,7 +38,7 @@ public interface ArticleSeriesCleanupMapper {
      * @param seriesUuid 已被刪除的系列公開 UUID
      * @return 被清空歸屬的文章筆數
      */
-    @Update("UPDATE articles SET series_uuid = NULL, series_position = NULL "
+    @Update("UPDATE articles SET series_uuid = NULL, series_position = NULL, version = version + 1 "
             + "WHERE series_uuid = #{seriesUuid}::uuid")
     int clearSeriesByUuid(@Param("seriesUuid") UUID seriesUuid);
 
@@ -45,7 +50,7 @@ public interface ArticleSeriesCleanupMapper {
      */
     @Update({
         "<script>",
-        "UPDATE articles SET series_uuid = NULL, series_position = NULL",
+        "UPDATE articles SET series_uuid = NULL, series_position = NULL, version = version + 1",
         " WHERE series_uuid IN",
         "<foreach collection='seriesUuids' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>",
         "</script>"
@@ -76,4 +81,31 @@ public interface ArticleSeriesCleanupMapper {
         "</script>"
     })
     List<String> findDistinctSeriesUuidsAfter(@Param("after") UUID after, @Param("limit") int limit);
+
+    /**
+     * {@link #findMembersBySeriesUuids} 的投影列：清空前的歸屬現況，供校正排程以 WARN 記錄、必要時人工復原。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應，SELECT 欄位順序
+     * （articleUuid, seriesUuid, seriesPosition）必須與元件順序一致，不可調整。</p>
+     *
+     * @param articleUuid    文章公開 UUID
+     * @param seriesUuid     原所屬系列公開 UUID
+     * @param seriesPosition 原在系列內的位置（nullable）
+     */
+    record StaleMemberRow(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {}
+
+    /**
+     * 查出指定系列的成員文章現況（清空歸屬之前呼叫，供 WARN 記錄以便人工復原）。呼叫端須保證集合非空。
+     *
+     * @param seriesUuids 已確認不存在的系列公開 UUID，至少一筆
+     * @return 每篇成員文章的 uuid、原 series_uuid、原 series_position
+     */
+    @Select({
+        "<script>",
+        "SELECT uuid AS articleUuid, series_uuid AS seriesUuid, series_position AS seriesPosition",
+        "  FROM articles WHERE series_uuid IN",
+        "<foreach collection='seriesUuids' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>",
+        "</script>"
+    })
+    List<StaleMemberRow> findMembersBySeriesUuids(@Param("seriesUuids") List<UUID> seriesUuids);
 }

@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.job;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.reconciliation.OrphanReconciliationJob;
 import dowob.xyz.blog.module.article.mapper.ArticleSeriesCleanupMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -24,8 +25,11 @@ import java.util.UUID;
  *   <li>存在性委派 {@link SeriesFacade#filterExistingUuids}（系列沒有狀態，存在即回傳）</li>
  *   <li><b>孤兒的處理是「把 {@code series_uuid}、{@code series_position} 設為 NULL」，絕不刪除文章</b>
  *       （系列只是文章的可選關聯，文章本身仍是有效資料；框架的 {@code removeOrphans} 明載兩種語意皆合法）</li>
- *   <li>與改造前 FK 的 {@code ON DELETE SET NULL} 相同，不遞增 {@code version}、不更新 {@code updated_at}</li>
- *   <li>不覆寫中止門檻，沿用框架預設</li>
+ *   <li>與 consumer 一致：{@code series_position} 一併清空（系列已不存在）、{@code version} 遞增（讓過期的整筆 save
+ *       撞樂觀鎖，不會把 ghost 歸屬寫回）、{@code updated_at} 不動（與改造前 FK 相同）；細節見
+ *       {@link ArticleSeriesCleanupMapper}</li>
+ *   <li>覆寫單次處理上限為 {@value #MAX_ORPHAN_SERIES_PER_RUN} 個孤兒系列，其餘門檻沿用框架預設</li>
+ *   <li>清空前以 WARN 逐篇記錄受影響文章，供存在性查詢誤判時人工復原</li>
  * </ul>
  *
  * <p>鎖與游標 key 以 {@code module=article}、{@code table=articles} 識別；若日後 articles 還有別的欄位需要
@@ -34,6 +38,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@Slf4j
 @Component
 public class ArticleSeriesOrphanReconciliationJob extends OrphanReconciliationJob {
 
@@ -45,6 +50,9 @@ public class ArticleSeriesOrphanReconciliationJob extends OrphanReconciliationJo
      * 排程執行緒池為單執行緒（PERF-16），同時觸發只會排隊互相拖延。</p>
      */
     public static final String CRON = "0 53 3 * * *";
+
+    /** 單次執行最多處理的孤兒系列數（見 {@link #maxOrphansPerRun()}） */
+    public static final int MAX_ORPHAN_SERIES_PER_RUN = 20;
 
     private final ArticleSeriesCleanupMapper cleanupMapper;
     private final SeriesFacade seriesFacade;
@@ -71,6 +79,20 @@ public class ArticleSeriesOrphanReconciliationJob extends OrphanReconciliationJo
     @Scheduled(cron = CRON)
     void scheduledRun() {
         run();
+    }
+
+    /**
+     * 單次執行最多處理的孤兒系列數：覆寫為 {@value #MAX_ORPHAN_SERIES_PER_RUN}（框架預設 1000 太寬鬆）。
+     *
+     * <p>系列是低基數實體（部落格量級為數十），正常情況下一次只會有個位數的系列被刪除而事件遺失。
+     * 若存在性查詢誤回空集合（例如 series 端異常），被參照的系列會全被判成孤兒；沒有這道上限，就會把這些系列底下
+     * 所有文章的歸屬與位置一次清光且無法復原。超過上限即整次中止（ABORTED、零變更）。</p>
+     *
+     * @return 孤兒系列數上限（含）
+     */
+    @Override
+    protected int maxOrphansPerRun() {
+        return MAX_ORPHAN_SERIES_PER_RUN;
     }
 
     @Override
@@ -111,7 +133,8 @@ public class ArticleSeriesOrphanReconciliationJob extends OrphanReconciliationJo
     /**
      * 把指向已不存在系列的文章歸屬設為 NULL（<b>不刪除文章</b>）。
      *
-     * <p>單一 {@code UPDATE ... IN (...)} 敘述本身即原子，不需要 {@code TransactionTemplate}；
+     * <p>清空前先以 WARN 逐篇記錄 articleUuid、原 series_uuid、原 series_position，供誤判時人工復原。
+     * 清空本身是單一 {@code UPDATE ... IN (...)} 敘述，本身即原子，不需要 {@code TransactionTemplate}；
      * 框架保證單次傳入筆數不超過頁大小，不會超出參數上限。</p>
      *
      * @param missing 已確認不存在的系列 UUID
@@ -122,6 +145,11 @@ public class ArticleSeriesOrphanReconciliationJob extends OrphanReconciliationJo
         if (missing.isEmpty()) {
             return 0;
         }
-        return cleanupMapper.clearSeriesByUuids(new ArrayList<>(missing));
+        List<UUID> seriesUuids = new ArrayList<>(missing);
+        for (ArticleSeriesCleanupMapper.StaleMemberRow row : cleanupMapper.findMembersBySeriesUuids(seriesUuids)) {
+            log.warn("系列孤兒校正：即將清空文章的系列歸屬（誤判時可依此還原） articleUuid={} seriesUuid={} seriesPosition={}",
+                    row.articleUuid(), row.seriesUuid(), row.seriesPosition());
+        }
+        return cleanupMapper.clearSeriesByUuids(seriesUuids);
     }
 }

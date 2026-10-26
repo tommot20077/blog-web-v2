@@ -18,7 +18,9 @@ import org.springframework.stereotype.Component;
  * <p>V32 起 {@code articles.series_uuid} 沒有指向 {@code series} 的 FK，原本的
  * {@code ON DELETE SET NULL} 改由本 consumer（即時）與 {@code ArticleSeriesOrphanReconciliationJob}
  * （每日校正，事件遺失時的第二道保險）負責。刪除語意不變：<b>文章留存，只清空 {@code series_uuid} 與
- * {@code series_position}</b>；且與改造前相同，不遞增 {@code version}、不更新 {@code updated_at}。</p>
+ * {@code series_position}</b>。與原 FK 的 SET NULL 的差異皆為有意：{@code series_position} 一併清空（系列已不存在）；
+ * {@code version} 遞增（過期的整筆 save 會撞樂觀鎖，不會把 ghost 歸屬寫回）；{@code updated_at} 不動（與改造前相同）。
+ * 細節見 {@code ArticleSeriesCleanupMapper}。</p>
  *
  * <p>只讀事件的 {@code seriesUuid}。{@code UPDATE ... WHERE series_uuid = ?} 是單一 SQL 敘述（本身即原子）
  * 且天然冪等，重送只會更新 0 筆，因此不使用 IdempotencyService、也不需要交易模板。</p>

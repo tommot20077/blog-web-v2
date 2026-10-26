@@ -786,21 +786,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
-     * <p>先以 {@code articleUuid} 找文章主鍵（查無即 no-op），再以 series UUID 直接寫入
-     * {@code articles.series_uuid}；article 不檢查系列是否存在（V32 起沒有 FK，存在性由呼叫端負責）。</p>
-     */
-    @Override
-    public void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
-        if (articleId == null) {
-            return;
-        }
-        articleService.updateSeriesAssignment(articleId, seriesUuid, seriesPosition);
-    }
-
-    /**
-     * {@inheritDoc}
-     *
      * <p>以<b>單一</b>條件式 UPDATE（{@code WHERE uuid = ? AND series_uuid IS NULL}）直接寫入，沒有先讀再寫。
      * 本方法刻意不標 {@code @Transactional}：單一語句本身原子，並隨呼叫端（series 服務）的交易一起提交或回滾。</p>
      *

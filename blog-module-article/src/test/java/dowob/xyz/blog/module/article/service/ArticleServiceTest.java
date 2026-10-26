@@ -374,13 +374,5 @@ class ArticleServiceTest {
 
             verify(commandSubService).decrementLikeCount(ARTICLE_ID);
         }
-
-        @Test
-        @DisplayName("updateSeriesAssignment delegates to commandSubService")
-        void updateSeriesAssignment_delegatesToCommandSubService() {
-            articleService.updateSeriesAssignment(ARTICLE_ID, SERIES_UUID, 2);
-
-            verify(commandSubService).updateSeriesAssignment(ARTICLE_ID, SERIES_UUID, 2);
-        }
     }
 }

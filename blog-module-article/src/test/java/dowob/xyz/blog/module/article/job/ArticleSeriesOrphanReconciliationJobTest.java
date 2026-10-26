@@ -99,6 +99,28 @@ class ArticleSeriesOrphanReconciliationJobTest {
     }
 
     @Test
+    @DisplayName("removeOrphans：清空前先查出受影響的文章（供 WARN 記錄以便人工復原），且先查後清")
+    void removeOrphans_looksUpAffectedMembersBeforeClearing() {
+        UUID a = UUID.randomUUID();
+        UUID article = UUID.randomUUID();
+        when(mapper.findMembersBySeriesUuids(List.of(a)))
+                .thenReturn(List.of(new ArticleSeriesCleanupMapper.StaleMemberRow(article, a, 4)));
+        when(mapper.clearSeriesByUuids(List.of(a))).thenReturn(1);
+
+        job.removeOrphans(List.of(a));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(mapper);
+        order.verify(mapper).findMembersBySeriesUuids(List.of(a));
+        order.verify(mapper).clearSeriesByUuids(List.of(a));
+    }
+
+    @Test
+    @DisplayName("單次處理的孤兒系列上限覆寫為 20（框架預設 1000 對這個資料量太寬鬆）")
+    void maxOrphansPerRun_isTwenty() {
+        assertThat(job.maxOrphansPerRun()).isEqualTo(20);
+    }
+
+    @Test
     @DisplayName("removeOrphans：空集合不呼叫 mapper（避免 IN () 語法錯誤）並回傳 0")
     void removeOrphans_empty_returnsZeroWithoutQuery() {
         assertThat(job.removeOrphans(List.of())).isZero();

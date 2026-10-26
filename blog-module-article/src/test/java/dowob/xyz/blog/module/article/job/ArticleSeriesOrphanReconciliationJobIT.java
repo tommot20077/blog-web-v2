@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.article.job;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.reconciliation.OrphanReconciliationJob.Result;
 import dowob.xyz.blog.module.article.support.ArticleSeriesITSupport;
+import dowob.xyz.blog.module.article.support.WarnLogCapture;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -15,6 +16,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -102,8 +104,8 @@ class ArticleSeriesOrphanReconciliationJobIT extends ArticleSeriesITSupport {
     }
 
     @Test
-    @DisplayName("與改造前相同：校正清空歸屬不遞增 version、不更新 updated_at")
-    void run_doesNotTouchVersionNorUpdatedAt() {
+    @DisplayName("校正清空歸屬遞增 version（與 consumer 一致），不更新 updated_at（與改造前相同）")
+    void run_bumpsVersionButNotUpdatedAt() {
         UUID alive1 = UUID.randomUUID();
         UUID alive2 = UUID.randomUUID();
         UUID gone = UUID.randomUUID();
@@ -111,13 +113,60 @@ class ArticleSeriesOrphanReconciliationJobIT extends ArticleSeriesITSupport {
         insertArticle(alive2, 1, "PUBLISHED");
         LocalDateTime fixed = LocalDateTime.of(2026, 1, 2, 3, 4, 5);
         UUID orphan = insertArticleWithAudit(gone, 2, 6, fixed);
+        UUID aliveMember = insertArticleWithAudit(alive1, 3, 8, fixed);
         seriesExist(alive1, alive2);
 
         job.run();
 
         assertThat(seriesUuidOf(orphan)).isNull();
-        assertThat(versionOf(orphan)).isEqualTo(6);
+        assertThat(versionOf(orphan)).isEqualTo(7);
         assertThat(updatedAtOf(orphan)).isEqualTo(fixed);
+        assertThat(versionOf(aliveMember)).as("仍存在系列的成員不受影響").isEqualTo(8);
+    }
+
+    @Test
+    @DisplayName("清空前以 WARN 逐篇記錄 articleUuid、原 series_uuid、原 series_position，供人工復原")
+    void run_warnsEachAffectedArticleBeforeClearing() {
+        UUID alive1 = UUID.randomUUID();
+        UUID alive2 = UUID.randomUUID();
+        UUID gone = UUID.randomUUID();
+        insertArticle(alive1, 1, "PUBLISHED");
+        insertArticle(alive2, 1, "PUBLISHED");
+        UUID orphan1 = insertArticle(gone, 3, "PUBLISHED");
+        UUID orphan2 = insertArticle(gone, 7, "DRAFT");
+        seriesExist(alive1, alive2);
+
+        List<String> warns;
+        try (WarnLogCapture capture = new WarnLogCapture(ArticleSeriesOrphanReconciliationJob.class)) {
+            job.run();
+            warns = capture.warnings();
+        }
+
+        assertThat(warns).anySatisfy(m -> assertThat(m)
+                .contains(orphan1.toString()).contains(gone.toString()).contains("seriesPosition=3"));
+        assertThat(warns).anySatisfy(m -> assertThat(m)
+                .contains(orphan2.toString()).contains(gone.toString()).contains("seriesPosition=7"));
+        assertThat(warns).noneSatisfy(m -> assertThat(m).contains(alive1.toString()));
+    }
+
+    @Test
+    @DisplayName("單次處理的孤兒系列上限為 20：超過即 ABORTED、零變更（誤判時不致一次清光大量歸屬）")
+    void run_moreThanTwentyOrphanSeries_abortsWithoutChanging() {
+        UUID alive1 = UUID.randomUUID();
+        UUID alive2 = UUID.randomUUID();
+        insertArticle(alive1, 1, "PUBLISHED");
+        insertArticle(alive2, 1, "PUBLISHED");
+        List<UUID> orphans = new java.util.ArrayList<>();
+        for (int i = 0; i < 21; i++) {
+            UUID gone = UUID.randomUUID();
+            orphans.add(insertArticle(gone, i + 1, "PUBLISHED"));
+        }
+        seriesExist(alive1, alive2);
+
+        Result result = job.run();
+
+        assertThat(result).isEqualTo(Result.ABORTED);
+        assertThat(orphans).allSatisfy(a -> assertThat(seriesUuidOf(a)).isNotNull());
     }
 
     @Test

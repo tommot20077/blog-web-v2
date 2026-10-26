@@ -178,12 +178,6 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     @Override
-    @Transactional
-    public void updateSeriesAssignment(Long articleId, UUID seriesUuid, Integer seriesPosition) {
-        commandSubService.updateSeriesAssignment(articleId, seriesUuid, seriesPosition);
-    }
-
-    @Override
     @Transactional(readOnly = true)
     public List<Article> findBySeriesUuidOrderByPosition(UUID seriesUuid) {
         return querySubService.findBySeriesUuidOrderByPosition(seriesUuid);

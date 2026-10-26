@@ -2149,35 +2149,6 @@ class ArticleCommandSubServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("updateSeriesAssignment")
-    class OtherCrossModuleTests {
-
-        @Test
-        @DisplayName("updates series assignment when article exists")
-        void updateSeriesAssignment_articleExists_updatesAndSaves() {
-            Article article = buildArticle(ArticleStatus.DRAFT);
-            when(articleRepository.findById(1L)).thenReturn(Optional.of(article));
-
-            UUID seriesUuid = UUID.randomUUID();
-            commandSubService.updateSeriesAssignment(1L, seriesUuid, 2);
-
-            assertThat(article.getSeriesUuid()).isEqualTo(seriesUuid);
-            assertThat(article.getSeriesPosition()).isEqualTo(2);
-            verify(articleRepository).save(article);
-        }
-
-        @Test
-        @DisplayName("does nothing when article is missing")
-        void updateSeriesAssignment_articleMissing_doesNotSave() {
-            when(articleRepository.findById(1L)).thenReturn(Optional.empty());
-
-            commandSubService.updateSeriesAssignment(1L, UUID.randomUUID(), 2);
-
-            verify(articleRepository, never()).save(any());
-        }
-    }
-
     /**
      * 檔案綁定回填測試（Task B6）
      *

@@ -95,24 +95,34 @@ class ArticleSeriesUuidMigrationIT {
     // ─────────────────────────── 回填 ───────────────────────────
 
     @Test
-    @DisplayName("既有 articles 依 series_id 回填為系列的 uuid；無系列者維持 NULL；series_position 與其餘欄位原封不動")
+    @DisplayName("既有 articles 依 series_id 回填為系列的 uuid（含同一系列多篇）；無系列者維持 NULL；series_position 與其餘欄位原封不動")
     void existingArticles_areBackfilledWithSeriesUuid_nullStaysNull_otherColumnsUntouched() throws SQLException {
+        // 先插入幾篇無系列的文章墊高 article id，讓 series.id 與 article.id 不會剛好相同（避免 join 寫成 s.id = a.id 時巧合通過）
+        long filler1 = insertArticle("filler-1", null, null);
+        insertArticle("filler-2", null, null);
+        insertArticle("filler-3", null, null);
         Series alpha = insertSeries("alpha");
         Series beta = insertSeries("beta");
         long first = insertArticle("first", alpha.id(), 1);
         long second = insertArticle("second", beta.id(), 7);
+        long third = insertArticle("third", alpha.id(), 2);
         long loner = insertArticle("loner", null, null);
+        assertThat(first).as("測試前提：article id 與 series id 不同").isNotEqualTo(alpha.id()).isGreaterThan(filler1);
+        assertThat(third).isNotIn(alpha.id(), beta.id());
         String before = queryString(ROW_DIGEST_SQL, first);
 
         runV32();
 
         assertThat(queryUuid("SELECT series_uuid FROM articles WHERE id = ?", first)).isEqualTo(alpha.uuid());
+        assertThat(queryUuid("SELECT series_uuid FROM articles WHERE id = ?", third)).as("同一系列的另一篇").isEqualTo(alpha.uuid());
         assertThat(queryUuid("SELECT series_uuid FROM articles WHERE id = ?", second)).isEqualTo(beta.uuid());
         assertThat(queryUuid("SELECT series_uuid FROM articles WHERE id = ?", loner)).isNull();
+        assertThat(queryUuid("SELECT series_uuid FROM articles WHERE id = ?", filler1)).isNull();
         assertThat(queryLong("SELECT series_position FROM articles WHERE id = ?", first)).isEqualTo(1L);
         assertThat(queryLong("SELECT series_position FROM articles WHERE id = ?", second)).isEqualTo(7L);
+        assertThat(queryLong("SELECT series_position FROM articles WHERE id = ?", third)).isEqualTo(2L);
         assertThat(queryString("SELECT series_position::text FROM articles WHERE id = ?", loner)).isNull();
-        assertThat(queryLong("SELECT COUNT(*) FROM articles")).isEqualTo(3L);
+        assertThat(queryLong("SELECT COUNT(*) FROM articles")).isEqualTo(7L);
         assertThat(queryString(ROW_DIGEST_SQL, first)).isEqualTo(before);
     }
 

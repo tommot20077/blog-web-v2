@@ -33,7 +33,7 @@ import java.util.UUID;
  *       findBySeriesUuidOrderByPosition）：不限狀態，回傳含 status 的 ArticleData，
  *       caller 自行依 status 判斷（如 SeriesService 過濾 DRAFT）。</li>
  *   <li><b>SP-B 新增 simple write</b>（incrementCommentCount / decrementCommentCount /
- *       incrementLikeCount / decrementLikeCount / updateSeriesAssignment(UUID, UUID, Integer)）：counter /
+ *       incrementLikeCount / decrementLikeCount）：counter /
  *       欄位 set 類型，直接更新 article 欄位，無業務邏輯觸發。</li>
  *   <li><b>SP-D 新增 read</b>（findContentById）：完整 content 內容 DTO，給 version 模組 snapshot / restore stash 流程用。</li>
  *   <li><b>M2-a 新增（reading 模組 UUID 化用，只增不減）</b>（getSummariesByUuids / filterReadableUuids /
@@ -45,7 +45,7 @@ import java.util.UUID;
  *       removeFromSeriesIfAssigned / updateSeriesPositionIfAssigned）：條件式寫入，由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
  *       讓 series 的 article_count 不必先讀再寫。</li>
  *   <li><b>M6-b</b>：series 維度全面改為 {@code series_uuid}，移除 Long 版 series 方法
- *       （findBySeriesIdOrderByPosition / updateSeriesAssignment(Long, Long, Integer) /
+ *       （findBySeriesIdOrderByPosition / updateSeriesAssignment（Long 與 UUID 版）/
  *       countPublishedBySeriesIds / findPrev·NextPublishedInSeries(Long, Integer)）；
  *       UUID 版直接查詢 {@code articles.series_uuid}，不再經 SeriesFacade 轉換。</li>
  *   <li><b>SP-D 新增 atomic write</b>（applyRestoreContent）：version 模組 restore 用，內部接管 mutate / save / syncArticleTags / publish events 順序。</li>
@@ -255,23 +255,6 @@ public interface ArticleFacade {
     void decrementLikeCount(UUID articleUuid);
 
     /**
-     * 設定文章的 series 歸屬與位置（series 模組 add / remove article from series 用）。
-     *
-     * <ul>
-     *   <li>{@code seriesUuid} 為 null 代表移出 series（通常 {@code seriesPosition} 也傳 null）；</li>
-     *   <li>{@code articleUuid} 不存在時為 no-op（不拋例外）；</li>
-     *   <li>M6-b 起 {@code articles.series_uuid} 直接寫入，<b>article 不檢查系列是否存在</b>
-     *       （跨模組不得有 FK，article 也不再依賴 series）；系列存在性由呼叫端 series 模組負責驗證。
-     *       原 Long 版 {@code updateSeriesAssignment(Long, Long, Integer)} 隨 {@code series_id} 一併移除。</li>
-     * </ul>
-     *
-     * @param articleUuid    文章公開 UUID
-     * @param seriesUuid     系列公開 UUID（移出時傳 null）
-     * @param seriesPosition 在 series 內的位置（移出時傳 null）
-     */
-    void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
-
-    /**
      * 條件式加入 series：僅當文章<b>目前不屬於任何 series</b> 時才指派，並回報這次寫入是否真的指派了。
      *
      * <p>為什麼需要：series 模組以 {@code article_count} 記錄成員數，必須知道「這次呼叫是不是新成員」。
@@ -281,12 +264,12 @@ public interface ArticleFacade {
      * 由 affected rows 決定。同一時間只有一個交易能把 NULL 改成非 NULL，另一個得到 {@code false}。</p>
      *
      * <p>回傳 {@code false} 代表文章不存在，或<b>已屬於某個 series（含同一個）</b>；呼叫端須自行區分
-     * （例如以 {@link #findByUuid} 重讀後，同一 series 改以 {@link #updateSeriesAssignment(UUID, UUID, Integer)}
-     * 只更新位置）。寫入時一併遞增樂觀鎖 {@code version} 並更新 {@code updated_at}，與實體 save 的效果一致，
+         * 只更新位置）。寫入時一併遞增樂觀鎖 {@code version} 並更新 {@code updated_at}，與實體 save 的效果一致，
      * 使並行中的文章編輯（讀到舊 series 歸屬）會因版本不符而失敗，不會把舊歸屬寫回去。</p>
      *
      * <p>M6-b 起直接寫入 {@code articles.series_uuid}；article 不檢查系列是否存在
-     * （系列存在性由呼叫端 series 模組負責，V32 起沒有 FK 把關）。</p>
+     * （系列存在性由呼叫端 series 模組負責，V32 起沒有 FK 把關）。呼叫端若在寫入後發現系列已被併發刪除
+     * （例如 {@code article_count + 1} 影響 0 列），須回滾交易，避免留下指向已不存在系列的歸屬。</p>
      *
      * @param articleUuid    文章公開 UUID
      * @param seriesUuid     要加入的系列公開 UUID（不得為 null）
@@ -316,7 +299,7 @@ public interface ArticleFacade {
      *
      * <p>供 series 模組處理「文章已在同一個 series，只更新位置」：以單一
      * {@code UPDATE articles SET series_position = ? WHERE uuid = ? AND series_uuid = ?} 完成，
-     * 取代 {@link #updateSeriesAssignment(UUID, UUID, Integer)} 的讀改寫——後者在兩個請求同時更新位置時
+     * 取代「讀文章、改欄位、整列 save」的讀改寫——後者在兩個請求同時更新位置時
      * 會因樂觀鎖衝突失敗，與併發移出交錯時還可能把文章重新寫回 series 而沒有 +1 計數（RACE-14）。
      * 寫入時一併遞增 {@code version} 並更新 {@code updated_at}。</p>
      *

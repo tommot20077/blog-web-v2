@@ -111,7 +111,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `idx_articles_published_latest`（V22, partial）on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'——公開列表預設排序；`view_count` / `comment_count` 刻意不建排序索引（頻繁回寫，避免失去 HOT update）
 
 **Foreign keys:**
-- **無任何外向 FK（M6 完成）**：V31 已移除 `author_id` → `users(id)`（使用者只做軟刪除，不新增連動，匿名化另案 DATA-02）；V32 已移除 `series_id` → `series(id)`（ON DELETE SET NULL）。「series 刪除 → 文章脫離系列」改由 `SeriesDeletedEvent` consumer＋每日校正負責：只清空 `series_uuid`／`series_position`，**文章留存**；與原 FK 的 SET NULL 相同，**不遞增 `version`、不更新 `updated_at`**
+- **無任何外向 FK（M6 完成）**：V31 已移除 `author_id` → `users(id)`（使用者只做軟刪除，不新增連動，匿名化另案 DATA-02）；V32 已移除 `series_id` → `series(id)`（ON DELETE SET NULL）。「series 刪除 → 文章脫離系列」改由 `SeriesDeletedEvent` consumer＋每日校正負責：只清空 `series_uuid`／`series_position`，**文章留存**。與原 FK 的 SET NULL 的差異皆為有意：`series_position` 一併清空（系列已不存在）；`version` 遞增（過期的整筆 save 會撞樂觀鎖，不會把 ghost 歸屬寫回）；`updated_at` 不動（與改造前相同）
 
 ---
 

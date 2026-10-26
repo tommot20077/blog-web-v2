@@ -777,20 +777,4 @@ class ArticleCommandSubService {
     public void decrementLikeCount(Long articleId) {
         articleMapper.decrementLikeCount(articleId);
     }
-
-    /**
-     * 更新文章的 series 歸屬與排序位置。
-     *
-     * @param articleId      文章資料庫主鍵
-     * @param seriesUuid     所屬 series 公開 UUID（null 表示解除）
-     * @param seriesPosition 在 series 中的排序位置（null 表示解除）
-     */
-    @Transactional
-    public void updateSeriesAssignment(Long articleId, UUID seriesUuid, Integer seriesPosition) {
-        articleRepository.findById(articleId).ifPresent(a -> {
-            a.setSeriesUuid(seriesUuid);
-            a.setSeriesPosition(seriesPosition);
-            articleRepository.save(a);
-        });
-    }
 }
