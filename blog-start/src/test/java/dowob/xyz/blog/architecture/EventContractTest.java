@@ -89,9 +89,6 @@ class EventContractTest {
      * 規則 (a) 例外清單：缺少 {@code UUID eventId} 的事件。key 為類別全名，value 為「階段：說明」。
      */
     private static final Map<String, String> MISSING_EVENT_ID_EXEMPT = Map.ofEntries(
-            // 預計 M5（file 階段）：補 eventId，ThumbnailConsumer 冪等
-            Map.entry("dowob.xyz.blog.module.file.event.ImageUploadedEvent",
-                    "M5：file 模組內部事件，file 階段補 eventId 並讓 ThumbnailConsumer 冪等"),
             // 預計 M7（search 階段）：search 的鏡像 DTO 補 eventId，讓 listener 冪等
             Map.entry("dowob.xyz.blog.module.search.listener.dto.ArticleDeletedMessage",
                     "M7：search 鏡像 DTO（listener 參數），search 階段補 eventId"),

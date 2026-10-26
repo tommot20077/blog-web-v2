@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.file.repository;
 
 import dowob.xyz.blog.module.file.model.FileMetadata;
+import org.springframework.data.jdbc.repository.query.Modifying;
 import org.springframework.data.jdbc.repository.query.Query;
 import org.springframework.data.repository.CrudRepository;
 import org.springframework.data.repository.query.Param;
@@ -47,4 +48,20 @@ public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUI
      * @return 已綁定此文章的檔案元資料列表
      */
     List<FileMetadata> findByArticleUuid(UUID articleUuid);
+
+    /**
+     * 只更新 {@code has_thumbnail} 旗標為 true，不動其他欄位
+     *
+     * <p>供 {@code ThumbnailConsumer} 使用。縮圖處理耗時（下載、縮圖、上傳），若改用
+     * {@code findById} 後再 {@code save}，Spring Data JDBC 會把整列所有欄位一起 UPDATE，
+     * 處理期間其他流程寫入的 {@code article_uuid}（{@code bindToArticle}）會被舊值蓋回 null；
+     * 檔案若已被刪除，{@code save} 還會拋例外。單欄位 UPDATE 沒有這兩個問題：檔案已被刪除時
+     * 影響 0 列，屬正常 no-op。</p>
+     *
+     * @param id 檔案 UUID
+     * @return 受影響列數（檔案已不存在時為 0）
+     */
+    @Modifying
+    @Query("UPDATE file_metadata SET has_thumbnail = TRUE WHERE id = :id")
+    int markThumbnailGenerated(@Param("id") UUID id);
 }
