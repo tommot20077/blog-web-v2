@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.module.article.support.TestUsers;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.response.PageResult;
@@ -87,7 +88,7 @@ class AdminArticleControllerTest {
         Role.ADMIN.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(1L, new UUID(0L, 1L), Role.ADMIN), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(1L, TestUsers.uuidOf(1L), Role.ADMIN), null, authorities);
         return authentication(auth);
     }
 
@@ -97,7 +98,7 @@ class AdminArticleControllerTest {
         Role.AUTHOR.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(3L, new UUID(0L, 3L), Role.AUTHOR), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(3L, TestUsers.uuidOf(3L), Role.AUTHOR), null, authorities);
         return authentication(auth);
     }
 
@@ -107,7 +108,7 @@ class AdminArticleControllerTest {
         Role.USER.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(2L, new UUID(0L, 2L), Role.USER), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(2L, TestUsers.uuidOf(2L), Role.USER), null, authorities);
         return authentication(auth);
     }
 
@@ -223,7 +224,7 @@ class AdminArticleControllerTest {
                 .title("已下架文章")
                 .status(ArticleStatus.ARCHIVED)
                 .build();
-        when(articleService.archiveArticle(new UUID(0L, 1L), Role.ADMIN, uuid)).thenReturn(response);
+        when(articleService.archiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid)).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
                         .with(asAdmin()))
@@ -231,7 +232,7 @@ class AdminArticleControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.status").value("ARCHIVED"));
 
-        verify(articleService).archiveArticle(new UUID(0L, 1L), Role.ADMIN, uuid);
+        verify(articleService).archiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid);
     }
 
     // =========================================================================
@@ -273,7 +274,7 @@ class AdminArticleControllerTest {
                 .title("已復原文章")
                 .status(ArticleStatus.DRAFT)
                 .build();
-        when(articleService.unarchiveArticle(new UUID(0L, 1L), Role.ADMIN, uuid)).thenReturn(response);
+        when(articleService.unarchiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid)).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
                         .with(asAdmin()))
@@ -281,7 +282,7 @@ class AdminArticleControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data.status").value("DRAFT"));
 
-        verify(articleService).unarchiveArticle(new UUID(0L, 1L), Role.ADMIN, uuid);
+        verify(articleService).unarchiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid);
     }
 
 }

@@ -703,9 +703,13 @@ class SeriesControllerIT {
     @Test
     @DisplayName("GET /series/{slug} - 作者資訊來自 UserFacade（uuid、nickname、avatarUrl）")
     void getSlug_authorComesFromUserFacade() throws Exception {
-        createVisibleSeries("author-detail", SeededUsers.USER1_UUID, USER1_ID);
+        Series series = createVisibleSeries("author-detail", SeededUsers.USER1_UUID, USER1_ID);
+        /* 成員文章共 3 篇、兩位不同作者：證明成員作者是整頁一次批次解析，而不是逐篇（N+1） */
+        createArticleInSeries(USER2_ID, ArticleStatus.PUBLISHED, series.getId(), 2);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, series.getId(), 3);
         when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
-                SeededUsers.USER1_UUID, new UserDisplayInfo(SeededUsers.USER1_UUID, "Alice", "https://img/alice.png")));
+                SeededUsers.USER1_UUID, new UserDisplayInfo(SeededUsers.USER1_UUID, "Alice", "https://img/alice.png"),
+                SeededUsers.USER2_UUID, new UserDisplayInfo(SeededUsers.USER2_UUID, "Bob", null)));
 
         String body = mockMvc.perform(get("/api/v1/series/{slug}", "author-detail"))
                 .andExpect(status().isOk())
@@ -714,6 +718,7 @@ class SeriesControllerIT {
         assertThat(json(body).at("/data/author/uuid").asText()).isEqualTo(SeededUsers.USER1_UUID.toString());
         assertThat(json(body).at("/data/author/nickname").asText()).isEqualTo("Alice");
         assertThat(json(body).at("/data/author/avatarUrl").asText()).isEqualTo("https://img/alice.png");
+        assertThat(json(body).at("/data/articles")).as("成員文章為 3 篇").hasSize(3);
         /*
          * 詳情頁有兩個各自批次的作者解析：series 作者一次，成員文章摘要的作者一次（M6-a 起 article 也改走
          * getDisplayInfoByUuids，先前走已移除的 Long 版 getAuthorInfoByIds，總數同為 2），兩者都不隨筆數 N+1。

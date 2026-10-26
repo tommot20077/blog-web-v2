@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.module.article.support.TestUsers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
@@ -135,7 +136,7 @@ class CategoryControllerIT {
     private SeriesFacade seriesFacade;
 
     private static final Long AUTHOR_ID = 1L;
-    private static final UUID AUTHOR_UUID = new UUID(0L, AUTHOR_ID);
+    private static final UUID AUTHOR_UUID = TestUsers.uuidOf(AUTHOR_ID);
 
     @AfterEach
     void cleanUp() {
@@ -148,7 +149,7 @@ class CategoryControllerIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, TestUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 

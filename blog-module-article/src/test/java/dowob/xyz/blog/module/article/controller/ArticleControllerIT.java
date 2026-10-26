@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.module.article.support.TestUsers;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -206,17 +207,17 @@ class ArticleControllerIT {
     /**
      * 測試用作者 UUID
      */
-    private static final UUID AUTHOR_UUID = new UUID(0L, AUTHOR_ID);
+    private static final UUID AUTHOR_UUID = TestUsers.uuidOf(AUTHOR_ID);
 
     /**
-     * 第二位測試作者 ID（公開列表作者篩選情境；其 AuthUser.uuid 為 {@code new UUID(0L, id)}）
+     * 第二位測試作者 ID（公開列表作者篩選情境；其 AuthUser.uuid 為 {@code TestUsers.uuidOf(id)}）
      */
     private static final Long SECOND_AUTHOR_ID = 2L;
 
     /**
      * 第二位測試作者的公開 UUID（與 {@link #asUser} 為該 id 建立的 AuthUser.uuid 相同）
      */
-    private static final UUID SECOND_AUTHOR_UUID = new UUID(0L, SECOND_AUTHOR_ID);
+    private static final UUID SECOND_AUTHOR_UUID = TestUsers.uuidOf(SECOND_AUTHOR_ID);
 
     /**
      * 每次測試後清理文章資料
@@ -261,7 +262,7 @@ class ArticleControllerIT {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
-        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, TestUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
