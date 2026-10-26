@@ -50,7 +50,7 @@ class ArticleServiceTest {
     private static final UUID AUTHOR_UUID = new UUID(0L, 1L);
     private static final UUID OTHER_USER_UUID = new UUID(0L, 2L);
     private static final Long ARTICLE_ID = 11L;
-    private static final Long SERIES_ID = 99L;
+    private static final UUID SERIES_UUID = UUID.randomUUID();
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
     private static final String CLIENT_IP = "127.0.0.1";
 
@@ -233,15 +233,15 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("findBySeriesIdOrderByPosition delegates to querySubService")
-        void findBySeriesIdOrderByPosition_delegatesToQuerySubService() {
+        @DisplayName("findBySeriesUuidOrderByPosition delegates to querySubService")
+        void findBySeriesUuidOrderByPosition_delegatesToQuerySubService() {
             Article article = buildArticle();
-            when(querySubService.findBySeriesIdOrderByPosition(SERIES_ID)).thenReturn(List.of(article));
+            when(querySubService.findBySeriesUuidOrderByPosition(SERIES_UUID)).thenReturn(List.of(article));
 
-            List<Article> actual = articleService.findBySeriesIdOrderByPosition(SERIES_ID);
+            List<Article> actual = articleService.findBySeriesUuidOrderByPosition(SERIES_UUID);
 
             assertThat(actual).containsExactly(article);
-            verify(querySubService).findBySeriesIdOrderByPosition(SERIES_ID);
+            verify(querySubService).findBySeriesUuidOrderByPosition(SERIES_UUID);
         }
 
         @Test
@@ -373,14 +373,6 @@ class ArticleServiceTest {
             articleService.decrementLikeCount(ARTICLE_ID);
 
             verify(commandSubService).decrementLikeCount(ARTICLE_ID);
-        }
-
-        @Test
-        @DisplayName("updateSeriesAssignment delegates to commandSubService")
-        void updateSeriesAssignment_delegatesToCommandSubService() {
-            articleService.updateSeriesAssignment(ARTICLE_ID, SERIES_ID, 2);
-
-            verify(commandSubService).updateSeriesAssignment(ARTICLE_ID, SERIES_ID, 2);
         }
     }
 }

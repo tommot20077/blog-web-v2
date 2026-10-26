@@ -79,7 +79,8 @@ class ArticleQueryServiceTest {
     private static final UUID AUTHOR_UUID = TestUsers.uuidOf(AUTHOR_ID);
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
     private static final Long ARTICLE_DB_ID = 42L;
-    private static final Long SERIES_DB_ID = 300L;
+    /** M6-b：文章直接存 series_uuid，列表補系列標題改以 UUID 批次查詢 */
+    private static final UUID SERIES_UUID = UUID.randomUUID();
 
     /**
      * 建立測試用 ArticleSummaryResponse
@@ -117,13 +118,13 @@ class ArticleQueryServiceTest {
     }
 
     /**
-     * 建立 Article stub（含 uuid、id、seriesId，供 findIdsByUuids 回傳）
+     * 建立 Article stub（含 uuid、id、seriesUuid，供 findIdsByUuids 回傳）
      */
     private Article buildArticleIdRow() {
         Article a = new Article();
         a.setId(ARTICLE_DB_ID);
         a.setUuid(ARTICLE_UUID);
-        a.setSeriesId(SERIES_DB_ID);
+        a.setSeriesUuid(SERIES_UUID);
         return a;
     }
 
@@ -621,7 +622,7 @@ class ArticleQueryServiceTest {
                     articleQueryService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID), false);
 
             // series 詳情自行以 row 覆寫 seriesUuid/seriesTitle，enrich 不該再查 SeriesFacade（會被覆寫，白費）
-            verify(seriesFacade, never()).batchGetSeriesBasicInfo(anyCollection());
+            verify(seriesFacade, never()).batchGetSeriesBasicInfoByUuids(anyCollection());
             assertThat(result.get(0).getSeriesUuid()).isNull();
             assertThat(result.get(0).getSeriesTitle()).isNull();
         }
@@ -629,21 +630,52 @@ class ArticleQueryServiceTest {
         @Test
         @DisplayName("預設（1-arg）：仍呼叫 seriesFacade 補 seriesUuid/seriesTitle（BookmarkController 需要）")
         void getArticleSummariesByIds_default_enrichesSeriesNav() {
-            UUID seriesUuid = UUID.randomUUID();
             ArticleSummaryResponse summary = summaryWithSeriesPosition();
             when(articleService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID)))
                     .thenReturn(List.of(summary));
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID)))
                     .thenReturn(List.of(buildArticleIdRow()));
-            when(seriesFacade.batchGetSeriesBasicInfo(Set.of(SERIES_DB_ID)))
-                    .thenReturn(Map.of(SERIES_DB_ID, new SeriesBasicInfo(seriesUuid, "S")));
+            when(seriesFacade.batchGetSeriesBasicInfoByUuids(Set.of(SERIES_UUID)))
+                    .thenReturn(Map.of(SERIES_UUID, new SeriesBasicInfo(SERIES_UUID, "S")));
 
             List<ArticleSummaryResponse> result =
                     articleQueryService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID));
 
-            verify(seriesFacade).batchGetSeriesBasicInfo(Set.of(SERIES_DB_ID));
-            assertThat(result.get(0).getSeriesUuid()).isEqualTo(seriesUuid);
+            verify(seriesFacade).batchGetSeriesBasicInfoByUuids(Set.of(SERIES_UUID));
+            assertThat(result.get(0).getSeriesUuid()).isEqualTo(SERIES_UUID);
             assertThat(result.get(0).getSeriesTitle()).isEqualTo("S");
+        }
+
+        @Test
+        @DisplayName("系列已被刪除（SeriesFacade 查無，事件尚未清空歸屬）：seriesUuid/seriesTitle 保持 null，不拋錯")
+        void getArticleSummariesByIds_seriesGone_leavesSeriesFieldsNull() {
+            ArticleSummaryResponse summary = summaryWithSeriesPosition();
+            when(articleService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID)))
+                    .thenReturn(List.of(summary));
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID)))
+                    .thenReturn(List.of(buildArticleIdRow()));
+            when(seriesFacade.batchGetSeriesBasicInfoByUuids(Set.of(SERIES_UUID))).thenReturn(Map.of());
+
+            List<ArticleSummaryResponse> result =
+                    articleQueryService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID));
+
+            assertThat(result.get(0).getSeriesUuid()).isNull();
+            assertThat(result.get(0).getSeriesTitle()).isNull();
+        }
+
+        @Test
+        @DisplayName("文章不屬於任何系列：不呼叫 seriesFacade（沒有系列 uuid 可查）")
+        void getArticleSummariesByIds_noSeries_doesNotCallSeriesFacade() {
+            ArticleSummaryResponse summary = ArticleSummaryResponse.builder().uuid(ARTICLE_UUID).build();
+            Article loner = buildArticleIdRow();
+            loner.setSeriesUuid(null);
+            when(articleService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID)))
+                    .thenReturn(List.of(summary));
+            when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(loner));
+
+            articleQueryService.getArticleSummariesByIds(List.of(ARTICLE_DB_ID));
+
+            verify(seriesFacade, never()).batchGetSeriesBasicInfoByUuids(anyCollection());
         }
     }
 }

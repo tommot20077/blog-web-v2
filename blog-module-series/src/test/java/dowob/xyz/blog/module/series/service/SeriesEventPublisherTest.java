@@ -2,6 +2,15 @@ package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Appender;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.config.Configurator;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -13,6 +22,8 @@ import org.springframework.amqp.AmqpConnectException;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -73,5 +84,43 @@ class SeriesEventPublisherTest {
                 .when(rabbitTemplate).convertAndSend(any(String.class), any(String.class), any(Object.class));
 
         assertThatCode(() -> publisher.publishDeleted(UUID.randomUUID())).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("publishDeleted：MQ 發送失敗 → 以 ERROR 等級記錄，訊息帶 seriesUuid 與 eventId（M6-b：失敗由 article 端每日校正兜底，須可追查）")
+    void publishDeleted_whenBrokerFails_logsErrorWithSeriesUuidAndEventId() {
+        doThrow(new AmqpConnectException(new RuntimeException("broker down")))
+                .when(rabbitTemplate).convertAndSend(any(String.class), any(String.class), any(Object.class));
+        UUID seriesUuid = UUID.randomUUID();
+        String loggerName = SeriesEventPublisher.class.getName();
+        Level originalLevel = LogManager.getLogger(loggerName).getLevel();
+        // 測試環境沒有 log4j2 設定檔時預設只輸出 ERROR 以上；明確放寬到 ALL，才不依賴環境就能分辨 warn 與 error
+        Configurator.setLevel(loggerName, Level.ALL);
+        LoggerContext context = (LoggerContext) LogManager.getContext(false);
+        Configuration config = context.getConfiguration();
+        List<LogEvent> captured = new ArrayList<>();
+        Appender appender = new AbstractAppender("series-publisher-test", null, null, true, Property.EMPTY_ARRAY) {
+            @Override
+            public void append(LogEvent event) {
+                captured.add(event.toImmutable());
+            }
+        };
+        appender.start();
+        config.addAppender(appender);
+        config.getLoggerConfig(loggerName).addAppender(appender, Level.ALL, null);
+        context.updateLoggers();
+        try {
+            publisher.publishDeleted(seriesUuid);
+        } finally {
+            config.getLoggerConfig(loggerName).removeAppender(appender.getName());
+            appender.stop();
+            Configurator.setLevel(loggerName, originalLevel);
+            context.updateLoggers();
+        }
+
+        assertThat(captured).hasSize(1);
+        LogEvent logged = captured.get(0);
+        assertThat(logged.getLevel()).isEqualTo(Level.ERROR);
+        assertThat(logged.getMessage().getFormattedMessage()).contains(seriesUuid.toString()).contains("eventId=");
     }
 }

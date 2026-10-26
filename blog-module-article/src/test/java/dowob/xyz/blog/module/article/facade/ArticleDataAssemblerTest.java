@@ -1,143 +1,105 @@
 package dowob.xyz.blog.module.article.facade;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.article.model.Article;
-import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.beans.factory.ObjectProvider;
 
-import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
 
 /**
  * {@link ArticleDataAssembler} 單元測試。
  *
- * <p>驗證 M6-a 之後 ArticleData 的 authorUuid <b>直接取自 {@code articles.author_uuid}</b>（不再經 users 查詢，
- * 也沒有 Long 的作者主鍵）；seriesUuid（M6-b 才改）仍經 {@link SeriesFacade} <b>批次一次取得</b>，不得逐筆查詢，
- * 且 SeriesFacade 以 {@link ObjectProvider} 延遲取得（打斷 SeriesFacadeImpl → ArticleFacade 的 bean 循環）。</p>
+ * <p>M6 之後 ArticleData 的 {@code authorUuid}（M6-a）與 {@code seriesUuid}（M6-b）都<b>直接取自
+ * {@code articles} 的欄位</b>：不再經 users 或 series 查詢、也沒有任何 Long 的跨模組主鍵，
+ * 因此本元件沒有任何依賴，也不會發出任何查詢（批次或逐筆皆無）。</p>
  *
  * @author Yuan
- * @version 2.0
+ * @version 3.0（M6-b：seriesUuid 直接取自 articles.series_uuid）
  */
-@ExtendWith(MockitoExtension.class)
 @DisplayName("ArticleDataAssembler 單元測試")
 class ArticleDataAssemblerTest {
 
-    @Mock private ObjectProvider<SeriesFacade> seriesFacadeProvider;
-    @Mock private SeriesFacade seriesFacade;
+    private final ArticleDataAssembler assembler = new ArticleDataAssembler();
 
-    private ArticleDataAssembler assembler;
-
-    @BeforeEach
-    void setUp() {
-        assembler = new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider));
-    }
-
-    private static Article article(long id, UUID authorUuid, Long seriesId) {
+    private static Article article(long id, UUID authorUuid, UUID seriesUuid) {
         Article a = new Article();
         a.setId(id);
         a.setUuid(UUID.randomUUID());
         a.setAuthorUuid(authorUuid);
         a.setStatus(ArticleStatus.PUBLISHED);
-        a.setSeriesId(seriesId);
-        a.setSeriesPosition(seriesId == null ? null : 1);
+        a.setSeriesUuid(seriesUuid);
+        a.setSeriesPosition(seriesUuid == null ? null : 1);
         return a;
     }
 
     @Test
-    @DisplayName("單篇文章 → authorUuid 直接取自文章，seriesUuid 經 SeriesFacade 填值")
-    void toArticleData_singleArticle_fillsAuthorAndSeriesUuid() {
+    @DisplayName("單篇文章 → authorUuid 與 seriesUuid 直接取自文章，seriesPosition 與狀態原樣帶出")
+    void toArticleData_singleArticle_copiesUuidsAndFieldsFromArticle() {
         UUID authorUuid = UUID.randomUUID();
         UUID seriesUuid = UUID.randomUUID();
-        when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
-        when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of(3L, seriesUuid));
+        Article source = article(1L, authorUuid, seriesUuid);
 
-        ArticleData data = assembler.toArticleData(article(1L, authorUuid, 3L));
+        ArticleData data = assembler.toArticleData(source);
 
+        assertThat(data.id()).isEqualTo(1L);
+        assertThat(data.uuid()).isEqualTo(source.getUuid());
+        assertThat(data.status()).isEqualTo("PUBLISHED");
         assertThat(data.authorUuid()).isEqualTo(authorUuid);
-        assertThat(data.seriesId()).isEqualTo(3L);
         assertThat(data.seriesUuid()).isEqualTo(seriesUuid);
+        assertThat(data.seriesPosition()).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("文章無系列 → seriesUuid 為 null，且完全不取得 SeriesFacade")
-    void toArticleData_noSeries_seriesUuidNullAndSeriesFacadeUntouched() {
+    @DisplayName("文章無系列 → seriesUuid 與 seriesPosition 皆為 null")
+    void toArticleData_noSeries_seriesFieldsNull() {
         UUID authorUuid = UUID.randomUUID();
 
         ArticleData data = assembler.toArticleData(article(1L, authorUuid, null));
 
         assertThat(data.authorUuid()).isEqualTo(authorUuid);
         assertThat(data.seriesUuid()).isNull();
-        verifyNoInteractions(seriesFacadeProvider, seriesFacade);
+        assertThat(data.seriesPosition()).isNull();
     }
 
     @Test
-    @DisplayName("多篇文章 → 系列只批次查詢一次（不逐筆），送出的 id 已去重、不含 null；作者不發任何查詢")
-    void toArticleDataList_multipleArticles_resolvesSeriesUuidsInOneBatch() {
+    @DisplayName("多篇文章 → 逐篇對應各自的作者與系列 uuid，保留輸入順序")
+    void toArticleDataList_multipleArticles_mapsEachInOrder() {
         UUID authorA = UUID.randomUUID();
         UUID authorB = UUID.randomUUID();
         UUID seriesX = UUID.randomUUID();
         UUID seriesY = UUID.randomUUID();
         List<Article> articles = List.of(
-                article(1L, authorA, 100L),
-                article(2L, authorA, 100L),
-                article(3L, authorB, 200L),
+                article(1L, authorA, seriesX),
+                article(2L, authorA, seriesX),
+                article(3L, authorB, seriesY),
                 article(4L, authorB, null));
-        when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
-        when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of(100L, seriesX, 200L, seriesY));
 
         List<ArticleData> result = assembler.toArticleDataList(articles);
 
         assertThat(result).extracting(ArticleData::authorUuid).containsExactly(authorA, authorA, authorB, authorB);
         assertThat(result).extracting(ArticleData::seriesUuid).containsExactly(seriesX, seriesX, seriesY, null);
         assertThat(result).extracting(ArticleData::id).containsExactly(1L, 2L, 3L, 4L);
-
-        verify(seriesFacade, times(1)).findUuidsByIds(anyCollection());
-        verify(seriesFacadeProvider, times(1)).getObject();
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Collection<Long>> seriesIds = ArgumentCaptor.forClass(Collection.class);
-        verify(seriesFacade).findUuidsByIds(seriesIds.capture());
-        assertThat(seriesIds.getValue()).containsExactlyInAnyOrder(100L, 200L);
     }
 
     @Test
-    @DisplayName("系列 id 在 SeriesFacade 查無 → 該篇 seriesUuid 為 null，不拋錯，authorUuid 不受影響")
-    void toArticleDataList_seriesNotFound_seriesUuidNull() {
-        UUID authorUuid = UUID.randomUUID();
-        when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
-        when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of());
+    @DisplayName("系列已被刪除但事件尚未清空歸屬 → 仍帶出文章目前儲存的 seriesUuid（不再有『查無即 null』的轉換）")
+    void toArticleDataList_staleSeriesUuid_isPassedThrough() {
+        UUID staleSeries = UUID.randomUUID();
 
-        List<ArticleData> result = assembler.toArticleDataList(List.of(article(1L, authorUuid, 999L)));
+        List<ArticleData> result = assembler.toArticleDataList(List.of(article(1L, UUID.randomUUID(), staleSeries)));
 
-        assertThat(result.get(0).seriesId()).isEqualTo(999L);
-        assertThat(result.get(0).seriesUuid()).isNull();
-        assertThat(result.get(0).authorUuid()).isEqualTo(authorUuid);
+        assertThat(result.get(0).seriesUuid()).isEqualTo(staleSeries);
     }
 
     @Test
-    @DisplayName("空輸入 → 回傳空清單，不發任何查詢")
-    void toArticleDataList_empty_noQueries() {
+    @DisplayName("空輸入 → 回傳空清單")
+    void toArticleDataList_empty_returnsEmpty() {
         assertThat(assembler.toArticleDataList(List.of())).isEmpty();
         assertThat(assembler.toArticleDataList(null)).isEmpty();
-
-        verifyNoInteractions(seriesFacadeProvider, seriesFacade);
     }
 }

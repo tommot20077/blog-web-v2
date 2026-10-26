@@ -111,7 +111,7 @@ class VersioningServiceTest {
 
     /** 建立只帶 uuid 與作者 uuid 的 ArticleData（ownership 檢查用）。 */
     private ArticleData articleData(UUID aArticleUuid, UUID aAuthorUuid) {
-        return new ArticleData(100L, aArticleUuid, "DRAFT", null, null, aAuthorUuid, null);
+        return new ArticleData(100L, aArticleUuid, "DRAFT", null, aAuthorUuid, null);
     }
 
     // ─── recordAutoSnapshot ─────────────

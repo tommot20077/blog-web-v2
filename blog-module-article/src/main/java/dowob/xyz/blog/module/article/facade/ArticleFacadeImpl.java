@@ -124,8 +124,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
     private final ArticleFileBinder articleFileBinder;
 
     /**
-     * ArticleData 組裝元件（設計 §3.1 過渡 API：批次填入 authorUuid / seriesUuid；
-     * SeriesFacade 在其內以 ObjectProvider 延遲取得，避免與 SeriesFacadeImpl 形成 bean 循環）
+     * ArticleData 組裝元件（authorUuid / seriesUuid 直接取自 articles 的欄位，沒有任何查詢或依賴）
      */
     private final ArticleDataAssembler articleDataAssembler;
 
@@ -134,7 +133,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
      *
      * <p>必須用 {@link ObjectProvider} 而非直接注入：{@code ArticleQueryService} 注入 {@code ReadingFacade}，
      * 而 reading 的實作類別注入 {@code ArticleFacade}，直接建構子注入會形成 bean 循環。
-     * 比照 {@code ArticleIdentityResolver} 處理 {@code SeriesFacade} 的做法，只在方法被呼叫時才取得。</p>
+     * 只在方法被呼叫時才取得。</p>
      */
     private final ObjectProvider<ArticleQueryService> articleQueryServiceProvider;
 
@@ -386,14 +385,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
         return articleDataAssembler.toArticleDataList(articleService.findByIds(articleIds));
     }
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public List<ArticleData> findBySeriesIdOrderByPosition(Long seriesId) {
-        return articleDataAssembler.toArticleDataList(articleService.findBySeriesIdOrderByPosition(seriesId));
-    }
-
     // ─── SP-B 新增 5 write method（純 delegate）───
 
     /**
@@ -426,14 +417,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
     @Override
     public void decrementLikeCount(Long articleId) {
         articleService.decrementLikeCount(articleId);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
-        articleService.updateSeriesAssignment(articleId, seriesId, seriesPosition);
     }
 
     // ─── SP-D 新增：findContentById + applyRestoreContent ───
@@ -664,37 +647,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
-     * <p>輸入為 caller 的全量 series 主鍵，無上界，故經 {@link BatchedQuery} 切批。
-     * 各批回傳的 key 不重疊（一個 series 只屬於一批），屬跨批可合併形狀。</p>
-     */
-    @Override
-    public Map<Long, Integer> countPublishedBySeriesIds(Collection<Long> seriesIds) {
-        return BatchedQuery.queryInBatches(seriesIds, articleMapper::countPublishedBySeriesIds)
-                .stream()
-                .collect(Collectors.toMap(
-                        ArticleMapper.SeriesPublishedCountRow::seriesId,
-                        ArticleMapper.SeriesPublishedCountRow::publishedCount));
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public Optional<ArticleNavRef> findPrevPublishedInSeries(Long seriesId, Integer currentPosition) {
-        return Optional.ofNullable(articleMapper.findPrevPublishedInSeries(seriesId, currentPosition));
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public Optional<ArticleNavRef> findNextPublishedInSeries(Long seriesId, Integer currentPosition) {
-        return Optional.ofNullable(articleMapper.findNextPublishedInSeries(seriesId, currentPosition));
-    }
-
-    /**
-     * {@inheritDoc}
-     *
      * <p><b>不分狀態</b>：SQL 不篩 {@code status}，草稿也算存在，與
      * {@link #filterPublishedUuids(Collection)} 只認 PUBLISHED 不同。輸入無上界，
      * 故去重後經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
@@ -816,134 +768,109 @@ public class ArticleFacadeImpl implements ArticleFacade {
         return foundUuids.stream().map(byUuid::get).filter(Objects::nonNull).toList();
     }
 
-    // ─── M4-a：series UUID 版（過渡期：M6 改以 articles.series_uuid 直查）───
+    // ─── series UUID 版（M6-b 起直接以 articles.series_uuid 查詢／寫入，不再經 SeriesFacade 轉換）───
 
     /**
      * {@inheritDoc}
      *
-     * <p>過渡期：先經 SeriesFacade 把 series UUID 換成主鍵，再委派 Long 版的內部查詢；
-     * M6 改以 {@code articles.series_uuid} 直查。series 不存在時不查文章，直接回傳空清單。</p>
+     * <p>直接以 {@code articles.series_uuid} 查詢；null 視為查無，不發查詢。</p>
      */
     @Override
     public List<ArticleData> findBySeriesUuidOrderByPosition(UUID seriesUuid) {
-        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                .map(this::findBySeriesIdOrderByPosition)
-                .orElseGet(List::of);
+        if (seriesUuid == null) {
+            return List.of();
+        }
+        return articleDataAssembler.toArticleDataList(articleService.findBySeriesUuidOrderByPosition(seriesUuid));
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p>過渡期：流程與 Long 版逐項對應——先以 {@code articleUuid} 找文章主鍵（查無即 no-op，
-     * 不檢查 series）；{@code seriesUuid} 為 null 直接寫入 null；非 null 但查無 series 時，
-     * 於寫入前拋 {@link IllegalArgumentException}。這是呼叫端的程式錯誤（應先驗證 series 存在），
-     * 不是業務錯誤，故不轉為 {@code BusinessException}。M6 改以 {@code articles.series_uuid} 直寫。</p>
-     *
-     * @throws IllegalArgumentException seriesUuid 非 null 但查無此 series（文章不會被改動）
-     */
-    @Override
-    public void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {
-        Long articleId = articleService.findIdByUuid(articleUuid);
-        if (articleId == null) {
-            return;
-        }
-        Long seriesId = null;
-        if (seriesUuid != null) {
-            seriesId = articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                    .orElseThrow(() -> new IllegalArgumentException("series 不存在: " + seriesUuid));
-        }
-        articleService.updateSeriesAssignment(articleId, seriesId, seriesPosition);
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * <p>過渡期：series UUID 先經 SeriesFacade 換成主鍵，再以<b>單一</b>條件式 UPDATE
-     * （{@code WHERE uuid = ? AND series_id IS NULL}）寫入，沒有先讀再寫；M6 改以 {@code series_uuid} 直寫。
+     * <p>以<b>單一</b>條件式 UPDATE（{@code WHERE uuid = ? AND series_uuid IS NULL}）直接寫入，沒有先讀再寫。
      * 本方法刻意不標 {@code @Transactional}：單一語句本身原子，並隨呼叫端（series 服務）的交易一起提交或回滾。</p>
      *
-     * @throws IllegalArgumentException seriesUuid 為 null 或查無此 series
+     * @throws IllegalArgumentException seriesUuid 為 null
      */
     @Override
     public boolean assignToSeriesIfUnassigned(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {
         if (seriesUuid == null) {
             throw new IllegalArgumentException("seriesUuid 不得為 null");
         }
-        Long seriesId = articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                .orElseThrow(() -> new IllegalArgumentException("series 不存在: " + seriesUuid));
-        return articleMapper.assignToSeriesIfUnassigned(articleUuid, seriesId, seriesPosition, LocalDateTime.now()) == 1;
+        return articleMapper.assignToSeriesIfUnassigned(articleUuid, seriesUuid, seriesPosition, LocalDateTime.now()) == 1;
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p>過渡期：series UUID 先經 SeriesFacade 換成主鍵，再以單一條件式 UPDATE
-     * （{@code WHERE uuid = ? AND series_id = ?}）寫入；series 不存在代表文章不可能屬於它，直接回傳 false。</p>
+     * <p>單一條件式 UPDATE（{@code WHERE uuid = ? AND series_uuid = ?}）；seriesUuid 為 null 視為不屬於，回傳 false。</p>
      */
     @Override
     public boolean removeFromSeriesIfAssigned(UUID articleUuid, UUID seriesUuid) {
-        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                .map(seriesId -> articleMapper.removeFromSeriesIfAssigned(articleUuid, seriesId, LocalDateTime.now()) == 1)
-                .orElse(false);
+        if (seriesUuid == null) {
+            return false;
+        }
+        return articleMapper.removeFromSeriesIfAssigned(articleUuid, seriesUuid, LocalDateTime.now()) == 1;
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p>過渡期：series UUID 先經 SeriesFacade 換成主鍵，再以單一條件式 UPDATE
-     * （{@code WHERE uuid = ? AND series_id = ?}）只改位置；series 不存在代表文章不可能屬於它，直接回傳 false。</p>
+     * <p>單一條件式 UPDATE（{@code WHERE uuid = ? AND series_uuid = ?}）只改位置；
+     * seriesUuid 為 null 視為不屬於，回傳 false。</p>
      */
     @Override
     public boolean updateSeriesPositionIfAssigned(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {
-        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                .map(seriesId -> articleMapper.updateSeriesPositionIfAssigned(
-                        articleUuid, seriesId, seriesPosition, LocalDateTime.now()) == 1)
-                .orElse(false);
+        if (seriesUuid == null) {
+            return false;
+        }
+        return articleMapper.updateSeriesPositionIfAssigned(
+                articleUuid, seriesUuid, seriesPosition, LocalDateTime.now()) == 1;
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p>過渡期：series UUID 經 {@code SeriesFacade.findIdsByUuids} <b>一次</b>批次換成主鍵
-     * （不逐筆），再委派 Long 版計數並以 UUID 為 key 回傳；M6 改以 {@code articles.series_uuid} 直查。</p>
+     * <p>輸入無上界，去重並忽略 null 後經 {@link BatchedQuery} 切批，直接以 {@code series_uuid} 分組計數；
+     * 各批 key 不重疊，屬跨批可合併形狀。空輸入不發查詢，避免產生 {@code IN ()}。
+     * 結果一律是可變的 HashMap（空結果也是）。</p>
      */
     @Override
     public Map<UUID, Integer> countPublishedBySeriesUuids(Collection<UUID> seriesUuids) {
-        Map<UUID, Long> idByUuid = articleDataAssembler.resolveSeriesIdsByUuids(seriesUuids);
-        // 與 Long 版一致：結果一律是可變的 HashMap（空結果也是）
         Map<UUID, Integer> result = new HashMap<>();
-        if (idByUuid.isEmpty()) {
+        if (seriesUuids == null || seriesUuids.isEmpty()) {
             return result;
         }
-        Map<Long, Integer> countById = countPublishedBySeriesIds(idByUuid.values());
-        idByUuid.forEach((uuid, id) -> {
-            Integer count = countById.get(id);
-            if (count != null) {
-                result.put(uuid, count);
-            }
-        });
+        List<UUID> distinct = seriesUuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (distinct.isEmpty()) {
+            return result;
+        }
+        BatchedQuery.queryInBatches(distinct, articleMapper::countPublishedBySeriesUuids)
+                .forEach(row -> result.put(row.seriesUuid(), row.publishedCount()));
         return result;
     }
 
     /**
      * {@inheritDoc}
-     *
-     * <p>過渡期：先經 SeriesFacade 換成主鍵再委派 Long 版；series 不存在時回傳 empty。</p>
      */
     @Override
     public Optional<ArticleNavRef> findPrevPublishedInSeries(UUID seriesUuid, Integer currentPosition) {
-        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                .flatMap(seriesId -> findPrevPublishedInSeries(seriesId, currentPosition));
+        if (seriesUuid == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(articleMapper.findPrevPublishedInSeries(seriesUuid, currentPosition));
     }
 
     /**
      * {@inheritDoc}
-     *
-     * <p>過渡期：先經 SeriesFacade 換成主鍵再委派 Long 版；series 不存在時回傳 empty。</p>
      */
     @Override
     public Optional<ArticleNavRef> findNextPublishedInSeries(UUID seriesUuid, Integer currentPosition) {
-        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                .flatMap(seriesId -> findNextPublishedInSeries(seriesId, currentPosition));
+        if (seriesUuid == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(articleMapper.findNextPublishedInSeries(seriesUuid, currentPosition));
     }
 }

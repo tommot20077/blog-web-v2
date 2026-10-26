@@ -1,8 +1,6 @@
 package dowob.xyz.blog.module.article.facade;
 
-import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
@@ -14,16 +12,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -56,27 +50,16 @@ class ArticleLookupFacadeImplTest {
     @Mock
     private ArticleMapper articleMapper;
 
-    /** Mock：延遲取得 SeriesFacade 的 provider（打斷 bean 循環） */
-    @Mock
-    private ObjectProvider<SeriesFacade> seriesFacadeProvider;
-
-    /** Mock：series uuid 轉換 */
-    @Mock
-    private SeriesFacade seriesFacade;
-
     /** 受測物件 */
     private ArticleLookupFacadeImpl articleLookupFacadeImpl;
 
     /**
-     * 組裝受測物件：以真實的 {@link ArticleDataAssembler} 包裝被 mock 的 mapper 與 provider，
+     * 組裝受測物件：注入真實的 {@link ArticleDataAssembler}，
      * 讓原有的欄位對應測試仍驗到真正的轉換邏輯。
      */
     @BeforeEach
     void setUp() {
-        lenient().when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
-        lenient().when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of());
-        articleLookupFacadeImpl = new ArticleLookupFacadeImpl(
-                articleRepository, new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)));
+        articleLookupFacadeImpl = new ArticleLookupFacadeImpl(articleRepository, new ArticleDataAssembler());
     }
 
     /**
@@ -93,7 +76,8 @@ class ArticleLookupFacadeImplTest {
         UUID authorUuid = UUID.randomUUID();
         article.setAuthorUuid(authorUuid);
         article.setStatus(ArticleStatus.PUBLISHED);
-        article.setSeriesId(3L);
+        UUID seriesUuid = UUID.randomUUID();
+        article.setSeriesUuid(seriesUuid);
         article.setSeriesPosition(2);
         when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
@@ -105,7 +89,7 @@ class ArticleLookupFacadeImplTest {
         assertThat(data.id()).isEqualTo(42L);
         assertThat(data.uuid()).isEqualTo(articleUuid);
         assertThat(data.status()).isEqualTo("PUBLISHED");
-        assertThat(data.seriesId()).isEqualTo(3L);
+        assertThat(data.seriesUuid()).isEqualTo(seriesUuid);
         assertThat(data.seriesPosition()).isEqualTo(2);
     }
 
@@ -168,10 +152,9 @@ class ArticleLookupFacadeImplTest {
         article.setUuid(articleUuid);
         article.setAuthorUuid(authorUuid);
         article.setStatus(ArticleStatus.PUBLISHED);
-        article.setSeriesId(3L);
+        article.setSeriesUuid(seriesUuid);
         article.setSeriesPosition(2);
         when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
-        when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of(3L, seriesUuid));
 
         ArticleData data = articleLookupFacadeImpl.findByUuid(articleUuid).orElseThrow();
 
@@ -180,10 +163,10 @@ class ArticleLookupFacadeImplTest {
     }
 
     /**
-     * 驗證：文章無系列時 seriesUuid 為 null，且不需要取得 SeriesFacade（避免不必要的 bean 取用）。
+     * 驗證：文章無系列時 seriesUuid 為 null。
      */
     @Test
-    @DisplayName("findByUuid → 文章無系列 → seriesUuid 為 null 且不取得 SeriesFacade")
+    @DisplayName("findByUuid → 文章無系列 → seriesUuid 為 null")
     void findByUuid_noSeries_shouldLeaveSeriesUuidNull() {
         UUID articleUuid = UUID.randomUUID();
         Article article = new Article();
@@ -196,6 +179,5 @@ class ArticleLookupFacadeImplTest {
         ArticleData data = articleLookupFacadeImpl.findByUuid(articleUuid).orElseThrow();
 
         assertThat(data.seriesUuid()).isNull();
-        org.mockito.Mockito.verify(seriesFacadeProvider, org.mockito.Mockito.never()).getObject();
     }
 }

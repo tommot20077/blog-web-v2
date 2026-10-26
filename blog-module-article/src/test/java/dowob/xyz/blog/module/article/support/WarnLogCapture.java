@@ -1,4 +1,4 @@
-package dowob.xyz.blog.module.article.facade;
+package dowob.xyz.blog.module.article.support;
 
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
@@ -22,7 +22,7 @@ import java.util.List;
  * @author Yuan
  * @version 1.0
  */
-final class WarnLogCapture implements AutoCloseable {
+public final class WarnLogCapture implements AutoCloseable {
 
     private final String loggerName;
     private final Configuration config;
@@ -38,7 +38,7 @@ final class WarnLogCapture implements AutoCloseable {
      *
      * @param loggerClass 要擷取其日誌的類別
      */
-    WarnLogCapture(Class<?> loggerClass) {
+    public WarnLogCapture(Class<?> loggerClass) {
         this.loggerName = loggerClass.getName();
         this.context = (LoggerContext) LogManager.getContext(false);
         this.config = context.getConfiguration();
@@ -76,7 +76,7 @@ final class WarnLogCapture implements AutoCloseable {
      *
      * @return 訊息快照
      */
-    List<String> warnings() {
+    public List<String> warnings() {
         synchronized (warnings) {
             return List.copyOf(warnings);
         }

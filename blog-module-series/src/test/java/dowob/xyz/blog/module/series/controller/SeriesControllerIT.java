@@ -1,15 +1,19 @@
 package dowob.xyz.blog.module.series.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
+import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.module.article.consumer.ArticleSeriesDeletedConsumer;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.series.config.SeriesTestApplication;
@@ -21,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +54,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -97,6 +103,7 @@ class SeriesControllerIT {
     @Autowired private ObjectMapper objectMapper;
     @Autowired private SeriesRepository seriesRepo;
     @Autowired private ArticleRepository articleRepo;
+    @Autowired private ArticleSeriesDeletedConsumer articleSeriesDeletedConsumer;
 
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
@@ -115,7 +122,7 @@ class SeriesControllerIT {
     void setup() {
         // 清理前次測試資料
         articleRepo.findAll().forEach(a -> {
-            a.setSeriesId(null);
+            a.setSeriesUuid(null);
             a.setSeriesPosition(null);
             articleRepo.save(a);
         });
@@ -126,7 +133,7 @@ class SeriesControllerIT {
     @AfterEach
     void cleanUp() {
         articleRepo.findAll().forEach(a -> {
-            a.setSeriesId(null);
+            a.setSeriesUuid(null);
             a.setSeriesPosition(null);
             articleRepo.save(a);
         });
@@ -164,7 +171,7 @@ class SeriesControllerIT {
     }
 
     /** 建立一篇指定狀態的文章並關聯到 series（供公開可見性測試用）。 */
-    private Article createArticleInSeries(Long authorId, ArticleStatus status, Long seriesId, int position) {
+    private Article createArticleInSeries(Long authorId, ArticleStatus status, UUID seriesUuid, int position) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
         article.setAuthorUuid(SeededUsers.uuidOf(authorId));
@@ -176,7 +183,7 @@ class SeriesControllerIT {
         article.setLikeCount(0);
         article.setCommentCount(0);
         article.setViewCount(0L);
-        article.setSeriesId(seriesId);
+        article.setSeriesUuid(seriesUuid);
         article.setSeriesPosition(position);
         article.setCreatedAt(LocalDateTime.now());
         article.setUpdatedAt(LocalDateTime.now());
@@ -331,7 +338,7 @@ class SeriesControllerIT {
     }
 
     @Test
-    @DisplayName("DELETE /series/{uuid} - owner 刪除 → articles series_id 設 NULL")
+    @DisplayName("DELETE /series/{uuid} - owner 刪除 → 發出 SeriesDeletedEvent，article consumer 處理後 articles.series_uuid 清空、文章留存")
     void delete_byOwner_unlinkArticles() throws Exception {
         // 建立 series
         Series series = new Series();
@@ -346,7 +353,7 @@ class SeriesControllerIT {
 
         // 建立文章並關聯到 series
         Article article = createPublishedArticle(USER1_ID);
-        article.setSeriesId(saved.getId());
+        article.setSeriesUuid(saved.getUuid());
         article.setSeriesPosition(1);
         articleRepo.save(article);
 
@@ -358,9 +365,20 @@ class SeriesControllerIT {
         // series 已刪除
         assertThat(seriesRepo.findByUuid(saved.getUuid())).isEmpty();
 
-        // 文章的 series_id 應由 DB ON DELETE SET NULL 設為 NULL
+        // V32 起沒有 FK：事件被消費前文章仍帶著 series_uuid（最終一致的中間狀態）
+        assertThat(articleRepo.findById(article.getId()).orElseThrow().getSeriesUuid()).isEqualTo(saved.getUuid());
+
+        // 把 series 實際發出的事件交給 article consumer（IT 不真起 broker，直接呼叫）
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(rabbitTemplate).convertAndSend(
+                eq(SeriesEventContract.EXCHANGE), eq(SeriesEventContract.ROUTING_KEY_DELETED), published.capture());
+        articleSeriesDeletedConsumer.onSeriesDeleted(
+                (SeriesDeletedEvent) published.getValue(), Mockito.mock(Channel.class), 1L);
+
+        // 文章的 series_uuid／series_position 已清空，文章本身仍在
         Article updatedArticle = articleRepo.findById(article.getId()).orElseThrow();
-        assertThat(updatedArticle.getSeriesId()).isNull();
+        assertThat(updatedArticle.getSeriesUuid()).isNull();
+        assertThat(updatedArticle.getSeriesPosition()).isNull();
     }
 
     @Test
@@ -392,7 +410,7 @@ class SeriesControllerIT {
 
         // 驗證文章已關聯到 series
         Article updated = articleRepo.findById(article.getId()).orElseThrow();
-        assertThat(updated.getSeriesId()).isEqualTo(saved.getId());
+        assertThat(updated.getSeriesUuid()).isEqualTo(saved.getUuid());
         assertThat(updated.getSeriesPosition()).isEqualTo(1);
     }
 
@@ -422,7 +440,7 @@ class SeriesControllerIT {
 
         // 建立文章並關聯到 series1
         Article article = createPublishedArticle(USER1_ID);
-        article.setSeriesId(saved1.getId());
+        article.setSeriesUuid(saved1.getUuid());
         article.setSeriesPosition(1);
         articleRepo.save(article);
 
@@ -450,7 +468,7 @@ class SeriesControllerIT {
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
-        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getId(), 1);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getUuid(), 1);
 
         // 已認證用戶取得 series 詳情（myProgress 不應為 null；readingFacade mock 回空 → readCount 0）
         mockMvc.perform(get("/api/v1/series/{slug}", "progress-series")
@@ -475,7 +493,7 @@ class SeriesControllerIT {
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
-        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getId(), 1);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getUuid(), 1);
 
         // 未帶任何認證：本端點依 security.md 原則 7 豁免為公開端點，
         // 且 GET /api/v1/series/** 於 SecurityConfig 明確 permitAll。
@@ -500,7 +518,7 @@ class SeriesControllerIT {
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
-        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, saved.getId(), 1);
+        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, saved.getUuid(), 1);
 
         mockMvc.perform(get("/api/v1/series/{slug}", "draft-only-series"))
                 .andExpect(status().isOk())
@@ -525,8 +543,8 @@ class SeriesControllerIT {
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
 
-        Article published = createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getId(), 1);
-        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, saved.getId(), 2);
+        Article published = createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, saved.getUuid(), 1);
+        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, saved.getUuid(), 2);
 
         mockMvc.perform(get("/api/v1/series/{slug}", "mixed-series"))
                 .andExpect(status().isOk())
@@ -559,7 +577,7 @@ class SeriesControllerIT {
         withPublished.setCreatedAt(LocalDateTime.now());
         withPublished.setUpdatedAt(LocalDateTime.now());
         Series savedA = seriesRepo.save(withPublished);
-        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, savedA.getId(), 1);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, savedA.getUuid(), 1);
 
         // series B：只有 DRAFT 文章，但反正規化 article_count 仍為 1（模擬 unpublish 後的漂移）→ 不應出現
         Series draftOnly = new Series();
@@ -571,7 +589,7 @@ class SeriesControllerIT {
         draftOnly.setCreatedAt(LocalDateTime.now());
         draftOnly.setUpdatedAt(LocalDateTime.now());
         Series savedB = seriesRepo.save(draftOnly);
-        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, savedB.getId(), 1);
+        createArticleInSeries(USER1_ID, ArticleStatus.DRAFT, savedB.getUuid(), 1);
 
         mockMvc.perform(get("/api/v1/series"))
                 .andExpect(status().isOk())
@@ -612,11 +630,11 @@ class SeriesControllerIT {
         Series savedSeries = seriesRepo.save(series);
 
         Article published = createPublishedArticle(USER1_ID);
-        published.setSeriesId(savedSeries.getId());
+        published.setSeriesUuid(savedSeries.getUuid());
         published.setSeriesPosition(1);
         articleRepo.save(published);
 
-        // 直接屬於同一 series 的 DRAFT（模擬 PUBLISHED 加入後被改回草稿，series_id 未清空）
+        // 直接屬於同一 series 的 DRAFT（模擬 PUBLISHED 加入後被改回草稿，series_uuid 未清空）
         Article draft = new Article();
         draft.setUuid(UUID.randomUUID());
         draft.setAuthorUuid(SeededUsers.USER1_UUID);
@@ -630,7 +648,7 @@ class SeriesControllerIT {
         draft.setViewCount(0L);
         draft.setCreatedAt(LocalDateTime.now());
         draft.setUpdatedAt(LocalDateTime.now());
-        draft.setSeriesId(savedSeries.getId());
+        draft.setSeriesUuid(savedSeries.getUuid());
         draft.setSeriesPosition(2);
         articleRepo.save(draft);
 
@@ -662,7 +680,7 @@ class SeriesControllerIT {
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
-        createArticleInSeries(authorId, ArticleStatus.PUBLISHED, saved.getId(), 1);
+        createArticleInSeries(authorId, ArticleStatus.PUBLISHED, saved.getUuid(), 1);
         return saved;
     }
 
@@ -705,8 +723,8 @@ class SeriesControllerIT {
     void getSlug_authorComesFromUserFacade() throws Exception {
         Series series = createVisibleSeries("author-detail", SeededUsers.USER1_UUID, USER1_ID);
         /* 成員文章共 3 篇、兩位不同作者：證明成員作者是整頁一次批次解析，而不是逐篇（N+1） */
-        createArticleInSeries(USER2_ID, ArticleStatus.PUBLISHED, series.getId(), 2);
-        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, series.getId(), 3);
+        createArticleInSeries(USER2_ID, ArticleStatus.PUBLISHED, series.getUuid(), 2);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, series.getUuid(), 3);
         when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
                 SeededUsers.USER1_UUID, new UserDisplayInfo(SeededUsers.USER1_UUID, "Alice", "https://img/alice.png"),
                 SeededUsers.USER2_UUID, new UserDisplayInfo(SeededUsers.USER2_UUID, "Bob", null)));

@@ -107,8 +107,8 @@ class ArticleFacadeReadingUuidIT {
     private final List<UUID> insertedArticles = new ArrayList<>();
     /** 本測試寫入的使用者 id，供清理 */
     private final List<Long> insertedUsers = new ArrayList<>();
-    /** 本測試寫入的 series id，供清理 */
-    private final List<Long> insertedSeries = new ArrayList<>();
+    /** seedSummaryArticles 指派給文章 a 的系列公開 UUID（沒有對應的 series 列） */
+    private UUID seededSeriesUuid;
     /** 本測試寫入的 tag id，供清理 */
     private final List<UUID> insertedTags = new ArrayList<>();
 
@@ -133,11 +133,9 @@ class ArticleFacadeReadingUuidIT {
         SecurityContextHolder.clearContext();
         insertedArticles.forEach(uuid -> jdbcTemplate.update("DELETE FROM articles WHERE uuid = ?", uuid));
         insertedTags.forEach(id -> jdbcTemplate.update("DELETE FROM tags WHERE id = ?", id));
-        insertedSeries.forEach(id -> jdbcTemplate.update("DELETE FROM series WHERE id = ?", id));
         insertedUsers.forEach(id -> jdbcTemplate.update("DELETE FROM users WHERE id = ?", id));
         insertedArticles.clear();
         insertedTags.clear();
-        insertedSeries.clear();
         insertedUsers.clear();
     }
 
@@ -328,11 +326,9 @@ class ArticleFacadeReadingUuidIT {
         UUID b = insertArticle(author2Uuid, "PUBLISHED", 1);
         UUID c = insertArticle(author1Uuid, "DRAFT", 0);
 
-        Long seriesId = jdbcTemplate.queryForObject(
-                "INSERT INTO series (title, slug, author_uuid) VALUES ('系列', ?, ?) RETURNING id",
-                Long.class, "s-" + UUID.randomUUID(), author1Uuid);
-        insertedSeries.add(seriesId);
-        jdbcTemplate.update("UPDATE articles SET series_id = ?, series_position = 2 WHERE uuid = ?", seriesId, a);
+        // M6-b：articles.series_uuid 沒有 FK，不需要真的建 series 列；series 標題由 mock 的 SeriesFacade 回答
+        seededSeriesUuid = UUID.randomUUID();
+        jdbcTemplate.update("UPDATE articles SET series_uuid = ?, series_position = 2 WHERE uuid = ?", seededSeriesUuid, a);
 
         UUID tagId = UUID.randomUUID();
         jdbcTemplate.update("INSERT INTO tags (id, name, slug) VALUES (?, ?, ?)",
@@ -343,8 +339,8 @@ class ArticleFacadeReadingUuidIT {
         when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
                 author1Uuid, new UserDisplayInfo(author1Uuid, "TestAuthor", null),
                 author2Uuid, new UserDisplayInfo(author2Uuid, "Author2", null)));
-        when(seriesFacade.batchGetSeriesBasicInfo(anyCollection())).thenReturn(Map.of(
-                seriesId, new SeriesBasicInfo(UUID.randomUUID(), "系列")));
+        when(seriesFacade.batchGetSeriesBasicInfoByUuids(anyCollection())).thenReturn(Map.of(
+                seededSeriesUuid, new SeriesBasicInfo(seededSeriesUuid, "系列")));
         return List.of(a, b, c);
     }
 
@@ -373,7 +369,7 @@ class ArticleFacadeReadingUuidIT {
         assertThat(byUuid).extracting(ArticleSummaryResponse::getBookmarked).containsExactly(false, false, true);
         assertThat(byUuid.get(0).getLastReadProgress()).isEqualByComparingTo("0.50");
         assertThat(byUuid.get(1).getSeriesTitle()).isEqualTo("系列");
-        assertThat(byUuid.get(1).getSeriesUuid()).isNotNull();
+        assertThat(byUuid.get(1).getSeriesUuid()).isEqualTo(seededSeriesUuid);
         assertThat(byUuid.get(1).getTags()).hasSize(1);
         assertThat(byUuid.get(1).getAuthorUuid()).isEqualTo(author1Uuid);
     }
@@ -392,7 +388,7 @@ class ArticleFacadeReadingUuidIT {
         verify(readingFacade, times(1)).batchIsLiked(any(), anyList());
         verify(readingFacade, times(1)).batchIsBookmarked(any(), anyList());
         verify(readingFacade, times(1)).batchGetProgress(any(), anyList());
-        verify(seriesFacade, times(1)).batchGetSeriesBasicInfo(anyCollection());
+        verify(seriesFacade, times(1)).batchGetSeriesBasicInfoByUuids(anyCollection());
         verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
     }
 

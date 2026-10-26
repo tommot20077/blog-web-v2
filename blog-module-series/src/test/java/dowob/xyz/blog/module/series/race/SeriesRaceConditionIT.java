@@ -59,9 +59,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * series 模組兩個併發問題的整合測試（真實 Postgres、經 MockMvc → controller → service → 交易，不 mock 任何約束）。
  *
  * <ul>
- *   <li><b>RACE-14</b>：{@code addArticleToSeries} 以「讀到的 seriesId 是否為 null」判斷是否為新成員
+ *   <li><b>RACE-14</b>：{@code addArticleToSeries} 以「讀到的 seriesUuid 是否為 null」判斷是否為新成員
  *       （check-then-act）。兩個請求同時加入同一篇文章，都讀到 null，都 {@code article_count + 1}，
- *       結果 +2。新實作由寫入本身（{@code UPDATE ... WHERE series_id IS NULL} 的 affected rows）決定。
+ *       結果 +2。新實作由寫入本身（{@code UPDATE ... WHERE series_uuid IS NULL} 的 affected rows）決定。
  *       移出同理：兩個請求都讀到「在此 series」，都 -1。</li>
  *   <li><b>RACE-15</b>：slug 唯一性以 {@code existsBySlug} 先查再 save，併發撞到 UNIQUE 會變成 500
  *       而非 {@code S0104}（建立與更新兩處）。新實作建立用 {@code INSERT ... ON CONFLICT DO NOTHING}，
@@ -120,7 +120,7 @@ class SeriesRaceConditionIT {
     @AfterEach
     void cleanUp() {
         jdbc.execute("DELETE FROM processed_events");
-        jdbc.execute("UPDATE articles SET series_id = NULL, series_position = NULL");
+        jdbc.execute("UPDATE articles SET series_uuid = NULL, series_position = NULL");
         jdbc.execute("DELETE FROM series");
         jdbc.execute("DELETE FROM articles");
     }
@@ -183,8 +183,7 @@ class SeriesRaceConditionIT {
     }
 
     private int memberRowsOf(UUID seriesUuid) {
-        return jdbc.queryForObject("SELECT COUNT(*) FROM articles WHERE series_id = "
-                + "(SELECT id FROM series WHERE uuid = ?)", Integer.class, seriesUuid);
+        return jdbc.queryForObject("SELECT COUNT(*) FROM articles WHERE series_uuid = ?", Integer.class, seriesUuid);
     }
 
     /** 回應的 HTTP 狀態碼與業務錯誤碼（成功為 {@code 00000}）。 */

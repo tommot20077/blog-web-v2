@@ -44,12 +44,6 @@ public class ArticleEventPublisher {
 
     private final ArticleMapper articleMapper;
 
-    /**
-     * series uuid 的轉換元件（與 ArticleDataAssembler 共用；M6-b 以 series_uuid 欄位取代後移除；內部以 ObjectProvider 延遲取得
-     * SeriesFacade，避開 SeriesFacadeImpl → ArticleFacade 的 bean 循環，本類別不得直接注入 SeriesFacade）
-     */
-    private final ArticleIdentityResolver identityResolver;
-
     // ──────────────────────────────────────────────
     // ContentChanged（SAVED / PUBLISHED / RESTORED）
     // ──────────────────────────────────────────────
@@ -158,9 +152,9 @@ public class ArticleEventPublisher {
      * 讓維運可告警並人工補送。</p>
      *
      * @param article      文章 entity（提供 uuid / authorUuid）
-     * @param seriesUuid   文章所屬 series 公開 UUID（nullable；caller 必須在 delete <b>之前</b>以
-     *                     {@link #resolveSeriesUuidForDelete} 取得，本方法不再查 series——
-     *                     它是 series 模組扣計數的唯一依據，不能在刪除後才查、查失敗就發出 null）
+     * @param seriesUuid   文章所屬 series 公開 UUID（nullable；caller 在 delete <b>之前</b>直接讀自文章實體的
+     *                     {@code series_uuid}，本方法不查任何東西——它是 series 模組扣計數的唯一依據，
+     *                     必須與被刪除的文章列一致）
      * @param categoryIds  文章 categories（caller 在 delete 前讀取；空 list 不可 null）
      * @param tagIds       文章 tags（caller 在 delete 前讀取；空 list 不可 null）
      */
@@ -186,25 +180,6 @@ public class ArticleEventPublisher {
                             + "需人工補送：articleUuid={}, eventId={}, error={}",
                     article.getUuid(), eventId, e.getMessage(), e);
         }
-    }
-
-    /**
-     * 於<b>刪除文章之前</b>取得其所屬 series 的公開 UUID，供 {@link #publishDeleted} 帶入事件。
-     *
-     * <p>為什麼必須在刪除前、且失敗要往外拋：{@code ArticleDeletedEvent} 不再帶 Long {@code seriesId}，
-     * {@code seriesUuid} 成為 series 模組扣 {@code article_count} 的唯一依據。若等文章刪除之後才查、
-     * 查詢又失敗，事件就會帶著 null 發出，series 的計數永遠不會被扣。改成刪除前取得：查詢失敗時
-     * 刪除根本不動手，使用者看到錯誤可重試；成功時 uuid 一路傳給 publisher，事件發送前不再查詢。</p>
-     *
-     * @param seriesId series 主鍵；null（文章不在 series）回傳 null 且不發任何查詢
-     * @return series 公開 UUID；查無（資料異常）為 null
-     * @throws RuntimeException 查詢失敗時直接往外拋（不吞掉）
-     */
-    public UUID resolveSeriesUuidForDelete(Long seriesId) {
-        if (seriesId == null) {
-            return null;
-        }
-        return identityResolver.resolveSeriesUuids(List.of(seriesId)).get(seriesId);
     }
 
     // ──────────────────────────────────────────────

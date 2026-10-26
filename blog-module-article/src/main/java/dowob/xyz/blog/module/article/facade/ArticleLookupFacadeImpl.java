@@ -20,9 +20,8 @@ import java.util.UUID;
  * </p>
  *
  * <p>
- * 另依賴 {@link ArticleDataAssembler}（設計 §3.1：填入 authorUuid / seriesUuid）。它只依賴
- * {@code ArticleMapper} 與 {@code ObjectProvider<SeriesFacade>}（延遲取得），不含任何 service / facade 的建構子依賴，
- * 因此不會重新引入循環。
+ * 另依賴 {@link ArticleDataAssembler}（填入 authorUuid / seriesUuid，兩者皆直接取自文章欄位）。
+ * 它沒有任何依賴（不含任何 service / facade / mapper 的建構子依賴），因此不會重新引入循環。
  * </p>
  *
  * <p>

@@ -160,8 +160,8 @@ class ArticleQuerySubService {
     }
 
     @Transactional(readOnly = true)
-    List<Article> findBySeriesIdOrderByPosition(Long seriesId) {
-        return articleMapper.findBySeriesIdOrderByPosition(seriesId);
+    List<Article> findBySeriesUuidOrderByPosition(UUID seriesUuid) {
+        return articleMapper.findBySeriesUuidOrderByPosition(seriesUuid);
     }
 
     Optional<Article> findById(Long id) {

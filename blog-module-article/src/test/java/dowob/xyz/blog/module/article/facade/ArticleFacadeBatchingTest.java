@@ -1,7 +1,5 @@
 package dowob.xyz.blog.module.article.facade;
 
-import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
@@ -19,7 +17,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -50,7 +47,6 @@ class ArticleFacadeBatchingTest {
     @Mock private ArticleRecommendMapper recommendMapper;
     @Mock private ArticleService articleService;
     @Mock private ArticleMapper articleMapper;
-    @Mock private ObjectProvider<SeriesFacade> seriesFacadeProvider;
     @Mock private UserFacade userFacade;
     private ArticleFacadeImpl facade;
 
@@ -58,14 +54,14 @@ class ArticleFacadeBatchingTest {
     private static final UUID AUTHOR_UUID = UUID.randomUUID();
 
     /**
-     * 手動建構 facade 並注入「真實」的 {@link ArticleDataAssembler}（包裝 mock 的 mapper 與 provider）。
+     * 手動建構 facade 並注入「真實」的 {@link ArticleDataAssembler}。
      * 不用 {@code @InjectMocks}：它會把 assembler 注入為 null，日後任何測試觸及 findByIds 等方法就會 NPE。
      * 本測試不關心的其餘依賴傳 null（與先前 {@code @InjectMocks} 的行為一致）。
      */
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, userFacade, recommendMapper, articleService, null, null, null, null,
-                null, new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)), null, null, null);
+                null, new ArticleDataAssembler(), null, null, null);
     }
 
     /** findByUuids 每次收到的批次大小 */

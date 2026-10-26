@@ -94,7 +94,7 @@ class ArticleSeriesConditionalAssignmentIT {
     @BeforeEach
     @AfterEach
     void cleanUp() {
-        jdbc.execute("UPDATE articles SET series_id = NULL, series_position = NULL");
+        jdbc.execute("UPDATE articles SET series_uuid = NULL, series_position = NULL");
         jdbc.execute("DELETE FROM series");
         jdbc.execute("DELETE FROM articles");
     }
@@ -124,8 +124,8 @@ class ArticleSeriesConditionalAssignmentIT {
         return articleRepo.save(article);
     }
 
-    private Long seriesIdOf(UUID articleUuid) {
-        return jdbc.queryForObject("SELECT series_id FROM articles WHERE uuid = ?", Long.class, articleUuid);
+    private UUID seriesUuidOf(UUID articleUuid) {
+        return jdbc.queryForObject("SELECT series_uuid FROM articles WHERE uuid = ?", UUID.class, articleUuid);
     }
 
     private Integer positionOf(UUID articleUuid) {
@@ -134,10 +134,6 @@ class ArticleSeriesConditionalAssignmentIT {
 
     private long versionOf(UUID articleUuid) {
         return jdbc.queryForObject("SELECT version FROM articles WHERE uuid = ?", Long.class, articleUuid);
-    }
-
-    private Long idOfSeries(UUID seriesUuid) {
-        return jdbc.queryForObject("SELECT id FROM series WHERE uuid = ?", Long.class, seriesUuid);
     }
 
     // ─── assignToSeriesIfUnassigned ────────────────────────────────────────
@@ -152,7 +148,7 @@ class ArticleSeriesConditionalAssignmentIT {
         boolean assigned = articleFacade.assignToSeriesIfUnassigned(article.getUuid(), series, 4);
 
         assertThat(assigned).isTrue();
-        assertThat(seriesIdOf(article.getUuid())).isEqualTo(idOfSeries(series));
+        assertThat(seriesUuidOf(article.getUuid())).isEqualTo(series);
         assertThat(positionOf(article.getUuid())).isEqualTo(4);
         assertThat(versionOf(article.getUuid())).as("與實體 save 一致：遞增 version").isEqualTo(versionBefore + 1);
     }
@@ -183,20 +179,33 @@ class ArticleSeriesConditionalAssignmentIT {
         boolean assigned = articleFacade.assignToSeriesIfUnassigned(article.getUuid(), other, 2);
 
         assertThat(assigned).isFalse();
-        assertThat(seriesIdOf(article.getUuid())).isEqualTo(idOfSeries(first));
+        assertThat(seriesUuidOf(article.getUuid())).isEqualTo(first);
         assertThat(positionOf(article.getUuid())).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("文章不存在 → 回傳 false；series 不存在 → IllegalArgumentException 且文章不被改動")
-    void assign_unknownArticle_false_unknownSeries_throws() {
+    @DisplayName("文章不存在 → 回傳 false；seriesUuid 為 null → IllegalArgumentException 且文章不被改動")
+    void assign_unknownArticle_false_nullSeries_throws() {
         UUID series = insertSeries("cond-unknown");
         Article article = insertArticle();
 
         assertThat(articleFacade.assignToSeriesIfUnassigned(UUID.randomUUID(), series, 1)).isFalse();
-        assertThatThrownBy(() -> articleFacade.assignToSeriesIfUnassigned(article.getUuid(), UUID.randomUUID(), 1))
+        assertThatThrownBy(() -> articleFacade.assignToSeriesIfUnassigned(article.getUuid(), null, 1))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThat(seriesIdOf(article.getUuid())).isNull();
+        assertThat(seriesUuidOf(article.getUuid())).isNull();
+    }
+
+    @Test
+    @DisplayName("M6-b：article 不檢查 series 是否存在（沒有 FK、也不依賴 series 模組）→ 不存在的 series uuid 照寫入並回傳 true；"
+            + "存在性由呼叫端 SeriesService 負責，殘留的歸屬由刪除事件或每日校正清空")
+    void assign_unknownSeries_isWrittenAsIs() {
+        Article article = insertArticle();
+        UUID ghost = UUID.randomUUID();
+
+        boolean assigned = articleFacade.assignToSeriesIfUnassigned(article.getUuid(), ghost, 1);
+
+        assertThat(assigned).isTrue();
+        assertThat(seriesUuidOf(article.getUuid())).isEqualTo(ghost);
     }
 
     @Test
@@ -210,7 +219,7 @@ class ArticleSeriesConditionalAssignmentIT {
                     articleFacade.assignToSeriesIfUnassigned(article.getUuid(), series, i + 1));
 
             assertThat(results).as("第 %d 輪", round).containsExactlyInAnyOrder(true, false);
-            assertThat(seriesIdOf(article.getUuid())).as("第 %d 輪", round).isEqualTo(idOfSeries(series));
+            assertThat(seriesUuidOf(article.getUuid())).as("第 %d 輪", round).isEqualTo(series);
         }
     }
 
@@ -228,7 +237,7 @@ class ArticleSeriesConditionalAssignmentIT {
 
         assertThat(updated).isTrue();
         assertThat(positionOf(article.getUuid())).isEqualTo(8);
-        assertThat(seriesIdOf(article.getUuid())).isEqualTo(idOfSeries(series));
+        assertThat(seriesUuidOf(article.getUuid())).isEqualTo(series);
         assertThat(versionOf(article.getUuid())).isEqualTo(versionBefore + 1);
     }
 
@@ -247,7 +256,7 @@ class ArticleSeriesConditionalAssignmentIT {
         assertThat(articleFacade.updateSeriesPositionIfAssigned(inMember.getUuid(), UUID.randomUUID(), 5)).isFalse();
 
         assertThat(positionOf(inMember.getUuid())).isEqualTo(1);
-        assertThat(seriesIdOf(free.getUuid())).as("未歸屬的文章不會被寫入任何 series").isNull();
+        assertThat(seriesUuidOf(free.getUuid())).as("未歸屬的文章不會被寫入任何 series").isNull();
     }
 
     @Test
@@ -279,7 +288,7 @@ class ArticleSeriesConditionalAssignmentIT {
         boolean removed = articleFacade.removeFromSeriesIfAssigned(article.getUuid(), series);
 
         assertThat(removed).isTrue();
-        assertThat(seriesIdOf(article.getUuid())).isNull();
+        assertThat(seriesUuidOf(article.getUuid())).isNull();
         assertThat(positionOf(article.getUuid())).isNull();
         assertThat(versionOf(article.getUuid())).isEqualTo(versionBefore + 1);
     }
@@ -298,7 +307,7 @@ class ArticleSeriesConditionalAssignmentIT {
         assertThat(articleFacade.removeFromSeriesIfAssigned(UUID.randomUUID(), member)).isFalse();
         assertThat(articleFacade.removeFromSeriesIfAssigned(inMember.getUuid(), UUID.randomUUID())).isFalse();
 
-        assertThat(seriesIdOf(inMember.getUuid())).isEqualTo(idOfSeries(member));
+        assertThat(seriesUuidOf(inMember.getUuid())).isEqualTo(member);
         assertThat(positionOf(inMember.getUuid())).isEqualTo(1);
     }
 
@@ -314,7 +323,7 @@ class ArticleSeriesConditionalAssignmentIT {
                     articleFacade.removeFromSeriesIfAssigned(article.getUuid(), series));
 
             assertThat(results).as("第 %d 輪", round).containsExactlyInAnyOrder(true, false);
-            assertThat(seriesIdOf(article.getUuid())).as("第 %d 輪", round).isNull();
+            assertThat(seriesUuidOf(article.getUuid())).as("第 %d 輪", round).isNull();
         }
     }
 

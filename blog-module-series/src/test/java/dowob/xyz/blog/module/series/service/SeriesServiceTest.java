@@ -113,7 +113,12 @@ class SeriesServiceTest {
     }
 
     private ArticleData article(UUID uuid, UUID authorUuid, ArticleStatus status, UUID inSeriesUuid, Integer position) {
-        return new ArticleData(articleId, uuid, status.name(), null, position, authorUuid, inSeriesUuid);
+        return new ArticleData(articleId, uuid, status.name(), position, authorUuid, inSeriesUuid);
+    }
+
+    /** 讓 series 自己的 mapper 回答「這個 series 仍存在」（供判斷文章的舊歸屬是不是殘留的 ghost）。 */
+    private void otherSeriesExists(UUID other) {
+        when(mapper.findExistingUuidsIn(List.of(other))).thenReturn(List.of(other.toString()));
     }
 
     private void stubAuthor(UUID uuid, String nickname) {
@@ -359,11 +364,11 @@ class SeriesServiceTest {
         when(articleFacade.findByUuid(articleUuid))
                 .thenReturn(Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
         when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 3)).thenReturn(true);
+        when(mapper.incrementArticleCount(seriesId)).thenReturn(1);
 
         service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 3);
 
         verify(mapper).incrementArticleCount(seriesId);
-        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
         verify(articleFacade, times(1)).findByUuid(articleUuid);
     }
 
@@ -379,7 +384,6 @@ class SeriesServiceTest {
         service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 5);
 
         verify(articleFacade).updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5);
-        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
         verify(mapper, never()).incrementArticleCount(any());
     }
 
@@ -392,6 +396,7 @@ class SeriesServiceTest {
                 Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)));
         when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5)).thenReturn(false, true);
         when(articleFacade.updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+        when(mapper.incrementArticleCount(seriesId)).thenReturn(1);
 
         service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 5);
 
@@ -419,8 +424,10 @@ class SeriesServiceTest {
     @DisplayName("addArticleToSeries：預讀時文章在另一個 series → S0106，不嘗試指派")
     void addArticleToSeries_articleAlreadyInOtherSeries_throwsS0106() {
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        UUID otherSeries = UUID.randomUUID();
         when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                article(articleUuid, userUuid, ArticleStatus.PUBLISHED, UUID.randomUUID(), 1)));
+                article(articleUuid, userUuid, ArticleStatus.PUBLISHED, otherSeries, 1)));
+        otherSeriesExists(otherSeries);
 
         assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
                 .isInstanceOf(BusinessException.class)
@@ -439,13 +446,13 @@ class SeriesServiceTest {
                 Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)),
                 Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, otherSeries, 1)));
         when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(false);
+        otherSeriesExists(otherSeries);
 
         assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES.getMessage());
 
         verify(mapper, never()).incrementArticleCount(any());
-        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
     }
 
     @Test
@@ -456,11 +463,84 @@ class SeriesServiceTest {
                 Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)),
                 Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
         when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(false, true);
+        when(mapper.incrementArticleCount(seriesId)).thenReturn(1);
 
         service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1);
 
         verify(articleFacade, times(2)).assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1);
         verify(mapper, times(1)).incrementArticleCount(seriesId);
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：文章殘留的舊歸屬指向已被刪除的 series（事件尚未處理）→ 條件式清掉殘留、不動 article_count，重讀後正常加入")
+    void addArticleToSeries_staleMembershipOfDeletedSeries_isReleasedThenAssigned() {
+        UUID ghostSeries = UUID.randomUUID();
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, ghostSeries, 4)),
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
+        when(mapper.findExistingUuidsIn(List.of(ghostSeries))).thenReturn(List.of());
+        when(articleFacade.removeFromSeriesIfAssigned(articleUuid, ghostSeries)).thenReturn(true);
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(true);
+        when(mapper.incrementArticleCount(seriesId)).thenReturn(1);
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1);
+
+        verify(articleFacade).removeFromSeriesIfAssigned(articleUuid, ghostSeries);
+        verify(mapper, never()).decrementArticleCount(any());
+        verify(mapper, times(1)).incrementArticleCount(seriesId);
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：舊歸屬的 series 仍存在 → 維持 S0106，不清除、不指派")
+    void addArticleToSeries_membershipOfExistingOtherSeries_staysS0106() {
+        UUID realOther = UUID.randomUUID();
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                article(articleUuid, userUuid, ArticleStatus.PUBLISHED, realOther, 1)));
+        otherSeriesExists(realOther);
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES.getMessage());
+
+        verify(articleFacade, never()).removeFromSeriesIfAssigned(any(), any());
+        verify(articleFacade, never()).assignToSeriesIfUnassigned(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：重試迴圈重讀後才發現殘留的 ghost 歸屬 → 套用同一個判斷，清掉後重試成功")
+    void addArticleToSeries_ghostFoundOnReread_isReleasedAndRetried() {
+        UUID ghostSeries = UUID.randomUUID();
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)),
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, ghostSeries, 2)),
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
+        when(mapper.findExistingUuidsIn(List.of(ghostSeries))).thenReturn(List.of());
+        when(articleFacade.removeFromSeriesIfAssigned(articleUuid, ghostSeries)).thenReturn(true);
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(false, true);
+        when(mapper.incrementArticleCount(seriesId)).thenReturn(1);
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1);
+
+        verify(articleFacade).removeFromSeriesIfAssigned(articleUuid, ghostSeries);
+        verify(articleFacade, times(2)).assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1);
+        verify(mapper, never()).decrementArticleCount(any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：指派成功但 article_count +1 影響 0 列（series 在讀取後被刪除）→ 拋 S0101 讓整個交易回滾，ghost 歸屬不落地")
+    void addArticleToSeries_incrementAffectsNothing_throwsSeriesNotFound() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid))
+                .thenReturn(Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 3)).thenReturn(true);
+        when(mapper.incrementArticleCount(seriesId)).thenReturn(0);
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 3))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(SeriesErrorCode.SERIES_NOT_FOUND.getMessage());
     }
 
     @Test
@@ -505,7 +585,6 @@ class SeriesServiceTest {
                 .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_PUBLISHED.getMessage());
 
         verify(articleFacade, never()).assignToSeriesIfUnassigned(any(), any(), any());
-        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
     }
 
     @Test
@@ -541,6 +620,7 @@ class SeriesServiceTest {
         when(articleFacade.findByUuid(articleUuid)).thenReturn(
                 Optional.of(article(articleUuid, UUID.randomUUID(), ArticleStatus.PUBLISHED, null, null)));
         when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 1)).thenReturn(true);
+        when(mapper.incrementArticleCount(seriesId)).thenReturn(1);
 
         service.addArticleToSeries(seriesUuid, articleUuid, userUuid, /* isAdmin */ true, 1);
 

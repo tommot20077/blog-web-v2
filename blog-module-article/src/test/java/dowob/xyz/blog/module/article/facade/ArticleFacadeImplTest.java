@@ -1,11 +1,9 @@
 package dowob.xyz.blog.module.article.facade;
 
-import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
@@ -39,7 +37,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -97,13 +94,6 @@ class ArticleFacadeImplTest {
     @Mock
     private FileFacade fileFacade;
 
-    /** 過渡期 UUID 欄位：SeriesFacade 以 ObjectProvider 延遲取得（本測試不關心其回傳值） */
-    @Mock
-    private ObjectProvider<SeriesFacade> seriesFacadeProvider;
-
-    @Mock
-    private SeriesFacade seriesFacade;
-
     private ArticleFacadeImpl facade;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
@@ -111,6 +101,9 @@ class ArticleFacadeImplTest {
 
     /** 測試用作者公開 UUID（M6-a：文章直接存 author_uuid） */
     private static final UUID AUTHOR_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+
+    /** 測試用系列公開 UUID（M6-b：文章直接存 series_uuid） */
+    private static final UUID SERIES_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000b1");
 
     @BeforeEach
     void setUp() {
@@ -125,13 +118,9 @@ class ArticleFacadeImplTest {
             articleMapper, userFacade, recommendMapper, articleService,
             articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
             articleFileBinder,
-            new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)),
+            new ArticleDataAssembler(),
             null, null, null
         );
-
-        /** 過渡期 UUID 欄位的依賴：本測試類不驗證 UUID 值（見 ArticleFacadeUuidFieldsTest），回傳空即可 */
-        when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
-        when(seriesFacade.findUuidsByIds(any())).thenReturn(java.util.Map.of());
 
         /** 推薦與索引查詢的作者暱稱一律經 UserFacade UUID 版批次解析（M6-a 起不再 JOIN users） */
         when(userFacade.getDisplayInfoByUuids(any())).thenReturn(
@@ -145,13 +134,13 @@ class ArticleFacadeImplTest {
     }
 
     // ─── SP-B helper：建立測試用 Article entity ───
-    private Article buildArticle(Long id, UUID uuid, ArticleStatus status, Long seriesId, Integer pos) {
+    private Article buildArticle(Long id, UUID uuid, ArticleStatus status, UUID seriesUuid, Integer pos) {
         Article a = new Article();
         a.setId(id);
         a.setUuid(uuid);
         a.setAuthorUuid(AUTHOR_UUID);
         a.setStatus(status);
-        a.setSeriesId(seriesId);
+        a.setSeriesUuid(seriesUuid);
         a.setSeriesPosition(pos);
         return a;
     }
@@ -532,7 +521,7 @@ class ArticleFacadeImplTest {
         @DisplayName("文章存在時回傳 ArticleData（含 Article→ArticleData 轉換驗證）")
         void returnsArticleData_convertedFromEntity() {
             UUID uuid = UUID.randomUUID();
-            Article a = buildArticle(100L, uuid, ArticleStatus.PUBLISHED, 50L, 3);
+            Article a = buildArticle(100L, uuid, ArticleStatus.PUBLISHED, SERIES_UUID, 3);
             when(articleService.findByUuid(uuid)).thenReturn(Optional.of(a));
 
             Optional<ArticleData> result = facade.findByUuid(uuid);
@@ -542,7 +531,7 @@ class ArticleFacadeImplTest {
             assertThat(data.id()).isEqualTo(100L);
             assertThat(data.uuid()).isEqualTo(uuid);
             assertThat(data.status()).isEqualTo("PUBLISHED");
-            assertThat(data.seriesId()).isEqualTo(50L);
+            assertThat(data.seriesUuid()).isEqualTo(SERIES_UUID);
             assertThat(data.seriesPosition()).isEqualTo(3);
         }
 
@@ -563,7 +552,7 @@ class ArticleFacadeImplTest {
     class FindByIdDelegate {
 
         @Test
-        @DisplayName("回傳 ArticleData（null seriesId / seriesPosition）")
+        @DisplayName("回傳 ArticleData（null seriesUuid / seriesPosition）")
         void returnsArticleData_convertedFromEntity() {
             Article a = buildArticle(100L, UUID.randomUUID(), ArticleStatus.DRAFT, null, null);
             when(articleService.findById(100L)).thenReturn(Optional.of(a));
@@ -572,7 +561,7 @@ class ArticleFacadeImplTest {
 
             assertThat(result).isPresent();
             assertThat(result.get().status()).isEqualTo("DRAFT");
-            assertThat(result.get().seriesId()).isNull();
+            assertThat(result.get().seriesUuid()).isNull();
             assertThat(result.get().seriesPosition()).isNull();
         }
     }
@@ -599,17 +588,17 @@ class ArticleFacadeImplTest {
     }
 
     @Nested
-    @DisplayName("SP-B findBySeriesIdOrderByPosition")
-    class FindBySeriesIdOrderByPositionDelegate {
+    @DisplayName("findBySeriesUuidOrderByPosition")
+    class FindBySeriesUuidOrderByPositionDelegate {
 
         @Test
         @DisplayName("回傳 ArticleData 列表（含 seriesPosition 驗證）")
         void returnsArticleDataList() {
-            Article a1 = buildArticle(1L, UUID.randomUUID(), ArticleStatus.PUBLISHED, 50L, 1);
-            Article a2 = buildArticle(2L, UUID.randomUUID(), ArticleStatus.PUBLISHED, 50L, 2);
-            when(articleService.findBySeriesIdOrderByPosition(50L)).thenReturn(List.of(a1, a2));
+            Article a1 = buildArticle(1L, UUID.randomUUID(), ArticleStatus.PUBLISHED, SERIES_UUID, 1);
+            Article a2 = buildArticle(2L, UUID.randomUUID(), ArticleStatus.PUBLISHED, SERIES_UUID, 2);
+            when(articleService.findBySeriesUuidOrderByPosition(SERIES_UUID)).thenReturn(List.of(a1, a2));
 
-            List<ArticleData> result = facade.findBySeriesIdOrderByPosition(50L);
+            List<ArticleData> result = facade.findBySeriesUuidOrderByPosition(SERIES_UUID);
 
             assertThat(result).hasSize(2);
             assertThat(result.get(0).seriesPosition()).isEqualTo(1);
@@ -649,13 +638,6 @@ class ArticleFacadeImplTest {
         void decrementLikeCount_delegatesToArticleService() {
             facade.decrementLikeCount(100L);
             verify(articleService).decrementLikeCount(100L);
-        }
-
-        @Test
-        @DisplayName("updateSeriesAssignment 委派 articleService")
-        void updateSeriesAssignment_delegatesToArticleService() {
-            facade.updateSeriesAssignment(100L, 50L, 3);
-            verify(articleService).updateSeriesAssignment(100L, 50L, 3);
         }
     }
 

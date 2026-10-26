@@ -11,16 +11,16 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * M6-a：article facade DTO 移除 Long 作者識別（{@code authorId}）與登入識別符（{@code authorUsername}）的契約測試。
+ * M6：article facade DTO 移除 Long 作者識別（{@code authorId}）、登入識別符（{@code authorUsername}）
+ * 與 series 的 Long 主鍵（{@code seriesId}）的契約測試。
  *
- * <p>他模組已全部改讀 {@code authorUuid}，owner 直接從 record 移除這些欄位，
- * 不得保留為恆 null 的欄位（會成為靜默陷阱）。{@code ArticleData.id}、{@code seriesId} 是 article 自有主鍵與
- * series 過渡欄位，本階段不動（M6-b／Z1）。</p>
+ * <p>他模組已全部改讀 {@code authorUuid}／{@code seriesUuid}，owner 直接從 record 移除這些欄位，
+ * 不得保留為恆 null 的欄位（會成為靜默陷阱）。{@code ArticleData.id} 是 article 自有主鍵，Z1 才移除。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0（M6-b：移除 seriesId）
  */
-@DisplayName("article facade DTO 移除 authorId／authorUsername")
+@DisplayName("article facade DTO 移除 authorId／authorUsername／seriesId")
 class ArticleFacadeDtoLongAuthorFieldRemovalTest {
 
     /**
@@ -34,11 +34,21 @@ class ArticleFacadeDtoLongAuthorFieldRemovalTest {
     }
 
     @Test
-    @DisplayName("ArticleData 不含 authorId，保留 id／authorUuid／seriesId")
-    void articleData_hasNoAuthorId() {
+    @DisplayName("ArticleData 不含 authorId／seriesId，保留 id／uuid／authorUuid／seriesUuid／seriesPosition")
+    void articleData_hasNoAuthorIdAndNoSeriesId() {
         assertThat(components(ArticleData.class))
-                .doesNotContain("authorId")
-                .contains("id", "uuid", "authorUuid", "seriesId", "seriesUuid");
+                .doesNotContain("authorId", "seriesId")
+                .contains("id", "uuid", "status", "authorUuid", "seriesUuid", "seriesPosition");
+    }
+
+    @Test
+    @DisplayName("ArticleData 的建構子沒有第二個 Long 參數（不留 series 主鍵的舊建構子形狀）")
+    void articleData_constructorsHaveNoLongSeriesParameter() {
+        assertThat(ArticleData.class.getConstructors())
+                .allSatisfy(constructor -> assertThat(Arrays.stream(constructor.getParameterTypes())
+                        .filter(Long.class::equals).count())
+                        .as("只有 id 是 Long：%s", constructor)
+                        .isEqualTo(1L));
     }
 
     @Test

@@ -1,7 +1,5 @@
 package dowob.xyz.blog.module.article.facade;
 
-import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.module.article.model.Article;
@@ -16,8 +14,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
-
-import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -37,18 +33,17 @@ class ArticleFacadeSetPredicateTest {
 
     @Mock private ArticleMapper articleMapper;
     @Mock private ArticleService articleService;
-    @Mock private ObjectProvider<SeriesFacade> seriesFacadeProvider;
     private ArticleFacadeImpl facade;
 
     /**
-     * 手動建構 facade 並注入「真實」的 {@link ArticleDataAssembler}（包裝 mock 的 mapper 與 provider）。
+     * 手動建構 facade 並注入「真實」的 {@link ArticleDataAssembler}。
      * 不用 {@code @InjectMocks}：它會把 assembler 注入為 null，日後任何測試觸及 findByIds 等方法就會 NPE。
      * 本測試不關心的其餘依賴傳 null（與先前 {@code @InjectMocks} 的行為一致）。
      */
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, null, null, articleService, null, null, null, null, null,
-                new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)), null, null, null);
+                new ArticleDataAssembler(), null, null, null);
     }
 
     @Nested
@@ -70,72 +65,78 @@ class ArticleFacadeSetPredicateTest {
     }
 
     @Nested
-    class CountPublishedBySeriesIds {
+    class CountPublishedBySeriesUuids {
+
+        private final UUID seriesA = UUID.randomUUID();
+        private final UUID seriesB = UUID.randomUUID();
+        private final UUID seriesC = UUID.randomUUID();
 
         @Test
         @DisplayName("空輸入不查詢，直接回空 map")
         void emptyInputReturnsEmptyMapWithoutQuery() {
-            assertThat(facade.countPublishedBySeriesIds(List.of())).isEmpty();
+            assertThat(facade.countPublishedBySeriesUuids(List.of())).isEmpty();
         }
 
         @Test
         @DisplayName("只回傳有公開文章的 series，且計數正確")
         void onlyReturnsSeriesWithPublishedArticlesAndCorrectCount() {
-            when(articleMapper.countPublishedBySeriesIds(List.of(1L, 2L, 3L)))
+            when(articleMapper.countPublishedBySeriesUuids(anyCollection()))
                     .thenReturn(List.of(
-                            new ArticleMapper.SeriesPublishedCountRow(1L, 3),
-                            new ArticleMapper.SeriesPublishedCountRow(3L, 1)));
+                            new ArticleMapper.SeriesPublishedCountRow(seriesA, 3),
+                            new ArticleMapper.SeriesPublishedCountRow(seriesC, 1)));
 
-            Map<Long, Integer> result = facade.countPublishedBySeriesIds(List.of(1L, 2L, 3L));
+            Map<UUID, Integer> result = facade.countPublishedBySeriesUuids(List.of(seriesA, seriesB, seriesC));
 
-            assertThat(result).containsOnlyKeys(1L, 3L);
-            assertThat(result.get(1L)).isEqualTo(3);
-            assertThat(result.get(3L)).isEqualTo(1);
+            assertThat(result).containsOnlyKeys(seriesA, seriesC);
+            assertThat(result.get(seriesA)).isEqualTo(3);
+            assertThat(result.get(seriesC)).isEqualTo(1);
         }
 
         @Test
         @DisplayName("輸入超過批次上限時切批查詢，各批結果合併為單一 map")
         void whenInputExceedsBatchLimit_splitsIntoBatchesAndMergesResult() {
             int total = BatchedQuery.BATCH_SIZE + 100;
-            List<Long> seriesIds = IntStream.rangeClosed(1, total)
-                    .mapToObj(Long::valueOf)
+            List<UUID> seriesUuids = IntStream.rangeClosed(1, total)
+                    .mapToObj(i -> UUID.randomUUID())
                     .toList();
             List<Integer> observedBatchSizes = new ArrayList<>();
-            when(articleMapper.countPublishedBySeriesIds(anyCollection())).thenAnswer(invocation -> {
-                Collection<Long> batch = invocation.getArgument(0);
+            when(articleMapper.countPublishedBySeriesUuids(anyCollection())).thenAnswer(invocation -> {
+                Collection<UUID> batch = invocation.getArgument(0);
                 observedBatchSizes.add(batch.size());
                 return batch.stream()
-                        .map(id -> new ArticleMapper.SeriesPublishedCountRow(id, 1))
+                        .map(uuid -> new ArticleMapper.SeriesPublishedCountRow(uuid, 1))
                         .toList();
             });
 
-            Map<Long, Integer> result = facade.countPublishedBySeriesIds(seriesIds);
+            Map<UUID, Integer> result = facade.countPublishedBySeriesUuids(seriesUuids);
 
             assertThat(observedBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
             assertThat(result).hasSize(total);
-            assertThat(result.get(1L)).isEqualTo(1);
-            assertThat(result.get((long) total)).isEqualTo(1);
+            assertThat(result.get(seriesUuids.get(0))).isEqualTo(1);
+            assertThat(result.get(seriesUuids.get(total - 1))).isEqualTo(1);
         }
     }
 
     @Nested
     class NavQueries {
 
+        private final UUID series = UUID.randomUUID();
+
         @Test
         @DisplayName("首篇沒有 prev")
         void firstArticleHasNoPrev() {
-            when(articleMapper.findPrevPublishedInSeries(10L, 1)).thenReturn(null);
-            assertThat(facade.findPrevPublishedInSeries(10L, 1)).isEmpty();
+            when(articleMapper.findPrevPublishedInSeries(series, 1)).thenReturn(null);
+            assertThat(facade.findPrevPublishedInSeries(series, 1)).isEmpty();
         }
 
         @Test
         @DisplayName("有 prev 時包成 ArticleNavRef")
         void whenPrevExists_wrapsAsArticleNavRef() {
             UUID uuid = UUID.randomUUID();
-            when(articleMapper.findPrevPublishedInSeries(10L, 3))
+            when(articleMapper.findPrevPublishedInSeries(series, 3))
                     .thenReturn(new ArticleNavRef(uuid, "前一篇", "prev-slug"));
 
-            Optional<ArticleNavRef> result = facade.findPrevPublishedInSeries(10L, 3);
+            Optional<ArticleNavRef> result = facade.findPrevPublishedInSeries(series, 3);
 
             assertThat(result).isPresent();
             assertThat(result.get().uuid()).isEqualTo(uuid);
@@ -146,8 +147,8 @@ class ArticleFacadeSetPredicateTest {
         @Test
         @DisplayName("末篇沒有 next")
         void lastArticleHasNoNext() {
-            when(articleMapper.findNextPublishedInSeries(10L, 9)).thenReturn(null);
-            assertThat(facade.findNextPublishedInSeries(10L, 9)).isEmpty();
+            when(articleMapper.findNextPublishedInSeries(series, 9)).thenReturn(null);
+            assertThat(facade.findNextPublishedInSeries(series, 9)).isEmpty();
         }
     }
 }
