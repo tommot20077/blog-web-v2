@@ -884,7 +884,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
         }
         Long seriesId = articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
                 .orElseThrow(() -> new IllegalArgumentException("series 不存在: " + seriesUuid));
-        return articleMapper.assignToSeriesIfUnassigned(articleUuid, seriesId, seriesPosition) == 1;
+        return articleMapper.assignToSeriesIfUnassigned(articleUuid, seriesId, seriesPosition, LocalDateTime.now()) == 1;
     }
 
     /**
@@ -896,7 +896,21 @@ public class ArticleFacadeImpl implements ArticleFacade {
     @Override
     public boolean removeFromSeriesIfAssigned(UUID articleUuid, UUID seriesUuid) {
         return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                .map(seriesId -> articleMapper.removeFromSeriesIfAssigned(articleUuid, seriesId) == 1)
+                .map(seriesId -> articleMapper.removeFromSeriesIfAssigned(articleUuid, seriesId, LocalDateTime.now()) == 1)
+                .orElse(false);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>過渡期：series UUID 先經 SeriesFacade 換成主鍵，再以單一條件式 UPDATE
+     * （{@code WHERE uuid = ? AND series_id = ?}）只改位置；series 不存在代表文章不可能屬於它，直接回傳 false。</p>
+     */
+    @Override
+    public boolean updateSeriesPositionIfAssigned(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {
+        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
+                .map(seriesId -> articleMapper.updateSeriesPositionIfAssigned(
+                        articleUuid, seriesId, seriesPosition, LocalDateTime.now()) == 1)
                 .orElse(false);
     }
 

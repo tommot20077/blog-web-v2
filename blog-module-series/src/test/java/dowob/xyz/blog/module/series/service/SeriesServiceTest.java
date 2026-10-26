@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
@@ -31,6 +32,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
@@ -136,6 +139,7 @@ class SeriesServiceTest {
         req.setTitle("Vue 101");
         req.setSlug("vue-101");
         req.setDescription("intro");
+        LocalDateTime beforeCall = LocalDateTime.now();
 
         SeriesSummaryResponse resp = service.createSeries(userUuid, req);
 
@@ -146,6 +150,9 @@ class SeriesServiceTest {
         assertThat(saved.getSlug()).isEqualTo("vue-101");
         assertThat(saved.getDescription()).isEqualTo("intro");
         assertThat(saved.getArticleCount()).isZero();
+        /* 時間由 Java 傳入（JVM 時鐘），不依賴 DB 的 CURRENT_TIMESTAMP；建立時兩者相同 */
+        assertThat(saved.getCreatedAt()).isNotNull().isBetween(beforeCall, LocalDateTime.now());
+        assertThat(saved.getUpdatedAt()).isEqualTo(saved.getCreatedAt());
         verify(repo, never()).existsBySlug(any());
         verify(repo, never()).save(any());
 
@@ -198,16 +205,21 @@ class SeriesServiceTest {
         updated.setTitle("new");
         updated.setSlug("new-slug");
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing), Optional.of(updated));
-        when(mapper.updateBasicFields(seriesId, "new", "new-slug", null, null)).thenReturn(1);
+        when(mapper.updateBasicFields(eq(seriesId), eq("new"), eq("new-slug"), isNull(), isNull(), any(LocalDateTime.class)))
+                .thenReturn(1);
         stubAuthor(userUuid, "user");
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("new");
         req.setSlug("new-slug");
+        LocalDateTime beforeCall = LocalDateTime.now();
 
         SeriesSummaryResponse resp = service.updateSeries(seriesUuid, userUuid, false, req);
 
-        verify(mapper).updateBasicFields(seriesId, "new", "new-slug", null, null);
+        ArgumentCaptor<LocalDateTime> updatedAt = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(mapper).updateBasicFields(eq(seriesId), eq("new"), eq("new-slug"), isNull(), isNull(), updatedAt.capture());
+        assertThat(updatedAt.getValue()).as("updated_at 由 Java 傳入（JVM 時鐘）")
+                .isBetween(beforeCall, LocalDateTime.now());
         verify(repo, never()).existsBySlug(any());
         verify(repo, never()).save(any());
         assertThat(resp.getUuid()).isEqualTo(seriesUuid);
@@ -220,7 +232,7 @@ class SeriesServiceTest {
     @DisplayName("updateSeries：slug 撞唯一約束（DuplicateKeyException）→ S0104，且 UPDATE 之後不再有任何 DB 操作")
     void updateSeries_duplicateKey_throwsS0104AndNoMoreDbOperations() {
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
-        when(mapper.updateBasicFields(any(), any(), any(), any(), any()))
+        when(mapper.updateBasicFields(any(), any(), any(), any(), any(), any()))
                 .thenThrow(new DuplicateKeyException("series_slug_key"));
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
@@ -232,7 +244,7 @@ class SeriesServiceTest {
 
         // PostgreSQL 的交易在錯誤後即中止：捕捉後不得再執行任何 SQL（含 re-fetch 與查作者）
         verify(repo, times(1)).findByUuid(seriesUuid);
-        verify(mapper, times(1)).updateBasicFields(any(), any(), any(), any(), any());
+        verify(mapper, times(1)).updateBasicFields(any(), any(), any(), any(), any(), any());
         verifyNoMoreInteractions(repo, mapper);
         verifyNoInteractions(userFacade);
     }
@@ -241,7 +253,7 @@ class SeriesServiceTest {
     @DisplayName("updateSeries：更新後 re-fetch 查無（資料異常）→ SERIES_NOT_FOUND 而非 NPE")
     void updateSeries_refetchReturnsEmpty_throwsSeriesNotFound() {
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)), Optional.empty());
-        when(mapper.updateBasicFields(any(), any(), any(), any(), any())).thenReturn(1);
+        when(mapper.updateBasicFields(any(), any(), any(), any(), any(), any())).thenReturn(1);
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
         req.setTitle("new");
@@ -263,7 +275,7 @@ class SeriesServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.SERIES_ACCESS_DENIED.getMessage());
 
-        verify(mapper, never()).updateBasicFields(any(), any(), any(), any(), any());
+        verify(mapper, never()).updateBasicFields(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -271,7 +283,7 @@ class SeriesServiceTest {
     void updateSeries_byAdmin_succeeds() {
         Series existing = series(otherUserUuid);
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(existing), Optional.of(existing));
-        when(mapper.updateBasicFields(any(), any(), any(), any(), any())).thenReturn(1);
+        when(mapper.updateBasicFields(any(), any(), any(), any(), any(), any())).thenReturn(1);
         stubAuthor(otherUserUuid, "owner");
 
         UpdateSeriesRequest req = new UpdateSeriesRequest();
@@ -279,7 +291,8 @@ class SeriesServiceTest {
 
         service.updateSeries(seriesUuid, userUuid, /* isAdmin */ true, req);
 
-        verify(mapper).updateBasicFields(seriesId, "admin override", null, null, null);
+        verify(mapper).updateBasicFields(eq(seriesId), eq("admin override"), isNull(), isNull(), isNull(),
+                any(LocalDateTime.class));
     }
 
     // ── deleteSeries（commit 後才發事件）─────────────────────────────────────
@@ -355,16 +368,50 @@ class SeriesServiceTest {
     }
 
     @Test
-    @DisplayName("addArticleToSeries：已在同一 series（指派回 false、重讀仍在此 series）→ 只更新位置，不 +1")
+    @DisplayName("addArticleToSeries：已在同一 series（指派回 false、重讀仍在此 series）→ 以條件式 UPDATE 只更新位置，不 +1，也不走讀改寫")
     void addArticleToSeries_sameSeries_updatesPositionOnly() {
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
         when(articleFacade.findByUuid(articleUuid))
                 .thenReturn(Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)));
         when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+        when(articleFacade.updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5)).thenReturn(true);
 
         service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 5);
 
-        verify(articleFacade).updateSeriesAssignment(articleUuid, seriesUuid, 5);
+        verify(articleFacade).updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5);
+        verify(articleFacade, never()).updateSeriesAssignment(any(UUID.class), any(UUID.class), any());
+        verify(mapper, never()).incrementArticleCount(any());
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：條件式更新位置回 false（文章剛被移出）→ 回到迴圈重新指派，成功才 +1")
+    void addArticleToSeries_positionUpdateLostRace_loopsBackAndAssigns() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)),
+                Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5)).thenReturn(false, true);
+        when(articleFacade.updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+
+        service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 5);
+
+        verify(articleFacade, times(2)).assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5);
+        verify(mapper, times(1)).incrementArticleCount(seriesId);
+    }
+
+    @Test
+    @DisplayName("addArticleToSeries：兩次嘗試歸屬都被併發改變 → 回報併發衝突 A0208（不是 S0106），不 +1")
+    void addArticleToSeries_ownershipKeepsChanging_throwsConcurrentUpdate() {
+        when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
+        when(articleFacade.findByUuid(articleUuid))
+                .thenReturn(Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, seriesUuid, 2)));
+        when(articleFacade.assignToSeriesIfUnassigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+        when(articleFacade.updateSeriesPositionIfAssigned(articleUuid, seriesUuid, 5)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 5))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getMessage());
+
         verify(mapper, never()).incrementArticleCount(any());
     }
 
@@ -417,8 +464,8 @@ class SeriesServiceTest {
     }
 
     @Test
-    @DisplayName("addArticleToSeries：重試仍失敗（無法判定歸屬）→ S0106，不 +1")
-    void addArticleToSeries_retryAlsoFails_throwsS0106() {
+    @DisplayName("addArticleToSeries：重試仍失敗（文章一直被併發移出）→ 併發衝突 A0208，不 +1")
+    void addArticleToSeries_retryAlsoFails_throwsConcurrentUpdate() {
         when(repo.findByUuid(seriesUuid)).thenReturn(Optional.of(series(userUuid)));
         when(articleFacade.findByUuid(articleUuid)).thenReturn(
                 Optional.of(article(articleUuid, userUuid, ArticleStatus.PUBLISHED, null, null)),
@@ -427,7 +474,7 @@ class SeriesServiceTest {
 
         assertThatThrownBy(() -> service.addArticleToSeries(seriesUuid, articleUuid, userUuid, false, 1))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES.getMessage());
+                .hasMessageContaining(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getMessage());
 
         verify(mapper, never()).incrementArticleCount(any());
     }

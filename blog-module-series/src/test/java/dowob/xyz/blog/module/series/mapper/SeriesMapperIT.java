@@ -26,6 +26,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
@@ -89,6 +91,9 @@ class SeriesMapperIT {
         s.setCoverImageUrl("https://img/" + slug);
         s.setAuthorUuid(SeededUsers.USER1_UUID);
         s.setArticleCount(0);
+        LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
+        s.setCreatedAt(now);
+        s.setUpdatedAt(now);
         return s;
     }
 
@@ -111,8 +116,10 @@ class SeriesMapperIT {
         assertThat(jdbc.queryForObject("SELECT title || '|' || slug || '|' || description || '|' || article_count "
                 + "FROM series WHERE uuid = ?", String.class, s.getUuid()))
                 .isEqualTo("T-mapper-insert|mapper-insert|d-mapper-insert|0");
-        assertThat(jdbc.queryForObject("SELECT created_at IS NOT NULL AND updated_at IS NOT NULL "
-                + "FROM series WHERE uuid = ?", Boolean.class, s.getUuid())).isTrue();
+        assertThat(jdbc.queryForObject("SELECT created_at FROM series WHERE uuid = ?", LocalDateTime.class, s.getUuid()))
+                .as("created_at 為呼叫端傳入的 Java 時間").isEqualTo(s.getCreatedAt());
+        assertThat(jdbc.queryForObject("SELECT updated_at FROM series WHERE uuid = ?", LocalDateTime.class, s.getUuid()))
+                .isEqualTo(s.getUpdatedAt());
     }
 
     @Test
@@ -140,7 +147,7 @@ class SeriesMapperIT {
         Series s = newSeries("mapper-upd");
         mapper.insertIfSlugAbsent(s);
 
-        int affected = mapper.updateBasicFields(idOf(s.getUuid()), "new title", null, null, null);
+        int affected = mapper.updateBasicFields(idOf(s.getUuid()), "new title", null, null, null, LocalDateTime.now());
 
         assertThat(affected).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT title || '|' || slug || '|' || description || '|' || cover_image_url "
@@ -155,7 +162,7 @@ class SeriesMapperIT {
         s.setArticleCount(4);
         mapper.insertIfSlugAbsent(s);
 
-        mapper.updateBasicFields(idOf(s.getUuid()), "t2", "mapper-upd-all-2", "d2", "https://img/2");
+        mapper.updateBasicFields(idOf(s.getUuid()), "t2", "mapper-upd-all-2", "d2", "https://img/2", LocalDateTime.now());
 
         assertThat(jdbc.queryForObject("SELECT title || '|' || slug || '|' || description || '|' || cover_image_url "
                 + "|| '|' || article_count || '|' || author_uuid FROM series WHERE uuid = ?", String.class, s.getUuid()))
@@ -170,8 +177,21 @@ class SeriesMapperIT {
         mapper.insertIfSlugAbsent(a);
         mapper.insertIfSlugAbsent(b);
 
-        assertThatThrownBy(() -> mapper.updateBasicFields(idOf(b.getUuid()), null, "mapper-taken", null, null))
+        assertThatThrownBy(() -> mapper.updateBasicFields(idOf(b.getUuid()), null, "mapper-taken", null, null, LocalDateTime.now()))
                 .isInstanceOf(DuplicateKeyException.class);
+    }
+
+    @Test
+    @DisplayName("updateBasicFields：updated_at 寫入呼叫端傳入的 Java 時間")
+    void updateBasicFields_writesGivenUpdatedAt() {
+        Series s = newSeries("mapper-upd-time");
+        mapper.insertIfSlugAbsent(s);
+        LocalDateTime given = LocalDateTime.of(2031, 5, 6, 7, 8, 9);
+
+        mapper.updateBasicFields(idOf(s.getUuid()), "t", null, null, null, given);
+
+        assertThat(jdbc.queryForObject("SELECT updated_at FROM series WHERE uuid = ?", LocalDateTime.class, s.getUuid()))
+                .isEqualTo(given);
     }
 
     @Test
@@ -180,7 +200,7 @@ class SeriesMapperIT {
         Series s = newSeries("mapper-own");
         mapper.insertIfSlugAbsent(s);
 
-        int affected = mapper.updateBasicFields(idOf(s.getUuid()), "t", "mapper-own", null, null);
+        int affected = mapper.updateBasicFields(idOf(s.getUuid()), "t", "mapper-own", null, null, LocalDateTime.now());
 
         assertThat(affected).isEqualTo(1);
     }

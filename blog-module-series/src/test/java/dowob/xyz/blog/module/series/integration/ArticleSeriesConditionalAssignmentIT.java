@@ -214,6 +214,58 @@ class ArticleSeriesConditionalAssignmentIT {
         }
     }
 
+    // ─── updateSeriesPositionIfAssigned ────────────────────────────────────
+
+    @Test
+    @DisplayName("文章屬於指定 series → 回傳 true，只改位置（series 不變）並遞增 version")
+    void updatePosition_whenAssigned_returnsTrueAndOnlyChangesPosition() {
+        UUID series = insertSeries("cond-pos");
+        Article article = insertArticle();
+        assertThat(articleFacade.assignToSeriesIfUnassigned(article.getUuid(), series, 1)).isTrue();
+        long versionBefore = versionOf(article.getUuid());
+
+        boolean updated = articleFacade.updateSeriesPositionIfAssigned(article.getUuid(), series, 8);
+
+        assertThat(updated).isTrue();
+        assertThat(positionOf(article.getUuid())).isEqualTo(8);
+        assertThat(seriesIdOf(article.getUuid())).isEqualTo(idOfSeries(series));
+        assertThat(versionOf(article.getUuid())).isEqualTo(versionBefore + 1);
+    }
+
+    @Test
+    @DisplayName("文章未歸屬、屬於另一個 series、文章不存在或 series 不存在 → 都回傳 false 且不改動（不會把文章寫回 series）")
+    void updatePosition_whenNotInThatSeries_returnsFalseAndDoesNotReassign() {
+        UUID member = insertSeries("cond-pos-member");
+        UUID other = insertSeries("cond-pos-other");
+        Article inMember = insertArticle();
+        Article free = insertArticle();
+        assertThat(articleFacade.assignToSeriesIfUnassigned(inMember.getUuid(), member, 1)).isTrue();
+
+        assertThat(articleFacade.updateSeriesPositionIfAssigned(inMember.getUuid(), other, 5)).isFalse();
+        assertThat(articleFacade.updateSeriesPositionIfAssigned(free.getUuid(), member, 5)).isFalse();
+        assertThat(articleFacade.updateSeriesPositionIfAssigned(UUID.randomUUID(), member, 5)).isFalse();
+        assertThat(articleFacade.updateSeriesPositionIfAssigned(inMember.getUuid(), UUID.randomUUID(), 5)).isFalse();
+
+        assertThat(positionOf(inMember.getUuid())).isEqualTo(1);
+        assertThat(seriesIdOf(free.getUuid())).as("未歸屬的文章不會被寫入任何 series").isNull();
+    }
+
+    @Test
+    @DisplayName("兩條執行緒同時更新同一篇文章的位置（重複多輪）→ 兩個都回 true，不會有樂觀鎖衝突")
+    void updatePosition_concurrently_bothSucceed() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            UUID series = insertSeries("cond-race-pos-" + round);
+            Article article = insertArticle();
+            assertThat(articleFacade.assignToSeriesIfUnassigned(article.getUuid(), series, 1)).isTrue();
+
+            List<Boolean> results = runConcurrently(i ->
+                    articleFacade.updateSeriesPositionIfAssigned(article.getUuid(), series, i + 2));
+
+            assertThat(results).as("第 %d 輪", round).containsExactly(true, true);
+            assertThat(positionOf(article.getUuid())).as("第 %d 輪", round).isIn(2, 3);
+        }
+    }
+
     // ─── removeFromSeriesIfAssigned ────────────────────────────────────────
 
     @Test

@@ -42,7 +42,7 @@ import java.util.UUID;
  *       applyRestoreContent(UUID, ArticleRestoreSource)）：語意與對應的 Long 版相同；
  *       UUID 版的 restore 由 article 自行渲染 Markdown，caller 不再需要 import 渲染器。</li>
  *   <li><b>M4-b 新增（series 模組 RACE-14 用，只增不減）</b>（assignToSeriesIfUnassigned /
- *       removeFromSeriesIfAssigned）：條件式寫入，由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
+ *       removeFromSeriesIfAssigned / updateSeriesPositionIfAssigned）：條件式寫入，由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
  *       讓 series 的 article_count 不必先讀再寫。</li>
  *   <li><b>SP-D 新增 atomic write</b>（applyRestoreContent）：version 模組 restore 用，內部接管 mutate / save / syncArticleTags / publish events 順序。</li>
  * </ul>
@@ -329,6 +329,23 @@ public interface ArticleFacade {
      *         （文章不存在、不屬於該系列，或已被另一個請求移出）
      */
     boolean removeFromSeriesIfAssigned(UUID articleUuid, UUID seriesUuid);
+
+    /**
+     * 條件式更新位置：僅當文章<b>目前屬於指定的 series</b> 時才改 {@code series_position}。
+     *
+     * <p>供 series 模組處理「文章已在同一個 series，只更新位置」：以單一
+     * {@code UPDATE articles SET series_position = ? WHERE uuid = ? AND series_id = ?} 完成，
+     * 取代 {@link #updateSeriesAssignment(UUID, UUID, Integer)} 的讀改寫——後者在兩個請求同時更新位置時
+     * 會因樂觀鎖衝突失敗，與併發移出交錯時還可能把文章重新寫回 series 而沒有 +1 計數（RACE-14）。
+     * 寫入時一併遞增 {@code version} 並更新 {@code updated_at}。</p>
+     *
+     * @param articleUuid    文章公開 UUID
+     * @param seriesUuid     文章應屬於的系列公開 UUID；null 或查無此 series 視為「不屬於」
+     * @param seriesPosition 新的位置
+     * @return {@code true} 表示位置已更新；{@code false} 表示沒有任何寫入
+     *         （文章不存在、不屬於該系列，或已被另一個請求移出／移到別的系列）
+     */
+    boolean updateSeriesPositionIfAssigned(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
 
     // ─── SP-D 新增 1 read ───
 

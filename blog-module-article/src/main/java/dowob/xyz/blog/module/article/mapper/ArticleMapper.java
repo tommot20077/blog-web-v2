@@ -16,6 +16,7 @@ import org.apache.ibatis.annotations.Results;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -328,19 +329,22 @@ public interface ArticleMapper {
      *
      * <p>把「是否為新成員」的判斷放進寫入本身（RACE-14）：同一時間只有一個交易能把 NULL 改為非 NULL，
      * 另一個交易（READ COMMITTED 下等鎖、重評 WHERE）得到 affected = 0。
-     * 比照實體 save 的效果遞增樂觀鎖 {@code version} 並更新 {@code updated_at}。</p>
+     * 比照實體 save 的效果遞增樂觀鎖 {@code version} 並更新 {@code updated_at}；
+     * 時間由 Java 傳入（與 {@code @LastModifiedDate} 同一個時鐘來源，不用資料庫的 CURRENT_TIMESTAMP）。</p>
      *
      * @param uuid     文章公開 UUID
      * @param seriesId 要加入的 series 主鍵
      * @param position 在 series 內的位置
+     * @param now      寫入的 updated_at（JVM 時間）
      * @return 受影響列數：1 表示指派成功，0 表示文章不存在或已屬於某個 series
      */
     @Update("UPDATE articles SET series_id = #{seriesId}, series_position = #{position}, "
-            + "version = version + 1, updated_at = CURRENT_TIMESTAMP "
+            + "version = version + 1, updated_at = #{now} "
             + "WHERE uuid = #{uuid}::uuid AND series_id IS NULL")
     int assignToSeriesIfUnassigned(@Param("uuid") UUID uuid,
                                    @Param("seriesId") Long seriesId,
-                                   @Param("position") Integer position);
+                                   @Param("position") Integer position,
+                                   @Param("now") LocalDateTime now);
 
     /**
      * 條件式移出 series：僅當文章目前屬於指定的 series（{@code series_id = #{seriesId}}）時才清空。
@@ -349,12 +353,33 @@ public interface ArticleMapper {
      *
      * @param uuid     文章公開 UUID
      * @param seriesId 文章應屬於的 series 主鍵
+     * @param now      寫入的 updated_at（JVM 時間）
      * @return 受影響列數：1 表示移出成功，0 表示文章不存在或不屬於該 series
      */
     @Update("UPDATE articles SET series_id = NULL, series_position = NULL, "
-            + "version = version + 1, updated_at = CURRENT_TIMESTAMP "
+            + "version = version + 1, updated_at = #{now} "
             + "WHERE uuid = #{uuid}::uuid AND series_id = #{seriesId}")
-    int removeFromSeriesIfAssigned(@Param("uuid") UUID uuid, @Param("seriesId") Long seriesId);
+    int removeFromSeriesIfAssigned(@Param("uuid") UUID uuid, @Param("seriesId") Long seriesId,
+                                   @Param("now") LocalDateTime now);
+
+    /**
+     * 條件式更新位置：僅當文章目前屬於指定的 series 時才改 {@code series_position}。
+     *
+     * <p>取代「讀文章、改欄位、整列 save」的讀改寫：那條路徑在兩個請求同時更新位置時會因樂觀鎖衝突回 500，
+     * 且與併發移出交錯時可能把文章重新寫回 series 卻沒有 +1 計數（RACE-14）。本語句只動
+     * {@code series_position}，WHERE 條件保證「文章仍屬於該 series」與寫入在同一個原子步驟內判定；
+     * 同樣遞增 {@code version} 並更新 {@code updated_at}。</p>
+     *
+     * @param uuid     文章公開 UUID
+     * @param seriesId 文章應屬於的 series 主鍵
+     * @param position 新的位置
+     * @param now      寫入的 updated_at（JVM 時間）
+     * @return 受影響列數：1 表示位置已更新，0 表示文章不存在或目前不屬於該 series（已被移出或移到別處）
+     */
+    @Update("UPDATE articles SET series_position = #{position}, version = version + 1, updated_at = #{now} "
+            + "WHERE uuid = #{uuid}::uuid AND series_id = #{seriesId}")
+    int updateSeriesPositionIfAssigned(@Param("uuid") UUID uuid, @Param("seriesId") Long seriesId,
+                                       @Param("position") Integer position, @Param("now") LocalDateTime now);
 
     /**
      * 集合述詞：一次算出多個 series 各自的 PUBLISHED 文章數。

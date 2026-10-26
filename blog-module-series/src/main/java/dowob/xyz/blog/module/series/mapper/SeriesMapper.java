@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -69,14 +70,16 @@ public interface SeriesMapper {
      * <p>{@code INSERT ... ON CONFLICT (slug) DO NOTHING}：兩個請求同時以相同 slug 建立，資料庫唯一約束決定
      * 贏家，落敗者得到 affected = 0，由 service 轉成 {@code SLUG_ALREADY_USED}；沒有 existsBySlug 先查再寫的
      * 競態，也不會讓 PostgreSQL 交易因唯一約束錯誤而中止。{@code created_at}／{@code updated_at}
-     * 使用欄位預設值。</p>
+     * 由呼叫端以 Java 時間（{@code LocalDateTime.now()}）傳入，與其他寫入路徑的 {@code @CreatedDate}／
+     * {@code @LastModifiedDate} 同一個時鐘來源，不用資料庫的 CURRENT_TIMESTAMP。</p>
      *
-     * @param series 要新增的 series（uuid、title、slug、description、coverImageUrl、authorUuid、articleCount）
+     * @param series 要新增的 series（uuid、title、slug、description、coverImageUrl、authorUuid、articleCount、createdAt、updatedAt）
      * @return 受影響列數：1 表示新增成功，0 表示 slug 已被使用
      */
-    @Insert("INSERT INTO series (uuid, title, slug, description, cover_image_url, author_uuid, article_count) "
+    @Insert("INSERT INTO series (uuid, title, slug, description, cover_image_url, author_uuid, article_count, "
+            + "created_at, updated_at) "
             + "VALUES (#{uuid}::uuid, #{title}, #{slug}, #{description}, #{coverImageUrl}, #{authorUuid}::uuid, "
-            + "#{articleCount}) ON CONFLICT (slug) DO NOTHING")
+            + "#{articleCount}, #{createdAt}, #{updatedAt}) ON CONFLICT (slug) DO NOTHING")
     int insertIfSlugAbsent(Series series);
 
     /**
@@ -91,18 +94,20 @@ public interface SeriesMapper {
      * @param slug          新 slug；null 表示不更新
      * @param description   新描述；null 表示不更新
      * @param coverImageUrl 新封面網址；null 表示不更新
+     * @param updatedAt     寫入的 updated_at（JVM 時間）
      * @return 受影響列數
      */
     @Update("UPDATE series SET title = COALESCE(#{title,jdbcType=VARCHAR}, title), "
             + "slug = COALESCE(#{slug,jdbcType=VARCHAR}, slug), "
             + "description = COALESCE(#{description,jdbcType=VARCHAR}, description), "
             + "cover_image_url = COALESCE(#{coverImageUrl,jdbcType=VARCHAR}, cover_image_url), "
-            + "updated_at = CURRENT_TIMESTAMP WHERE id = #{id}")
+            + "updated_at = #{updatedAt} WHERE id = #{id}")
     int updateBasicFields(@Param("id") Long id,
                           @Param("title") String title,
                           @Param("slug") String slug,
                           @Param("description") String description,
-                          @Param("coverImageUrl") String coverImageUrl);
+                          @Param("coverImageUrl") String coverImageUrl,
+                          @Param("updatedAt") LocalDateTime updatedAt);
 
     /** 反正規化 +1 */
     @Update("UPDATE series SET article_count = article_count + 1 WHERE id = #{id}")

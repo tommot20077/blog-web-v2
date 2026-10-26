@@ -252,6 +252,48 @@ class SeriesRaceConditionIT {
         }
     }
 
+    // ─── RACE-14：「已在同一 series，只更新位置」路徑 ────────────────────────
+
+    @Test
+    @DisplayName("RACE-14：兩條執行緒同時更新同一篇已在 series 內文章的位置（重複多輪）→ 全部 200（不得 500）、article_count 與成員數不變")
+    void updatePositionConcurrently_bothOk_noServerError_countUnchanged() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            UUID series = createSeriesViaApi("race-pos-" + round);
+            Article article = createPublishedArticle();
+            assertThat(addArticle(series, article.getUuid(), 1)).isEqualTo(200);
+
+            List<Integer> statuses = runConcurrently(i ->
+                    () -> addArticle(series, article.getUuid(), i + 2));
+
+            assertThat(statuses).as("第 %d 輪的 HTTP 狀態（讀改寫的位置更新會因樂觀鎖衝突回 500）", round)
+                    .containsExactly(200, 200);
+            assertThat(articleCountOf(series)).as("第 %d 輪的 article_count", round).isEqualTo(1);
+            assertThat(memberRowsOf(series)).as("第 %d 輪的成員數", round).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT series_position FROM articles WHERE uuid = ?",
+                    Integer.class, article.getUuid())).as("第 %d 輪的位置為其中一個請求的值", round).isIn(2, 3);
+        }
+    }
+
+    @Test
+    @DisplayName("RACE-14：一條執行緒移出、另一條同時更新位置（重複多輪）→ 不得 500，且 article_count 恆等於成員數")
+    void removeAndUpdatePositionConcurrently_countAlwaysMatchesMembership() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            UUID series = createSeriesViaApi("race-rm-pos-" + round);
+            Article article = createPublishedArticle();
+            assertThat(addArticle(series, article.getUuid(), 1)).isEqualTo(200);
+
+            List<Integer> statuses = runConcurrently(i -> i == 0
+                    ? () -> removeArticle(series, article.getUuid())
+                    : () -> addArticle(series, article.getUuid(), 5));
+
+            assertThat(statuses).as("第 %d 輪的 HTTP 狀態：只能是成功或業務錯誤，不得 500", round)
+                    .allSatisfy(status -> assertThat(status).isIn(200, 400));
+            assertThat(articleCountOf(series))
+                    .as("第 %d 輪：文章被重新寫回 series 卻沒有 +1，會出現 article_count=0 但成員數=1", round)
+                    .isEqualTo(memberRowsOf(series));
+        }
+    }
+
     // ─── RACE-14：移出 ─────────────────────────────────────────────────────
 
     @Test

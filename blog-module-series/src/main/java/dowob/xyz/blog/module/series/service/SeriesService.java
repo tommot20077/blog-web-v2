@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.series.service;
 
 import dowob.xyz.blog.common.api.dto.AuthorSummary;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
@@ -26,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -85,10 +87,11 @@ public class SeriesService {
     private static final BigDecimal READ_THRESHOLD = new BigDecimal("0.95");
 
     /**
-     * 條件式加入 series 的最多嘗試次數。
+     * 加入 series（指派或更新位置）的最多嘗試次數。
      *
-     * <p>第一次回 false 且重讀發現文章「無 series」，代表它在兩次讀寫之間被另一個請求移出了；
-     * 再試一次即可。仍失敗就放棄（回報文章屬於其他 series），不無限重試。</p>
+     * <p>條件式寫入回 false 代表文章的歸屬在兩次讀寫之間被另一個請求改變了（被移出，或被移到別處）；
+     * 重讀後重新判斷再試一次即可。仍失敗就放棄並回報併發衝突
+     * （{@code ARTICLE_CONCURRENT_UPDATE}，請使用者重試），不無限重試。</p>
      */
     private static final int MAX_ASSIGN_ATTEMPTS = 2;
 
@@ -259,6 +262,10 @@ public class SeriesService {
         s.setCoverImageUrl(req.getCoverImageUrl());
         s.setAuthorUuid(userUuid);
         s.setArticleCount(0);
+        /* 時間由 Java 傳入（與 @CreatedDate／@LastModifiedDate 同一個時鐘來源），不用 DB 的 CURRENT_TIMESTAMP */
+        LocalDateTime now = LocalDateTime.now();
+        s.setCreatedAt(now);
+        s.setUpdatedAt(now);
         if (mapper.insertIfSlugAbsent(s) == 0) {
             throw new BusinessException(SeriesErrorCode.SLUG_ALREADY_USED);
         }
@@ -291,7 +298,7 @@ public class SeriesService {
         requireOwnerOrAdmin(s, userUuid, isAdmin);
         try {
             mapper.updateBasicFields(s.getId(), req.getTitle(), req.getSlug(),
-                    req.getDescription(), req.getCoverImageUrl());
+                    req.getDescription(), req.getCoverImageUrl(), LocalDateTime.now());
         } catch (DuplicateKeyException e) {
             throw new BusinessException(SeriesErrorCode.SLUG_ALREADY_USED);
         }
@@ -342,7 +349,10 @@ public class SeriesService {
      * 兩個請求同時加入同一篇文章，都讀到「無 series」，都 +1），而是由寫入本身決定——
      * {@link ArticleFacade#assignToSeriesIfUnassigned} 回傳 true 才 {@code article_count + 1}。
      * 回傳 false 代表文章已屬於某個 series（含同一個，或剛被另一個請求加入），此時重讀判斷：
-     * 同一個 series 只更新位置；其他 series 回 S0106。</p>
+     * 同一個 series 以條件式 UPDATE（{@code WHERE series_id = ?}）只更新位置——同樣不是讀改寫，
+     * 兩個請求同時更新位置不會因樂觀鎖衝突失敗，與併發移出交錯時也不會把文章重新寫回 series 而漏算計數；
+     * 其他 series 回 S0106。條件式更新回 false（文章剛被移出或移到別處）時回到迴圈重新判斷；
+     * 兩次嘗試都無法定案則回 {@code ARTICLE_CONCURRENT_UPDATE}。</p>
      *
      * @param seriesUuid  Series 公開 UUID
      * @param articleUuid 文章公開 UUID
@@ -382,10 +392,13 @@ public class SeriesService {
             if (!current.seriesUuid().equals(s.getUuid())) {
                 throw new BusinessException(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES);
             }
-            articleFacade.updateSeriesAssignment(articleUuid, s.getUuid(), position);
-            return;
+            if (articleFacade.updateSeriesPositionIfAssigned(articleUuid, s.getUuid(), position)) {
+                return;
+            }
+            /* 文章在重讀與更新之間被移出或移到別處：回到迴圈重新判斷 */
         }
-        throw new BusinessException(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES);
+        /* 兩次都無法定案：歸屬不斷被併發改變，並非「屬於其他 series」，回報通用的併發衝突讓使用者重試 */
+        throw new BusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE);
     }
 
     /**
