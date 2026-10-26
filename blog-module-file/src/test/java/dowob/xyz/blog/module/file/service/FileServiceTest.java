@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
+import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
@@ -139,6 +140,36 @@ class FileServiceTest {
             assertThat(response.getId()).isNotNull();
             verify(fileMetadataRepository).save(any(FileMetadata.class));
             verify(rabbitTemplate).convertAndSend(any(String.class), any(String.class), any(Object.class));
+        }
+
+        /** 驗證上傳成功時發出的 ImageUploadedEvent 帶有發送端產生的 eventId（consumer 冪等的前提）且每次不同 */
+        @Test
+        @DisplayName("uploadFile_withValidImage_publishesImageUploadedEventWithFreshEventId")
+        void uploadFile_withValidImage_publishesImageUploadedEventWithFreshEventId() throws Exception {
+            byte[] jpegBytes = new byte[]{
+                (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0,
+                0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
+                0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+                (byte) 0xFF, (byte) 0xD9
+            };
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            UUID uploaderId = UUID.randomUUID();
+
+            FileUploadResponse first = fileService.uploadFile(
+                    new MockMultipartFile("file", "a.jpg", "image/jpeg", jpegBytes),
+                    UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR");
+            fileService.uploadFile(
+                    new MockMultipartFile("file", "b.jpg", "image/jpeg", jpegBytes),
+                    UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR");
+
+            ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+            verify(rabbitTemplate, times(2)).convertAndSend(any(String.class), any(String.class), captor.capture());
+            List<ImageUploadedEvent> events = captor.getAllValues().stream()
+                    .map(ImageUploadedEvent.class::cast).toList();
+            assertThat(events).allSatisfy(e -> assertThat(e.eventId()).isNotNull());
+            assertThat(events.get(0).eventId()).isNotEqualTo(events.get(1).eventId());
+            assertThat(events.get(0).fileId()).isEqualTo(first.getId());
         }
 
         /** 驗證非圖片 MIME 類型應拋出 INVALID_FILE_TYPE 錯誤 */

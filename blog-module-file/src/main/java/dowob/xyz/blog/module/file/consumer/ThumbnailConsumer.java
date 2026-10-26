@@ -20,6 +20,7 @@ import org.springframework.stereotype.Component;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.Optional;
 
 /**
  * 縮圖產生消費者
@@ -28,6 +29,8 @@ import java.io.InputStream;
  * 監聽 file.thumbnail Queue，收到圖片上傳事件後從 MinIO 下載原始圖片，
  * 使用 Thumbnailator 產生 300px 寬縮圖後上傳回 MinIO，並更新 DB 的 has_thumbnail 欄位。
  * </p>
+ *
+ * <p>冪等性：以 {@code has_thumbnail} 旗標做天然冪等，重送的事件在旗標已為 true 時直接 ack。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -72,9 +75,23 @@ public class ThumbnailConsumer {
     public void handleImageUploaded(ImageUploadedEvent event,
                                     Channel channel,
                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        consumerExecutor.execute(CONSUMER_NAME, () -> "fileId=" + event.fileId(), channel, deliveryTag, () -> {
+        consumerExecutor.execute(CONSUMER_NAME, () -> "fileId=" + event.fileId() + ", eventId=" + event.eventId(), channel, deliveryTag, () -> {
             if (!event.contentType().startsWith("image/")) {
                 log.debug("非圖片類型，跳過縮圖處理: {}", event.contentType());
+                return;
+            }
+
+            /*
+             * 天然冪等（不使用 IdempotencyService）：縮圖是否完成已由 file_metadata.has_thumbnail 記錄，
+             * 重送時旗標為 true 就直接 ack，不再下載、產生與上傳。
+             * 不用 processed_events 的原因：它在處理「前」標記，處理中途失敗（MinIO 暫時不可用）後
+             * 重試會被誤判為已處理而永遠漏做縮圖；旗標是處理「後」才寫，失敗重試仍會重做。
+             * 兩次遞送若在旗標寫入前併發，結果只是同一個縮圖物件被覆寫一次（內容相同），無害。
+             * 舊格式 in-flight 訊息的 eventId 為 null，本邏輯不依賴 eventId，故照常處理。
+             */
+            Optional<FileMetadata> existing = fileMetadataRepository.findById(event.fileId());
+            if (existing.map(m -> Boolean.TRUE.equals(m.getHasThumbnail())).orElse(false)) {
+                log.debug("縮圖已存在，跳過重複處理: fileId={}", event.fileId());
                 return;
             }
 
@@ -104,7 +121,7 @@ public class ThumbnailConsumer {
                                 .build());
             }
 
-            fileMetadataRepository.findById(event.fileId()).ifPresent(metadata -> {
+            existing.ifPresent(metadata -> {
                 metadata.setHasThumbnail(true);
                 fileMetadataRepository.save(metadata);
             });

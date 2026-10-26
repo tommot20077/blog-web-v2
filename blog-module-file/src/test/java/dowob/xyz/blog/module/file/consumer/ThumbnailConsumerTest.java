@@ -12,6 +12,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.minio.GetObjectArgs;
 import io.minio.GetObjectResponse;
 import io.minio.MinioClient;
+import io.minio.PutObjectArgs;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LogEvent;
@@ -43,6 +44,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -81,7 +83,7 @@ class ThumbnailConsumerTest {
     void handleImageUploaded_withNonImageType_skips() throws Exception {
         ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
         ImageUploadedEvent event = new ImageUploadedEvent(
-                UUID.randomUUID(), "files/test.pdf", "application/pdf");
+                UUID.randomUUID(), UUID.randomUUID(), "files/test.pdf", "application/pdf");
 
         thumbnailConsumer.handleImageUploaded(event, channel, 1L);
 
@@ -97,7 +99,7 @@ class ThumbnailConsumerTest {
     void handleImageUploaded_onFailure_callsBasicNack() throws Exception {
         ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
         ImageUploadedEvent event = new ImageUploadedEvent(
-                UUID.randomUUID(), "files/error.jpg", "image/jpeg");
+                UUID.randomUUID(), UUID.randomUUID(), "files/error.jpg", "image/jpeg");
 
         /** minioClient.getObject 拋出例外以模擬失敗 */
         when(minioClient.getObject(any(GetObjectArgs.class)))
@@ -118,7 +120,7 @@ class ThumbnailConsumerTest {
 
         UUID fileId = UUID.randomUUID();
         ImageUploadedEvent event = new ImageUploadedEvent(
-                fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
 
         FileMetadata metadata = new FileMetadata();
         metadata.setId(fileId);
@@ -160,7 +162,7 @@ class ThumbnailConsumerTest {
 
         UUID fileId = UUID.randomUUID();
         ImageUploadedEvent event = new ImageUploadedEvent(
-                fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
 
         when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
 
@@ -190,7 +192,7 @@ class ThumbnailConsumerTest {
     void handleImageUploaded_onFailure_nackAlsoFails_doesNotThrow() throws Exception {
         ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
         ImageUploadedEvent event = new ImageUploadedEvent(
-                UUID.randomUUID(), "files/error.jpg", "image/jpeg");
+                UUID.randomUUID(), UUID.randomUUID(), "files/error.jpg", "image/jpeg");
 
         when(minioClient.getObject(any(GetObjectArgs.class)))
                 .thenThrow(new RuntimeException("MinIO connection failed"));
@@ -211,7 +213,7 @@ class ThumbnailConsumerTest {
 
         UUID fileId = UUID.randomUUID();
         ImageUploadedEvent event = new ImageUploadedEvent(
-                fileId, "articles/noext", "image/jpeg");
+                UUID.randomUUID(), fileId, "articles/noext", "image/jpeg");
 
         when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
 
@@ -241,7 +243,7 @@ class ThumbnailConsumerTest {
     @DisplayName("handleImageUploaded：成功時 ConsumerExecutor 計入 processed 指標")
     void handleImageUploaded_success_recordsProcessedMetric() throws Exception {
         ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
-        ImageUploadedEvent event = new ImageUploadedEvent(UUID.randomUUID(), "files/test.pdf", "application/pdf");
+        ImageUploadedEvent event = new ImageUploadedEvent(UUID.randomUUID(), UUID.randomUUID(), "files/test.pdf", "application/pdf");
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -265,7 +267,7 @@ class ThumbnailConsumerTest {
     void handleImageUploaded_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
         UUID fileId = UUID.randomUUID();
-        ImageUploadedEvent event = new ImageUploadedEvent(fileId, "files/error.jpg", "image/jpeg");
+        ImageUploadedEvent event = new ImageUploadedEvent(UUID.randomUUID(), fileId, "files/error.jpg", "image/jpeg");
         when(minioClient.getObject(any(GetObjectArgs.class)))
                 .thenThrow(new RuntimeException("MinIO connection failed"));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -284,6 +286,106 @@ class ThumbnailConsumerTest {
             Metrics.removeRegistry(registry);
             registry.close();
         }
+    }
+
+    /**
+     * 情境：縮圖已產生（metadata.hasThumbnail 已為 true）→ 天然冪等，直接 ack，不下載、不上傳、不寫 DB。
+     *
+     * <p>這是重送（at-least-once）的第二次遞送：第一次已完成縮圖並寫入旗標，重做只是浪費 MinIO 流量。</p>
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handleImageUploaded_whenThumbnailAlreadyGenerated_skipsWorkAndAcks")
+    void handleImageUploaded_whenThumbnailAlreadyGenerated_skipsWorkAndAcks() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        FileMetadata metadata = new FileMetadata();
+        metadata.setId(fileId);
+        metadata.setHasThumbnail(true);
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 11L);
+
+        verify(minioClient, never()).getObject(any(GetObjectArgs.class));
+        verify(minioClient, never()).putObject(any(PutObjectArgs.class));
+        verify(fileMetadataRepository, never()).save(any());
+        verify(channel).basicAck(11L, false);
+    }
+
+    /**
+     * 情境：同一事件（相同 eventId）遞送兩次 → 縮圖只產生與上傳一次，兩次皆 ack。
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handleImageUploaded_redeliveredAfterSuccess_generatesThumbnailOnlyOnce")
+    void handleImageUploaded_redeliveredAfterSuccess_generatesThumbnailOnlyOnce() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        /* 同一個 metadata 實例：第一次處理寫入旗標後，第二次 findById 讀到的就是已完成狀態 */
+        FileMetadata metadata = new FileMetadata();
+        metadata.setId(fileId);
+        metadata.setHasThumbnail(false);
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+        when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenAnswer(inv -> jpegResponse());
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 21L);
+        thumbnailConsumer.handleImageUploaded(event, channel, 22L);
+
+        verify(minioClient, times(1)).getObject(any(GetObjectArgs.class));
+        verify(minioClient, times(1)).putObject(any(PutObjectArgs.class));
+        verify(fileMetadataRepository, times(1)).save(any());
+        verify(channel).basicAck(21L, false);
+        verify(channel).basicAck(22L, false);
+    }
+
+    /**
+     * 情境：舊格式 in-flight 訊息（無 eventId，反序列化為 null）→ 仍照常處理，不因缺 eventId 而失敗。
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handleImageUploaded_legacyEventWithoutEventId_stillGeneratesThumbnail")
+    void handleImageUploaded_legacyEventWithoutEventId_stillGeneratesThumbnail() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                null, fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        FileMetadata metadata = new FileMetadata();
+        metadata.setId(fileId);
+        metadata.setHasThumbnail(false);
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+        when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenAnswer(inv -> jpegResponse());
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 31L);
+
+        verify(minioClient).putObject(any(PutObjectArgs.class));
+        assertThat(metadata.getHasThumbnail()).isTrue();
+        verify(channel).basicAck(31L, false);
+    }
+
+    /**
+     * 建立回傳測試用 JPEG 位元組的 MinIO 回應。
+     *
+     * @return 每次呼叫皆為全新串流的 {@link GetObjectResponse} mock
+     * @throws IOException 讀取測試資源失敗時
+     */
+    private GetObjectResponse jpegResponse() throws IOException {
+        InputStream jpegStream = getClass().getResourceAsStream("/test.jpg");
+        assertThat(jpegStream).isNotNull();
+        ByteArrayInputStream bais = new ByteArrayInputStream(jpegStream.readAllBytes());
+        GetObjectResponse response = org.mockito.Mockito.mock(GetObjectResponse.class);
+        when(response.read(any(byte[].class), any(int.class), any(int.class)))
+                .thenAnswer(inv -> bais.read(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        when(response.read()).thenAnswer(inv -> bais.read());
+        return response;
     }
 
     /**

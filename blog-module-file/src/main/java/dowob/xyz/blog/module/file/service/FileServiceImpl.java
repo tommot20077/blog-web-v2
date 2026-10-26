@@ -217,7 +217,7 @@ public class FileServiceImpl implements FileService {
             rabbitTemplate.convertAndSend(
                     FileRabbitMqConfig.EXCHANGE,
                     FileRabbitMqConfig.IMAGE_UPLOADED_KEY,
-                    new ImageUploadedEvent(fileId, storagePath, detectedMimeType));
+                    new ImageUploadedEvent(UUID.randomUUID(), fileId, storagePath, detectedMimeType));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort），不影響上傳結果: {}", storagePath, e);
         }
