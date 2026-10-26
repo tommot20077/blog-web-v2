@@ -871,6 +871,38 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
+     * <p>過渡期：series UUID 先經 SeriesFacade 換成主鍵，再以<b>單一</b>條件式 UPDATE
+     * （{@code WHERE uuid = ? AND series_id IS NULL}）寫入，沒有先讀再寫；M6 改以 {@code series_uuid} 直寫。
+     * 本方法刻意不標 {@code @Transactional}：單一語句本身原子，並隨呼叫端（series 服務）的交易一起提交或回滾。</p>
+     *
+     * @throws IllegalArgumentException seriesUuid 為 null 或查無此 series
+     */
+    @Override
+    public boolean assignToSeriesIfUnassigned(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {
+        if (seriesUuid == null) {
+            throw new IllegalArgumentException("seriesUuid 不得為 null");
+        }
+        Long seriesId = articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
+                .orElseThrow(() -> new IllegalArgumentException("series 不存在: " + seriesUuid));
+        return articleMapper.assignToSeriesIfUnassigned(articleUuid, seriesId, seriesPosition) == 1;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>過渡期：series UUID 先經 SeriesFacade 換成主鍵，再以單一條件式 UPDATE
+     * （{@code WHERE uuid = ? AND series_id = ?}）寫入；series 不存在代表文章不可能屬於它，直接回傳 false。</p>
+     */
+    @Override
+    public boolean removeFromSeriesIfAssigned(UUID articleUuid, UUID seriesUuid) {
+        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
+                .map(seriesId -> articleMapper.removeFromSeriesIfAssigned(articleUuid, seriesId) == 1)
+                .orElse(false);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * <p>過渡期：series UUID 經 {@code SeriesFacade.findIdsByUuids} <b>一次</b>批次換成主鍵
      * （不逐筆），再委派 Long 版計數並以 UUID 為 key 回傳；M6 改以 {@code articles.series_uuid} 直查。</p>
      */

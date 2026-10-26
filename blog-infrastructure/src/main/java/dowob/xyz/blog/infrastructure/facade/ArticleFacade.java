@@ -41,6 +41,9 @@ import java.util.UUID;
  *   <li><b>M3-a 新增（version 模組 UUID 化用，只增不減）</b>（findContentByUuid /
  *       applyRestoreContent(UUID, ArticleRestoreSource)）：語意與對應的 Long 版相同；
  *       UUID 版的 restore 由 article 自行渲染 Markdown，caller 不再需要 import 渲染器。</li>
+ *   <li><b>M4-b 新增（series 模組 RACE-14 用，只增不減）</b>（assignToSeriesIfUnassigned /
+ *       removeFromSeriesIfAssigned）：條件式寫入，由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
+ *       讓 series 的 article_count 不必先讀再寫。</li>
  *   <li><b>SP-D 新增 atomic write</b>（applyRestoreContent）：version 模組 restore 用，內部接管 mutate / save / syncArticleTags / publish events 順序。</li>
  * </ul>
  *
@@ -286,6 +289,46 @@ public interface ArticleFacade {
      * @throws IllegalArgumentException seriesUuid 非 null 但查無此 series
      */
     void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
+
+    /**
+     * 條件式加入 series：僅當文章<b>目前不屬於任何 series</b> 時才指派，並回報這次寫入是否真的指派了。
+     *
+     * <p>為什麼需要：series 模組以 {@code article_count} 記錄成員數，必須知道「這次呼叫是不是新成員」。
+     * 先讀 {@code seriesId} 再決定是否 +1 是 check-then-act（RACE-14）——兩個請求同時加入同一篇文章，
+     * 都讀到「無 series」，都 +1，計數多出 1。本方法把判斷放進寫入本身：
+     * {@code UPDATE articles SET series_id = ?, series_position = ? WHERE uuid = ? AND series_id IS NULL}，
+     * 由 affected rows 決定。同一時間只有一個交易能把 NULL 改成非 NULL，另一個得到 {@code false}。</p>
+     *
+     * <p>回傳 {@code false} 代表文章不存在，或<b>已屬於某個 series（含同一個）</b>；呼叫端須自行區分
+     * （例如以 {@link #findByUuid} 重讀後，同一 series 改以 {@link #updateSeriesAssignment(UUID, UUID, Integer)}
+     * 只更新位置）。寫入時一併遞增樂觀鎖 {@code version} 並更新 {@code updated_at}，與實體 save 的效果一致，
+     * 使並行中的文章編輯（讀到舊 series 歸屬）會因版本不符而失敗，不會把舊歸屬寫回去。</p>
+     *
+     * <p><b>過渡期</b>：series UUID 經 {@code SeriesFacade} 換成主鍵後寫入 {@code articles.series_id}；
+     * M6 改以 {@code articles.series_uuid} 直寫。</p>
+     *
+     * @param articleUuid    文章公開 UUID
+     * @param seriesUuid     要加入的系列公開 UUID（不得為 null）
+     * @param seriesPosition 在系列內的位置
+     * @return {@code true} 表示這次呼叫把文章從「無 series」改為屬於該系列；{@code false} 表示沒有任何寫入
+     * @throws IllegalArgumentException seriesUuid 為 null，或查無此 series（文章不會被改動）
+     */
+    boolean assignToSeriesIfUnassigned(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
+
+    /**
+     * 條件式移出 series：僅當文章<b>目前屬於指定的 series</b> 時才移出，並回報這次寫入是否真的移出了。
+     *
+     * <p>與 {@link #assignToSeriesIfUnassigned} 對稱，解 RACE-14 的移出面：
+     * {@code UPDATE articles SET series_id = NULL, series_position = NULL WHERE uuid = ? AND series_id = ?}，
+     * 由 affected rows 決定 series 模組是否 {@code article_count - 1}。兩個請求同時移出同一篇文章，
+     * 只有一個得到 {@code true}。寫入時一併遞增 {@code version} 並更新 {@code updated_at}。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param seriesUuid  文章應屬於的系列公開 UUID；null 或查無此 series 視為「不屬於」
+     * @return {@code true} 表示這次呼叫把文章從該系列移出；{@code false} 表示沒有任何寫入
+     *         （文章不存在、不屬於該系列，或已被另一個請求移出）
+     */
+    boolean removeFromSeriesIfAssigned(UUID articleUuid, UUID seriesUuid);
 
     // ─── SP-D 新增 1 read ───
 

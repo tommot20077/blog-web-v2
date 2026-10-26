@@ -324,6 +324,39 @@ public interface ArticleMapper {
     List<Article> findBySeriesIdOrderByPosition(@Param("seriesId") Long seriesId);
 
     /**
+     * 條件式加入 series：僅當文章目前不屬於任何 series（{@code series_id IS NULL}）時才寫入。
+     *
+     * <p>把「是否為新成員」的判斷放進寫入本身（RACE-14）：同一時間只有一個交易能把 NULL 改為非 NULL，
+     * 另一個交易（READ COMMITTED 下等鎖、重評 WHERE）得到 affected = 0。
+     * 比照實體 save 的效果遞增樂觀鎖 {@code version} 並更新 {@code updated_at}。</p>
+     *
+     * @param uuid     文章公開 UUID
+     * @param seriesId 要加入的 series 主鍵
+     * @param position 在 series 內的位置
+     * @return 受影響列數：1 表示指派成功，0 表示文章不存在或已屬於某個 series
+     */
+    @Update("UPDATE articles SET series_id = #{seriesId}, series_position = #{position}, "
+            + "version = version + 1, updated_at = CURRENT_TIMESTAMP "
+            + "WHERE uuid = #{uuid}::uuid AND series_id IS NULL")
+    int assignToSeriesIfUnassigned(@Param("uuid") UUID uuid,
+                                   @Param("seriesId") Long seriesId,
+                                   @Param("position") Integer position);
+
+    /**
+     * 條件式移出 series：僅當文章目前屬於指定的 series（{@code series_id = #{seriesId}}）時才清空。
+     *
+     * <p>與 {@link #assignToSeriesIfUnassigned} 對稱；affected = 1 才代表這次呼叫真的移出了文章。</p>
+     *
+     * @param uuid     文章公開 UUID
+     * @param seriesId 文章應屬於的 series 主鍵
+     * @return 受影響列數：1 表示移出成功，0 表示文章不存在或不屬於該 series
+     */
+    @Update("UPDATE articles SET series_id = NULL, series_position = NULL, "
+            + "version = version + 1, updated_at = CURRENT_TIMESTAMP "
+            + "WHERE uuid = #{uuid}::uuid AND series_id = #{seriesId}")
+    int removeFromSeriesIfAssigned(@Param("uuid") UUID uuid, @Param("seriesId") Long seriesId);
+
+    /**
      * 集合述詞：一次算出多個 series 各自的 PUBLISHED 文章數。
      *
      * <p>取代 series 模組原本直讀 articles 的 EXISTS ＋ COUNT 兩個子查詢
