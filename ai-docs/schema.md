@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V27 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V28 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V27**
+> 最後更新版本：**V28**
 
 ---
 
@@ -475,14 +475,14 @@ PRIMARY KEY (user_id, tag_id)
 
 ### article_versions
 
-> V16 新增。文章版本快照，用於 draft history / versioning 功能。
+> V16 新增。文章版本快照，用於 draft history / versioning 功能。V28 起文章與作者一律以 UUID 識別，不再有 Long 欄位與 FK。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
 | uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | 對外公開識別碼 |
-| article_id | BIGINT | NOT NULL REFERENCES articles(id) ON DELETE CASCADE | |
-| author_id | BIGINT | NOT NULL REFERENCES users(id) | |
+| article_uuid | UUID | NOT NULL | V28 新增（取代已 DROP 的 `article_id`，由 `articles.uuid` 回填）。**無 FK** |
+| author_uuid | UUID | NOT NULL | V28 新增（取代已 DROP 的 `author_id`，由 `users.uuid` 回填；快照當時文章作者）。**無 FK** |
 | type | VARCHAR(20) | NOT NULL CHECK (type IN ('AUTO','MANUAL','PUBLISHED')) | 快照類型 |
 | title | VARCHAR(255) | NOT NULL | 版本標題 |
 | slug | VARCHAR(255) | NOT NULL | 版本 slug（快照時刻） |
@@ -498,37 +498,36 @@ PRIMARY KEY (user_id, tag_id)
 **Indexes:**
 - `article_versions_pkey`（auto）on id
 - `article_versions_uuid_key`（auto, UNIQUE）on uuid
-- `idx_article_versions_article_created`（V16）on (article_id, created_at DESC)
-- `idx_article_versions_article_type`（V16）on (article_id, type)
+- `idx_article_versions_article_created`（V16；V28 以 uuid 重建，名稱不變）on (article_uuid, created_at DESC)
+- `idx_article_versions_article_type`（V16；V28 以 uuid 重建，名稱不變）on (article_uuid, type)
 
-**Foreign keys:**
-- `article_id` → `articles(id)` ON DELETE CASCADE
-- `author_id` → `users(id)`（NO ACTION）
+> 重建的兩個索引都以 `article_uuid` 開頭，同時支援文章刪除連動與每日孤兒校正以 `article_uuid` 查詢，不另建單欄索引。
+
+**Foreign keys:** 無（V28 已移除 `article_id` → `articles(id)` ON DELETE CASCADE 與 `author_id` → `users(id)`）。文章刪除 → 版本快照刪除改由 `VersionArticleDeletedConsumer`（事件）＋ `ArticleVersionOrphanReconciliationJob`（每日校正）負責。
 
 ---
 
 ### user_preferences
 
-> V16 新增。使用者通用 K-V 偏好設定表（可擴展到任意模組）。
+> V16 新增。使用者通用 K-V 偏好設定表（可擴展到任意模組）。V28 起使用者一律以 UUID 識別，不再有 Long 欄位與 FK。
 
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
-| user_id | BIGINT | NOT NULL REFERENCES users(id) ON DELETE CASCADE | |
+| user_uuid | UUID | NOT NULL | V28 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK**；使用者只軟刪除，不需連動 |
 | pref_key | VARCHAR(100) | NOT NULL | 偏好鍵（如 `draft.auto_save_interval`） |
 | pref_value | TEXT | NOT NULL | 偏好值（序列化為字串） |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 | updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 
 **Constraints:**
-- `uq_user_preferences_user_key` UNIQUE (user_id, pref_key)
+- `uq_user_preferences_user_key` UNIQUE (user_uuid, pref_key)（V28 於 uuid 欄位上以同名重建；`INSERT ... ON CONFLICT (user_uuid, pref_key) DO UPDATE` 依賴它）
 
 **Indexes:**
 - `user_preferences_pkey`（auto）on id
-- `uq_user_preferences_user_key`（auto, UNIQUE constraint）on (user_id, pref_key)
+- `uq_user_preferences_user_key`（auto, UNIQUE constraint）on (user_uuid, pref_key)
 
-**Foreign keys:**
-- `user_id` → `users(id)` ON DELETE CASCADE
+**Foreign keys:** 無（V28 已移除 `user_id` → `users(id)` ON DELETE CASCADE）。使用者只做軟刪除，原 CASCADE 從未觸發，拿掉後行為不變，故不新增連動。
 
 ---
 
@@ -586,6 +585,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V25** | 跨模組識別全面改 UUID（comment 模組）：`comments` 新增 `user_uuid UUID`、`comment_likes` 新增 `user_uuid UUID`，皆由 `users.uuid` 回填後 `SET NOT NULL`（找不到使用者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP `comments_article_uuid_fkey`（V24）；DROP 欄位 `comments.article_id`、`comments.user_id`、`comment_likes.user_id`（連帶移除各自的 FK、`idx_comments_article_top_level`、`idx_comments_user_created`、舊 `uq_comment_likes_user_comment`）；以 `user_uuid` 重建 `idx_comments_user_created` (user_uuid, created_at DESC) 與 `uq_comment_likes_user_comment` UNIQUE (user_uuid, comment_id)。新 uuid 欄位不建 FK；`parent_id`、`comment_id` 模組內部關聯不動 |
 | **V26** | 跨模組識別全面改 UUID（reading 模組：按讚與收藏）：`user_article_likes`、`user_bookmarks` 各新增 `user_uuid UUID`、`article_uuid UUID`，分別由 `users.uuid`、`articles.uuid` 回填後 `SET NOT NULL`（找不到使用者或文章時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `user_id`、`article_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE——與舊 UNIQUE）；以 uuid 欄位同名重建 `uq_user_article_likes_user_article`、`uq_user_bookmarks_user_article` UNIQUE (user_uuid, article_uuid)；新增 `idx_user_article_likes_article_uuid`、`idx_user_bookmarks_article_uuid`（article_uuid 單欄，供刪除連動與校正）。新 uuid 欄位不建 FK；`user_highlights`、`user_reading_progress` 不在本次遷移內（M2-c） |
 | **V27** | 跨模組識別全面改 UUID（reading 模組：劃線與閱讀進度）：`user_highlights`、`user_reading_progress` 各新增 `user_uuid UUID`、`article_uuid UUID`，分別由 `users.uuid`、`articles.uuid` 回填後 `SET NOT NULL`（找不到使用者或文章時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `user_id`、`article_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE——與含該欄位的索引／舊 UNIQUE）；以 uuid 欄位同名重建 `idx_user_highlights_article_for_user` (user_uuid, article_uuid)、`idx_user_highlights_user_recent` (user_uuid, created_at DESC)、`uq_user_reading_progress_user_article` UNIQUE (user_uuid, article_uuid)、`idx_user_reading_progress_user_recent` (user_uuid, updated_at DESC)；新增 `idx_user_highlights_article_uuid`、`idx_user_reading_progress_article_uuid`（article_uuid 單欄，供刪除連動與校正）。新 uuid 欄位不建 FK。至此 reading 模組四張表都不再有跨模組 Long 欄位與 FK |
+| **V28** | 跨模組識別全面改 UUID（version 模組）：`article_versions` 新增 `article_uuid UUID`、`author_uuid UUID`，`user_preferences` 新增 `user_uuid UUID`，分別由 `articles.uuid`、`users.uuid` 回填後 `SET NOT NULL`（找不到文章、作者或使用者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `article_versions.article_id`／`author_id`、`user_preferences.user_id`（連帶移除各自的 FK——含 `article_id` → `articles(id)` ON DELETE CASCADE 與 `user_id` → `users(id)` ON DELETE CASCADE——與含該欄位的索引／舊 UNIQUE）；以 uuid 欄位同名重建 `idx_article_versions_article_created` (article_uuid, created_at DESC)、`idx_article_versions_article_type` (article_uuid, type)、`uq_user_preferences_user_key` UNIQUE (user_uuid, pref_key)。新 uuid 欄位不建 FK；`article_versions.category_id`（快照分類、非 FK）不動。文章刪除 → 版本快照刪除改由事件＋每日校正負責；`user_preferences` 不新增連動 |
 
 ---
 

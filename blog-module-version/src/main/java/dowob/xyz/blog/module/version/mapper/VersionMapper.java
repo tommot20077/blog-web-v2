@@ -7,9 +7,10 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Version 模組 MyBatis Mapper — retention DELETE / count 等批次操作。
+ * Version 模組 MyBatis Mapper — retention DELETE / count 等批次操作（V28 起以 {@code article_uuid} 識別文章）。
  *
  * @author Yuan
  * @version 1.0
@@ -26,24 +27,24 @@ public interface VersionMapper {
         "DELETE FROM article_versions",
         " WHERE id IN (",
         "   SELECT id FROM article_versions",
-        "    WHERE article_id = #{articleId} AND type = 'AUTO'",
+        "    WHERE article_uuid = #{articleUuid}::uuid AND type = 'AUTO'",
         "    ORDER BY created_at DESC",
         "    OFFSET #{retain}",
         " )"
     })
-    int retainAuto(@Param("articleId") Long articleId, @Param("retain") int retain);
+    int retainAuto(@Param("articleUuid") UUID articleUuid, @Param("retain") int retain);
 
     /**
      * publish 凍結時清掉所有 AUTO 快照（保留 MANUAL / PUBLISHED）。
      */
-    @Update("DELETE FROM article_versions WHERE article_id = #{articleId} AND type = 'AUTO'")
-    int deleteAutoByArticle(@Param("articleId") Long articleId);
+    @Update("DELETE FROM article_versions WHERE article_uuid = #{articleUuid}::uuid AND type = 'AUTO'")
+    int deleteAutoByArticle(@Param("articleUuid") UUID articleUuid);
 
     /**
      * 計算 article 的 PUBLISHED 快照數（用於 freezePublished 算 vN）。
      */
-    @Select("SELECT COUNT(*) FROM article_versions WHERE article_id = #{articleId} AND type = 'PUBLISHED'")
-    int countPublished(@Param("articleId") Long articleId);
+    @Select("SELECT COUNT(*) FROM article_versions WHERE article_uuid = #{articleUuid}::uuid AND type = 'PUBLISHED'")
+    int countPublished(@Param("articleUuid") UUID articleUuid);
 
     /**
      * 分頁查詢版本 summary（不含 content，給列表頁輕量用）。
@@ -53,14 +54,14 @@ public interface VersionMapper {
         "<script>",
         "SELECT uuid, type, note, created_at, length(content) AS content_length",
         "  FROM article_versions",
-        " WHERE article_id = #{articleId}",
+        " WHERE article_uuid = #{articleUuid}::uuid",
         " <if test='typeFilter != null'>AND type = #{typeFilter}</if>",
         " ORDER BY created_at DESC",
         " LIMIT #{size} OFFSET #{offset}",
         "</script>"
     })
     List<VersionSummaryResponse> listSummaries(
-            @Param("articleId") Long articleId,
+            @Param("articleUuid") UUID articleUuid,
             @Param("typeFilter") String typeFilter,
             @Param("size") int size,
             @Param("offset") int offset);
@@ -72,9 +73,9 @@ public interface VersionMapper {
     @Select({
         "<script>",
         "SELECT COUNT(*) FROM article_versions",
-        " WHERE article_id = #{articleId}",
+        " WHERE article_uuid = #{articleUuid}::uuid",
         " <if test='typeFilter != null'>AND type = #{typeFilter}</if>",
         "</script>"
     })
-    long countSummaries(@Param("articleId") Long articleId, @Param("typeFilter") String typeFilter);
+    long countSummaries(@Param("articleUuid") UUID articleUuid, @Param("typeFilter") String typeFilter);
 }

@@ -11,6 +11,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.version.config.VersionTestApplication;
 import dowob.xyz.blog.module.version.repository.UserPreferenceRepository;
+import dowob.xyz.blog.module.version.support.SeededVersionUsers;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -111,7 +112,7 @@ class PreferenceControllerIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, SeededVersionUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -214,5 +215,43 @@ class PreferenceControllerIT {
                 .andExpect(jsonPath("$.data.enabled.source").value("system"))
                 .andExpect(jsonPath("$.data.intervalSeconds.source").value("system"))
                 .andExpect(jsonPath("$.data.diffChars.source").value("system"));
+    }
+
+    // ─────────────────────────────── 雙擊（ON CONFLICT） ────────────────────
+
+    @Test
+    @DisplayName("PUT /preferences/version - 連續送出相同內容（雙擊）兩次都 200，每個 key 只有一列且以 user_uuid 識別")
+    void put_doubleSubmit_bothReturn200AndKeepSingleRowPerKey() throws Exception {
+        Map<String, Object> payload = Map.of("retain", 100, "diffChars", 80);
+
+        for (int i = 0; i < 2; i++) {
+            mockMvc.perform(put("/api/v1/me/preferences/version")
+                            .with(asUser(USER1_ID, Role.AUTHOR))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(payload)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value("00000"));
+        }
+
+        var rows = prefRepo.findByUserUuid(SeededVersionUsers.USER1_UUID);
+        org.assertj.core.api.Assertions.assertThat(rows).hasSize(2);
+        org.assertj.core.api.Assertions.assertThat(rows)
+                .extracting(dowob.xyz.blog.module.version.model.UserPreference::getPrefKey)
+                .containsExactlyInAnyOrder("version.auto.retain", "version.auto.diff-chars");
+    }
+
+    @Test
+    @DisplayName("偏好設定依使用者隔離：作者 2 看不到作者 1 的 override")
+    void get_otherUser_doesNotSeeAnotherUsersOverride() throws Exception {
+        mockMvc.perform(put("/api/v1/me/preferences/version")
+                        .with(asUser(USER1_ID, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("retain", 100))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/me/preferences/version")
+                        .with(asUser(2L, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.retain.source").value("system"));
     }
 }

@@ -10,6 +10,7 @@ import org.springframework.data.relational.core.mapping.Column;
 import org.springframework.data.relational.core.mapping.Table;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 /**
  * 使用者偏好設定（user_preferences 表映射）。
@@ -28,8 +29,9 @@ public class UserPreference {
     @Id
     private Long id;
 
-    @Column("user_id")
-    private Long userId;
+    /** 偏好設定所屬使用者的公開 UUID（V28 起取代舊的 Long 使用者欄位；無 FK，使用者只軟刪除故不需刪除連動） */
+    @Column("user_uuid")
+    private UUID userUuid;
 
     @Column("pref_key")
     private String prefKey;

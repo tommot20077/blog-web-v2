@@ -13,19 +13,25 @@ import java.util.UUID;
  * Article Version Repository。
  *
  * @author Yuan
- * @version 1.0
+ * @version 1.1
  */
 @Repository
 public interface ArticleVersionRepository extends CrudRepository<ArticleVersion, Long> {
     Optional<ArticleVersion> findByUuid(UUID uuid);
 
-    /** 取最新一筆 type 的快照（用於 AutoSnapshotPolicy 計算 diff）*/
+    /**
+     * 取某篇文章最新一筆指定 type 的快照（用於 AutoSnapshotPolicy 計算 diff）。
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param type        快照類型（AUTO／MANUAL／PUBLISHED）
+     * @return 最新一筆；沒有時 empty
+     */
     @Query("""
             SELECT * FROM article_versions
-             WHERE article_id = :articleId AND type = :type
+             WHERE article_uuid = :articleUuid AND type = :type
              ORDER BY created_at DESC LIMIT 1
             """)
-    Optional<ArticleVersion> findLatestByArticleAndType(
-            @Param("articleId") Long articleId,
+    Optional<ArticleVersion> findLatestByArticleUuidAndType(
+            @Param("articleUuid") UUID articleUuid,
             @Param("type") String type);
 }

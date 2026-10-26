@@ -51,7 +51,7 @@ public class PreferenceController {
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "取得 effective version config")
     public ApiResponse<EffectiveConfigResponse> get(@AuthenticationPrincipal AuthUser user) {
-        return ApiResponse.success(preferenceResolver.getEffectiveResponse(user.id()));
+        return ApiResponse.success(preferenceResolver.getEffectiveResponse(user.uuid()));
     }
 
     /**
@@ -64,7 +64,7 @@ public class PreferenceController {
     public ApiResponse<EffectiveConfigResponse> update(
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdatePreferenceRequest req) {
-        return ApiResponse.success(preferenceResolver.updatePreferences(user.id(), req));
+        return ApiResponse.success(preferenceResolver.updatePreferences(user.uuid(), req));
     }
 
     /**
@@ -78,7 +78,7 @@ public class PreferenceController {
             @AuthenticationPrincipal AuthUser user,
             @PathVariable String key) {
         String fullKey = mapKey(key);
-        return ApiResponse.success(preferenceResolver.resetKey(user.id(), fullKey));
+        return ApiResponse.success(preferenceResolver.resetKey(user.uuid(), fullKey));
     }
 
     /**

@@ -36,11 +36,13 @@ public class ArticleVersion {
 
     private UUID uuid;
 
-    @Column("article_id")
-    private Long articleId;
+    /** 所屬文章的公開 UUID（V28 起取代舊的 Long 文章欄位；無 FK，文章刪除由 {@code VersionArticleDeletedConsumer} 與每日校正清除） */
+    @Column("article_uuid")
+    private UUID articleUuid;
 
-    @Column("author_id")
-    private Long authorId;
+    /** 快照當時文章作者的公開 UUID（V28 起取代舊的 Long 作者欄位；無 FK） */
+    @Column("author_uuid")
+    private UUID authorUuid;
 
     private String type;
 

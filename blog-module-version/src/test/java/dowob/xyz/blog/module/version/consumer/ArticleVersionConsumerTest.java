@@ -30,9 +30,13 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -61,7 +65,7 @@ class ArticleVersionConsumerTest {
 
     private ArticleVersionConsumer consumer;
 
-    private static final long ARTICLE_ID = 100L;
+    private static final UUID ARTICLE_UUID = UUID.randomUUID();
     private static final long DELIVERY_TAG = 42L;
 
     @BeforeEach
@@ -70,29 +74,33 @@ class ArticleVersionConsumerTest {
     }
 
     private ArticleContentChangedEvent event(Action action) {
+        return event(action, ARTICLE_UUID);
+    }
+
+    private ArticleContentChangedEvent event(Action action, UUID articleUuid) {
         return new ArticleContentChangedEvent(
-                UUID.randomUUID(), ARTICLE_ID, UUID.randomUUID(), 1L, null, action, Instant.now());
+                UUID.randomUUID(), 100L, articleUuid, 1L, null, action, Instant.now());
     }
 
     @Test
     @DisplayName("SAVED + shouldSnapshot=true: 寫入快照並 basicAck")
     void onContentChanged_savedAndShouldSnapshot_recordsAndAcks() throws IOException {
-        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_ID)).thenReturn(true);
+        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(true);
 
         consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
 
-        verify(versioningService).recordAutoSnapshot(ARTICLE_ID);
+        verify(versioningService).recordAutoSnapshot(ARTICLE_UUID);
         verify(channel).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
     @DisplayName("SAVED + shouldSnapshot=false: 不寫入但仍 basicAck")
     void onContentChanged_savedButPolicyFalse_skipsButAcks() throws IOException {
-        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_ID)).thenReturn(false);
+        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(false);
 
         consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
 
-        verify(versioningService, never()).recordAutoSnapshot(ARTICLE_ID);
+        verify(versioningService, never()).recordAutoSnapshot(ARTICLE_UUID);
         verify(channel).basicAck(DELIVERY_TAG, false);
     }
 
@@ -101,7 +109,7 @@ class ArticleVersionConsumerTest {
     void onContentChanged_published_freezesAndAcks() throws IOException {
         consumer.onContentChanged(event(Action.PUBLISHED), channel, DELIVERY_TAG);
 
-        verify(versioningService).freezePublished(ARTICLE_ID);
+        verify(versioningService).freezePublished(ARTICLE_UUID);
         verify(channel).basicAck(DELIVERY_TAG, false);
     }
 
@@ -110,16 +118,27 @@ class ArticleVersionConsumerTest {
     void onContentChanged_restored_isNoOpButAcks() throws IOException {
         consumer.onContentChanged(event(Action.RESTORED), channel, DELIVERY_TAG);
 
-        verify(versioningService, never()).recordAutoSnapshot(ARTICLE_ID);
-        verify(versioningService, never()).freezePublished(ARTICLE_ID);
+        verify(versioningService, never()).recordAutoSnapshot(ARTICLE_UUID);
+        verify(versioningService, never()).freezePublished(ARTICLE_UUID);
         verify(channel).basicAck(DELIVERY_TAG, false);
+    }
+
+    @Test
+    @DisplayName("舊 payload 缺 articleUuid: 不觸發任何快照流程，仍 basicAck（重送也不會變好）")
+    void onContentChanged_nullArticleUuid_skipsAndAcks() throws IOException {
+        consumer.onContentChanged(event(Action.SAVED, null), channel, DELIVERY_TAG);
+        consumer.onContentChanged(event(Action.PUBLISHED, null), channel, DELIVERY_TAG);
+
+        verifyNoInteractions(versioningService, autoSnapshotPolicy);
+        verify(channel, times(2)).basicAck(DELIVERY_TAG, false);
+        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
     @DisplayName("Service 拋例外: 呼叫 basicNack（不重新入隊）")
     void onContentChanged_serviceThrows_callsBasicNack() throws IOException {
-        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_ID)).thenReturn(true);
-        doThrow(new RuntimeException("DB error")).when(versioningService).recordAutoSnapshot(ARTICLE_ID);
+        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(true);
+        doThrow(new RuntimeException("DB error")).when(versioningService).recordAutoSnapshot(ARTICLE_UUID);
 
         consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
 
@@ -129,7 +148,7 @@ class ArticleVersionConsumerTest {
     @Test
     @DisplayName("ACK 失敗時呼叫 basicNack 避免訊息卡住")
     void onContentChanged_ackThrows_callsBasicNack() throws IOException {
-        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_ID)).thenReturn(true);
+        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(true);
         doThrow(new IOException("ACK failed")).when(channel).basicAck(DELIVERY_TAG, false);
 
         consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
@@ -166,7 +185,7 @@ class ArticleVersionConsumerTest {
     @Test
     @DisplayName("onContentChanged：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
     void onContentChanged_onFailure_recordsMetricsAndLogsContext() throws Exception {
-        doThrow(new RuntimeException("DB error")).when(versioningService).freezePublished(ARTICLE_ID);
+        doThrow(new RuntimeException("DB error")).when(versioningService).freezePublished(ARTICLE_UUID);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -177,7 +196,7 @@ class ArticleVersionConsumerTest {
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
-                        .contains("articleId=" + ARTICLE_ID)
+                        .contains("articleUuid=" + ARTICLE_UUID)
                         .contains("action=PUBLISHED");
             });
         } finally {
