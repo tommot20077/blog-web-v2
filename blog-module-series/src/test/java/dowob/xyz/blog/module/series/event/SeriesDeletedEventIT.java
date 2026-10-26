@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.series.event;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
@@ -11,6 +12,7 @@ import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.module.article.consumer.ArticleSeriesDeletedConsumer;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.series.config.SeriesTestApplication;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 import org.springframework.amqp.AmqpConnectException;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -50,6 +53,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -66,8 +71,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>重點是<b>時序</b>：事件必須在刪除交易 <b>commit 後</b>才發送（{@code code-standards.md}「Transaction + MQ」）。
  * 做法是在 {@code RabbitTemplate.convertAndSend} 被呼叫的當下，以<b>另一條連線</b>查 series 是否已經消失——
- * 查得到代表資料還沒 commit。同時確認刪除語意不變：{@code articles.series_id} 仍由 FK
- * {@code ON DELETE SET NULL} 清空；發送失敗不影響刪除結果；失敗的請求不發事件。</p>
+ * 查得到代表資料還沒 commit。M6-b 起 {@code articles.series_uuid} 沒有 FK，「刪 series → 文章脫離系列」
+ * 改由 article 的 {@code ArticleSeriesDeletedConsumer} 處理這個事件：刪除後（事件被消費前）文章仍帶著
+ * series_uuid，consumer 處理後才清空、文章本身保留（刪除語意不變）；重複事件不出錯。
+ * 發送失敗不影響刪除結果；失敗的請求不發事件。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -100,6 +107,7 @@ class SeriesDeletedEventIT {
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
     @Autowired private ArticleRepository articleRepo;
+    @Autowired private ArticleSeriesDeletedConsumer articleSeriesDeletedConsumer;
     @Autowired private JdbcTemplate jdbc;
 
     @MockitoBean private ConnectionFactory connectionFactory;
@@ -113,7 +121,7 @@ class SeriesDeletedEventIT {
     @BeforeEach
     @AfterEach
     void cleanUp() {
-        jdbc.execute("UPDATE articles SET series_id = NULL, series_position = NULL");
+        jdbc.execute("UPDATE articles SET series_uuid = NULL, series_position = NULL");
         jdbc.execute("DELETE FROM series");
         jdbc.execute("DELETE FROM articles");
     }
@@ -139,7 +147,7 @@ class SeriesDeletedEventIT {
     private Article createArticleInSeries(UUID seriesUuid, int position) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(SeededUsers.USER1_ID);
+        article.setAuthorUuid(SeededUsers.USER1_UUID);
         article.setTitle("In Series " + UUID.randomUUID());
         article.setSlug("in-series-" + UUID.randomUUID());
         article.setContent("content");
@@ -148,7 +156,7 @@ class SeriesDeletedEventIT {
         article.setLikeCount(0);
         article.setCommentCount(0);
         article.setViewCount(0L);
-        article.setSeriesId(jdbc.queryForObject("SELECT id FROM series WHERE uuid = ?", Long.class, seriesUuid));
+        article.setSeriesUuid(seriesUuid);
         article.setSeriesPosition(position);
         article.setCreatedAt(LocalDateTime.now());
         article.setUpdatedAt(LocalDateTime.now());
@@ -187,18 +195,57 @@ class SeriesDeletedEventIT {
     }
 
     @Test
-    @DisplayName("刪除語意不變：成員文章的 series_id 仍由 ON DELETE SET NULL 清空，文章本身保留")
-    void deleteSeries_stillUnlinksArticlesByForeignKey() throws Exception {
+    @DisplayName("刪除語意不變：刪 series 後文章仍有 series_uuid（沒有 FK）→ article consumer 處理事件 → 清空，文章本身保留")
+    void deleteSeries_articlesUnlinkedByConsumerAfterEvent() throws Exception {
         UUID seriesUuid = createSeriesViaApi("event-unlink");
         Article article = createArticleInSeries(seriesUuid, 1);
+        Article otherSeriesMember = createArticleInSeries(createSeriesViaApi("event-keep"), 2);
 
         mockMvc.perform(delete("/api/v1/series/{uuid}", seriesUuid)
                         .with(asUser(SeededUsers.USER1_ID, Role.AUTHOR)))
                 .andExpect(status().isOk());
 
         assertThat(seriesRows(seriesUuid)).isZero();
+        assertThat(articleRepo.findById(article.getId()).orElseThrow().getSeriesUuid())
+                .as("V32 起沒有 FK：事件被消費前，文章仍帶著已刪除系列的 uuid（最終一致）").isEqualTo(seriesUuid);
+
+        SeriesDeletedEvent event = capturePublishedEvent();
+        articleSeriesDeletedConsumer.onSeriesDeleted(event, Mockito.mock(Channel.class), 1L);
+
         Article unlinked = articleRepo.findById(article.getId()).orElseThrow();
-        assertThat(unlinked.getSeriesId()).isNull();
+        assertThat(unlinked.getSeriesUuid()).isNull();
+        assertThat(unlinked.getSeriesPosition()).isNull();
+        assertThat(articleRepo.findById(otherSeriesMember.getId()).orElseThrow().getSeriesUuid())
+                .as("其他系列的成員不受影響").isNotNull();
+        assertThat(articleRepo.count()).as("文章留存").isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("同一個 SeriesDeletedEvent 重複送達（at-least-once）→ consumer 不出錯，第二次為 no-op")
+    void deleteSeries_duplicateEvent_isHarmless() throws Exception {
+        UUID seriesUuid = createSeriesViaApi("event-duplicate");
+        Article article = createArticleInSeries(seriesUuid, 1);
+        mockMvc.perform(delete("/api/v1/series/{uuid}", seriesUuid)
+                        .with(asUser(SeededUsers.USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+        SeriesDeletedEvent event = capturePublishedEvent();
+        Channel channel = Mockito.mock(Channel.class);
+
+        articleSeriesDeletedConsumer.onSeriesDeleted(event, channel, 1L);
+        articleSeriesDeletedConsumer.onSeriesDeleted(event, channel, 2L);
+
+        assertThat(articleRepo.findById(article.getId()).orElseThrow().getSeriesUuid()).isNull();
+        verify(channel).basicAck(1L, false);
+        verify(channel).basicAck(2L, false);
+        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
+    }
+
+    /** 取得 series 實際發給 broker 的那個事件（IT 不真起 broker，改由測試把它交給 article consumer）。 */
+    private SeriesDeletedEvent capturePublishedEvent() {
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(rabbitTemplate).convertAndSend(
+                eq(SeriesEventContract.EXCHANGE), eq(SeriesEventContract.ROUTING_KEY_DELETED), captor.capture());
+        return (SeriesDeletedEvent) captor.getValue();
     }
 
     @Test

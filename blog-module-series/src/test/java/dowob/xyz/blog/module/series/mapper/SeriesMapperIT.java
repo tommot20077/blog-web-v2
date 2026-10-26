@@ -263,4 +263,25 @@ class SeriesMapperIT {
         assertThat(rows).extracting(Series::getArticleCount)
                 .as("列表查詢不投影 article_count（改用即時計數）").containsOnlyNulls();
     }
+
+    @Test
+    @DisplayName("findBasicInfoBySeriesUuids：回傳指定 uuid 的主鍵、uuid、標題，不認識的 uuid 略過")
+    void findBasicInfoBySeriesUuids_returnsRequestedRows() {
+        Series a = newSeries("mapper-basic-1");
+        Series b = newSeries("mapper-basic-2");
+        Series c = newSeries("mapper-basic-3");
+        for (Series s : List.of(a, b, c)) {
+            mapper.insertIfSlugAbsent(s);
+        }
+
+        List<SeriesMapper.SeriesBasicRow> rows =
+                mapper.findBasicInfoBySeriesUuids(List.of(a.getUuid(), c.getUuid(), UUID.randomUUID()));
+
+        assertThat(rows).extracting(SeriesMapper.SeriesBasicRow::seriesUuid)
+                .containsExactlyInAnyOrder(a.getUuid(), c.getUuid());
+        SeriesMapper.SeriesBasicRow rowA = rows.stream()
+                .filter(r -> r.seriesUuid().equals(a.getUuid())).findFirst().orElseThrow();
+        assertThat(rowA.seriesId()).isEqualTo(idOf(a.getUuid()));
+        assertThat(rowA.seriesTitle()).isEqualTo("T-mapper-basic-1");
+    }
 }

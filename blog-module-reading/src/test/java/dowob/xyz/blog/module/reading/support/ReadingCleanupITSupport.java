@@ -107,14 +107,14 @@ public abstract class ReadingCleanupITSupport {
     /**
      * 建立一篇指定作者的文章。
      *
-     * @param authorId 作者主鍵（article 模組尚未改為 UUID，仍以主鍵寫入）
+     * @param authorId 作者種子使用者主鍵（寫入時轉為其固定 uuid：articles.author_uuid）
      * @param status   文章狀態
      * @return 已儲存的文章
      */
     protected Article createArticle(Long authorId, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededReadingUsers.uuidOf(authorId));
         article.setTitle("reading-cleanup-it");
         article.setSlug("reading-cleanup-it-" + UUID.randomUUID());
         article.setContent("test");

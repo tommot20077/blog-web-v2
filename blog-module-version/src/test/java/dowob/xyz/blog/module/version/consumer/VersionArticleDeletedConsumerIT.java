@@ -40,7 +40,7 @@ class VersionArticleDeletedConsumerIT extends VersionCleanupITSupport {
     @Autowired private VersionArticleDeletedConsumer consumer;
 
     private static ArticleDeletedEvent eventOf(UUID articleUuid) {
-        return new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, null, List.of(), List.of(), Instant.now(), null, null);
+        return new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, List.of(), List.of(), Instant.now(), null, null);
     }
 
     @Test

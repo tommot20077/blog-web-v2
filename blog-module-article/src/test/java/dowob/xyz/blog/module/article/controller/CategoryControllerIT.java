@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.module.article.support.TestUsers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
@@ -8,6 +9,7 @@ import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleTestApplication;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
@@ -38,10 +40,15 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Objects;
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -129,7 +136,7 @@ class CategoryControllerIT {
     private SeriesFacade seriesFacade;
 
     private static final Long AUTHOR_ID = 1L;
-    private static final UUID AUTHOR_UUID = UUID.randomUUID();
+    private static final UUID AUTHOR_UUID = TestUsers.uuidOf(AUTHOR_ID);
 
     @AfterEach
     void cleanUp() {
@@ -142,7 +149,7 @@ class CategoryControllerIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, TestUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -277,9 +284,7 @@ class CategoryControllerIT {
     @Test
     @DisplayName("DELETE /api/admin/categories/{uuid} - 刪除有文章的分類 → A0206")
     void deleteCategory_hasArticles_error() throws Exception {
-        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
-        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+        stubUserFacade();
 
         /** 建立分類 */
         CreateCategoryRequest createRequest = new CreateCategoryRequest();
@@ -317,9 +322,7 @@ class CategoryControllerIT {
     @Test
     @DisplayName("GET /api/v1/articles?categorySlug=backend - 依分類篩選已發布文章")
     void getPublishedArticles_filteredByCategorySlug() throws Exception {
-        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
-        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+        stubUserFacade();
 
         /** 建立分類 */
         CreateCategoryRequest categoryRequest = new CreateCategoryRequest();
@@ -397,9 +400,7 @@ class CategoryControllerIT {
     @Test
     @DisplayName("GET /api/v1/articles/{uuid} - 回應中包含 categories 欄位")
     void getArticle_responseContainsCategories() throws Exception {
-        when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
-        when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
+        stubUserFacade();
 
         /** 建立分類 */
         CreateCategoryRequest categoryRequest = new CreateCategoryRequest();
@@ -440,5 +441,20 @@ class CategoryControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.categories").isArray())
                 .andExpect(jsonPath("$.data.categories[0].slug").value("backend"));
+    }
+
+    /**
+     * 讓 {@code UserFacade.getDisplayInfoByUuids} 對任何被查詢的 UUID 都回傳暱稱 "TestAuthor"
+     * （M6-a：文章回應的作者資訊一律經 UUID 版 facade 批次解析，已不再有 Long 版呼叫）。
+     */
+    @SuppressWarnings("unchecked")
+    private void stubUserFacade() {
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenAnswer(invocation -> {
+            Collection<UUID> uuids = invocation.getArgument(0);
+            Map<UUID, UserDisplayInfo> result = new HashMap<>();
+            uuids.stream().filter(Objects::nonNull)
+                    .forEach(u -> result.put(u, new UserDisplayInfo(u, "TestAuthor", null)));
+            return result;
+        });
     }
 }

@@ -57,7 +57,6 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -107,15 +106,15 @@ class ArticleCommandSubServiceTest {
 
     private ArticleCommandSubService commandSubService;
 
-    private static final Long AUTHOR_ID = 1L;
-    private static final Long OTHER_USER_ID = 2L;
+    private static final UUID AUTHOR_UUID = new UUID(0L, 1L);
+    private static final UUID OTHER_USER_UUID = new UUID(0L, 2L);
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
 
     private Article buildArticle(ArticleStatus status) {
         Article article = new Article();
         article.setId(1L);
         article.setUuid(ARTICLE_UUID);
-        article.setAuthorId(AUTHOR_ID);
+        article.setAuthorUuid(AUTHOR_UUID);
         article.setTitle("測試標題");
         article.setContent("測試內容");
         article.setSummary("測試摘要");
@@ -232,7 +231,7 @@ class ArticleCommandSubServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_UUID, request);
 
             assertThat(response).isNotNull();
             assertThat(response.getUuid()).isEqualTo(ARTICLE_UUID);
@@ -252,7 +251,7 @@ class ArticleCommandSubServiceTest {
             // save 直接回傳傳入的 Article，以便驗證實際存入的狀態
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             // 無論傳入何種狀態，儲存至 DB 前都必須是 DRAFT
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -261,7 +260,7 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("正常：getUserNicknameById 回傳 empty 時，建立文章不拋例外")
+        @DisplayName("正常：回應 mapper 查無作者暱稱時，建立文章不拋例外")
         void createArticle_userNicknameNotFound_noException() {
 
             CreateArticleRequest request = new CreateArticleRequest();
@@ -271,7 +270,7 @@ class ArticleCommandSubServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_UUID, request);
 
             assertThat(response).isNotNull();
         }
@@ -287,7 +286,7 @@ class ArticleCommandSubServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_UUID, request);
 
             org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -305,7 +304,7 @@ class ArticleCommandSubServiceTest {
 
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -325,7 +324,7 @@ class ArticleCommandSubServiceTest {
 
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -350,7 +349,7 @@ class ArticleCommandSubServiceTest {
                             new TagInfo(tagId1, "Spring", "spring"),
                             new TagInfo(tagId2, "Java", "java")));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             verify(tagFacade).findOrCreateTags(List.of("Spring", "Java"));
             verify(tagFacade).syncArticleTags(ARTICLE_UUID, List.of(tagId1, tagId2));
@@ -367,7 +366,7 @@ class ArticleCommandSubServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             verify(tagFacade, never()).findOrCreateTags(any());
             verify(tagFacade, never()).syncArticleTags(any(), any());
@@ -384,7 +383,7 @@ class ArticleCommandSubServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             verify(tagFacade, never()).findOrCreateTags(any());
             verify(tagFacade, never()).syncArticleTags(any(), any());
@@ -400,7 +399,7 @@ class ArticleCommandSubServiceTest {
 
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -417,7 +416,7 @@ class ArticleCommandSubServiceTest {
 
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -436,7 +435,7 @@ class ArticleCommandSubServiceTest {
             // save 直接回傳傳入的 Article，以便驗證實際存入的狀態
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             // 捕捉實際傳入 save() 的 Article，驗證 status 已被強制覆寫為 DRAFT
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -456,7 +455,7 @@ class ArticleCommandSubServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             verify(articleEventPublisher).publishContentChanged(eq(saved), eq(ArticleContentChangedEvent.Action.SAVED));
         }
@@ -476,7 +475,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("更新後標題");
 
-            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             assertThat(response).isNotNull();
             verify(articleRepository).save(any(Article.class));
@@ -492,7 +491,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("Admin 更新");
 
-            EditorArticleResponse response = commandSubService.updateArticle(OTHER_USER_ID, Role.ADMIN, ARTICLE_UUID, request);
+            EditorArticleResponse response = commandSubService.updateArticle(OTHER_USER_UUID, Role.ADMIN, ARTICLE_UUID, request);
 
             assertThat(response).isNotNull();
         }
@@ -508,7 +507,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.DRAFT);
 
-            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
             assertThat(response.getRejectReason()).isNull();
@@ -528,7 +527,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.PENDING_REVIEW);
 
-            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -547,7 +546,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.PUBLISHED);
 
-            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -566,7 +565,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("修正後標題");
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -584,7 +583,7 @@ class ArticleCommandSubServiceTest {
             request.setTitle("試圖篡改");
 
             assertThatThrownBy(
-                    () -> commandSubService.updateArticle(OTHER_USER_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    () -> commandSubService.updateArticle(OTHER_USER_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
         }
@@ -597,7 +596,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
 
             assertThatThrownBy(
-                    () -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, UUID.randomUUID(), request))
+                    () -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, UUID.randomUUID(), request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
         }
@@ -616,7 +615,7 @@ class ArticleCommandSubServiceTest {
             request.setCategoryIds(List.of(nonExistentUuid));
 
             assertThatThrownBy(
-                    () -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    () -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.CATEGORY_NOT_FOUND.getMessage());
         }
@@ -630,7 +629,7 @@ class ArticleCommandSubServiceTest {
 
             UpdateArticleRequest emptyRequest = new UpdateArticleRequest();
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, emptyRequest);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, emptyRequest);
 
             org.mockito.ArgumentCaptor<Article> articleCaptor = org.mockito.ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(articleCaptor.capture());
@@ -657,7 +656,7 @@ class ArticleCommandSubServiceTest {
             request.setCategoryIds(List.of(catUuid));
 
             assertThatThrownBy(
-                    () -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+                    () -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(DataIntegrityViolationException.class);
         }
 
@@ -671,7 +670,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setContent("更新後的 Markdown 內容");
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -690,7 +689,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("並發更新");
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getMessage());
         }
@@ -709,7 +708,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTagNames(List.of("Spring"));
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             verify(tagFacade).findOrCreateTags(List.of("Spring"));
             verify(tagFacade).syncArticleTags(ARTICLE_UUID, List.of(tagId1));
@@ -725,7 +724,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             /** tagNames 為 null，不更新 */
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             verify(tagFacade, never()).findOrCreateTags(any());
             verify(tagFacade, never()).syncArticleTags(any(), any());
@@ -742,7 +741,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTagNames(List.of());
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             verify(tagFacade).deleteArticleTags(ARTICLE_UUID);
             verify(tagFacade, never()).syncArticleTags(any(), any());
@@ -758,7 +757,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setCoverImageUrl("https://example.com/cover.jpg");
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -782,7 +781,7 @@ class ArticleCommandSubServiceTest {
                     .thenReturn(new RenderResult("<h2 id=\"heading-安裝步驟\">安裝步驟</h2>", tocEntries));
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -803,7 +802,7 @@ class ArticleCommandSubServiceTest {
                     .thenReturn(new RenderResult("<p>純文字內容，無任何標題</p>\n", List.of()));
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -825,7 +824,7 @@ class ArticleCommandSubServiceTest {
             when(markdownRenderer.render(request.getContent()))
                     .thenReturn(new RenderResult("<h2 id=\"heading-新章節\">新章節</h2>", newToc));
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -848,7 +847,7 @@ class ArticleCommandSubServiceTest {
             request.setTitle("只改標題");
             // request.content 為 null，不應觸發 toc 重算
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -868,7 +867,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
             verify(articleEventPublisher).publishPublished(any(Article.class), any());
@@ -882,7 +881,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(response.getRejectReason()).isNull();
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -897,7 +896,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.publishArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.publishArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PUBLISHED);
         }
@@ -909,7 +908,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
             assertThatThrownBy(
-                    () -> commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    () -> commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
         }
@@ -921,7 +920,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
             assertThatThrownBy(
-                    () -> commandSubService.publishArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    () -> commandSubService.publishArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -933,7 +932,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
             assertThatThrownBy(
-                    () -> commandSubService.publishArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    () -> commandSubService.publishArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -947,7 +946,7 @@ class ArticleCommandSubServiceTest {
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(
                     List.of(new TagInfo(UUID.randomUUID(), "Spring", "spring")));
 
-            commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             ArgumentCaptor<Article> articleCaptor = ArgumentCaptor.forClass(Article.class);
             @SuppressWarnings("unchecked")
@@ -969,7 +968,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
             assertThatThrownBy(
-                    () -> commandSubService.publishArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+                    () -> commandSubService.publishArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
 
@@ -989,7 +988,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "內容不符合規範");
+            ArticleResponse response = commandSubService.rejectArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, "內容不符合規範");
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.REJECTED);
         }
@@ -1001,7 +1000,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
             assertThatThrownBy(
-                    () -> commandSubService.rejectArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, "原因"))
+                    () -> commandSubService.rejectArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, "原因"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
         }
@@ -1013,7 +1012,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
             assertThatThrownBy(
-                    () -> commandSubService.rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "原因"))
+                    () -> commandSubService.rejectArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, "原因"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1025,7 +1024,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID,
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID,
                     buildUpdateRequest(ArticleStatus.DRAFT));
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
@@ -1038,7 +1037,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "內容不符合規範");
+            commandSubService.rejectArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, "內容不符合規範");
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1052,7 +1051,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "內容違規");
+            ArticleResponse response = commandSubService.rejectArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, "內容違規");
 
             assertThat(response.getRejectReason()).isEqualTo("內容違規");
         }
@@ -1085,7 +1084,7 @@ class ArticleCommandSubServiceTest {
             when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of());
             when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of());
 
-            commandSubService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             verify(articleRepository).delete(article);
         }
@@ -1096,7 +1095,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.deleteArticle(OTHER_USER_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.deleteArticle(OTHER_USER_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
 
@@ -1104,14 +1103,14 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent（精準驗 4 params；seriesUuid 於刪除前取得）")
+        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent（精準驗 4 params；無系列的文章 seriesUuid 為 null）")
         void deleteArticle_shouldPublishDeletedEvent() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of(CATEGORY_UUID));
             when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of(TAG_UUID));
 
-            commandSubService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             verify(articleEventPublisher).publishDeleted(
                     eq(article),
@@ -1122,20 +1121,18 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("M4-b：delete 前先取得 seriesUuid（先於 articleRepository.delete），並傳給 publisher；刪除後不再查")
-        void deleteArticle_resolvesSeriesUuidBeforeDelete_andPassesToPublisher() {
+        @DisplayName("M6-b：事件帶文章自己的 series_uuid（刪除前已在文章實體上，不再查 series），先 delete 再發事件")
+        void deleteArticle_passesArticleOwnSeriesUuidToPublisher() {
             Article article = buildArticle(ArticleStatus.DRAFT);
-            article.setSeriesId(50L);
             UUID seriesUuid = UUID.randomUUID();
+            article.setSeriesUuid(seriesUuid);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of(CATEGORY_UUID));
             when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of(TAG_UUID));
-            when(articleEventPublisher.resolveSeriesUuidForDelete(50L)).thenReturn(seriesUuid);
 
-            commandSubService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             org.mockito.InOrder order = org.mockito.Mockito.inOrder(articleEventPublisher, articleRepository);
-            order.verify(articleEventPublisher).resolveSeriesUuidForDelete(50L);
             order.verify(articleRepository).delete(article);
             order.verify(articleEventPublisher).publishDeleted(
                     eq(article),
@@ -1143,19 +1140,19 @@ class ArticleCommandSubServiceTest {
                     eq(List.of(CATEGORY_UUID)),
                     eq(List.of(TAG_UUID))
             );
-            verify(articleEventPublisher, times(1)).resolveSeriesUuidForDelete(any());
+            org.mockito.Mockito.verifyNoMoreInteractions(articleEventPublisher);
         }
 
         @Test
-        @DisplayName("邊界：刪除無 seriesId 的文章時 publisher 收到 null seriesUuid")
+        @DisplayName("邊界：刪除無系列的文章時 publisher 收到 null seriesUuid")
         void deleteArticle_withoutSeriesId_publisherReceivesNullSeriesUuid() {
             Article article = buildArticle(ArticleStatus.DRAFT);
-            // seriesId 為 null（buildArticle 預設未設置）
+            // seriesUuid 為 null（buildArticle 預設未設置）
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of());
             when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of());
 
-            commandSubService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             verify(articleRepository).delete(article);
             verify(articleEventPublisher).publishDeleted(
@@ -1167,17 +1164,16 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("M4-b：刪除前取得 seriesUuid 失敗 → 刪除不動手（不會刪了文章卻發出沒有 seriesUuid 的事件）")
-        void deleteArticle_whenSeriesUuidLookupFails_doesNotDelete() {
+        @DisplayName("刪除失敗（資料庫例外）→ 例外往外拋，且不發出 ArticleDeletedEvent")
+        void deleteArticle_whenDeleteFails_doesNotPublishEvent() {
             Article article = buildArticle(ArticleStatus.DRAFT);
-            article.setSeriesId(50L);
+            article.setSeriesUuid(UUID.randomUUID());
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
-            when(articleEventPublisher.resolveSeriesUuidForDelete(50L)).thenThrow(new IllegalStateException("series down"));
+            org.mockito.Mockito.doThrow(new IllegalStateException("db down")).when(articleRepository).delete(article);
 
-            assertThatThrownBy(() -> commandSubService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(IllegalStateException.class);
 
-            verify(articleRepository, never()).delete(any());
             verify(articleEventPublisher, never()).publishDeleted(any(), any(UUID.class), any(), any());
         }
     }
@@ -1193,7 +1189,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.submitForReview(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
         }
@@ -1206,7 +1202,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.submitForReview(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.PENDING_REVIEW);
             assertThat(response.getRejectReason()).isNull();
@@ -1221,7 +1217,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.submitForReview(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1232,7 +1228,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.submitForReview(OTHER_USER_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.submitForReview(OTHER_USER_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
         }
@@ -1249,7 +1245,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -1265,7 +1261,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(response.getRejectReason()).isNull();
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -1279,7 +1275,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.withdrawArticle(OTHER_USER_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(OTHER_USER_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
             verify(articleRepository, never()).save(any(Article.class));
@@ -1292,7 +1288,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.withdrawArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
         }
@@ -1304,7 +1300,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             verifyNoInteractions(articleEventPublisher);
         }
@@ -1315,7 +1311,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
             verify(articleRepository, never()).save(any(Article.class));
@@ -1327,7 +1323,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
             verify(articleRepository, never()).save(any(Article.class));
@@ -1339,7 +1335,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.REJECTED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
             verify(articleRepository, never()).save(any(Article.class));
@@ -1351,7 +1347,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.ARCHIVED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
             verify(articleRepository, never()).save(any(Article.class));
@@ -1363,7 +1359,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.withdrawArticle(OTHER_USER_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(OTHER_USER_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
             verify(articleRepository, never()).save(any(Article.class));
@@ -1375,7 +1371,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID))
                     .thenThrow(new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
 
-            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
         }
@@ -1393,7 +1389,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.ARCHIVED);
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -1408,7 +1404,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleEventPublisher).publishArchived(captor.capture());
@@ -1433,7 +1429,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1443,7 +1439,7 @@ class ArticleCommandSubServiceTest {
         @Test
         @DisplayName("異常：AUTHOR 本人下架自己的文章 → ARTICLE_ACCESS_DENIED（下架非作者自助操作）")
         void archiveArticle_byAuthor_denied() {
-            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
 
@@ -1456,7 +1452,7 @@ class ArticleCommandSubServiceTest {
         @Test
         @DisplayName("異常：operatorRole 為 null（未解析出角色）→ ARTICLE_ACCESS_DENIED")
         void archiveArticle_nullRole_denied() {
-            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, null, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, null, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
         }
@@ -1467,7 +1463,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1478,7 +1474,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1489,7 +1485,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.REJECTED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1500,7 +1496,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.ARCHIVED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1511,7 +1507,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class);
 
             verify(articleRepository, never()).save(any(Article.class));
@@ -1524,7 +1520,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID))
                     .thenThrow(new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
 
-            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
         }
@@ -1541,7 +1537,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            ArticleResponse response = commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.unarchiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             assertThat(response.getStatus()).isEqualTo(ArticleStatus.DRAFT);
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
@@ -1556,7 +1552,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            commandSubService.unarchiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             verifyNoInteractions(articleEventPublisher);
         }
@@ -1573,7 +1569,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            commandSubService.unarchiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1583,7 +1579,7 @@ class ArticleCommandSubServiceTest {
         @Test
         @DisplayName("異常：AUTHOR 本人復原自己的文章 → ARTICLE_ACCESS_DENIED")
         void unarchiveArticle_byAuthor_denied() {
-            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
 
@@ -1597,7 +1593,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
             verify(articleRepository, never()).save(any(Article.class));
@@ -1609,7 +1605,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1620,7 +1616,7 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.REJECTED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
             verify(articleRepository, never()).save(any(Article.class));
@@ -1632,7 +1628,7 @@ class ArticleCommandSubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID))
                     .thenThrow(new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
 
-            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID))
+            assertThatThrownBy(() -> commandSubService.unarchiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
         }
@@ -1651,7 +1647,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("更新後標題");
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
 
@@ -1668,7 +1664,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("更新草稿標題");
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             verify(articleEventPublisher, never()).publishUpdated(any());
             verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
@@ -1689,7 +1685,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.ARCHIVED);
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
@@ -1703,7 +1699,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.DRAFT);
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
@@ -1719,7 +1715,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.PUBLISHED);
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1736,7 +1732,7 @@ class ArticleCommandSubServiceTest {
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
 
-            commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1757,7 +1753,7 @@ class ArticleCommandSubServiceTest {
             when(articleRepository.save(any(Article.class))).thenReturn(savedArticle);
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
 
-            ArticleResponse response = commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse response = commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(response.getUpdatedAt()).isEqualTo(savedUpdatedAt);
         }
@@ -1776,7 +1772,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.ARCHIVED);
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1790,7 +1786,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.DRAFT);
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
@@ -1804,7 +1800,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.PENDING_REVIEW);
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1818,7 +1814,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.PUBLISHED);
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
@@ -1832,7 +1828,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.REJECTED);
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID.getMessage());
         }
@@ -1846,7 +1842,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setStatus(ArticleStatus.DRAFT);
 
-            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request))
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_EDIT_NOT_ALLOWED.getMessage());
         }
@@ -1866,7 +1862,7 @@ class ArticleCommandSubServiceTest {
 
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1884,7 +1880,7 @@ class ArticleCommandSubServiceTest {
 
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1903,7 +1899,7 @@ class ArticleCommandSubServiceTest {
             request.setContent("新內容");
             request.setSummary("自訂摘要");
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1921,7 +1917,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setSummary("");  // 空白觸發自動摘要，content 為 null 時用現有 content
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -1947,7 +1943,7 @@ class ArticleCommandSubServiceTest {
                     List.of(new TagInfo(tagId1, "Spring", "spring"),
                             new TagInfo(tagId2, "Java", "java")));
 
-            commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             ArgumentCaptor<Article> articleCaptor2 = ArgumentCaptor.forClass(Article.class);
             @SuppressWarnings("unchecked")
@@ -1966,7 +1962,7 @@ class ArticleCommandSubServiceTest {
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
 
-            commandSubService.publishArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             verify(articleEventPublisher, never()).publishTagged(any(), any());
         }
@@ -1989,7 +1985,7 @@ class ArticleCommandSubServiceTest {
                             new TagInfo(tagId1, "Spring", "spring"),
                             new TagInfo(tagId2, "Java", "java")));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             ArgumentCaptor<Article> articleCaptorCreate = ArgumentCaptor.forClass(Article.class);
             @SuppressWarnings("unchecked")
@@ -2010,7 +2006,7 @@ class ArticleCommandSubServiceTest {
             Article saved = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             verify(articleEventPublisher, never()).publishTagged(any(), any());
         }
@@ -2029,7 +2025,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTagNames(List.of("Spring"));
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             ArgumentCaptor<Article> articleCaptorUpdate = ArgumentCaptor.forClass(Article.class);
             @SuppressWarnings("unchecked")
@@ -2049,7 +2045,7 @@ class ArticleCommandSubServiceTest {
 
             UpdateArticleRequest request = new UpdateArticleRequest();
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             verify(articleEventPublisher, never()).publishTagged(any(), any());
         }
@@ -2074,7 +2070,7 @@ class ArticleCommandSubServiceTest {
                     .thenReturn(new RenderResult("這是正常文字", List.of()));  // 模擬 OWASP 剝除 script 後的結果
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             org.mockito.ArgumentCaptor<Article> captor = org.mockito.ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -2093,7 +2089,7 @@ class ArticleCommandSubServiceTest {
 
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
@@ -2153,34 +2149,6 @@ class ArticleCommandSubServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("updateSeriesAssignment")
-    class OtherCrossModuleTests {
-
-        @Test
-        @DisplayName("updates series assignment when article exists")
-        void updateSeriesAssignment_articleExists_updatesAndSaves() {
-            Article article = buildArticle(ArticleStatus.DRAFT);
-            when(articleRepository.findById(1L)).thenReturn(Optional.of(article));
-
-            commandSubService.updateSeriesAssignment(1L, 10L, 2);
-
-            assertThat(article.getSeriesId()).isEqualTo(10L);
-            assertThat(article.getSeriesPosition()).isEqualTo(2);
-            verify(articleRepository).save(article);
-        }
-
-        @Test
-        @DisplayName("does nothing when article is missing")
-        void updateSeriesAssignment_articleMissing_doesNotSave() {
-            when(articleRepository.findById(1L)).thenReturn(Optional.empty());
-
-            commandSubService.updateSeriesAssignment(1L, 10L, 2);
-
-            verify(articleRepository, never()).save(any());
-        }
-    }
-
     /**
      * 檔案綁定回填測試（Task B6）
      *
@@ -2225,7 +2193,7 @@ class ArticleCommandSubServiceTest {
             saved.setContent(content);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             @SuppressWarnings("unchecked")
             ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
@@ -2248,7 +2216,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setContent(newContent);
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             @SuppressWarnings("unchecked")
             ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
@@ -2267,7 +2235,7 @@ class ArticleCommandSubServiceTest {
             saved.setContent("純文字內容，沒有任何圖片連結");
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of());
         }
@@ -2287,7 +2255,7 @@ class ArticleCommandSubServiceTest {
             saved.setContent(content);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_UUID, request);
 
             assertThat(response).isNotNull();
             verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of(validFileId));
@@ -2309,7 +2277,7 @@ class ArticleCommandSubServiceTest {
             saved.setContent(content);
             when(articleRepository.save(any(Article.class))).thenReturn(saved);
 
-            commandSubService.createArticle(AUTHOR_ID, request);
+            commandSubService.createArticle(AUTHOR_UUID, request);
 
             verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of(fileId));
         }
@@ -2330,7 +2298,7 @@ class ArticleCommandSubServiceTest {
             doThrow(new RuntimeException("file service 掛了"))
                     .when(fileFacade).bindFilesToArticle(any(), any());
 
-            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse response = commandSubService.createArticle(AUTHOR_UUID, request);
 
             assertThat(response).isNotNull();
             assertThat(response.getUuid()).isEqualTo(ARTICLE_UUID);
@@ -2349,7 +2317,7 @@ class ArticleCommandSubServiceTest {
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setTitle("更新標題但 facade 會失敗");
 
-            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            EditorArticleResponse response = commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             assertThat(response).isNotNull();
         }
@@ -2367,7 +2335,7 @@ class ArticleCommandSubServiceTest {
             request.setTitle("只改標題");
             /** content 為 null，代表不更新內文 */
 
-            commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             verify(fileFacade).bindFilesToArticle(ARTICLE_UUID, List.of(existingFileId));
         }

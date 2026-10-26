@@ -134,7 +134,7 @@ class CrossModuleReadingIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(USER_ID);
+        article.setAuthorUuid(SeededReadingUsers.uuidOf(USER_ID));
         article.setTitle("Cross IT");
         article.setSlug("cross-it-" + UUID.randomUUID());
         article.setContent("test");
@@ -263,7 +263,7 @@ class CrossModuleReadingIT {
 
         // 處理文章刪除事件 → 四張表的資料都消失
         Channel channel = Mockito.mock(Channel.class);
-        articleDeletedConsumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, USER_ID, List.of(), List.of(), Instant.now(), null, null), channel, 1L);
+        articleDeletedConsumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, List.of(), List.of(), Instant.now(), null, null), channel, 1L);
 
         assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
         assertThat(likeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();

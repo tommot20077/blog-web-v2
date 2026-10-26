@@ -158,6 +158,25 @@ public interface SeriesMapper {
     record SeriesBasicRow(Long seriesId, java.util.UUID seriesUuid, String seriesTitle) {}
 
     /**
+     * 以公開 UUID 批次取得 series 基本資訊（供 {@code SeriesFacade.batchGetSeriesBasicInfoByUuids}，M6-b）。
+     *
+     * <p>沿用 {@link SeriesBasicRow}（欄位順序 seriesId, seriesUuid, seriesTitle 不可調整，
+     * MyBatis 對 record 建構子採位置對應）。</p>
+     *
+     * @param uuids series 公開 UUID 清單（不得為空，由 caller 保證，避免 {@code IN ()} 語法錯誤）
+     * @return 每個存在的 series 的基本資訊列
+     */
+    @Select({
+        "<script>",
+        "SELECT id AS seriesId, uuid AS seriesUuid, title AS seriesTitle",
+        "  FROM series",
+        " WHERE uuid IN",
+        "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>",
+        "</script>"
+    })
+    List<SeriesBasicRow> findBasicInfoBySeriesUuids(@Param("list") List<java.util.UUID> uuids);
+
+    /**
      * 在給定的 UUID 中篩出「目前仍存在」的 series。
      *
      * <p>供孤兒校正排程判斷系列是否已被刪除。回傳型別採 {@code String}（{@code uuid::text}），

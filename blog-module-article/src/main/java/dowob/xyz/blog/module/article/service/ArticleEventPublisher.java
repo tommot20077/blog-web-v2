@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.event.ArticleUpdatedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
@@ -43,12 +44,6 @@ public class ArticleEventPublisher {
 
     private final ArticleMapper articleMapper;
 
-    /**
-     * 作者／series uuid 的批次轉換元件（與 ArticleDataAssembler 共用；內部以 ObjectProvider 延遲取得
-     * SeriesFacade，避開 SeriesFacadeImpl → ArticleFacade 的 bean 循環，本類別不得直接注入 SeriesFacade）
-     */
-    private final ArticleIdentityResolver identityResolver;
-
     // ──────────────────────────────────────────────
     // ContentChanged（SAVED / PUBLISHED / RESTORED）
     // ──────────────────────────────────────────────
@@ -64,7 +59,7 @@ public class ArticleEventPublisher {
             ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                     UUID.randomUUID(),
                     article.getUuid(),
-                    resolveAuthorUuid("ArticleContentChangedEvent", article),
+                    article.getAuthorUuid(),
                     action,
                     Instant.now());
             rabbitTemplate.convertAndSend(
@@ -93,15 +88,13 @@ public class ArticleEventPublisher {
             ArticleUpdatedEvent event = new ArticleUpdatedEvent(
                     UUID.randomUUID(),
                     article.getUuid(),
-                    article.getAuthorId(),
-                    resolveAuthorUuid("ArticleUpdatedEvent", article),
+                    article.getAuthorUuid(),
                     article.getTitle(),
                     article.getPublishedAt(),
                     article.getSlug(),
                     article.getSummary(),
                     stripMarkdown(article.getContent()),
-                    userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
-                    userFacade.getUserNicknameById(article.getAuthorId()).orElse(null),
+                    resolveAuthorNickname(article),
                     tags);
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
@@ -127,15 +120,13 @@ public class ArticleEventPublisher {
             ArticlePublishedEvent event = new ArticlePublishedEvent(
                     UUID.randomUUID(),
                     article.getUuid(),
-                    article.getAuthorId(),
-                    resolveAuthorUuid("ArticlePublishedEvent", article),
+                    article.getAuthorUuid(),
                     article.getTitle(),
                     article.getPublishedAt(),
                     article.getSlug(),
                     article.getSummary(),
                     stripMarkdown(article.getContent()),
-                    userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
-                    userFacade.getUserNicknameById(article.getAuthorId()).orElse(null),
+                    resolveAuthorNickname(article),
                     tags);
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
@@ -160,10 +151,10 @@ public class ArticleEventPublisher {
      * 同時成立而無人察覺，正是 warn 蓋不住的狀態；訊息帶 eventId 與 articleUuid，
      * 讓維運可告警並人工補送。</p>
      *
-     * @param article      文章 entity（提供 uuid / authorId）
-     * @param seriesUuid   文章所屬 series 公開 UUID（nullable；caller 必須在 delete <b>之前</b>以
-     *                     {@link #resolveSeriesUuidForDelete} 取得，本方法不再查 series——
-     *                     它是 series 模組扣計數的唯一依據，不能在刪除後才查、查失敗就發出 null）
+     * @param article      文章 entity（提供 uuid / authorUuid）
+     * @param seriesUuid   文章所屬 series 公開 UUID（nullable；caller 在 delete <b>之前</b>直接讀自文章實體的
+     *                     {@code series_uuid}，本方法不查任何東西——它是 series 模組扣計數的唯一依據，
+     *                     必須與被刪除的文章列一致）
      * @param categoryIds  文章 categories（caller 在 delete 前讀取；空 list 不可 null）
      * @param tagIds       文章 tags（caller 在 delete 前讀取；空 list 不可 null）
      */
@@ -174,11 +165,10 @@ public class ArticleEventPublisher {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
                 eventId,
                 article.getUuid(),
-                article.getAuthorId(),
                 categoryIds != null ? categoryIds : List.of(),
                 tagIds != null ? tagIds : List.of(),
                 Instant.now(),
-                resolveAuthorUuid("ArticleDeletedEvent", article),
+                article.getAuthorUuid(),
                 seriesUuid
             );
             rabbitTemplate.convertAndSend(
@@ -190,25 +180,6 @@ public class ArticleEventPublisher {
                             + "需人工補送：articleUuid={}, eventId={}, error={}",
                     article.getUuid(), eventId, e.getMessage(), e);
         }
-    }
-
-    /**
-     * 於<b>刪除文章之前</b>取得其所屬 series 的公開 UUID，供 {@link #publishDeleted} 帶入事件。
-     *
-     * <p>為什麼必須在刪除前、且失敗要往外拋：{@code ArticleDeletedEvent} 不再帶 Long {@code seriesId}，
-     * {@code seriesUuid} 成為 series 模組扣 {@code article_count} 的唯一依據。若等文章刪除之後才查、
-     * 查詢又失敗，事件就會帶著 null 發出，series 的計數永遠不會被扣。改成刪除前取得：查詢失敗時
-     * 刪除根本不動手，使用者看到錯誤可重試；成功時 uuid 一路傳給 publisher，事件發送前不再查詢。</p>
-     *
-     * @param seriesId series 主鍵；null（文章不在 series）回傳 null 且不發任何查詢
-     * @return series 公開 UUID；查無（資料異常）為 null
-     * @throws RuntimeException 查詢失敗時直接往外拋（不吞掉）
-     */
-    public UUID resolveSeriesUuidForDelete(Long seriesId) {
-        if (seriesId == null) {
-            return null;
-        }
-        return identityResolver.resolveSeriesUuids(List.of(seriesId)).get(seriesId);
     }
 
     // ──────────────────────────────────────────────
@@ -292,27 +263,22 @@ public class ArticleEventPublisher {
     // ──────────────────────────────────────────────
 
     /**
-     * 取得作者公開 UUID（事件的過渡 uuid 欄位）。
+     * 取得作者暱稱（事件的 {@code authorNickname} 欄位）。
      *
-     * <p>uuid 欄位是新增的過渡資料，現有 consumer 仍讀 Long 欄位；因此查詢失敗<b>不得</b>阻擋事件發送
-     * （尤其刪除／下架事件是移除 ES 索引的唯一觸發），失敗時記 warn 並回傳 null。</p>
+     * <p>經 {@code UserFacade.getDisplayInfoByUuids} 以作者 UUID 查詢（不依使用者狀態過濾）；
+     * 查無作者時回傳 null。查詢失敗時例外往外拋，由呼叫端的 best-effort try／catch 記錄並不發送該事件
+     * （與先前以 Long 版 facade 查詢時的行為相同）。</p>
      *
-     * @param eventType 事件類型名稱（僅供 warn 日誌，方便維運定位）
-     * @param article   事件所屬文章；作者主鍵為 null 時回傳 null
-     * @return 作者 UUID；查無或查詢失敗為 null
+     * @param article 事件所屬文章
+     * @return 作者暱稱；查無為 null
      */
-    private UUID resolveAuthorUuid(String eventType, Article article) {
-        Long authorId = article.getAuthorId();
-        if (authorId == null) {
+    private String resolveAuthorNickname(Article article) {
+        UUID authorUuid = article.getAuthorUuid();
+        if (authorUuid == null) {
             return null;
         }
-        try {
-            return identityResolver.resolveAuthorUuids(List.of(authorId)).get(authorId);
-        } catch (Exception e) {
-            log.warn("{} 的 authorUuid 查詢失敗，以 null 發送（過渡欄位）：articleUuid={}, authorId={}, error={}",
-                    eventType, article.getUuid(), authorId, e.getMessage());
-            return null;
-        }
+        UserDisplayInfo author = userFacade.getDisplayInfoByUuids(List.of(authorUuid)).get(authorUuid);
+        return author == null ? null : author.nickname();
     }
 
     /**

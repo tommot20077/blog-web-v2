@@ -72,16 +72,16 @@ public class ArticleQueryService {
     /**
      * 分頁取得當前登入用戶的文章列表（含 liked 狀態）。
      *
-     * @param authorId 作者資料庫主鍵
+     * @param authorUuid 作者公開 UUID
      * @param page     頁碼（從 1 開始）
      * @param size     每頁筆數
      * @param status   文章狀態篩選（null 表示查詢全部）
      * @return 分頁文章摘要列表（liked 已填充）
      */
     public PageResult<ArticleSummaryResponse> getMyArticles(
-            Long authorId, int page, int size, ArticleStatus status) {
+            UUID authorUuid, int page, int size, ArticleStatus status) {
         PageResult<ArticleSummaryResponse> result =
-                articleService.getMyArticles(authorId, page, size, status);
+                articleService.getMyArticles(authorUuid, page, size, status);
         enrich(result.getRecords());
         return result;
     }
@@ -118,14 +118,14 @@ public class ArticleQueryService {
      * 根據 UUID 取得文章詳情（含 liked 狀態）。
      *
      * @param articleUuid 文章公開 UUID
-     * @param viewerId    觀看者 ID（匿名為 null）
+     * @param viewerUuid    觀看者公開 UUID（匿名為 null）
      * @param viewerRole  觀看者角色（匿名為 null）
      * @param clientIp    客戶端 IP（用於防刷）
      * @return 文章完整資訊（liked 已填充）
      */
     public ArticleResponse getArticleByUuid(
-            UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
-        ArticleResponse resp = articleService.getArticleByUuid(articleUuid, viewerId, viewerRole, clientIp);
+            UUID articleUuid, UUID viewerUuid, Role viewerRole, String clientIp) {
+        ArticleResponse resp = articleService.getArticleByUuid(articleUuid, viewerUuid, viewerRole, clientIp);
         enrichSingle(resp);
         return resp;
     }
@@ -134,14 +134,14 @@ public class ArticleQueryService {
      * 根據 slug 取得文章詳情（含 liked 狀態）。
      *
      * @param slug       文章 URL slug
-     * @param viewerId   觀看者 ID（匿名為 null）
+     * @param viewerUuid   觀看者公開 UUID（匿名為 null）
      * @param viewerRole 觀看者角色（匿名為 null）
      * @param clientIp   客戶端 IP（用於防刷）
      * @return 文章完整資訊（liked 已填充）
      */
     public ArticleResponse getArticleBySlug(
-            String slug, Long viewerId, Role viewerRole, String clientIp) {
-        ArticleResponse resp = articleService.getArticleBySlug(slug, viewerId, viewerRole, clientIp);
+            String slug, UUID viewerUuid, Role viewerRole, String clientIp) {
+        ArticleResponse resp = articleService.getArticleBySlug(slug, viewerUuid, viewerRole, clientIp);
         enrichSingle(resp);
         return resp;
     }
@@ -197,7 +197,6 @@ public class ArticleQueryService {
         if (records == null || records.isEmpty()) {
             return;
         }
-        Long userId = currentUserIdOrNull();
         UUID userUuid = currentUserUuidOrNull();
 
         // 批量取得 uuid → id 對應
@@ -208,29 +207,27 @@ public class ArticleQueryService {
         Map<UUID, Long> uuidToId = idRows.stream()
                 .collect(Collectors.toMap(Article::getUuid, Article::getId));
 
-        Map<Long, Long> articleIdToSeriesId = idRows.stream()
-                .filter(a -> a.getSeriesId() != null)
-                .collect(Collectors.toMap(Article::getId, Article::getSeriesId));
+        // 文章 uuid → 所屬系列 uuid（M6-b：直接取自 articles.series_uuid，不再經 series 主鍵轉換）
+        Map<UUID, UUID> articleToSeriesUuid = idRows.stream()
+                .filter(a -> a.getSeriesUuid() != null)
+                .collect(Collectors.toMap(Article::getUuid, Article::getSeriesUuid));
 
         // 補充 seriesUuid / seriesTitle（批次查詢，避免 N+1）；caller 若自行覆寫這兩欄可傳 false 略過
-        if (includeSeriesNav && !articleIdToSeriesId.isEmpty()) {
-            Map<Long, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfo(
-                    new HashSet<>(articleIdToSeriesId.values()));
+        if (includeSeriesNav && !articleToSeriesUuid.isEmpty()) {
+            Map<UUID, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfoByUuids(
+                    new HashSet<>(articleToSeriesUuid.values()));
             records.forEach(r -> {
                 if (r.getSeriesPosition() != null) {
-                    Long id = uuidToId.get(r.getUuid());
-                    if (id != null) {
-                        SeriesBasicInfo info = seriesMap.get(articleIdToSeriesId.get(id));
-                        if (info != null) {
-                            r.setSeriesUuid(info.getSeriesUuid());
-                            r.setSeriesTitle(info.getSeriesTitle());
-                        }
+                    SeriesBasicInfo info = seriesMap.get(articleToSeriesUuid.get(r.getUuid()));
+                    if (info != null) {
+                        r.setSeriesUuid(info.getSeriesUuid());
+                        r.setSeriesTitle(info.getSeriesTitle());
                     }
                 }
             });
         }
 
-        if (userId == null) {
+        if (userUuid == null) {
             records.forEach(r -> {
                 r.setLiked(false);
                 r.setBookmarked(false);
@@ -269,9 +266,8 @@ public class ArticleQueryService {
         // 填充 series 導覽資訊（不受登入狀態影響；SeriesFacade 以 uuid 自行處理文章不存在）
         seriesFacade.getSeriesNavigation(resp.getUuid()).ifPresent(resp::setSeriesNav);
 
-        Long userId = currentUserIdOrNull();
         UUID userUuid = currentUserUuidOrNull();
-        if (userId == null) {
+        if (userUuid == null) {
             resp.setLiked(false);
             resp.setBookmarked(false);
             resp.setLastReadProgress(null);
@@ -285,22 +281,10 @@ public class ArticleQueryService {
     }
 
     /**
-     * 從 SecurityContextHolder 取得當前登入使用者 ID，未登入時回傳 null。
-     *
-     * <p>Principal 為 {@link AuthUser}（JwtAuthenticationFilter 寫入），經 {@link SecurityUtils#currentAuthUser} 取出。</p>
-     *
-     * @return 使用者 DB ID，或 null（匿名 / 未認證）
-     */
-    private Long currentUserIdOrNull() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return SecurityUtils.currentAuthUser(auth).map(AuthUser::id).orElse(null);
-    }
-
-    /**
      * 從 SecurityContextHolder 取得當前登入使用者 UUID，未登入時回傳 null。
      *
-     * <p>與 {@link #currentUserIdOrNull()} 同源（{@link AuthUser}）。按讚／收藏的查詢已改以 UUID 識別（M2-b），
-     * 閱讀進度（M2-c）亦已改為 UUID；{@link #currentUserIdOrNull()} 僅剩判斷是否登入之用。</p>
+     * <p>Principal 為 {@link AuthUser}（JwtAuthenticationFilter 寫入），經 {@link SecurityUtils#currentAuthUser} 取出。
+     * 按讚／收藏（M2-b）、閱讀進度（M2-c）與是否登入的判斷一律以 UUID 為準，本類別不再使用 Long 使用者主鍵。</p>
      *
      * @return 使用者公開 UUID，或 null（匿名 / 未認證）
      */

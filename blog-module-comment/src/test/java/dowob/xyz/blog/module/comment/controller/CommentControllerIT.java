@@ -121,7 +121,7 @@ class CommentControllerIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(SeededUsers.USER_ID);
+        article.setAuthorUuid(SeededUsers.USER_UUID);
         article.setTitle("Test Article for Comments");
         article.setSlug("test-comment-article-" + UUID.randomUUID());
         article.setContent("test");
@@ -589,7 +589,7 @@ class CommentControllerIT {
         UUID parentUuid = createCommentDirectly(USER_UUID, null);
         Article another = new Article();
         another.setUuid(UUID.randomUUID());
-        another.setAuthorId(SeededUsers.USER_ID);
+        another.setAuthorUuid(SeededUsers.USER_UUID);
         another.setTitle("another");
         another.setSlug("another-" + UUID.randomUUID());
         another.setContent("t");

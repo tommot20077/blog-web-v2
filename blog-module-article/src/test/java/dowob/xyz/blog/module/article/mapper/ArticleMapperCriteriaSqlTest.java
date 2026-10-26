@@ -86,7 +86,8 @@ class ArticleMapperCriteriaSqlTest {
                         + "WHERE t.slug IN \\(\\s*\\?\\s*,\\s*\\?\\s*\\)\\s*GROUP BY art.article_id "
                         + "HAVING COUNT\\(DISTINCT t.id\\) = \\?\\)");
         assertThat(text).containsPattern(
-                "AND a.author_id IN \\(SELECT u.id FROM users u WHERE u.uuid IN \\(\\s*\\?::uuid\\s*\\)\\s*\\)");
+                "AND a.author_uuid IN \\(\\s*\\?::uuid\\s*\\)");
+        assertThat(text).doesNotContain("users");
         assertThat(text).contains("AND a.published_at >= ?");
         assertThat(parameterValues(sql)).containsExactly(
                 "tech", "life", "java", "spring", 2, author, NOW.minusDays(30), 10, 20L);

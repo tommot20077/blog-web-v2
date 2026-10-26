@@ -54,9 +54,8 @@ class ArticleEventMirrorCompatibilityTest {
         UUID authorUuid = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
         ArticlePublishedEvent event = new ArticlePublishedEvent(
-                eventId, articleUuid, 7L, authorUuid, "標題",
-                LocalDateTime.of(2026, 10, 24, 12, 0), "slug", "摘要", "純文字",
-                "alice", "愛麗絲", List.of(new TagInfo(tagId, "Java", "java")));
+                eventId, articleUuid, authorUuid, "標題",
+                LocalDateTime.of(2026, 10, 24, 12, 0), "slug", "摘要", "純文字", "愛麗絲", List.of(new TagInfo(tagId, "Java", "java")));
 
         Object restored = roundTrip(event, "dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent",
                 ArticlePublishedMessage.class);
@@ -81,9 +80,8 @@ class ArticleEventMirrorCompatibilityTest {
         UUID authorUuid = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
         ArticleUpdatedEvent event = new ArticleUpdatedEvent(
-                eventId, articleUuid, 7L, authorUuid, "新標題",
-                LocalDateTime.of(2026, 10, 24, 12, 0), "slug", "摘要", "純文字",
-                "alice", "愛麗絲", List.of());
+                eventId, articleUuid, authorUuid, "新標題",
+                LocalDateTime.of(2026, 10, 24, 12, 0), "slug", "摘要", "純文字", "愛麗絲", List.of());
 
         Object restored = roundTrip(event, "dowob.xyz.blog.module.article.event.ArticleUpdatedEvent",
                 ArticlePublishedMessage.class);
@@ -103,7 +101,7 @@ class ArticleEventMirrorCompatibilityTest {
         Instant occurredAt = Instant.parse("2026-10-24T00:00:00Z");
         UUID eventId = UUID.randomUUID();
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-                eventId, articleUuid, 1L, List.of(), List.of(), occurredAt, UUID.randomUUID(), UUID.randomUUID());
+                eventId, articleUuid, List.of(), List.of(), occurredAt, UUID.randomUUID(), UUID.randomUUID());
 
         Object restored = roundTrip(event, "dowob.xyz.blog.module.article.event.ArticleDeletedEvent",
                 ArticleDeletedMessage.class);

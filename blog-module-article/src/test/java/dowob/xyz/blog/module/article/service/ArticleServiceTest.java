@@ -47,10 +47,10 @@ class ArticleServiceTest {
 
     private ArticleServiceImpl articleService;
 
-    private static final Long AUTHOR_ID = 1L;
-    private static final Long OTHER_USER_ID = 2L;
+    private static final UUID AUTHOR_UUID = new UUID(0L, 1L);
+    private static final UUID OTHER_USER_UUID = new UUID(0L, 2L);
     private static final Long ARTICLE_ID = 11L;
-    private static final Long SERIES_ID = 99L;
+    private static final UUID SERIES_UUID = UUID.randomUUID();
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
     private static final String CLIENT_IP = "127.0.0.1";
 
@@ -78,14 +78,14 @@ class ArticleServiceTest {
                     .uuid(ARTICLE_UUID)
                     .status(ArticleStatus.PUBLISHED)
                     .build();
-            when(querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR)).thenReturn(expected);
+            when(querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR)).thenReturn(expected);
 
             ArticleResponse actual =
-                    articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR, CLIENT_IP);
+                    articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR, CLIENT_IP);
 
             assertThat(actual).isSameAs(expected);
             InOrder inOrder = inOrder(querySubService, articleViewSubService);
-            inOrder.verify(querySubService).getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR);
+            inOrder.verify(querySubService).getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR);
             inOrder.verify(articleViewSubService).recordView(ARTICLE_UUID, ArticleStatus.PUBLISHED, CLIENT_IP);
         }
 
@@ -93,10 +93,10 @@ class ArticleServiceTest {
         @DisplayName("getArticleByUuid does not record view when query throws")
         void getArticleByUuid_queryThrows_doesNotRecordView() {
             BusinessException error = new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
-            when(querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR)).thenThrow(error);
+            when(querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR)).thenThrow(error);
 
             assertThatThrownBy(
-                    () -> articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR, CLIENT_IP))
+                    () -> articleService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR, CLIENT_IP))
                     .isSameAs(error);
             verifyNoInteractions(articleViewSubService);
         }
@@ -139,12 +139,12 @@ class ArticleServiceTest {
         @DisplayName("getArticleForEdit delegates to querySubService")
         void getArticleForEdit_delegatesToQuerySubService() {
             EditorArticleResponse expected = EditorArticleResponse.builder().uuid(ARTICLE_UUID).build();
-            when(querySubService.getArticleForEdit(ARTICLE_UUID, AUTHOR_ID)).thenReturn(expected);
+            when(querySubService.getArticleForEdit(ARTICLE_UUID, AUTHOR_UUID)).thenReturn(expected);
 
-            EditorArticleResponse actual = articleService.getArticleForEdit(ARTICLE_UUID, AUTHOR_ID);
+            EditorArticleResponse actual = articleService.getArticleForEdit(ARTICLE_UUID, AUTHOR_UUID);
 
             assertThat(actual).isSameAs(expected);
-            verify(querySubService).getArticleForEdit(ARTICLE_UUID, AUTHOR_ID);
+            verify(querySubService).getArticleForEdit(ARTICLE_UUID, AUTHOR_UUID);
         }
 
         @Test
@@ -164,13 +164,13 @@ class ArticleServiceTest {
         @DisplayName("getMyArticles delegates to querySubService")
         void getMyArticles_delegatesToQuerySubService() {
             PageResult<ArticleSummaryResponse> expected = PageResult.of(1, 10, 0L, List.of());
-            when(querySubService.getMyArticles(AUTHOR_ID, 1, 10, ArticleStatus.DRAFT)).thenReturn(expected);
+            when(querySubService.getMyArticles(AUTHOR_UUID, 1, 10, ArticleStatus.DRAFT)).thenReturn(expected);
 
             PageResult<ArticleSummaryResponse> actual =
-                    articleService.getMyArticles(AUTHOR_ID, 1, 10, ArticleStatus.DRAFT);
+                    articleService.getMyArticles(AUTHOR_UUID, 1, 10, ArticleStatus.DRAFT);
 
             assertThat(actual).isSameAs(expected);
-            verify(querySubService).getMyArticles(AUTHOR_ID, 1, 10, ArticleStatus.DRAFT);
+            verify(querySubService).getMyArticles(AUTHOR_UUID, 1, 10, ArticleStatus.DRAFT);
         }
 
         @Test
@@ -233,15 +233,15 @@ class ArticleServiceTest {
         }
 
         @Test
-        @DisplayName("findBySeriesIdOrderByPosition delegates to querySubService")
-        void findBySeriesIdOrderByPosition_delegatesToQuerySubService() {
+        @DisplayName("findBySeriesUuidOrderByPosition delegates to querySubService")
+        void findBySeriesUuidOrderByPosition_delegatesToQuerySubService() {
             Article article = buildArticle();
-            when(querySubService.findBySeriesIdOrderByPosition(SERIES_ID)).thenReturn(List.of(article));
+            when(querySubService.findBySeriesUuidOrderByPosition(SERIES_UUID)).thenReturn(List.of(article));
 
-            List<Article> actual = articleService.findBySeriesIdOrderByPosition(SERIES_ID);
+            List<Article> actual = articleService.findBySeriesUuidOrderByPosition(SERIES_UUID);
 
             assertThat(actual).containsExactly(article);
-            verify(querySubService).findBySeriesIdOrderByPosition(SERIES_ID);
+            verify(querySubService).findBySeriesUuidOrderByPosition(SERIES_UUID);
         }
 
         @Test
@@ -266,12 +266,12 @@ class ArticleServiceTest {
         void createArticle_delegatesToCommandSubService() {
             CreateArticleRequest request = new CreateArticleRequest();
             EditorArticleResponse expected = EditorArticleResponse.builder().uuid(ARTICLE_UUID).build();
-            when(commandSubService.createArticle(AUTHOR_ID, request)).thenReturn(expected);
+            when(commandSubService.createArticle(AUTHOR_UUID, request)).thenReturn(expected);
 
-            EditorArticleResponse actual = articleService.createArticle(AUTHOR_ID, request);
+            EditorArticleResponse actual = articleService.createArticle(AUTHOR_UUID, request);
 
             assertThat(actual).isSameAs(expected);
-            verify(commandSubService).createArticle(AUTHOR_ID, request);
+            verify(commandSubService).createArticle(AUTHOR_UUID, request);
         }
 
         @Test
@@ -279,68 +279,68 @@ class ArticleServiceTest {
         void updateArticle_delegatesToCommandSubService() {
             UpdateArticleRequest request = new UpdateArticleRequest();
             EditorArticleResponse expected = EditorArticleResponse.builder().uuid(ARTICLE_UUID).build();
-            when(commandSubService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request)).thenReturn(expected);
+            when(commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request)).thenReturn(expected);
 
-            EditorArticleResponse actual = articleService.updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            EditorArticleResponse actual = articleService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
 
             assertThat(actual).isSameAs(expected);
-            verify(commandSubService).updateArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID, request);
+            verify(commandSubService).updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
         }
 
         @Test
         @DisplayName("deleteArticle delegates to commandSubService")
         void deleteArticle_delegatesToCommandSubService() {
-            articleService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            articleService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
-            verify(commandSubService).deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            verify(commandSubService).deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
         }
 
         @Test
         @DisplayName("publishArticle delegates to commandSubService")
         void publishArticle_delegatesToCommandSubService() {
             ArticleResponse expected = ArticleResponse.builder().uuid(ARTICLE_UUID).build();
-            when(commandSubService.publishArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID)).thenReturn(expected);
+            when(commandSubService.publishArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID)).thenReturn(expected);
 
-            ArticleResponse actual = articleService.publishArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            ArticleResponse actual = articleService.publishArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
 
             assertThat(actual).isSameAs(expected);
-            verify(commandSubService).publishArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID);
+            verify(commandSubService).publishArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
         }
 
         @Test
         @DisplayName("rejectArticle delegates to commandSubService")
         void rejectArticle_delegatesToCommandSubService() {
             ArticleResponse expected = ArticleResponse.builder().uuid(ARTICLE_UUID).build();
-            when(commandSubService.rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "reason")).thenReturn(expected);
+            when(commandSubService.rejectArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, "reason")).thenReturn(expected);
 
-            ArticleResponse actual = articleService.rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "reason");
+            ArticleResponse actual = articleService.rejectArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, "reason");
 
             assertThat(actual).isSameAs(expected);
-            verify(commandSubService).rejectArticle(AUTHOR_ID, Role.ADMIN, ARTICLE_UUID, "reason");
+            verify(commandSubService).rejectArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, "reason");
         }
 
         @Test
         @DisplayName("submitForReview delegates to commandSubService")
         void submitForReview_delegatesToCommandSubService() {
             ArticleResponse expected = ArticleResponse.builder().uuid(ARTICLE_UUID).build();
-            when(commandSubService.submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID)).thenReturn(expected);
+            when(commandSubService.submitForReview(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID)).thenReturn(expected);
 
-            ArticleResponse actual = articleService.submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse actual = articleService.submitForReview(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(actual).isSameAs(expected);
-            verify(commandSubService).submitForReview(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            verify(commandSubService).submitForReview(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
         }
 
         @Test
         @DisplayName("withdrawArticle delegates to commandSubService")
         void withdrawArticle_delegatesToCommandSubService() {
             ArticleResponse expected = ArticleResponse.builder().uuid(ARTICLE_UUID).build();
-            when(commandSubService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID)).thenReturn(expected);
+            when(commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID)).thenReturn(expected);
 
-            ArticleResponse actual = articleService.withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            ArticleResponse actual = articleService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             assertThat(actual).isSameAs(expected);
-            verify(commandSubService).withdrawArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
+            verify(commandSubService).withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
         }
 
         @Test
@@ -373,14 +373,6 @@ class ArticleServiceTest {
             articleService.decrementLikeCount(ARTICLE_ID);
 
             verify(commandSubService).decrementLikeCount(ARTICLE_ID);
-        }
-
-        @Test
-        @DisplayName("updateSeriesAssignment delegates to commandSubService")
-        void updateSeriesAssignment_delegatesToCommandSubService() {
-            articleService.updateSeriesAssignment(ARTICLE_ID, SERIES_ID, 2);
-
-            verify(commandSubService).updateSeriesAssignment(ARTICLE_ID, SERIES_ID, 2);
         }
     }
 }

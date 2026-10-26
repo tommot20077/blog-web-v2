@@ -98,7 +98,7 @@ class CommentLikeControllerIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(SeededUsers.USER_ID);
+        article.setAuthorUuid(SeededUsers.USER_UUID);
         article.setTitle("Test Article");
         article.setSlug("test-clike-" + UUID.randomUUID());
         article.setContent("test");

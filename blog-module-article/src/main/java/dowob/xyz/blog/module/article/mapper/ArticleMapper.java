@@ -47,8 +47,7 @@ public interface ArticleMapper {
      *   <li>標籤（AND）：{@code HAVING COUNT(DISTINCT t.id) = tagCount}，文章須帶有全部被選標籤；
      *       任一 slug 不存在即無結果，符合 AND 語意。屬跨批聚合，故參數數量不切批，
      *       而由 {@code PublishedArticleCriteria#of} 以 {@code ArticleListQuery.MAX_VALUES_PER_FILTER} 為上限、超過即拒絕。</li>
-     *   <li>作者（OR）：以 {@code users.uuid} 反查主鍵；{@code users} 為 reference data，
-     *       依 {@code architecture.md} 可直接讀取。</li>
+     *   <li>作者（OR）：直接比對 {@code articles.author_uuid}（M6-a 起作者以 UUID 儲存，不再反查 users）。</li>
      *   <li>日期：{@code published_at >= publishedAfter}，時間點由呼叫端以 JVM 時區換算
      *       （見 {@link PublishedArticleCriteria}）。</li>
      * </ul>
@@ -70,9 +69,9 @@ public interface ArticleMapper {
             "GROUP BY art.article_id HAVING COUNT(DISTINCT t.id) = #{criteria.tagCount}) " +
             "</if>" +
             "<if test='criteria.authorUuids.size() > 0'>" +
-            "AND a.author_id IN (SELECT u.id FROM users u WHERE u.uuid IN " +
+            "AND a.author_uuid IN " +
             "<foreach collection='criteria.authorUuids' item='authorUuid' open='(' separator=',' close=')'>#{authorUuid}::uuid</foreach>" +
-            ") " +
+            " " +
             "</if>" +
             "<if test='criteria.publishedAfter != null'>" +
             "AND a.published_at >= #{criteria.publishedAfter} " +
@@ -122,53 +121,53 @@ public interface ArticleMapper {
     long countPublishedByCriteria(@Param("criteria") PublishedArticleCriteria criteria);
 
     /**
-     * 根據作者 ID 與狀態篩選文章
+     * 根據作者公開 UUID 與狀態篩選文章
      *
-     * @param authorId 作者資料庫主鍵
-     * @param status   文章狀態
-     * @param offset   偏移量
-     * @param size     每頁筆數
+     * @param authorUuid 作者公開 UUID
+     * @param status     文章狀態
+     * @param offset     偏移量
+     * @param size       每頁筆數
      * @return 文章列表
      */
-    @Select("SELECT * FROM articles WHERE author_id = #{authorId} AND status = #{status} ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
-    List<Article> findByAuthorIdAndStatus(
-            @Param("authorId") Long authorId,
+    @Select("SELECT * FROM articles WHERE author_uuid = #{authorUuid}::uuid AND status = #{status} ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
+    List<Article> findByAuthorUuidAndStatus(
+            @Param("authorUuid") UUID authorUuid,
             @Param("status") ArticleStatus status,
             @Param("offset") long offset,
             @Param("size") int size);
 
     /**
-     * 根據作者 ID 分頁查詢（不篩選狀態）
+     * 根據作者公開 UUID 分頁查詢（不篩選狀態）
      *
-     * @param authorId 作者資料庫主鍵
-     * @param offset   偏移量
-     * @param size     每頁筆數
+     * @param authorUuid 作者公開 UUID
+     * @param offset     偏移量
+     * @param size       每頁筆數
      * @return 文章列表
      */
-    @Select("SELECT * FROM articles WHERE author_id = #{authorId} ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
-    List<Article> findByAuthorIdPaged(
-            @Param("authorId") Long authorId,
+    @Select("SELECT * FROM articles WHERE author_uuid = #{authorUuid}::uuid ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
+    List<Article> findByAuthorUuidPaged(
+            @Param("authorUuid") UUID authorUuid,
             @Param("offset") long offset,
             @Param("size") int size);
 
     /**
      * 計算作者的文章總筆數
      *
-     * @param authorId 作者資料庫主鍵
+     * @param authorUuid 作者公開 UUID
      * @return 總筆數
      */
-    @Select("SELECT COUNT(*) FROM articles WHERE author_id = #{authorId}")
-    long countByAuthorId(@Param("authorId") Long authorId);
+    @Select("SELECT COUNT(*) FROM articles WHERE author_uuid = #{authorUuid}::uuid")
+    long countByAuthorUuid(@Param("authorUuid") UUID authorUuid);
 
     /**
      * 計算作者在特定狀態下的文章總筆數
      *
-     * @param authorId 作者資料庫主鍵
-     * @param status   文章狀態
+     * @param authorUuid 作者公開 UUID
+     * @param status     文章狀態
      * @return 總筆數
      */
-    @Select("SELECT COUNT(*) FROM articles WHERE author_id = #{authorId} AND status = #{status}")
-    long countByAuthorIdAndStatus(@Param("authorId") Long authorId, @Param("status") ArticleStatus status);
+    @Select("SELECT COUNT(*) FROM articles WHERE author_uuid = #{authorUuid}::uuid AND status = #{status}")
+    long countByAuthorUuidAndStatus(@Param("authorUuid") UUID authorUuid, @Param("status") ArticleStatus status);
 
     /**
      * 分頁查詢待審文章（按提交時間升冪，供管理員審核）
@@ -316,50 +315,54 @@ public interface ArticleMapper {
     Long findIdByUuid(@Param("uuid") UUID uuid);
 
     /**
-     * 查詢指定 Series 內的所有文章，按 series_position 升冪排序。
+     * 查詢指定 Series 內的所有文章（不限狀態），按 series_position 升冪排序。
      *
-     * @param seriesId Series 資料庫主鍵
-     * @return 按 series_position 排序的文章列表
+     * <p>以 {@code articles.series_uuid} 直接查詢（M6-b；V32 起舊的 Long 系列欄位已移除）。
+     * 走 partial index {@code idx_articles_series_position (series_uuid, series_position)}。</p>
+     *
+     * @param seriesUuid Series 公開 UUID
+     * @return 按 series_position 排序的文章列表；系列沒有成員（含系列不存在）時為空
      */
-    @Select("SELECT * FROM articles WHERE series_id = #{seriesId} ORDER BY series_position")
-    List<Article> findBySeriesIdOrderByPosition(@Param("seriesId") Long seriesId);
+    @Select("SELECT * FROM articles WHERE series_uuid = #{seriesUuid}::uuid ORDER BY series_position")
+    List<Article> findBySeriesUuidOrderByPosition(@Param("seriesUuid") UUID seriesUuid);
 
     /**
-     * 條件式加入 series：僅當文章目前不屬於任何 series（{@code series_id IS NULL}）時才寫入。
+     * 條件式加入 series：僅當文章目前不屬於任何 series（{@code series_uuid IS NULL}）時才寫入。
      *
      * <p>把「是否為新成員」的判斷放進寫入本身（RACE-14）：同一時間只有一個交易能把 NULL 改為非 NULL，
      * 另一個交易（READ COMMITTED 下等鎖、重評 WHERE）得到 affected = 0。
      * 比照實體 save 的效果遞增樂觀鎖 {@code version} 並更新 {@code updated_at}；
-     * 時間由 Java 傳入（與 {@code @LastModifiedDate} 同一個時鐘來源，不用資料庫的 CURRENT_TIMESTAMP）。</p>
+     * 時間由 Java 傳入（與 {@code @LastModifiedDate} 同一個時鐘來源，不用資料庫的 CURRENT_TIMESTAMP）。
+     * 不檢查系列是否存在（V32 起沒有 FK，系列存在性由呼叫端 series 模組負責）。</p>
      *
-     * @param uuid     文章公開 UUID
-     * @param seriesId 要加入的 series 主鍵
-     * @param position 在 series 內的位置
-     * @param now      寫入的 updated_at（JVM 時間）
+     * @param uuid       文章公開 UUID
+     * @param seriesUuid 要加入的 series 公開 UUID
+     * @param position   在 series 內的位置
+     * @param now        寫入的 updated_at（JVM 時間）
      * @return 受影響列數：1 表示指派成功，0 表示文章不存在或已屬於某個 series
      */
-    @Update("UPDATE articles SET series_id = #{seriesId}, series_position = #{position}, "
+    @Update("UPDATE articles SET series_uuid = #{seriesUuid}::uuid, series_position = #{position}, "
             + "version = version + 1, updated_at = #{now} "
-            + "WHERE uuid = #{uuid}::uuid AND series_id IS NULL")
+            + "WHERE uuid = #{uuid}::uuid AND series_uuid IS NULL")
     int assignToSeriesIfUnassigned(@Param("uuid") UUID uuid,
-                                   @Param("seriesId") Long seriesId,
+                                   @Param("seriesUuid") UUID seriesUuid,
                                    @Param("position") Integer position,
                                    @Param("now") LocalDateTime now);
 
     /**
-     * 條件式移出 series：僅當文章目前屬於指定的 series（{@code series_id = #{seriesId}}）時才清空。
+     * 條件式移出 series：僅當文章目前屬於指定的 series（{@code series_uuid = #{seriesUuid}}）時才清空。
      *
      * <p>與 {@link #assignToSeriesIfUnassigned} 對稱；affected = 1 才代表這次呼叫真的移出了文章。</p>
      *
-     * @param uuid     文章公開 UUID
-     * @param seriesId 文章應屬於的 series 主鍵
-     * @param now      寫入的 updated_at（JVM 時間）
+     * @param uuid       文章公開 UUID
+     * @param seriesUuid 文章應屬於的 series 公開 UUID
+     * @param now        寫入的 updated_at（JVM 時間）
      * @return 受影響列數：1 表示移出成功，0 表示文章不存在或不屬於該 series
      */
-    @Update("UPDATE articles SET series_id = NULL, series_position = NULL, "
+    @Update("UPDATE articles SET series_uuid = NULL, series_position = NULL, "
             + "version = version + 1, updated_at = #{now} "
-            + "WHERE uuid = #{uuid}::uuid AND series_id = #{seriesId}")
-    int removeFromSeriesIfAssigned(@Param("uuid") UUID uuid, @Param("seriesId") Long seriesId,
+            + "WHERE uuid = #{uuid}::uuid AND series_uuid = #{seriesUuid}::uuid")
+    int removeFromSeriesIfAssigned(@Param("uuid") UUID uuid, @Param("seriesUuid") UUID seriesUuid,
                                    @Param("now") LocalDateTime now);
 
     /**
@@ -370,15 +373,15 @@ public interface ArticleMapper {
      * {@code series_position}，WHERE 條件保證「文章仍屬於該 series」與寫入在同一個原子步驟內判定；
      * 同樣遞增 {@code version} 並更新 {@code updated_at}。</p>
      *
-     * @param uuid     文章公開 UUID
-     * @param seriesId 文章應屬於的 series 主鍵
-     * @param position 新的位置
-     * @param now      寫入的 updated_at（JVM 時間）
+     * @param uuid       文章公開 UUID
+     * @param seriesUuid 文章應屬於的 series 公開 UUID
+     * @param position   新的位置
+     * @param now        寫入的 updated_at（JVM 時間）
      * @return 受影響列數：1 表示位置已更新，0 表示文章不存在或目前不屬於該 series（已被移出或移到別處）
      */
     @Update("UPDATE articles SET series_position = #{position}, version = version + 1, updated_at = #{now} "
-            + "WHERE uuid = #{uuid}::uuid AND series_id = #{seriesId}")
-    int updateSeriesPositionIfAssigned(@Param("uuid") UUID uuid, @Param("seriesId") Long seriesId,
+            + "WHERE uuid = #{uuid}::uuid AND series_uuid = #{seriesUuid}::uuid")
+    int updateSeriesPositionIfAssigned(@Param("uuid") UUID uuid, @Param("seriesUuid") UUID seriesUuid,
                                        @Param("position") Integer position, @Param("now") LocalDateTime now);
 
     /**
@@ -389,24 +392,24 @@ public interface ArticleMapper {
      * 故 count = 0 者不出現在結果中，caller 可直接以 key 集合當作過濾條件。</p>
      *
      * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
-     * SELECT 欄位順序（seriesId, publishedCount）必須與 {@link SeriesPublishedCountRow} 的元件順序一致，不可調整。</p>
+     * SELECT 欄位順序（seriesUuid, publishedCount）必須與 {@link SeriesPublishedCountRow} 的元件順序一致，不可調整。</p>
      *
-     * @param seriesIds series 主鍵集合（不得為空，由 caller 保證）
+     * @param seriesUuids series 公開 UUID 集合（不得為空，由 caller 保證）
      * @return 每個有公開文章的 series 及其計數
      */
     @Select({
         "<script>",
-        "SELECT series_id AS seriesId, COUNT(*) AS publishedCount",
+        "SELECT series_uuid AS seriesUuid, COUNT(*) AS publishedCount",
         "  FROM articles",
         " WHERE status = 'PUBLISHED'",
-        "   AND series_id IN",
-        "<foreach collection='seriesIds' item='id' open='(' separator=',' close=')'>",
-        "  #{id}",
+        "   AND series_uuid IN",
+        "<foreach collection='seriesUuids' item='uuid' open='(' separator=',' close=')'>",
+        "  #{uuid}::uuid",
         "</foreach>",
-        " GROUP BY series_id",
+        " GROUP BY series_uuid",
         "</script>"
     })
-    List<SeriesPublishedCountRow> countPublishedBySeriesIds(@Param("seriesIds") Collection<Long> seriesIds);
+    List<SeriesPublishedCountRow> countPublishedBySeriesUuids(@Param("seriesUuids") Collection<UUID> seriesUuids);
 
     /**
      * series 內 PUBLISHED 且 position 小於 current 的最後一筆（prev 導覽）。
@@ -414,20 +417,20 @@ public interface ArticleMapper {
      * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
      * SELECT 欄位順序（uuid, title, slug）必須與 {@link ArticleNavRef} 的元件順序一致，不可調整。</p>
      *
-     * @param seriesId        series 主鍵
+     * @param seriesUuid      series 公開 UUID
      * @param currentPosition 當前文章在 series 內的位置
      * @return 前一篇，若當前為第一篇則回傳 null
      */
     @Select("""
             SELECT uuid, title, slug
               FROM articles
-             WHERE series_id = #{seriesId}
+             WHERE series_uuid = #{seriesUuid}::uuid
                AND status = 'PUBLISHED'
                AND series_position < #{currentPosition}
              ORDER BY series_position DESC
              LIMIT 1
             """)
-    ArticleNavRef findPrevPublishedInSeries(@Param("seriesId") Long seriesId,
+    ArticleNavRef findPrevPublishedInSeries(@Param("seriesUuid") UUID seriesUuid,
                                             @Param("currentPosition") Integer currentPosition);
 
     /**
@@ -436,65 +439,38 @@ public interface ArticleMapper {
      * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
      * SELECT 欄位順序（uuid, title, slug）必須與 {@link ArticleNavRef} 的元件順序一致，不可調整。</p>
      *
-     * @param seriesId        series 主鍵
+     * @param seriesUuid      series 公開 UUID
      * @param currentPosition 當前文章在 series 內的位置
      * @return 後一篇，若當前為最後一篇則回傳 null
      */
     @Select("""
             SELECT uuid, title, slug
               FROM articles
-             WHERE series_id = #{seriesId}
+             WHERE series_uuid = #{seriesUuid}::uuid
                AND status = 'PUBLISHED'
                AND series_position > #{currentPosition}
              ORDER BY series_position ASC
              LIMIT 1
             """)
-    ArticleNavRef findNextPublishedInSeries(@Param("seriesId") Long seriesId,
+    ArticleNavRef findNextPublishedInSeries(@Param("seriesUuid") UUID seriesUuid,
                                             @Param("currentPosition") Integer currentPosition);
 
     /**
-     * 集合述詞：取回一批文章的可見性判斷所需欄位。
-     *
-     * <p>只投影 id / status / author_id 三欄，刻意不用 {@code SELECT *}
-     * （避免把 content / content_html 等 TEXT 欄位拉進記憶體）。
-     * 政策判斷本身在 {@code ArticleFacadeImpl} 委派 {@code ArticleVisibility}，
-     * <b>不在 SQL 內重寫</b>——可見性政策必須維持單一真相。</p>
+     * {@link #countPublishedBySeriesUuids} 的投影列。
      *
      * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
-     * SELECT 欄位順序（id, status, authorId）必須與 {@link ArticleVisibilityRow} 的元件順序一致，不可調整。</p>
+     * SELECT 欄位順序（seriesUuid, publishedCount）必須與此 record 的元件順序一致，不可調整。</p>
      *
-     * @param articleIds 文章主鍵集合（不得為空，由 caller 保證）
-     * @return 可見性判斷所需的欄位列
-     */
-    @Select({
-        "<script>",
-        "SELECT id, status, author_id AS authorId",
-        "  FROM articles",
-        " WHERE id IN",
-        "<foreach collection='articleIds' item='id' open='(' separator=',' close=')'>",
-        "  #{id}",
-        "</foreach>",
-        "</script>"
-    })
-    List<ArticleVisibilityRow> findVisibilityRowsByIds(@Param("articleIds") Collection<Long> articleIds);
-
-    /**
-     * {@link #countPublishedBySeriesIds} 的投影列。
-     *
-     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
-     * SELECT 欄位順序（seriesId, publishedCount）必須與此 record 的元件順序一致，不可調整。</p>
-     *
-     * @param seriesId       series 主鍵
+     * @param seriesUuid     series 公開 UUID
      * @param publishedCount 該 series 的 PUBLISHED 文章數
      */
-    record SeriesPublishedCountRow(Long seriesId, Integer publishedCount) {}
+    record SeriesPublishedCountRow(UUID seriesUuid, Integer publishedCount) {}
 
     /**
      * 集合述詞（UUID 版）：取回一批文章的可見性判斷所需欄位。
      *
-     * <p>只投影 uuid / status / 作者 uuid 三欄（不拉 TEXT 內容欄位）。作者 uuid 以 {@code LEFT JOIN users}
-     * 取得——article 內部的 {@code users} 仍是 reference data（M6 才改為 {@code author_uuid} 欄位）；
-     * 用 LEFT JOIN 是為了作者資料缺失的文章仍會出現在結果中（公開者照常可見）。
+     * <p>只投影 uuid / status / 作者 uuid 三欄（不拉 TEXT 內容欄位）。作者 uuid 直接取自
+     * {@code articles.author_uuid}（M6-a 起不再關聯 users 表）。
      * 政策判斷在 {@code ArticleFacadeImpl} 委派 {@code ArticleVisibility}，<b>不在 SQL 內重寫</b>。</p>
      *
      * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
@@ -505,9 +481,8 @@ public interface ArticleMapper {
      */
     @Select({
         "<script>",
-        "SELECT a.uuid AS uuid, a.status AS status, u.uuid AS authorUuid",
+        "SELECT a.uuid AS uuid, a.status AS status, a.author_uuid AS authorUuid",
         "  FROM articles a",
-        "  LEFT JOIN users u ON u.id = a.author_id",
         " WHERE a.uuid IN",
         "<foreach collection='articleUuids' item='articleUuid' open='(' separator=',' close=')'>",
         "  #{articleUuid}::uuid",
@@ -542,18 +517,6 @@ public interface ArticleMapper {
      * @param authorUuid 作者公開 UUID
      */
     record ArticleUuidVisibilityRow(UUID uuid, String status, UUID authorUuid) {}
-
-    /**
-     * {@link #findVisibilityRowsByIds} 的投影列。
-     *
-     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
-     * SELECT 欄位順序（id, status, authorId）必須與此 record 的元件順序一致，不可調整。</p>
-     *
-     * @param id       文章主鍵
-     * @param status   文章狀態名稱
-     * @param authorId 作者主鍵
-     */
-    record ArticleVisibilityRow(Long id, String status, Long authorId) {}
 
     /**
      * 撈文章對應的 tag UUID 列表（給 ArticleDeletedEvent rich payload 用）。
@@ -598,15 +561,15 @@ public interface ArticleMapper {
      * </p>
      *
      * @param uuids 文章公開 UUID 列表
-     * @return uuid → id/seriesId 對應結果
+     * @return uuid → id/seriesUuid 對應結果
      */
     @Results(id = "uuidToIdMap", value = {
             @Result(property = "id", column = "id"),
             @Result(property = "uuid", column = "uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class),
-            @Result(property = "seriesId", column = "series_id")
+            @Result(property = "seriesUuid", column = "series_uuid", javaType = UUID.class, typeHandler = UUIDTypeHandler.class)
     })
     @Select("<script>" +
-            "SELECT id, uuid, series_id FROM articles " +
+            "SELECT id, uuid, series_uuid FROM articles " +
             "WHERE uuid IN " +
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")
@@ -677,40 +640,4 @@ public interface ArticleMapper {
      */
     @Update("UPDATE articles SET comment_count = comment_count - 1 WHERE uuid = #{uuid}::uuid AND comment_count > 0")
     int decrementCommentCountByUuid(@Param("uuid") UUID uuid);
-
-    /**
-     * 批次查詢使用者主鍵對應的公開 UUID（供 {@code ArticleDataAssembler} 填 {@code authorUuid}，設計 §3.1 過渡 API）。
-     *
-     * <p>{@code users} 為 reference data，依 {@code architecture.md} 可直接讀取。
-     * 軟刪除的使用者仍有 uuid，故不加狀態過濾（與 {@code articles.author_id} 的 JOIN 語意一致）。
-     * M6 把 {@code articles.author_id} 改為 {@code author_uuid} 欄位後，本查詢即可移除。</p>
-     *
-     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
-     * SELECT 欄位順序（userId, userUuid）必須與 {@link UserUuidRow} 的元件順序一致，不可調整。</p>
-     *
-     * @param userIds 使用者主鍵集合（不得為空，由 caller 保證）
-     * @return 每個存在的使用者的主鍵與 UUID
-     */
-    @Select({
-        "<script>",
-        "SELECT id AS userId, uuid AS userUuid",
-        "  FROM users",
-        " WHERE id IN",
-        "<foreach collection='userIds' item='id' open='(' separator=',' close=')'>",
-        "  #{id}",
-        "</foreach>",
-        "</script>"
-    })
-    List<UserUuidRow> findUserUuidsByIds(@Param("userIds") Collection<Long> userIds);
-
-    /**
-     * {@link #findUserUuidsByIds} 的投影列。
-     *
-     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
-     * SELECT 欄位順序（userId, userUuid）必須與此 record 的元件順序一致，不可調整。</p>
-     *
-     * @param userId   使用者主鍵
-     * @param userUuid 使用者公開 UUID
-     */
-    record UserUuidRow(Long userId, UUID userUuid) {}
 }

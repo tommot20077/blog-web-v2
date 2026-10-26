@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
@@ -60,6 +61,7 @@ class ArticleResponseMapper {
                                Boolean bookmarked,
                                BigDecimal lastReadProgress,
                                SeriesNavigation seriesNav) {
+        AuthorInfo author = resolveAuthor(article.getAuthorUuid());
         return ArticleResponse.builder()
                 .uuid(article.getUuid())
                 .title(article.getTitle())
@@ -67,8 +69,8 @@ class ArticleResponseMapper {
                 .contentHtml(article.getContentHtml())
                 .summary(article.getSummary())
                 .coverImageUrl(article.getCoverImageUrl())
-                .authorUuid(resolveAuthorUuid(article.getAuthorId()))
-                .authorNickname(resolveAuthorNickname(article.getAuthorId()))
+                .authorUuid(author == null ? null : author.uuid())
+                .authorNickname(author == null ? null : author.nickname())
                 .status(article.getStatus())
                 .viewCount(viewCountService.getViewCount(article.getUuid()))
                 .createdAt(article.getCreatedAt())
@@ -116,17 +118,17 @@ class ArticleResponseMapper {
      *
      * <p>作者<b>必須</b>由呼叫端先以 {@link #batchToAuthorInfoMap} 整頁解析一次再傳入；
      * 本方法刻意不接受「自己去查作者」的用法——原本逐筆各查 uuid 與 nickname，
-     * 一頁 N 篇即 2N 條 {@code SELECT * FROM users}（PERF-02）。</p>
+     * 一頁 N 篇即 2N 條逐筆使用者查詢（PERF-02）。</p>
      *
      * @param article   文章實體
      * @param tagMap    文章 UUID → 標籤列表（整頁批次查詢結果）
-     * @param authorMap 作者主鍵 → 作者投影（整頁批次查詢結果）
+     * @param authorMap 作者公開 UUID → 作者投影（整頁批次查詢結果）
      * @return 文章摘要
      */
     ArticleSummaryResponse toSummaryResponse(Article article,
                                              Map<UUID, List<TagSummaryResponse>> tagMap,
-                                             Map<Long, AuthorInfo> authorMap) {
-        AuthorInfo author = article.getAuthorId() == null ? null : authorMap.get(article.getAuthorId());
+                                             Map<UUID, AuthorInfo> authorMap) {
+        AuthorInfo author = article.getAuthorUuid() == null ? null : authorMap.get(article.getAuthorUuid());
         return toSummaryResponse(article, tagMap.getOrDefault(article.getUuid(), List.of()), author);
     }
 
@@ -183,13 +185,20 @@ class ArticleResponseMapper {
     /**
      * 整頁批次解析作者投影。
      *
-     * <p>去重與切批由 owner 模組（{@code UserFacade} 實作）負責，本方法只負責委派。</p>
+     * <p>以 {@code UserFacade.getDisplayInfoByUuids} 一次查詢整頁作者（去重與切批由 owner 模組實作負責；
+     * 不依使用者狀態過濾，停權或軟刪除的作者仍顯示其暱稱），取代原本對 users 表的 JOIN。</p>
      *
-     * @param authorIds 作者主鍵集合（可含重複）
-     * @return 作者主鍵 → 作者投影；查無者不在結果中
+     * @param authorUuids 作者公開 UUID 集合（可含重複與 null）；null 或空集合不發查詢
+     * @return 作者公開 UUID → 作者投影；查無者不在結果中
      */
-    Map<Long, AuthorInfo> batchToAuthorInfoMap(Collection<Long> authorIds) {
-        return userFacade.getAuthorInfoByIds(authorIds);
+    Map<UUID, AuthorInfo> batchToAuthorInfoMap(Collection<UUID> authorUuids) {
+        if (authorUuids == null || authorUuids.isEmpty()) {
+            return Map.of();
+        }
+        return userFacade.getDisplayInfoByUuids(authorUuids).entrySet().stream()
+                .collect(Collectors.toMap(
+                        Map.Entry::getKey,
+                        e -> new AuthorInfo(e.getValue().uuid(), e.getValue().nickname())));
     }
 
     Map<UUID, List<TagSummaryResponse>> batchToTagResponsesMap(List<UUID> articleUuids) {
@@ -263,34 +272,40 @@ class ArticleResponseMapper {
         if (SecurityUtils.isAdmin(authentication)) {
             return article.getRejectReason();
         }
-        Long viewerId = resolveViewerId(authentication);
-        if (viewerId != null && Objects.equals(article.getAuthorId(), viewerId)) {
+        UUID viewerUuid = resolveViewerUuid(authentication);
+        if (viewerUuid != null && Objects.equals(article.getAuthorUuid(), viewerUuid)) {
             return article.getRejectReason();
         }
         return null;
     }
 
     /**
-     * 從認證物件取出觀看者的資料庫主鍵。
+     * 從認證物件取出觀看者的公開 UUID。
      *
      * <p>Principal 由 {@code JwtAuthenticationFilter} 寫入為 {@link AuthUser}，
-     * 經 {@link SecurityUtils#currentAuthUser(Authentication)} 取出後僅取其 {@code id}，
+     * 經 {@link SecurityUtils#currentAuthUser(Authentication)} 取出後僅取其 {@code uuid}，
      * 與 {@code ArticleQueryService} 判斷 liked / bookmarked 的取值方式一致。
      * 未登入 / 匿名 / principal 非 AuthUser 一律回傳 {@code null}，代表「無法識別的觀看者」。</p>
      *
      * @param authentication 當前認證物件（可為 null）
-     * @return 觀看者 DB 主鍵，無法識別時回傳 {@code null}
+     * @return 觀看者公開 UUID，無法識別時回傳 {@code null}
      */
-    private Long resolveViewerId(Authentication authentication) {
-        return SecurityUtils.currentAuthUser(authentication).map(AuthUser::id).orElse(null);
+    private UUID resolveViewerUuid(Authentication authentication) {
+        return SecurityUtils.currentAuthUser(authentication).map(AuthUser::uuid).orElse(null);
     }
 
-    UUID resolveAuthorUuid(Long authorId) {
-        return userFacade.getUserUuidById(authorId).orElse(null);
-    }
-
-    String resolveAuthorNickname(Long authorId) {
-        return userFacade.getUserNicknameById(authorId).orElse(null);
+    /**
+     * 單篇文章解析作者投影（只呼叫 UserFacade 一次，同時取得 uuid 與暱稱）。
+     *
+     * @param authorUuid 作者公開 UUID；null 時不發查詢
+     * @return 作者投影；查無作者（或 uuid 為 null）時為 null，此時 authorUuid／authorNickname 皆為 null
+     */
+    private AuthorInfo resolveAuthor(UUID authorUuid) {
+        if (authorUuid == null) {
+            return null;
+        }
+        UserDisplayInfo info = userFacade.getDisplayInfoByUuids(List.of(authorUuid)).get(authorUuid);
+        return info == null ? null : new AuthorInfo(info.uuid(), info.nickname());
     }
 
 }

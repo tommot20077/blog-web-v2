@@ -64,10 +64,10 @@ class ArticleQuerySubServiceTest {
 
     private ArticleQuerySubService querySubService;
 
-    private static final Long AUTHOR_ID = 1L;
-    private static final Long OTHER_USER_ID = 2L;
+    private static final UUID AUTHOR_UUID = new UUID(0L, 1L);
+    private static final UUID OTHER_USER_UUID = new UUID(0L, 2L);
     private static final Long ARTICLE_ID = 11L;
-    private static final Long SERIES_ID = 99L;
+    private static final UUID SERIES_UUID = UUID.randomUUID();
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
 
     @BeforeEach
@@ -81,7 +81,7 @@ class ArticleQuerySubServiceTest {
         Article article = new Article();
         article.setId(ARTICLE_ID);
         article.setUuid(ARTICLE_UUID);
-        article.setAuthorId(AUTHOR_ID);
+        article.setAuthorUuid(AUTHOR_UUID);
         article.setTitle("Test article");
         article.setContent("Test content");
         article.setSummary("Test summary");
@@ -145,7 +145,7 @@ class ArticleQuerySubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(responseMapper.toResponse(article)).thenReturn(expected);
 
-            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR);
+            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR);
 
             assertThat(response).isSameAs(expected);
         }
@@ -158,7 +158,7 @@ class ArticleQuerySubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(responseMapper.toResponse(article)).thenReturn(expected);
 
-            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.ADMIN);
+            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.ADMIN);
 
             assertThat(response).isSameAs(expected);
         }
@@ -169,7 +169,7 @@ class ArticleQuerySubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR))
+            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
             verify(responseMapper, never()).toResponse(any());
@@ -183,7 +183,7 @@ class ArticleQuerySubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(responseMapper.toResponse(article)).thenReturn(expected);
 
-            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR);
+            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR);
 
             assertThat(response).isSameAs(expected);
         }
@@ -194,7 +194,7 @@ class ArticleQuerySubServiceTest {
             Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.AUTHOR))
+            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
             verify(responseMapper, never()).toResponse(any());
@@ -225,7 +225,7 @@ class ArticleQuerySubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(responseMapper.toResponse(article)).thenReturn(expected);
 
-            assertThat(querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR)).isSameAs(expected);
+            assertThat(querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR)).isSameAs(expected);
         }
 
         @Test
@@ -236,22 +236,22 @@ class ArticleQuerySubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(responseMapper.toResponse(article)).thenReturn(expected);
 
-            assertThat(querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_ID, Role.ADMIN)).isSameAs(expected);
+            assertThat(querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.ADMIN)).isSameAs(expected);
         }
 
         /**
          * fail-safe：作者欄位為 null 時，匿名檢視者不得因為「兩個 null 相等」而被當成作者本人。
          *
-         * <p>articles.author_id 是 NOT NULL，正常資料不會走到這裡；但「作者比對」的正確形狀
+         * <p>articles.author_uuid 是 NOT NULL，正常資料不會走到這裡；但「作者比對」的正確形狀
          * 就是必須先確定有檢視者。這正是 checkReadPermission 自己一份實作與
          * {@code ArticleVisibility} 唯一的差異（後者多了 viewerId != null 守衛），
          * 委派之後這個邊界才有唯一解。</p>
          */
         @Test
-        @DisplayName("author id 為 null 時，匿名檢視者不得被當成作者本人")
-        void getArticle_nullAuthorId_anonymousDenied() {
+        @DisplayName("author uuid 為 null 時，匿名檢視者不得被當成作者本人")
+        void getArticle_nullAuthorUuid_anonymousDenied() {
             Article article = buildArticle(ArticleStatus.ARCHIVED);
-            article.setAuthorId(null);
+            article.setAuthorUuid(null);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
             assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, null, Role.USER))
@@ -295,7 +295,7 @@ class ArticleQuerySubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findBySlug(article.getSlug())).thenReturn(Optional.of(article));
 
-            assertThatThrownBy(() -> querySubService.getArticleBySlug(article.getSlug(), OTHER_USER_ID, Role.AUTHOR))
+            assertThatThrownBy(() -> querySubService.getArticleBySlug(article.getSlug(), OTHER_USER_UUID, Role.AUTHOR))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
             verify(responseMapper, never()).toResponse(any());
@@ -314,7 +314,7 @@ class ArticleQuerySubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(responseMapper.toEditorResponse(article)).thenReturn(expected);
 
-            EditorArticleResponse response = querySubService.getArticleForEdit(ARTICLE_UUID, AUTHOR_ID);
+            EditorArticleResponse response = querySubService.getArticleForEdit(ARTICLE_UUID, AUTHOR_UUID);
 
             assertThat(response).isSameAs(expected);
             verify(responseMapper).toEditorResponse(article);
@@ -328,7 +328,7 @@ class ArticleQuerySubServiceTest {
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(responseMapper.toEditorResponse(article)).thenReturn(expected);
 
-            EditorArticleResponse response = querySubService.getArticleForEdit(ARTICLE_UUID, AUTHOR_ID);
+            EditorArticleResponse response = querySubService.getArticleForEdit(ARTICLE_UUID, AUTHOR_UUID);
 
             assertThat(response).isSameAs(expected);
         }
@@ -340,7 +340,7 @@ class ArticleQuerySubServiceTest {
             when(entityFinder.findByUuidOrThrow(missingUuid))
                     .thenThrow(new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
 
-            assertThatThrownBy(() -> querySubService.getArticleForEdit(missingUuid, AUTHOR_ID))
+            assertThatThrownBy(() -> querySubService.getArticleForEdit(missingUuid, AUTHOR_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
         }
@@ -351,7 +351,7 @@ class ArticleQuerySubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
 
-            assertThatThrownBy(() -> querySubService.getArticleForEdit(ARTICLE_UUID, OTHER_USER_ID))
+            assertThatThrownBy(() -> querySubService.getArticleForEdit(ARTICLE_UUID, OTHER_USER_UUID))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
             verify(responseMapper, never()).toEditorResponse(any());
@@ -431,18 +431,18 @@ class ArticleQuerySubServiceTest {
         @Test
         @DisplayName("整頁作者只解析一次：同一作者去重，且不逐筆查詢（PERF-02）")
         void getPublishedArticles_resolvesAuthorsInSingleBatch() {
-            Article first = publishedArticle(101L, 1L);
-            Article second = publishedArticle(102L, 1L);
-            Article third = publishedArticle(103L, 2L);
+            Article first = publishedArticle(101L, AUTHOR_UUID);
+            Article second = publishedArticle(102L, AUTHOR_UUID);
+            Article third = publishedArticle(103L, OTHER_USER_UUID);
             Map<UUID, List<TagSummaryResponse>> tagMap = Map.of();
-            Map<Long, AuthorInfo> authorMap = Map.of(
-                    1L, new AuthorInfo(UUID.randomUUID(), "Alice"),
-                    2L, new AuthorInfo(UUID.randomUUID(), "Bob"));
+            Map<UUID, AuthorInfo> authorMap = Map.of(
+                    AUTHOR_UUID, new AuthorInfo(AUTHOR_UUID, "Alice"),
+                    OTHER_USER_UUID, new AuthorInfo(OTHER_USER_UUID, "Bob"));
             when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(0L), eq(10)))
                     .thenReturn(List.of(first, second, third));
             when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(3L);
             when(responseMapper.batchToTagResponsesMap(anyList())).thenReturn(tagMap);
-            when(responseMapper.batchToAuthorInfoMap(List.of(1L, 2L))).thenReturn(authorMap);
+            when(responseMapper.batchToAuthorInfoMap(List.of(AUTHOR_UUID, OTHER_USER_UUID))).thenReturn(authorMap);
             ArticleSummaryResponse s1 = ArticleSummaryResponse.builder().uuid(first.getUuid()).build();
             ArticleSummaryResponse s2 = ArticleSummaryResponse.builder().uuid(second.getUuid()).build();
             ArticleSummaryResponse s3 = ArticleSummaryResponse.builder().uuid(third.getUuid()).build();
@@ -455,21 +455,21 @@ class ArticleQuerySubServiceTest {
 
             assertThat(result.getRecords()).containsExactly(s1, s2, s3);
             verify(responseMapper, times(1)).batchToAuthorInfoMap(anyList());
-            verify(responseMapper).batchToAuthorInfoMap(List.of(1L, 2L));
+            verify(responseMapper).batchToAuthorInfoMap(List.of(AUTHOR_UUID, OTHER_USER_UUID));
         }
 
         /**
          * 建立一篇已發布文章（各自獨立的 id / uuid），供多作者分頁情境使用。
          *
          * @param id       文章主鍵
-         * @param authorId 作者主鍵
+         * @param authorUuid 作者公開 UUID
          * @return 已發布文章
          */
-        private Article publishedArticle(Long id, Long authorId) {
+        private Article publishedArticle(Long id, UUID authorUuid) {
             Article article = new Article();
             article.setId(id);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(authorId);
+            article.setAuthorUuid(authorUuid);
             article.setStatus(ArticleStatus.PUBLISHED);
             return article;
         }
@@ -485,18 +485,18 @@ class ArticleQuerySubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             ArticleSummaryResponse summary = summaryResponse(article);
             Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
-            when(articleMapper.findByAuthorIdPaged(AUTHOR_ID, 0L, 10)).thenReturn(List.of(article));
-            when(articleMapper.countByAuthorId(AUTHOR_ID)).thenReturn(1L);
+            when(articleMapper.findByAuthorUuidPaged(AUTHOR_UUID, 0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countByAuthorUuid(AUTHOR_UUID)).thenReturn(1L);
             when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
             when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
 
             PageResult<ArticleSummaryResponse> result =
-                    querySubService.getMyArticles(AUTHOR_ID, 1, 10, null);
+                    querySubService.getMyArticles(AUTHOR_UUID, 1, 10, null);
 
             assertThat(result.getRecords()).containsExactly(summary);
             assertThat(result.getTotal()).isEqualTo(1L);
-            verify(articleMapper).findByAuthorIdPaged(AUTHOR_ID, 0L, 10);
-            verify(articleMapper, never()).findByAuthorIdAndStatus(any(), any(), anyLong(), anyInt());
+            verify(articleMapper).findByAuthorUuidPaged(AUTHOR_UUID, 0L, 10);
+            verify(articleMapper, never()).findByAuthorUuidAndStatus(any(), any(), anyLong(), anyInt());
         }
 
         @Test
@@ -505,20 +505,20 @@ class ArticleQuerySubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             ArticleSummaryResponse summary = summaryResponse(article);
             Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
-            when(articleMapper.findByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT, 0L, 10))
+            when(articleMapper.findByAuthorUuidAndStatus(AUTHOR_UUID, ArticleStatus.DRAFT, 0L, 10))
                     .thenReturn(List.of(article));
-            when(articleMapper.countByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT)).thenReturn(1L);
+            when(articleMapper.countByAuthorUuidAndStatus(AUTHOR_UUID, ArticleStatus.DRAFT)).thenReturn(1L);
             when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
             when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
 
             PageResult<ArticleSummaryResponse> result =
-                    querySubService.getMyArticles(AUTHOR_ID, 1, 10, ArticleStatus.DRAFT);
+                    querySubService.getMyArticles(AUTHOR_UUID, 1, 10, ArticleStatus.DRAFT);
 
             assertThat(result.getRecords()).containsExactly(summary);
             assertThat(result.getTotal()).isEqualTo(1L);
-            verify(articleMapper).findByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT, 0L, 10);
-            verify(articleMapper).countByAuthorIdAndStatus(AUTHOR_ID, ArticleStatus.DRAFT);
-            verify(articleMapper, never()).findByAuthorIdPaged(any(), anyLong(), anyInt());
+            verify(articleMapper).findByAuthorUuidAndStatus(AUTHOR_UUID, ArticleStatus.DRAFT, 0L, 10);
+            verify(articleMapper).countByAuthorUuidAndStatus(AUTHOR_UUID, ArticleStatus.DRAFT);
+            verify(articleMapper, never()).findByAuthorUuidPaged(any(), anyLong(), anyInt());
         }
     }
 
@@ -615,15 +615,15 @@ class ArticleQuerySubServiceTest {
         }
 
         @Test
-        @DisplayName("findBySeriesIdOrderByPosition delegates to mapper")
-        void findBySeriesIdOrderByPosition_delegatesToMapper() {
+        @DisplayName("findBySeriesUuidOrderByPosition delegates to mapper")
+        void findBySeriesUuidOrderByPosition_delegatesToMapper() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
-            when(articleMapper.findBySeriesIdOrderByPosition(SERIES_ID)).thenReturn(List.of(article));
+            when(articleMapper.findBySeriesUuidOrderByPosition(SERIES_UUID)).thenReturn(List.of(article));
 
-            List<Article> result = querySubService.findBySeriesIdOrderByPosition(SERIES_ID);
+            List<Article> result = querySubService.findBySeriesUuidOrderByPosition(SERIES_UUID);
 
             assertThat(result).containsExactly(article);
-            verify(articleMapper).findBySeriesIdOrderByPosition(SERIES_ID);
+            verify(articleMapper).findBySeriesUuidOrderByPosition(SERIES_UUID);
         }
 
         @Test
@@ -655,7 +655,7 @@ class ArticleQuerySubServiceTest {
             verify(articleRepository, never()).findById(any());
             verify(responseMapper).batchToTagResponsesMap(List.of(ARTICLE_UUID, uuid2));
             /* 作者同樣整批解析一次（a2 未設作者，不得把 null 送進批次查詢） */
-            verify(responseMapper).batchToAuthorInfoMap(List.of(AUTHOR_ID));
+            verify(responseMapper).batchToAuthorInfoMap(List.of(AUTHOR_UUID));
         }
 
         @Test

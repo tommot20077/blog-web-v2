@@ -30,10 +30,10 @@ import java.util.UUID;
  *       getArticlesByTagIds / getRecentPublishedArticles / getPublishedArticlesByUuids /
  *       getArticlesPublishedAfter）：僅查 PUBLISHED 文章。</li>
  *   <li><b>SP-B 新增 read</b>（findIdByUuid / findByUuid / findById / findByIds /
- *       findBySeriesIdOrderByPosition）：不限狀態，回傳含 status 的 ArticleData，
+ *       findBySeriesUuidOrderByPosition）：不限狀態，回傳含 status 的 ArticleData，
  *       caller 自行依 status 判斷（如 SeriesService 過濾 DRAFT）。</li>
  *   <li><b>SP-B 新增 simple write</b>（incrementCommentCount / decrementCommentCount /
- *       incrementLikeCount / decrementLikeCount / updateSeriesAssignment）：counter /
+ *       incrementLikeCount / decrementLikeCount）：counter /
  *       欄位 set 類型，直接更新 article 欄位，無業務邏輯觸發。</li>
  *   <li><b>SP-D 新增 read</b>（findContentById）：完整 content 內容 DTO，給 version 模組 snapshot / restore stash 流程用。</li>
  *   <li><b>M2-a 新增（reading 模組 UUID 化用，只增不減）</b>（getSummariesByUuids / filterReadableUuids /
@@ -44,6 +44,10 @@ import java.util.UUID;
  *   <li><b>M4-b 新增（series 模組 RACE-14 用，只增不減）</b>（assignToSeriesIfUnassigned /
  *       removeFromSeriesIfAssigned / updateSeriesPositionIfAssigned）：條件式寫入，由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
  *       讓 series 的 article_count 不必先讀再寫。</li>
+ *   <li><b>M6-b</b>：series 維度全面改為 {@code series_uuid}，移除 Long 版 series 方法
+ *       （findBySeriesIdOrderByPosition / updateSeriesAssignment（Long 與 UUID 版）/
+ *       countPublishedBySeriesIds / findPrev·NextPublishedInSeries(Long, Integer)）；
+ *       UUID 版直接查詢 {@code articles.series_uuid}，不再經 SeriesFacade 轉換。</li>
  *   <li><b>SP-D 新增 atomic write</b>（applyRestoreContent）：version 模組 restore 用，內部接管 mutate / save / syncArticleTags / publish events 順序。</li>
  * </ul>
  *
@@ -172,20 +176,11 @@ public interface ArticleFacade {
     /**
      * 撈 series 內 article 排序好（給 SeriesService.getSeriesDetail 用）。
      *
-     * @param seriesId 系列主鍵
-     * @return 該 series 內 article 按 series_position 排序
-     */
-    List<ArticleData> findBySeriesIdOrderByPosition(Long seriesId);
-
-    /**
-     * UUID 版 {@link #findBySeriesIdOrderByPosition(Long)}：撈 series 內 article，依 series_position 排序。
-     *
-     * <p>語意與 Long 版完全相同；series 不存在（查無此 UUID）時與 Long 版遇到不存在的 series id 一致，
-     * 回傳空清單。<b>過渡期</b>：{@code articles} 仍以 {@code series_id}（Long）儲存，實作端經
-     * {@code SeriesFacade} 把 series UUID 換成主鍵再查；M6 改以 {@code articles.series_uuid} 直查。</p>
+     * <p>M6-b 起直接以 {@code articles.series_uuid} 查詢（原 Long 版 {@code findBySeriesIdOrderByPosition}
+     * 隨 {@code articles.series_id} 一併移除）。不限文章狀態；系列沒有任何成員（含系列不存在）時回傳空清單。</p>
      *
      * @param seriesUuid 系列公開 UUID；null 視為查無，回傳空清單
-     * @return 該 series 內 article 按 series_position 排序；查無 series 時為空清單
+     * @return 該 series 內 article 按 series_position 排序；查無成員時為空清單
      */
     List<ArticleData> findBySeriesUuidOrderByPosition(UUID seriesUuid);
 
@@ -260,58 +255,27 @@ public interface ArticleFacade {
     void decrementLikeCount(UUID articleUuid);
 
     /**
-     * series 模組 add / remove article from series 時 set article.series_id + series_position。
-     *
-     * @param articleId      文章主鍵
-     * @param seriesId       系列主鍵（remove 時傳 null）
-     * @param seriesPosition 在 series 內的位置（remove 時傳 null）
-     */
-    void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition);
-
-    /**
-     * UUID 版 {@link #updateSeriesAssignment(Long, Long, Integer)}：設定文章的 series 歸屬與位置。
-     *
-     * <p>行為與 Long 版逐項一致：</p>
-     * <ul>
-     *   <li>{@code seriesUuid} 為 null 代表移出 series（通常 {@code seriesPosition} 也傳 null）；</li>
-     *   <li>{@code articleUuid} 不存在時為 no-op（不拋例外，也不檢查 series）；</li>
-     *   <li>{@code seriesUuid} 非 null 但查無此 series 時，於寫入前拋 {@link IllegalArgumentException}
-     *       （文章不被改動）。這是呼叫端的程式錯誤——呼叫端應先驗證 series 存在——不是業務錯誤，
-     *       故不是 {@code BusinessException}。Long 版寫入不存在的 series id 則由
-     *       {@code articles.series_id → series(id)} 外鍵拒絕（被 Spring Data JDBC 包成
-     *       {@code DbActionExecutionException}），兩者皆不會寫入。</li>
-     * </ul>
-     * <p><b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直寫（屆時無外鍵，行為另行定義）。</p>
-     *
-     * @param articleUuid    文章公開 UUID
-     * @param seriesUuid     系列公開 UUID（移出時傳 null）
-     * @param seriesPosition 在 series 內的位置（移出時傳 null）
-     * @throws IllegalArgumentException seriesUuid 非 null 但查無此 series
-     */
-    void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
-
-    /**
      * 條件式加入 series：僅當文章<b>目前不屬於任何 series</b> 時才指派，並回報這次寫入是否真的指派了。
      *
      * <p>為什麼需要：series 模組以 {@code article_count} 記錄成員數，必須知道「這次呼叫是不是新成員」。
-     * 先讀 {@code seriesId} 再決定是否 +1 是 check-then-act（RACE-14）——兩個請求同時加入同一篇文章，
+     * 先讀 {@code seriesUuid} 再決定是否 +1 是 check-then-act（RACE-14）——兩個請求同時加入同一篇文章，
      * 都讀到「無 series」，都 +1，計數多出 1。本方法把判斷放進寫入本身：
-     * {@code UPDATE articles SET series_id = ?, series_position = ? WHERE uuid = ? AND series_id IS NULL}，
+     * {@code UPDATE articles SET series_uuid = ?, series_position = ? WHERE uuid = ? AND series_uuid IS NULL}，
      * 由 affected rows 決定。同一時間只有一個交易能把 NULL 改成非 NULL，另一個得到 {@code false}。</p>
      *
      * <p>回傳 {@code false} 代表文章不存在，或<b>已屬於某個 series（含同一個）</b>；呼叫端須自行區分
-     * （例如以 {@link #findByUuid} 重讀後，同一 series 改以 {@link #updateSeriesAssignment(UUID, UUID, Integer)}
-     * 只更新位置）。寫入時一併遞增樂觀鎖 {@code version} 並更新 {@code updated_at}，與實體 save 的效果一致，
+         * 只更新位置）。寫入時一併遞增樂觀鎖 {@code version} 並更新 {@code updated_at}，與實體 save 的效果一致，
      * 使並行中的文章編輯（讀到舊 series 歸屬）會因版本不符而失敗，不會把舊歸屬寫回去。</p>
      *
-     * <p><b>過渡期</b>：series UUID 經 {@code SeriesFacade} 換成主鍵後寫入 {@code articles.series_id}；
-     * M6 改以 {@code articles.series_uuid} 直寫。</p>
+     * <p>M6-b 起直接寫入 {@code articles.series_uuid}；article 不檢查系列是否存在
+     * （系列存在性由呼叫端 series 模組負責，V32 起沒有 FK 把關）。呼叫端若在寫入後發現系列已被併發刪除
+     * （例如 {@code article_count + 1} 影響 0 列），須回滾交易，避免留下指向已不存在系列的歸屬。</p>
      *
      * @param articleUuid    文章公開 UUID
      * @param seriesUuid     要加入的系列公開 UUID（不得為 null）
      * @param seriesPosition 在系列內的位置
      * @return {@code true} 表示這次呼叫把文章從「無 series」改為屬於該系列；{@code false} 表示沒有任何寫入
-     * @throws IllegalArgumentException seriesUuid 為 null，或查無此 series（文章不會被改動）
+     * @throws IllegalArgumentException seriesUuid 為 null（文章不會被改動）
      */
     boolean assignToSeriesIfUnassigned(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
 
@@ -319,12 +283,12 @@ public interface ArticleFacade {
      * 條件式移出 series：僅當文章<b>目前屬於指定的 series</b> 時才移出，並回報這次寫入是否真的移出了。
      *
      * <p>與 {@link #assignToSeriesIfUnassigned} 對稱，解 RACE-14 的移出面：
-     * {@code UPDATE articles SET series_id = NULL, series_position = NULL WHERE uuid = ? AND series_id = ?}，
+     * {@code UPDATE articles SET series_uuid = NULL, series_position = NULL WHERE uuid = ? AND series_uuid = ?}，
      * 由 affected rows 決定 series 模組是否 {@code article_count - 1}。兩個請求同時移出同一篇文章，
      * 只有一個得到 {@code true}。寫入時一併遞增 {@code version} 並更新 {@code updated_at}。</p>
      *
      * @param articleUuid 文章公開 UUID
-     * @param seriesUuid  文章應屬於的系列公開 UUID；null 或查無此 series 視為「不屬於」
+     * @param seriesUuid  文章應屬於的系列公開 UUID；null 視為「不屬於」
      * @return {@code true} 表示這次呼叫把文章從該系列移出；{@code false} 表示沒有任何寫入
      *         （文章不存在、不屬於該系列，或已被另一個請求移出）
      */
@@ -334,13 +298,13 @@ public interface ArticleFacade {
      * 條件式更新位置：僅當文章<b>目前屬於指定的 series</b> 時才改 {@code series_position}。
      *
      * <p>供 series 模組處理「文章已在同一個 series，只更新位置」：以單一
-     * {@code UPDATE articles SET series_position = ? WHERE uuid = ? AND series_id = ?} 完成，
-     * 取代 {@link #updateSeriesAssignment(UUID, UUID, Integer)} 的讀改寫——後者在兩個請求同時更新位置時
+     * {@code UPDATE articles SET series_position = ? WHERE uuid = ? AND series_uuid = ?} 完成，
+     * 取代「讀文章、改欄位、整列 save」的讀改寫——後者在兩個請求同時更新位置時
      * 會因樂觀鎖衝突失敗，與併發移出交錯時還可能把文章重新寫回 series 而沒有 +1 計數（RACE-14）。
      * 寫入時一併遞增 {@code version} 並更新 {@code updated_at}。</p>
      *
      * @param articleUuid    文章公開 UUID
-     * @param seriesUuid     文章應屬於的系列公開 UUID；null 或查無此 series 視為「不屬於」
+     * @param seriesUuid     文章應屬於的系列公開 UUID；null 視為「不屬於」
      * @param seriesPosition 新的位置
      * @return {@code true} 表示位置已更新；{@code false} 表示沒有任何寫入
      *         （文章不存在、不屬於該系列，或已被另一個請求移出／移到別的系列）
@@ -363,8 +327,8 @@ public interface ArticleFacade {
      * 公開 UUID → ArticleContentData（{@link #findContentById(Long)} 的 UUID 版，M3-a 新增）。
      *
      * <p>語意與 {@link #findContentById(Long)} 完全相同：<b>不分狀態</b>（DRAFT、PENDING_REVIEW、REJECTED、
-     * PUBLISHED、ARCHIVED 皆回傳），查無（含已硬刪）回傳 empty。回傳的 {@code authorUuid} 必須有值
-     * （正常情況下；作者查無時 owner 模組會記 warn，同 Long 版）。</p>
+     * PUBLISHED、ARCHIVED 皆回傳），查無（含已硬刪）回傳 empty。回傳的 {@code authorUuid} 直接取自
+     * {@code articles.author_uuid}，必定有值（M6-a 起該欄位為 NOT NULL）。</p>
      *
      * @param articleUuid 文章公開 UUID；{@code null} 回傳 empty
      * @return ArticleContentData Optional；查無時 empty
@@ -441,93 +405,48 @@ public interface ArticleFacade {
      *
      * <p>供 series 模組同時作為「哪些 series 有公開內容」的過濾條件與
      * {@code article_count} 的即時投影，取代原本直讀 articles 的
-     * EXISTS ＋ COUNT 子查詢（ARCH-13 / PERF-34）。</p>
+     * EXISTS ＋ COUNT 子查詢（ARCH-13 / PERF-34）。M6-b 起直接以 {@code articles.series_uuid} 分組計數
+     * （原 Long 版 {@code countPublishedBySeriesIds} 隨 {@code series_id} 一併移除）。</p>
      *
-     * <p><b>傳輸量界限</b>：與 {@code seriesIds} 大小成正比。series 為低基數實體
+     * <p><b>傳輸量界限</b>：與 {@code seriesUuids} 大小成正比。series 為低基數實體
      * （部落格量級為數十），可接受。<b>重評門檻：series 總數 > 5,000。</b></p>
      *
-     * @param seriesIds series 主鍵集合；空集合回傳空 Map
-     * @return series 主鍵 → PUBLISHED 文章數；<b>只含 count &gt; 0 者</b>
-     */
-    Map<Long, Integer> countPublishedBySeriesIds(Collection<Long> seriesIds);
-
-    /**
-     * UUID 版 {@link #countPublishedBySeriesIds(Collection)}：一次取得多個 series 各自的 PUBLISHED 文章數。
-     *
-     * <p>語意與 Long 版相同：<b>只含 count &gt; 0 者</b>；查無的 series UUID 同樣不出現在結果中。
-     * 實作端以 {@code SeriesFacade.findIdsByUuids} <b>一次</b>批次換成主鍵（不逐筆），
-     * <b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直查。</p>
-     *
-     * @param seriesUuids series 公開 UUID 集合；null 或空集合回傳空 Map（不查 DB）
-     * @return series 公開 UUID → PUBLISHED 文章數；<b>只含 count &gt; 0 者</b>
+     * @param seriesUuids series 公開 UUID 集合；null 或空集合回傳空 Map（不查 DB）；null 元素會被忽略
+     * @return series 公開 UUID → PUBLISHED 文章數；<b>只含 count &gt; 0 者</b>，回傳可變的 Map
      */
     Map<UUID, Integer> countPublishedBySeriesUuids(Collection<UUID> seriesUuids);
 
     /**
      * series 內 PUBLISHED 且位置小於 current 的最後一篇（prev 導覽）。
      *
-     * @param seriesId        series 主鍵
-     * @param currentPosition 當前文章在 series 內的位置
-     * @return 前一篇；當前為第一篇時為 {@code Optional.empty()}
-     */
-    Optional<ArticleNavRef> findPrevPublishedInSeries(Long seriesId, Integer currentPosition);
-
-    /**
-     * UUID 版 {@link #findPrevPublishedInSeries(Long, Integer)}。
+     * <p>M6-b 起直接以 {@code articles.series_uuid} 查詢（原 Long 版隨 {@code series_id} 一併移除）。</p>
      *
-     * <p>語意相同；series 查無（或為 null）時回傳 {@code Optional.empty()}。
-     * <b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直查。</p>
-     *
-     * @param seriesUuid      series 公開 UUID
+     * @param seriesUuid      series 公開 UUID；null 回傳 {@code Optional.empty()}
      * @param currentPosition 當前文章在 series 內的位置
-     * @return 前一篇；當前為第一篇或 series 不存在時為 {@code Optional.empty()}
+     * @return 前一篇；當前為第一篇或系列沒有成員時為 {@code Optional.empty()}
      */
     Optional<ArticleNavRef> findPrevPublishedInSeries(UUID seriesUuid, Integer currentPosition);
 
     /**
      * series 內 PUBLISHED 且位置大於 current 的第一篇（next 導覽）。
      *
-     * @param seriesId        series 主鍵
-     * @param currentPosition 當前文章在 series 內的位置
-     * @return 後一篇；當前為最後一篇時為 {@code Optional.empty()}
-     */
-    Optional<ArticleNavRef> findNextPublishedInSeries(Long seriesId, Integer currentPosition);
-
-    /**
-     * UUID 版 {@link #findNextPublishedInSeries(Long, Integer)}。
+     * <p>M6-b 起直接以 {@code articles.series_uuid} 查詢（原 Long 版隨 {@code series_id} 一併移除）。</p>
      *
-     * <p>語意相同；series 查無（或為 null）時回傳 {@code Optional.empty()}。
-     * <b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直查。</p>
-     *
-     * @param seriesUuid      series 公開 UUID
+     * @param seriesUuid      series 公開 UUID；null 回傳 {@code Optional.empty()}
      * @param currentPosition 當前文章在 series 內的位置
-     * @return 後一篇；當前為最後一篇或 series 不存在時為 {@code Optional.empty()}
+     * @return 後一篇；當前為最後一篇或系列沒有成員時為 {@code Optional.empty()}
      */
     Optional<ArticleNavRef> findNextPublishedInSeries(UUID seriesUuid, Integer currentPosition);
 
     /**
-     * 集合述詞：篩出 candidateIds 中「對該 viewer 可見」者，<b>維持輸入順序</b>。
+     * 集合述詞：篩出 candidates 中「對該 viewer 可見」者，<b>維持輸入順序</b>。
      *
-     * <p>可見性委派 {@code blog-common} 的 {@code ArticleVisibility}（單一真相）：
-     * PUBLISHED 全公開；非 PUBLISHED 僅作者本人與 ADMIN。查無此 id（已硬刪）者不會出現在結果中。</p>
+     * <p>可見性委派 {@code blog-common} 的 {@code ArticleVisibility}（單一真相）——PUBLISHED 全公開；
+     * 非 PUBLISHED 僅作者本人與 ADMIN；查無此 uuid（已硬刪）者不會出現在結果中。
+     * 作者以 UUID 比對（直接取自 {@code articles.author_uuid}）。</p>
      *
-     * <p><b>傳輸量界限</b>：與 {@code candidateIds} 大小成正比，非與頁大小成正比。
-     * 目前唯一 caller 是收藏列表，界限為單一使用者的收藏數 B；payload 僅 id。
-     * <b>重評門檻：任一使用者 B &gt; 5,000。</b></p>
-     *
-     * @param candidateIds 候選文章主鍵（依 caller 期望的顯示順序）；空清單回傳空清單
-     * @param viewerId     檢視者主鍵；匿名為 null
-     * @param isAdmin      檢視者是否為 ADMIN
-     * @return 可見的文章主鍵，順序與輸入一致
-     */
-    List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, boolean isAdmin);
-
-    /**
-     * 集合述詞：篩出 candidates 中「對該 viewer 可見」者，<b>維持輸入順序</b>（{@link #filterReadableIds} 的 UUID 版）。
-     *
-     * <p>語意與 {@link #filterReadableIds(List, Long, boolean)} 完全相同：可見性委派 {@code blog-common} 的
-     * {@code ArticleVisibility}（單一真相）——PUBLISHED 全公開；非 PUBLISHED 僅作者本人與 ADMIN；
-     * 查無此 uuid（已硬刪）者不會出現在結果中。作者以 UUID 比對（article 內部仍以 JOIN {@code users} 取得，M6 才改）。</p>
+     * <p>M6-a：原本以 Long 主鍵識別作者的 {@code filterReadableIds(List<Long>, Long, boolean)} 已移除——
+     * 作者不再有 Long 主鍵，且它沒有任何呼叫端。</p>
      *
      * <p><b>傳輸量界限</b>：與 {@code candidates} 大小成正比，非與頁大小成正比；實作端經 {@code BatchedQuery} 切批。
      * <b>重評門檻：任一使用者 B &gt; 5,000。</b></p>

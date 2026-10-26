@@ -104,7 +104,7 @@ class TransitionUuidApiIT {
     void cleanUp() {
         jdbcTemplate.execute("DELETE FROM processed_events");
         articleRepo.findAll().forEach(a -> {
-            a.setSeriesId(null);
+            a.setSeriesUuid(null);
             a.setSeriesPosition(null);
             articleRepo.save(a);
         });
@@ -116,10 +116,10 @@ class TransitionUuidApiIT {
         return jdbcTemplate.queryForObject("SELECT uuid FROM users WHERE id = ?", UUID.class, userId);
     }
 
-    private Article createArticle(Long authorId, Long seriesId, Integer position) {
+    private Article createArticle(Long authorId, UUID seriesUuid, Integer position) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(userUuid(authorId));
         article.setTitle("Transition IT " + UUID.randomUUID());
         article.setSlug("transition-it-" + UUID.randomUUID());
         article.setContent("content");
@@ -128,7 +128,7 @@ class TransitionUuidApiIT {
         article.setLikeCount(0);
         article.setCommentCount(0);
         article.setViewCount(0L);
-        article.setSeriesId(seriesId);
+        article.setSeriesUuid(seriesUuid);
         article.setSeriesPosition(position);
         article.setCreatedAt(LocalDateTime.now());
         article.setUpdatedAt(LocalDateTime.now());
@@ -161,7 +161,7 @@ class TransitionUuidApiIT {
     @DisplayName("ArticleFacade.findById / findByUuid → authorUuid 等於 users.uuid、seriesUuid 等於 series.uuid")
     void articleFacadeSingle_uuidFieldsMatchTables() {
         Series series = createSeries("it-single", AUTHOR_1);
-        Article article = createArticle(AUTHOR_1, series.getId(), 1);
+        Article article = createArticle(AUTHOR_1, series.getUuid(), 1);
 
         ArticleData byId = articleFacade.findById(article.getId()).orElseThrow();
         ArticleData byUuid = articleFacade.findByUuid(article.getUuid()).orElseThrow();
@@ -176,8 +176,8 @@ class TransitionUuidApiIT {
     void articleFacadeBatch_uuidFieldsMatchTables() {
         Series s1 = createSeries("it-batch-1", AUTHOR_1);
         Series s2 = createSeries("it-batch-2", AUTHOR_2);
-        Article a1 = createArticle(AUTHOR_1, s1.getId(), 1);
-        Article a2 = createArticle(AUTHOR_2, s2.getId(), 1);
+        Article a1 = createArticle(AUTHOR_1, s1.getUuid(), 1);
+        Article a2 = createArticle(AUTHOR_2, s2.getUuid(), 1);
         Article a3 = createArticle(AUTHOR_2, null, null);
 
         List<ArticleData> result = articleFacade.findByIds(List.of(a1.getId(), a2.getId(), a3.getId()));
@@ -193,13 +193,13 @@ class TransitionUuidApiIT {
     }
 
     @Test
-    @DisplayName("ArticleFacade.findBySeriesIdOrderByPosition → 每篇 seriesUuid 等於該 series.uuid")
+    @DisplayName("ArticleFacade.findBySeriesUuidOrderByPosition → 每篇 seriesUuid 等於該 series.uuid")
     void articleFacadeBySeries_seriesUuidMatches() {
         Series series = createSeries("it-by-series", AUTHOR_1);
-        createArticle(AUTHOR_1, series.getId(), 1);
-        createArticle(AUTHOR_1, series.getId(), 2);
+        createArticle(AUTHOR_1, series.getUuid(), 1);
+        createArticle(AUTHOR_1, series.getUuid(), 2);
 
-        List<ArticleData> result = articleFacade.findBySeriesIdOrderByPosition(series.getId());
+        List<ArticleData> result = articleFacade.findBySeriesUuidOrderByPosition(series.getUuid());
 
         assertThat(result).hasSize(2);
         assertThat(result).extracting(ArticleData::seriesUuid).containsOnly(series.getUuid());
@@ -210,7 +210,7 @@ class TransitionUuidApiIT {
     @DisplayName("ArticleLookupFacade.findByUuid（file 模組用的最小依賴 bean）→ 同樣帶 authorUuid / seriesUuid")
     void articleLookupFacade_uuidFieldsMatchTables() {
         Series series = createSeries("it-lookup", AUTHOR_1);
-        Article article = createArticle(AUTHOR_1, series.getId(), 1);
+        Article article = createArticle(AUTHOR_1, series.getUuid(), 1);
 
         ArticleData data = articleLookupFacade.findByUuid(article.getUuid()).orElseThrow();
 

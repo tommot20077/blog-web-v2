@@ -117,7 +117,7 @@ public class ArticleController {
                                                           @AuthenticationPrincipal AuthUser user,
                                                           Authentication authentication) {
         Role viewerRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleQueryService.getArticleBySlug(slug, (user == null ? null : user.id()), viewerRole, getClientIp(request)));
+        return ApiResponse.success(articleQueryService.getArticleBySlug(slug, (user == null ? null : user.uuid()), viewerRole, getClientIp(request)));
     }
 
     /**
@@ -145,21 +145,21 @@ public class ArticleController {
                                                     @AuthenticationPrincipal AuthUser user,
                                                     Authentication authentication) {
         Role viewerRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleQueryService.getArticleByUuid(uuid, (user == null ? null : user.id()), viewerRole, getClientIp(request)));
+        return ApiResponse.success(articleQueryService.getArticleByUuid(uuid, (user == null ? null : user.uuid()), viewerRole, getClientIp(request)));
     }
 
     /**
      * 建立文章（需 AUTHOR 或 ADMIN 角色）
      *
      * @param request  建立文章請求
-     * @param user 當前登入者（AuthUser；作者 ID）
+     * @param user 當前登入者（AuthUser；作者以其 uuid 識別）
      * @return 建立後的文章完整資訊
      */
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @PostMapping
     public ApiResponse<EditorArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request,
                                                              @AuthenticationPrincipal AuthUser user) {
-        return ApiResponse.success(articleService.createArticle(user.id(), request));
+        return ApiResponse.success(articleService.createArticle(user.uuid(), request));
     }
 
     /**
@@ -179,7 +179,7 @@ public class ArticleController {
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.updateArticle(user.id(), operatorRole, uuid, request));
+        return ApiResponse.success(articleService.updateArticle(user.uuid(), operatorRole, uuid, request));
     }
 
     /**
@@ -194,7 +194,7 @@ public class ArticleController {
     public ApiResponse<EditorArticleResponse> getArticleForEdit(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user) {
-        return ApiResponse.success(articleService.getArticleForEdit(uuid, user.id()));
+        return ApiResponse.success(articleService.getArticleForEdit(uuid, user.uuid()));
     }
 
     /**
@@ -211,7 +211,7 @@ public class ArticleController {
                                            @AuthenticationPrincipal AuthUser user,
                                            Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        articleService.deleteArticle(user.id(), operatorRole, uuid);
+        articleService.deleteArticle(user.uuid(), operatorRole, uuid);
         return ApiResponse.success();
     }
 
@@ -221,7 +221,7 @@ public class ArticleController {
      * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
      *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @param status   文章狀態篩選（可選）
-     * @param user 當前登入者（AuthUser；作者 ID）
+     * @param user 當前登入者（AuthUser；作者以其 uuid 識別）
      * @return 分頁文章摘要列表
      */
     @PreAuthorize("isAuthenticated()")
@@ -230,7 +230,7 @@ public class ArticleController {
             PageQuery pageQuery,
             @RequestParam(required = false) ArticleStatus status,
             @AuthenticationPrincipal AuthUser user) {
-        return ApiResponse.success(articleQueryService.getMyArticles(user.id(), pageQuery.page(), pageQuery.sizeOrDefault(10), status));
+        return ApiResponse.success(articleQueryService.getMyArticles(user.uuid(), pageQuery.page(), pageQuery.sizeOrDefault(10), status));
     }
 
     /**
@@ -247,7 +247,7 @@ public class ArticleController {
                                                          @AuthenticationPrincipal AuthUser user,
                                                          Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.submitForReview(user.id(), operatorRole, uuid));
+        return ApiResponse.success(articleService.submitForReview(user.uuid(), operatorRole, uuid));
     }
 
     /**
@@ -274,7 +274,7 @@ public class ArticleController {
                                                         @AuthenticationPrincipal AuthUser user,
                                                         Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.withdrawArticle(user.id(), operatorRole, uuid));
+        return ApiResponse.success(articleService.withdrawArticle(user.uuid(), operatorRole, uuid));
     }
 
     /**
@@ -291,7 +291,7 @@ public class ArticleController {
                                                        @AuthenticationPrincipal AuthUser user,
                                                        Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.publishArticle(user.id(), operatorRole, uuid));
+        return ApiResponse.success(articleService.publishArticle(user.uuid(), operatorRole, uuid));
     }
 
     /**
@@ -311,7 +311,7 @@ public class ArticleController {
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.rejectArticle(user.id(), operatorRole, uuid, request.getReason()));
+        return ApiResponse.success(articleService.rejectArticle(user.uuid(), operatorRole, uuid, request.getReason()));
     }
 
 

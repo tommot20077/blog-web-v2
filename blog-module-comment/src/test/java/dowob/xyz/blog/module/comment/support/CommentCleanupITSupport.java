@@ -88,9 +88,6 @@ public abstract class CommentCleanupITSupport {
     /** seed 資料中的使用者公開 UUID（固定值，見 {@link SeededUsers}） */
     protected static final UUID USER_UUID = SeededUsers.USER_UUID;
 
-    /** seed 資料中的使用者主鍵（僅供 articles.author_id 使用；article 模組尚未改為 UUID） */
-    protected static final Long USER_ID = SeededUsers.USER_ID;
-
     /** 清空本測試建立的資料（comments 先於 articles）。 */
     @AfterEach
     void cleanUpCommentCleanupData() {
@@ -108,7 +105,7 @@ public abstract class CommentCleanupITSupport {
     protected Article createArticle(ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(USER_ID);
+        article.setAuthorUuid(USER_UUID);
         article.setTitle("cleanup-it");
         article.setSlug("cleanup-it-" + UUID.randomUUID());
         article.setContent("test");

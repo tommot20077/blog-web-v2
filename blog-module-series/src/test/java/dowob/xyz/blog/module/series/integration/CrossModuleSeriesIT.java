@@ -13,6 +13,9 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
+import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
+import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
+import dowob.xyz.blog.module.article.consumer.ArticleSeriesDeletedConsumer;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.series.config.SeriesTestApplication;
@@ -24,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -53,6 +57,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -67,7 +73,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ol>
  *     <li>POST /series + 加文章 → GET /articles/{uuid} 回應含 seriesNav</li>
  *     <li>DELETE /articles/{uuid} → series.article_count 連動 -1</li>
- *     <li>DELETE /series/{uuid} → articles.series_id 設為 NULL</li>
+ *     <li>DELETE /series/{uuid} → SeriesDeletedEvent → article consumer 把 articles.series_uuid 清空</li>
  * </ol>
  *
  * <p>SeriesTestApplication 已掃 article 模組（ArticleController 可用），
@@ -106,6 +112,7 @@ class CrossModuleSeriesIT {
     @Autowired private SeriesRepository seriesRepo;
     @Autowired private ArticleRepository articleRepo;
     @Autowired private SeriesArticleDeletedConsumer seriesArticleDeletedConsumer;
+    @Autowired private ArticleSeriesDeletedConsumer articleSeriesDeletedConsumer;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private SeriesFacade seriesFacade;
 
@@ -122,10 +129,10 @@ class CrossModuleSeriesIT {
 
     @BeforeEach
     void setUp() {
-        // 清理前次測試資料（先刪 processed_events，再解綁 series_id，最後刪 series/article）
+        // 清理前次測試資料（先刪 processed_events，再解綁 series_uuid，最後刪 series/article）
         jdbcTemplate.execute("DELETE FROM processed_events");
         articleRepo.findAll().forEach(a -> {
-            a.setSeriesId(null);
+            a.setSeriesUuid(null);
             a.setSeriesPosition(null);
             articleRepo.save(a);
         });
@@ -137,7 +144,7 @@ class CrossModuleSeriesIT {
     void cleanUp() {
         jdbcTemplate.execute("DELETE FROM processed_events");
         articleRepo.findAll().forEach(a -> {
-            a.setSeriesId(null);
+            a.setSeriesUuid(null);
             a.setSeriesPosition(null);
             articleRepo.save(a);
         });
@@ -166,7 +173,7 @@ class CrossModuleSeriesIT {
                                             Long authorId, UUID seriesUuid) {
         try {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
-                eventId, articleUuid, authorId, List.of(), List.of(), Instant.now(), null, seriesUuid);
+                eventId, articleUuid, List.of(), List.of(), Instant.now(), null, seriesUuid);
             Channel mockChannel = Mockito.mock(Channel.class);
             seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
         } catch (Exception e) {
@@ -183,7 +190,7 @@ class CrossModuleSeriesIT {
     private Article createArticle(Long authorId, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededUsers.uuidOf(authorId));
         article.setTitle("Series IT Article " + UUID.randomUUID());
         article.setSlug("series-it-" + UUID.randomUUID());
         article.setContent("test content");
@@ -198,8 +205,8 @@ class CrossModuleSeriesIT {
     }
 
     /** 直接透過 repository 將文章加入 series 指定位置（繞過 API，因 API 僅允許 PUBLISHED 文章加入）。 */
-    private Article assignToSeries(Article article, Long seriesId, int position) {
-        article.setSeriesId(seriesId);
+    private Article assignToSeries(Article article, UUID seriesUuid, int position) {
+        article.setSeriesUuid(seriesUuid);
         article.setSeriesPosition(position);
         return articleRepo.save(article);
     }
@@ -312,7 +319,7 @@ class CrossModuleSeriesIT {
         // 1. 建立 series + 文章，直接寫 DB 設定 article_count = 1
         Series series = createSeries("Idempotent Series", "idempotent-series-it", AUTHOR_ID);
         Article article = createPublishedArticle(AUTHOR_ID);
-        article.setSeriesId(series.getId());
+        article.setSeriesUuid(series.getUuid());
         article.setSeriesPosition(1);
         articleRepo.save(article);
         seriesRepo.findByUuid(series.getUuid()).ifPresent(s -> {
@@ -323,7 +330,7 @@ class CrossModuleSeriesIT {
         // 2. 構造一個固定 eventId 的事件（重送 2 次）
         UUID eventId = UUID.randomUUID();
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-            eventId, article.getUuid(), AUTHOR_ID, List.of(), List.of(), Instant.now(), null, series.getUuid());
+            eventId, article.getUuid(), List.of(), List.of(), Instant.now(), null, series.getUuid());
 
         // 3. 第一次處理 → article_count 從 1 變 0
         Channel mockChannel = Mockito.mock(Channel.class);
@@ -353,7 +360,7 @@ class CrossModuleSeriesIT {
     void deleteArticle_notInSeries_noOp() {
         // 1. 構造 seriesUuid == null 的事件
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-            UUID.randomUUID(), UUID.randomUUID(), AUTHOR_ID, List.of(), List.of(), Instant.now(), null, null);
+            UUID.randomUUID(), UUID.randomUUID(), List.of(), List.of(), Instant.now(), null, null);
         Channel mockChannel = Mockito.mock(Channel.class);
         seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
 
@@ -365,24 +372,24 @@ class CrossModuleSeriesIT {
         assertThat(count).isEqualTo(0);
     }
 
-    // ─── Test C: DELETE series → articles.series_id NULL ────────────────────
+    // ─── Test C: DELETE series → SeriesDeletedEvent → article consumer 清空 articles.series_uuid ──
 
     @Test
-    @DisplayName("DELETE /series/{uuid} → articles.series_id 設為 NULL")
-    void deleteSeries_unlinksArticles() throws Exception {
+    @DisplayName("DELETE /series/{uuid} → 發出 SeriesDeletedEvent；article consumer 處理後 articles.series_uuid 清空、文章留存")
+    void deleteSeries_unlinksArticlesViaEventConsumer() throws Exception {
         // 1. 建立 series + 文章
         Series series = createSeries("Unlink Series", "unlink-series-it", AUTHOR_ID);
         Article article = createPublishedArticle(AUTHOR_ID);
         UUID articleUuid = article.getUuid();
 
         // 2. 將文章加入 series（直接寫 DB，避免 article_count 影響 Test C 邏輯）
-        article.setSeriesId(series.getId());
+        article.setSeriesUuid(series.getUuid());
         article.setSeriesPosition(1);
         articleRepo.save(article);
 
         // 確認文章已關聯
         Article linked = articleRepo.findById(article.getId()).orElseThrow();
-        assertThat(linked.getSeriesId()).isEqualTo(series.getId());
+        assertThat(linked.getSeriesUuid()).isEqualTo(series.getUuid());
 
         // 3. DELETE /api/v1/series/{uuid}（series 所有人刪除）
         mockMvc.perform(delete("/api/v1/series/{uuid}", series.getUuid())
@@ -393,11 +400,30 @@ class CrossModuleSeriesIT {
         // 4. series 已不存在
         assertThat(seriesRepo.findByUuid(series.getUuid())).isEmpty();
 
-        // 5. 文章的 series_id 應已被 DB ON DELETE SET NULL 設為 NULL
-        Article unlinked = articleRepo.findById(article.getId()).orElseThrow();
-        assertThat(unlinked.getSeriesId()).isNull();
+        // 5. V32 起沒有 FK：事件還沒被消費前，文章仍帶著（已不存在的）series_uuid——這是最終一致的中間狀態
+        Article beforeConsume = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(beforeConsume.getSeriesUuid()).isEqualTo(series.getUuid());
 
-        // 6. 確認 GET /articles/{uuid} 回應中 seriesNav 為 null（無 series 關聯）
+        // 6. 中間狀態下對外的 seriesNav 仍然是 null（SeriesFacade 查無 series 即無導覽），不會洩漏已刪除的系列
+        mockMvc.perform(get("/api/v1/articles/{uuid}", articleUuid)
+                        .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.seriesNav").doesNotExist());
+
+        // 7. 把 series 實際發出的事件交給 article consumer（IT 不真起 broker，直接呼叫）
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(rabbitTemplate).convertAndSend(
+                eq(SeriesEventContract.EXCHANGE), eq(SeriesEventContract.ROUTING_KEY_DELETED), published.capture());
+        SeriesDeletedEvent event = (SeriesDeletedEvent) published.getValue();
+        assertThat(event.seriesUuid()).isEqualTo(series.getUuid());
+        articleSeriesDeletedConsumer.onSeriesDeleted(event, Mockito.mock(Channel.class), 1L);
+
+        // 8. 文章的 series_uuid／series_position 已清空，文章本身仍在
+        Article unlinked = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(unlinked.getSeriesUuid()).isNull();
+        assertThat(unlinked.getSeriesPosition()).isNull();
+
+        // 9. 確認 GET /articles/{uuid} 回應中 seriesNav 為 null（無 series 關聯）
         mockMvc.perform(get("/api/v1/articles/{uuid}", articleUuid)
                         .with(asUser(AUTHOR_ID, Role.AUTHOR)))
                 .andExpect(status().isOk())
@@ -436,10 +462,10 @@ class CrossModuleSeriesIT {
         //    ARTICLE_NOT_PUBLISHED 守衛，故本測試全程繞過 API，直接操作 repository）
         Series series = createSeries("Nav Skip Draft Series", "nav-skip-draft-series-it", AUTHOR_ID);
 
-        Article pubFirst = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getId(), 1);
-        Article draftMiddle = assignToSeries(createArticle(AUTHOR_ID, ArticleStatus.DRAFT), series.getId(), 2);
-        Article pubMiddle = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getId(), 3);
-        Article pubLast = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getId(), 4);
+        Article pubFirst = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getUuid(), 1);
+        Article draftMiddle = assignToSeries(createArticle(AUTHOR_ID, ArticleStatus.DRAFT), series.getUuid(), 2);
+        Article pubMiddle = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getUuid(), 3);
+        Article pubLast = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getUuid(), 4);
 
         // 2. pubFirst：首篇，prev 應為 empty；next 跳過 draftMiddle，直接拿到 pubMiddle
         SeriesNavigation firstNav = seriesFacade.getSeriesNavigation(pubFirst.getUuid()).orElseThrow();

@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.series.event;
 import dowob.xyz.blog.infrastructure.config.RabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
+import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.series.config.SeriesRabbitMqConfig;
 import dowob.xyz.blog.module.series.service.SeriesEventPublisher;
 import org.junit.jupiter.api.AfterAll;
@@ -11,7 +12,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.Queue;
-import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -26,9 +26,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
- * {@code SeriesDeletedEvent} 對真實 RabbitMQ 的整合測試：本階段<b>沒有 consumer</b>（article 於 M6 訂閱），
- * 必須確認「exchange 已宣告、沒有任何 queue 綁定時發送不出錯」，且日後訂閱端（以相同契約綁定）收得到
- * 正確的 JSON。使用與正式環境相同的 {@link RabbitMqConfig#messageConverter()}。
+ * {@code SeriesDeletedEvent} 對真實 RabbitMQ 的整合測試：確認「exchange 已宣告、沒有任何 queue 綁定時發送不出錯」，
+ * 且 article 模組（M6-b 起的訂閱端）以自己的 {@link ArticleRabbitMqConfig} 宣告的 queue／binding 收得到正確的 JSON；
+ * article 與 series 各自宣告同名的 {@code series.events} exchange（參數相同）時，重複宣告不衝突。
+ * 使用與正式環境相同的 {@link RabbitMqConfig#messageConverter()}。
  *
  * @author Yuan
  * @version 1.0
@@ -63,7 +64,7 @@ class SeriesDeletedEventBrokerIT {
     }
 
     @Test
-    @DisplayName("沒有任何 queue 綁定（本階段沒有 consumer）→ exchange 存在，發送不出錯")
+    @DisplayName("沒有任何 queue 綁定 → exchange 存在，發送不出錯（topic exchange 直接丟棄）")
     void publishWithoutAnyConsumer_isSilentlyDroppedWithoutError() {
         assertThatCode(() -> template.execute(channel ->
                 channel.exchangeDeclarePassive(SeriesEventContract.EXCHANGE)))
@@ -73,19 +74,29 @@ class SeriesDeletedEventBrokerIT {
     }
 
     @Test
-    @DisplayName("日後的訂閱端以契約的 routing key 綁定 queue → 收到 JSON：eventId、seriesUuid、occurredAt")
-    void futureSubscriber_receivesEventAsContractJson() {
-        Queue queue = new Queue("series.deleted.future-subscriber", false, true, true);
+    @DisplayName("article 與 series 各自宣告同名的 series.events exchange（參數相同）→ 重複宣告冪等，不被 broker 拒絕")
+    void duplicateExchangeDeclarationByArticleAndSeries_isIdempotent() {
+        assertThatCode(() -> {
+            admin.declareExchange(new SeriesRabbitMqConfig().seriesEventsExchange());
+            admin.declareExchange(new ArticleRabbitMqConfig().articleSeriesEventsExchange());
+            admin.declareExchange(new SeriesRabbitMqConfig().seriesEventsExchange());
+        }).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("article 的 queue／binding（ArticleRabbitMqConfig）→ series 發出的事件送進 article.series-deleted，JSON 為 eventId、seriesUuid、occurredAt")
+    void articleQueue_receivesEventPublishedBySeries() {
+        ArticleRabbitMqConfig articleConfig = new ArticleRabbitMqConfig();
+        Queue queue = articleConfig.articleSeriesDeletedQueue();
+        admin.declareExchange(articleConfig.articleSeriesEventsExchange());
         admin.declareQueue(queue);
-        admin.declareBinding(BindingBuilder.bind(queue)
-                .to(new SeriesRabbitMqConfig().seriesEventsExchange())
-                .with(SeriesEventContract.ROUTING_KEY_DELETED));
+        admin.declareBinding(articleConfig.articleSeriesDeletedBinding(queue, articleConfig.articleSeriesEventsExchange()));
         UUID seriesUuid = UUID.randomUUID();
 
         publisher.publishDeleted(seriesUuid);
 
         Message received = template.receive(queue.getName(), 5_000);
-        assertThat(received).as("訂閱端應收到訊息").isNotNull();
+        assertThat(received).as("article.series-deleted 應收到訊息").isNotNull();
         Object restored = new RabbitMqConfig().messageConverter().fromMessage(withInferredType(received));
         assertThat(restored).isInstanceOfSatisfying(SeriesDeletedEvent.class, event -> {
             assertThat(event.seriesUuid()).isEqualTo(seriesUuid);

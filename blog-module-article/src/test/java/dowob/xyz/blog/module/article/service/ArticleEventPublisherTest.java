@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.service;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticleArchivedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
@@ -38,15 +39,13 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * ArticleEventPublisher 單元測試
@@ -67,25 +66,34 @@ class ArticleEventPublisherTest {
     @Mock
     private ArticleMapper articleMapper;
 
-    @Mock
-    private ArticleIdentityResolver identityResolver;
-
     @InjectMocks
     private ArticleEventPublisher publisher;
+
+    /** 測試用作者公開 UUID（M6-a 起文章直接存 author_uuid，事件不再經查詢取得） */
+    private static final UUID AUTHOR_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+
+    /**
+     * 建立指定作者的 UserDisplayInfo 回傳，模擬 {@code UserFacade.getDisplayInfoByUuids} 查得到作者暱稱。
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param nickname   作者暱稱
+     * @return facade 回傳的 Map
+     */
+    private static Map<UUID, UserDisplayInfo> displayInfo(UUID authorUuid, String nickname) {
+        return Map.of(authorUuid, new UserDisplayInfo(authorUuid, nickname, null));
+    }
 
     @Nested
     @DisplayName("publishContentChanged")
     class PublishContentChanged {
 
         @Test
-        @DisplayName("正常：事件帶新的 eventId、articleUuid 與 authorUuid（Long 過渡欄位已移除）")
+        @DisplayName("正常：事件帶新的 eventId、articleUuid 與直接取自文章的 authorUuid，且不呼叫 UserFacade")
         void publishContentChanged_shouldFillEventIdAndAuthorUuid() {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
-            UUID authorUuid = UUID.randomUUID();
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+            article.setAuthorUuid(AUTHOR_UUID);
 
             publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.SAVED);
 
@@ -98,8 +106,9 @@ class ArticleEventPublisherTest {
             ArticleContentChangedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
-            assertThat(event.authorUuid()).isEqualTo(authorUuid);
+            assertThat(event.authorUuid()).isEqualTo(AUTHOR_UUID);
             assertThat(event.action()).isEqualTo(ArticleContentChangedEvent.Action.SAVED);
+            verifyNoInteractions(userFacade);
         }
 
         @Test
@@ -108,8 +117,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, UUID.randomUUID()));
+            article.setAuthorUuid(AUTHOR_UUID);
 
             publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.SAVED);
 
@@ -125,26 +133,6 @@ class ArticleEventPublisherTest {
             assertThat(payload.keySet())
                     .containsExactlyInAnyOrder("eventId", "articleUuid", "authorUuid", "action", "occurredAt");
         }
-
-        @Test
-        @DisplayName("防禦：authorUuid 查詢失敗不得阻擋事件發送（欄位為 null）")
-        void publishContentChanged_whenUuidLookupFails_shouldStillPublish() {
-            Article article = new Article();
-            article.setId(100L);
-            article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
-
-            publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.PUBLISHED);
-
-            ArgumentCaptor<ArticleContentChangedEvent> captor =
-                    ArgumentCaptor.forClass(ArticleContentChangedEvent.class);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleEventContract.EXCHANGE),
-                    eq(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED),
-                    captor.capture());
-            assertThat(captor.getValue().authorUuid()).isNull();
-        }
     }
 
     @Nested
@@ -155,7 +143,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
+            article.setAuthorUuid(AUTHOR_UUID);
             article.setTitle("標題");
             article.setSlug("slug");
             article.setSummary("摘要");
@@ -165,15 +153,12 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("publishUpdated：事件帶新的 eventId 與 authorUuid，並保留 authorId 過渡欄位")
-        void publishUpdated_shouldFillEventIdAndAuthorUuid() {
+        @DisplayName("publishUpdated：事件帶新的 eventId、文章的 authorUuid 與 UUID 版 facade 查得的 authorNickname，且只查一次")
+        void publishUpdated_shouldFillEventIdAuthorUuidAndNickname() {
             Article article = publishedArticle();
-            UUID authorUuid = UUID.randomUUID();
             when(articleMapper.findTagsByArticleUuid(article.getUuid()))
                     .thenReturn(List.of(new TagInfo(UUID.randomUUID(), "Java", "java")));
-            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
-            when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+            when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(displayInfo(AUTHOR_UUID, "愛麗絲"));
 
             publisher.publishUpdated(article);
 
@@ -183,20 +168,17 @@ class ArticleEventPublisherTest {
             ArticleUpdatedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
-            assertThat(event.authorId()).isEqualTo(1L);
-            assertThat(event.authorUuid()).isEqualTo(authorUuid);
-            assertThat(event.authorUsername()).isEqualTo("alice");
+            assertThat(event.authorUuid()).isEqualTo(AUTHOR_UUID);
+            assertThat(event.authorNickname()).isEqualTo("愛麗絲");
             assertThat(event.tags()).hasSize(1);
+            verify(userFacade, times(1)).getDisplayInfoByUuids(any());
         }
 
         @Test
-        @DisplayName("publishPublished：事件帶新的 eventId 與 authorUuid，並保留 authorId 過渡欄位")
-        void publishPublished_shouldFillEventIdAndAuthorUuid() {
+        @DisplayName("publishPublished：事件帶新的 eventId、文章的 authorUuid 與 UUID 版 facade 查得的 authorNickname，且只查一次")
+        void publishPublished_shouldFillEventIdAuthorUuidAndNickname() {
             Article article = publishedArticle();
-            UUID authorUuid = UUID.randomUUID();
-            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
-            when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
+            when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(displayInfo(AUTHOR_UUID, "愛麗絲"));
 
             publisher.publishPublished(article, List.of());
 
@@ -206,26 +188,62 @@ class ArticleEventPublisherTest {
             ArticlePublishedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
-            assertThat(event.authorId()).isEqualTo(1L);
-            assertThat(event.authorUuid()).isEqualTo(authorUuid);
+            assertThat(event.authorUuid()).isEqualTo(AUTHOR_UUID);
+            assertThat(event.authorNickname()).isEqualTo("愛麗絲");
             assertThat(event.contentText()).isEqualTo("內容");
+            verify(userFacade, times(1)).getDisplayInfoByUuids(any());
         }
 
         @Test
-        @DisplayName("防禦：authorUuid 查詢失敗不得阻擋 publishPublished（欄位為 null，事件仍送出）")
-        void publishPublished_whenUuidLookupFails_shouldStillPublish() {
+        @DisplayName("publishPublished：facade 查無作者暱稱 → authorNickname 為 null，事件仍送出（authorUuid 照帶）")
+        void publishPublished_whenNicknameMissing_shouldStillPublishWithNullNickname() {
             Article article = publishedArticle();
-            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
-            when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
+            when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(Map.of());
 
             publisher.publishPublished(article, List.of());
 
             ArgumentCaptor<ArticlePublishedEvent> captor = ArgumentCaptor.forClass(ArticlePublishedEvent.class);
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_PUBLISHED), captor.capture());
-            assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
+            assertThat(captor.getValue().authorUuid()).isEqualTo(AUTHOR_UUID);
+            assertThat(captor.getValue().authorNickname()).isNull();
+        }
+
+        @Test
+        @DisplayName("publishUpdated：facade 查無作者暱稱 → authorNickname 為 null，事件仍送出（authorUuid 照帶）")
+        void publishUpdated_whenNicknameMissing_shouldStillPublishWithNullNickname() {
+            Article article = publishedArticle();
+            when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(Map.of());
+
+            publisher.publishUpdated(article);
+
+            ArgumentCaptor<ArticleUpdatedEvent> captor = ArgumentCaptor.forClass(ArticleUpdatedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_UPDATED), captor.capture());
+            assertThat(captor.getValue().authorUuid()).isEqualTo(AUTHOR_UUID);
+            assertThat(captor.getValue().authorNickname()).isNull();
+        }
+
+        @Test
+        @DisplayName("事件序列化後不含 authorId／authorUsername（登入識別符與 Long 識別不外流）")
+        void publishedAndUpdated_payloadHasNoLongIdentityOrUsername() {
+            Article article = publishedArticle();
+            when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(displayInfo(AUTHOR_UUID, "愛麗絲"));
+
+            publisher.publishPublished(article, List.of());
+            publisher.publishUpdated(article);
+
+            ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+            verify(rabbitTemplate, times(2)).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), any(String.class), captor.capture());
+            com.fasterxml.jackson.databind.ObjectMapper mapper =
+                    new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+            captor.getAllValues().forEach(event -> {
+                Map<String, Object> payload = mapper.convertValue(
+                        event, new com.fasterxml.jackson.core.type.TypeReference<>() { });
+                assertThat(payload.keySet()).doesNotContain("authorId", "authorUsername")
+                        .contains("authorUuid", "authorNickname");
+            });
         }
     }
 
@@ -252,102 +270,56 @@ class ArticleEventPublisherTest {
     }
 
     @Nested
-    @DisplayName("uuid 過渡欄位的查詢次數與失敗處理")
-    class IdentityResolution {
+    @DisplayName("作者識別：直接取自文章，不再經任何查詢（M6-a）")
+    class AuthorIdentityWithoutLookup {
 
         private Article publishedArticle() {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
+            article.setAuthorUuid(AUTHOR_UUID);
             article.setContent("內容");
             return article;
         }
 
-        private List<String> warnMessagesWhile(Runnable action) {
-            Logger logger = (Logger) LogManager.getLogger(ArticleEventPublisher.class);
-            Level original = logger.getLevel();
-            logger.setLevel(Level.WARN);
-            CapturingAppender appender = attachAppender();
-            try {
-                action.run();
-                return appender.events.stream()
-                        .filter(e -> e.getLevel() == Level.WARN)
-                        .map(e -> e.getMessage().getFormattedMessage())
-                        .toList();
-            } finally {
-                detachAppender(appender);
-                logger.setLevel(original);
-            }
+        @Test
+        @DisplayName("publishContentChanged：不碰 UserFacade")
+        void publishContentChanged_noLookups() {
+            publisher.publishContentChanged(publishedArticle(), ArticleContentChangedEvent.Action.SAVED);
+
+            verifyNoInteractions(userFacade);
         }
 
         @Test
-        @DisplayName("publishUpdated：authorUuid 查詢失敗不得阻擋事件發送（欄位為 null），warn 帶事件類型與 articleUuid")
-        void publishUpdated_whenUuidLookupFails_shouldStillPublishAndWarnWithContext() {
-            Article article = publishedArticle();
-            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
-            when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
+        @DisplayName("publishDeleted：不碰 UserFacade；seriesUuid 由呼叫端（取自文章的 series_uuid）傳入，不查任何東西")
+        void publishDeleted_noLookups() {
+            publisher.publishDeleted(publishedArticle(), UUID.randomUUID(), List.of(), List.of());
 
-            List<String> warns = warnMessagesWhile(() -> publisher.publishUpdated(article));
-
-            ArgumentCaptor<ArticleUpdatedEvent> captor = ArgumentCaptor.forClass(ArticleUpdatedEvent.class);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_UPDATED), captor.capture());
-            assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
-            assertThat(warns).anySatisfy(m -> assertThat(m)
-                    .contains("ArticleUpdatedEvent").contains(article.getUuid().toString()));
+            verifyNoInteractions(userFacade);
         }
 
         @Test
-        @DisplayName("publishUpdated：作者查詢恰 1 次，不查 series")
-        void publishUpdated_resolvesAuthorExactlyOnce() {
+        @DisplayName("publishPublished／publishUpdated：作者暱稱各只呼叫 UserFacade 一次")
+        void publishPublishedAndUpdated_resolveNicknameOnceEach() {
             Article article = publishedArticle();
+            when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(displayInfo(AUTHOR_UUID, "愛麗絲"));
+
+            publisher.publishPublished(article, List.of());
             publisher.publishUpdated(article);
 
-            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
+            verify(userFacade, times(2)).getDisplayInfoByUuids(List.of(AUTHOR_UUID));
         }
 
         @Test
-        @DisplayName("publishPublished：作者查詢恰 1 次，不查 series")
-        void publishPublished_resolvesAuthorExactlyOnce() {
+        @DisplayName("publishUpdated：UserFacade 查詢失敗 → 不外拋、事件不送出（既有 best-effort 行為），warn 帶事件類型")
+        void publishUpdated_whenNicknameLookupFails_doesNotPropagateAndWarns() {
             Article article = publishedArticle();
-            publisher.publishPublished(article, List.of());
+            when(userFacade.getDisplayInfoByUuids(any())).thenThrow(new IllegalStateException("user down"));
 
-            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
-        }
+            assertThatCode(() -> publisher.publishUpdated(article)).doesNotThrowAnyException();
 
-        @Test
-        @DisplayName("publishContentChanged：作者查詢恰 1 次，不查 series")
-        void publishContentChanged_resolvesAuthorExactlyOnce() {
-            Article article = publishedArticle();
-            publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.SAVED);
-
-            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
-        }
-
-        @Test
-        @DisplayName("publishDeleted（有系列）：作者 1 次；series 已由呼叫端在刪除前取得，這裡 0 次")
-        void publishDeleted_withSeries_resolvesAuthorOnceAndNoSeriesLookup() {
-            Article article = publishedArticle();
-            publisher.publishDeleted(article, UUID.randomUUID(), List.of(), List.of());
-
-            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
-        }
-
-        @Test
-        @DisplayName("publishDeleted（無系列）：作者 1 次，系列 0 次")
-        void publishDeleted_withoutSeries_resolvesAuthorOnceAndNoSeries() {
-            Article article = publishedArticle();
-            publisher.publishDeleted(article, (UUID) null, List.of(), List.of());
-
-            verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
+            verify(rabbitTemplate, never()).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_UPDATED), any(Object.class));
         }
     }
 
@@ -356,15 +328,13 @@ class ArticleEventPublisherTest {
     class PublishDeleted {
 
         @Test
-        @DisplayName("M4-b：seriesUuid 由呼叫端在刪除前取得並傳入 → 即使此時 series 查詢會失敗，事件仍帶正確的 seriesUuid，且不再查 series")
-        void publishDeleted_withPrecomputedSeriesUuid_neverQueriesSeriesAndKeepsUuid() {
+        @DisplayName("M6-b：seriesUuid 由呼叫端（取自文章自己的 series_uuid）傳入 → 事件帶同一個 seriesUuid")
+        void publishDeleted_withSeriesUuid_keepsUuidInEvent() {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
+            article.setAuthorUuid(AUTHOR_UUID);
             UUID seriesUuid = UUID.randomUUID();
-            lenient().when(identityResolver.resolveSeriesUuids(anyCollection()))
-                    .thenThrow(new IllegalStateException("series down"));
 
             publisher.publishDeleted(article, seriesUuid, List.of(), List.of());
 
@@ -372,28 +342,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             assertThat(captor.getValue().seriesUuid()).isEqualTo(seriesUuid);
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
-        }
-
-        @Test
-        @DisplayName("M4-b：resolveSeriesUuidForDelete 查得到 → 回傳 uuid；seriesId 為 null → null 且不查詢")
-        void resolveSeriesUuidForDelete_returnsUuidOrNull() {
-            UUID seriesUuid = UUID.randomUUID();
-            when(identityResolver.resolveSeriesUuids(anyCollection())).thenReturn(Map.of(200L, seriesUuid));
-
-            assertThat(publisher.resolveSeriesUuidForDelete(200L)).isEqualTo(seriesUuid);
-            assertThat(publisher.resolveSeriesUuidForDelete(null)).isNull();
-
-            verify(identityResolver, times(1)).resolveSeriesUuids(anyCollection());
-        }
-
-        @Test
-        @DisplayName("M4-b：resolveSeriesUuidForDelete 查詢失敗 → 例外往外拋（讓刪除在動手前就失敗，而不是事後發出 null）")
-        void resolveSeriesUuidForDelete_whenLookupFails_propagates() {
-            when(identityResolver.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
-
-            assertThatThrownBy(() -> publisher.resolveSeriesUuidForDelete(200L))
-                    .isInstanceOf(IllegalStateException.class);
         }
 
         @Test
@@ -402,7 +350,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             UUID tagUuid = UUID.randomUUID();
             UUID categoryUuid = UUID.randomUUID();
@@ -418,7 +366,6 @@ class ArticleEventPublisherTest {
             ArticleDeletedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
-            assertThat(event.authorId()).isEqualTo(1L);
             assertThat(event.categoryIds()).containsExactly(categoryUuid);
             assertThat(event.tagIds()).containsExactly(tagUuid);
             assertThat(event.occurredAt()).isNotNull();
@@ -430,7 +377,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(10L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(5L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             publisher.publishDeleted(article, (UUID) null, List.of(), List.of());
 
@@ -447,15 +394,14 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("正常：事件帶 authorUuid（批次取得）與呼叫端傳入的 seriesUuid")
+        @DisplayName("正常：事件帶文章自己的 authorUuid 與呼叫端傳入的 seriesUuid（不含 authorId）")
         void publishDeleted_shouldFillAuthorUuidAndSeriesUuid() {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
             UUID authorUuid = UUID.randomUUID();
+            article.setAuthorUuid(authorUuid);
             UUID seriesUuid = UUID.randomUUID();
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
 
             publisher.publishDeleted(article, seriesUuid, List.of(), List.of());
 
@@ -463,7 +409,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             ArticleDeletedEvent event = captor.getValue();
-            assertThat(event.authorId()).isEqualTo(1L);
             assertThat(event.authorUuid()).isEqualTo(authorUuid);
             assertThat(event.seriesUuid()).isEqualTo(seriesUuid);
         }
@@ -474,7 +419,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(10L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(5L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             publisher.publishDeleted(article, (UUID) null, List.of(), List.of());
 
@@ -482,27 +427,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             assertThat(captor.getValue().seriesUuid()).isNull();
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
-        }
-
-        @Test
-        @DisplayName("防禦：authorUuid 過渡欄位查詢失敗不得阻擋事件發送（authorUuid 為 null，seriesUuid 仍為傳入值）")
-        void publishDeleted_whenAuthorLookupFails_shouldStillPublishWithSeriesUuid() {
-            Article article = new Article();
-            article.setId(30L);
-            article.setUuid(UUID.randomUUID());
-            article.setAuthorId(1L);
-            when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
-            UUID seriesUuid = UUID.randomUUID();
-
-            publisher.publishDeleted(article, seriesUuid, List.of(), List.of());
-
-            ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
-            verify(rabbitTemplate).convertAndSend(
-                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
-            assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().seriesUuid()).isEqualTo(seriesUuid);
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
         }
 
         @Test
@@ -511,7 +435,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(20L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(3L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             publisher.publishDeleted(article, (UUID) null, null, null);
 
@@ -538,7 +462,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(21L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(3L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
                     .convertAndSend(eq(ArticleEventContract.EXCHANGE),
@@ -565,7 +489,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(22L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(3L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
                     .convertAndSend(eq(ArticleEventContract.EXCHANGE),
@@ -587,7 +511,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(300L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(7L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             publisher.publishArchived(article);
 
@@ -617,7 +541,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(301L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(7L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
                     .convertAndSend(eq(ArticleEventContract.EXCHANGE),
@@ -638,7 +562,7 @@ class ArticleEventPublisherTest {
             Article article = new Article();
             article.setId(302L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(7L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             doThrow(new RuntimeException("MQ down")).when(rabbitTemplate)
                     .convertAndSend(eq(ArticleEventContract.EXCHANGE),
