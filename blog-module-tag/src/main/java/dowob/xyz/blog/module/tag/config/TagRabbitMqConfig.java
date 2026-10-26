@@ -13,8 +13,8 @@ import org.springframework.context.annotation.Configuration;
  * 標籤模組 RabbitMQ 設定
  *
  * <p>
- * 宣告標籤模組所需的 Queue，並綁定至文章事件 Exchange，
- * 訂閱文章發布事件以更新標籤使用計數。
+ * 宣告標籤模組所需的 Queue，並綁定至文章事件 Exchange：
+ * 訂閱文章已標籤事件以更新標籤使用計數，訂閱文章刪除事件以連動刪除 {@code article_tags} 列。
  * </p>
  *
  * @author Yuan
@@ -32,6 +32,11 @@ public class TagRabbitMqConfig {
      * 標籤模組訂閱的文章已標籤事件 Queue 名稱
      */
     public static final String QUEUE_TAG_ARTICLE_TAGGED = "tag.article.tagged";
+
+    /**
+     * 標籤模組訂閱的文章刪除事件 Queue 名稱（文章刪除後連動刪除其 {@code article_tags} 列）
+     */
+    public static final String QUEUE_TAG_ARTICLE_DELETED = "tag.article-deleted";
 
     /**
      * 文章已標籤 Routing Key（取自共用事件契約 {@link ArticleEventContract#ROUTING_KEY_TAGGED}）
@@ -59,6 +64,33 @@ public class TagRabbitMqConfig {
                 .withArgument("x-dead-letter-exchange", "blog.dlq")
                 .withArgument("x-dead-letter-routing-key", "dead-letter")
                 .build();
+    }
+
+    /**
+     * 建立文章刪除事件消費用 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue tagArticleDeletedQueue() {
+        return QueueBuilder.durable(QUEUE_TAG_ARTICLE_DELETED)
+                .withArgument("x-dead-letter-exchange", "blog.dlq")
+                .withArgument("x-dead-letter-routing-key", "dead-letter")
+                .build();
+    }
+
+    /**
+     * 建立文章刪除 Queue 與 Exchange 的綁定（routing key 取自共用事件契約
+     * {@link ArticleEventContract#ROUTING_KEY_DELETED}，不 import article 模組）
+     *
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding bindTagArticleDeleted() {
+        return BindingBuilder
+                .bind(tagArticleDeletedQueue())
+                .to(tagArticleEventsExchange())
+                .with(ArticleEventContract.ROUTING_KEY_DELETED);
     }
 
     /**
