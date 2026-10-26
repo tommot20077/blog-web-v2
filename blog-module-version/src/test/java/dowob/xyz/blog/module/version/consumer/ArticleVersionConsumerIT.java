@@ -16,6 +16,7 @@ import dowob.xyz.blog.module.version.config.VersionTestApplication;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
 import dowob.xyz.blog.module.version.service.VersioningService;
+import dowob.xyz.blog.module.version.support.SeededVersionUsers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -149,9 +150,7 @@ class ArticleVersionConsumerIT {
     void onContentChanged_savedAction_writesAutoVersion() {
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                testArticle.getId(),
                 testArticle.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.SAVED,
                 Instant.now()
@@ -162,7 +161,8 @@ class ArticleVersionConsumerIT {
         List<ArticleVersion> versions = (List<ArticleVersion>) versionRepo.findAll();
         assertThat(versions).hasSize(1);
         assertThat(versions.get(0).getType()).isEqualTo(VersioningService.TYPE_AUTO);
-        assertThat(versions.get(0).getArticleId()).isEqualTo(testArticle.getId());
+        assertThat(versions.get(0).getArticleUuid()).isEqualTo(testArticle.getUuid());
+        assertThat(versions.get(0).getAuthorUuid()).isEqualTo(SeededVersionUsers.USER1_UUID);
     }
 
     /**
@@ -175,8 +175,8 @@ class ArticleVersionConsumerIT {
         for (int i = 0; i < 3; i++) {
             ArticleVersion v = new ArticleVersion();
             v.setUuid(UUID.randomUUID());
-            v.setArticleId(testArticle.getId());
-            v.setAuthorId(AUTHOR_ID);
+            v.setArticleUuid(testArticle.getUuid());
+            v.setAuthorUuid(SeededVersionUsers.USER1_UUID);
             v.setType(VersioningService.TYPE_AUTO);
             v.setTitle("Auto " + i);
             v.setSlug(testArticle.getSlug());
@@ -193,9 +193,7 @@ class ArticleVersionConsumerIT {
         // 觸發 PUBLISHED action
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                testArticle.getId(),
                 testArticle.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.PUBLISHED,
                 Instant.now()
@@ -216,14 +214,12 @@ class ArticleVersionConsumerIT {
     @Test
     @DisplayName("RESTORED action: no-op，不寫入任何快照")
     void onContentChanged_restoredAction_isNoOp() {
-        long countBefore = countVersionsForArticle(testArticle.getId());
+        long countBefore = countVersionsForArticle(testArticle.getUuid());
         assertThat(countBefore).isZero();
 
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                testArticle.getId(),
                 testArticle.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.RESTORED,
                 Instant.now()
@@ -231,7 +227,7 @@ class ArticleVersionConsumerIT {
 
         consumer.onContentChanged(event, mockChannel, DELIVERY_TAG);
 
-        long countAfter = countVersionsForArticle(testArticle.getId());
+        long countAfter = countVersionsForArticle(testArticle.getUuid());
         assertThat(countAfter).isZero();
     }
 
@@ -248,8 +244,8 @@ class ArticleVersionConsumerIT {
         for (int i = 0; i < 51; i++) {
             ArticleVersion v = new ArticleVersion();
             v.setUuid(UUID.randomUUID());
-            v.setArticleId(testArticle.getId());
-            v.setAuthorId(AUTHOR_ID);
+            v.setArticleUuid(testArticle.getUuid());
+            v.setAuthorUuid(SeededVersionUsers.USER1_UUID);
             v.setType(VersioningService.TYPE_AUTO);
             v.setTitle("Auto-pre-" + i);
             v.setSlug(testArticle.getSlug());
@@ -260,29 +256,29 @@ class ArticleVersionConsumerIT {
         }
 
         // 確認有 51 個 AUTO 快照
-        assertThat(countAutoVersionsForArticle(testArticle.getId())).isEqualTo(51);
+        assertThat(countAutoVersionsForArticle(testArticle.getUuid())).isEqualTo(51);
 
         // 直接呼叫 recordAutoSnapshot（模擬 consumer SAVED 路徑中 shouldSnapshot=true 的情況）
         // 這會寫入第 52 個快照，然後 retainAuto(articleId, 50) 刪掉超過 50 的
-        versioningService.recordAutoSnapshot(testArticle.getId());
+        versioningService.recordAutoSnapshot(testArticle.getUuid());
 
         // 驗證 AUTO 快照數 ≤ 50（retention 策略生效）
-        long autoCount = countAutoVersionsForArticle(testArticle.getId());
+        long autoCount = countAutoVersionsForArticle(testArticle.getUuid());
         assertThat(autoCount).isLessThanOrEqualTo(50);
     }
 
-    private long countVersionsForArticle(Long articleId) {
+    private long countVersionsForArticle(UUID articleUuid) {
         long count = 0;
         for (ArticleVersion v : versionRepo.findAll()) {
-            if (v.getArticleId().equals(articleId)) count++;
+            if (v.getArticleUuid().equals(articleUuid)) count++;
         }
         return count;
     }
 
-    private long countAutoVersionsForArticle(Long articleId) {
+    private long countAutoVersionsForArticle(UUID articleUuid) {
         long count = 0;
         for (ArticleVersion v : versionRepo.findAll()) {
-            if (v.getArticleId().equals(articleId)
+            if (v.getArticleUuid().equals(articleUuid)
                     && VersioningService.TYPE_AUTO.equals(v.getType())) {
                 count++;
             }

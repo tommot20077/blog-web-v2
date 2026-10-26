@@ -63,9 +63,7 @@ public class ArticleEventPublisher {
         try {
             ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                     UUID.randomUUID(),
-                    article.getId(),
                     article.getUuid(),
-                    article.getAuthorId(),
                     resolveAuthorUuid("ArticleContentChangedEvent", article),
                     action,
                     Instant.now());

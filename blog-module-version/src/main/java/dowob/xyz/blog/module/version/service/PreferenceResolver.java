@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 解析 user 的 effective version config（user_preferences override → application.yaml fallback）。
@@ -44,8 +45,14 @@ public class PreferenceResolver {
     @Value("${version.auto.diff-chars:50}")
     private int defaultDiffChars;
 
-    public AutoSnapshotConfig resolveForUser(Long userId) {
-        Map<String, String> kv = toMap(repo.findByUserId(userId));
+    /**
+     * 解析使用者的 effective 自動快照設定（user_preferences override → application.yaml 預設）。
+     *
+     * @param userUuid 使用者公開 UUID
+     * @return effective 設定
+     */
+    public AutoSnapshotConfig resolveForUser(UUID userUuid) {
+        Map<String, String> kv = toMap(repo.findByUserUuid(userUuid));
         return new AutoSnapshotConfig(
             getBool(kv, KEY_ENABLED,          defaultEnabled),
             getInt (kv, KEY_RETAIN,           defaultRetain),
@@ -55,8 +62,8 @@ public class PreferenceResolver {
     }
 
     /** 取得單筆 user override，未設則回 null（給 EffectiveConfigResponse source 標示用）*/
-    public String getRawValue(Long userId, String prefKey) {
-        return repo.findByUserIdAndPrefKey(userId, prefKey)
+    public String getRawValue(UUID userUuid, String prefKey) {
+        return repo.findByUserUuidAndPrefKey(userUuid, prefKey)
                 .map(UserPreference::getPrefValue)
                 .orElse(null);
     }
@@ -66,45 +73,45 @@ public class PreferenceResolver {
      * Service 層額外 range validation 作為 defense-in-depth。
      */
     @Transactional
-    public EffectiveConfigResponse updatePreferences(Long userId, UpdatePreferenceRequest req) {
+    public EffectiveConfigResponse updatePreferences(UUID userUuid, UpdatePreferenceRequest req) {
         if (req.getEnabled() != null) {
-            userPreferenceMapper.upsert(userId, KEY_ENABLED, req.getEnabled().toString());
+            userPreferenceMapper.upsert(userUuid, KEY_ENABLED, req.getEnabled().toString());
         }
         if (req.getRetain() != null) {
             validateRange(req.getRetain(), 1, 300);
-            userPreferenceMapper.upsert(userId, KEY_RETAIN, req.getRetain().toString());
+            userPreferenceMapper.upsert(userUuid, KEY_RETAIN, req.getRetain().toString());
         }
         if (req.getIntervalSeconds() != null) {
             validateRange(req.getIntervalSeconds(), 10, 600);
-            userPreferenceMapper.upsert(userId, KEY_INTERVAL_SECONDS, req.getIntervalSeconds().toString());
+            userPreferenceMapper.upsert(userUuid, KEY_INTERVAL_SECONDS, req.getIntervalSeconds().toString());
         }
         if (req.getDiffChars() != null) {
             validateRange(req.getDiffChars(), 0, 5000);
-            userPreferenceMapper.upsert(userId, KEY_DIFF_CHARS, req.getDiffChars().toString());
+            userPreferenceMapper.upsert(userUuid, KEY_DIFF_CHARS, req.getDiffChars().toString());
         }
-        return getEffectiveResponse(userId);
+        return getEffectiveResponse(userUuid);
     }
 
     /**
      * 重置指定 key 為系統預設（刪除 user override）。
      */
     @Transactional
-    public EffectiveConfigResponse resetKey(Long userId, String prefKey) {
-        repo.deleteByUserIdAndPrefKey(userId, prefKey);
-        return getEffectiveResponse(userId);
+    public EffectiveConfigResponse resetKey(UUID userUuid, String prefKey) {
+        repo.deleteByUserUuidAndPrefKey(userUuid, prefKey);
+        return getEffectiveResponse(userUuid);
     }
 
     /**
      * 取得 user 的 effective config response（含 source 標示）。
      */
     @Transactional(readOnly = true)
-    public EffectiveConfigResponse getEffectiveResponse(Long userId) {
-        AutoSnapshotConfig effective = resolveForUser(userId);
+    public EffectiveConfigResponse getEffectiveResponse(UUID userUuid) {
+        AutoSnapshotConfig effective = resolveForUser(userUuid);
         EffectiveConfigResponse r = new EffectiveConfigResponse();
-        r.setEnabled(buildField(userId, KEY_ENABLED, effective.enabled()));
-        r.setRetain(buildField(userId, KEY_RETAIN, effective.retain()));
-        r.setIntervalSeconds(buildField(userId, KEY_INTERVAL_SECONDS, effective.intervalSeconds()));
-        r.setDiffChars(buildField(userId, KEY_DIFF_CHARS, effective.diffChars()));
+        r.setEnabled(buildField(userUuid, KEY_ENABLED, effective.enabled()));
+        r.setRetain(buildField(userUuid, KEY_RETAIN, effective.retain()));
+        r.setIntervalSeconds(buildField(userUuid, KEY_INTERVAL_SECONDS, effective.intervalSeconds()));
+        r.setDiffChars(buildField(userUuid, KEY_DIFF_CHARS, effective.diffChars()));
         return r;
     }
 
@@ -114,8 +121,8 @@ public class PreferenceResolver {
         }
     }
 
-    private <T> EffectiveConfigResponse.Field<T> buildField(Long userId, String key, T value) {
-        String source = getRawValue(userId, key) != null ? "user" : "system";
+    private <T> EffectiveConfigResponse.Field<T> buildField(UUID userUuid, String key, T value) {
+        String source = getRawValue(userUuid, key) != null ? "user" : "system";
         return new EffectiveConfigResponse.Field<>(value, source);
     }
 

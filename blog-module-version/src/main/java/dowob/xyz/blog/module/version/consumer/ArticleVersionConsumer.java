@@ -49,15 +49,19 @@ public class ArticleVersionConsumer {
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         consumerExecutor.execute(CONSUMER_NAME,
-                () -> "articleId=" + event.articleId() + ", action=" + event.action(),
+                () -> "articleUuid=" + event.articleUuid() + ", action=" + event.action(),
                 channel, deliveryTag, () -> {
+                    if (event.articleUuid() == null) {
+                        log.warn("文章內容變更事件缺少 articleUuid，略過快照流程 eventId={}", event.eventId());
+                        return;
+                    }
                     switch (event.action()) {
                         case SAVED -> {
-                            if (autoSnapshotPolicy.shouldSnapshot(event.articleId())) {
-                                versioningService.recordAutoSnapshot(event.articleId());
+                            if (autoSnapshotPolicy.shouldSnapshot(event.articleUuid())) {
+                                versioningService.recordAutoSnapshot(event.articleUuid());
                             }
                         }
-                        case PUBLISHED -> versioningService.freezePublished(event.articleId());
+                        case PUBLISHED -> versioningService.freezePublished(event.articleUuid());
                         case RESTORED -> {
                             /* no-op：restore 已在 VersioningService 內部寫過 stash */
                         }

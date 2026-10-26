@@ -104,17 +104,7 @@ class CrossModuleImportTest {
             // （ArticleSummaryResponse 已於 M2-a 搬至 blog-infrastructure，對它的條目隨之移除）
             Map.entry("dowob.xyz.blog.module.series.service.SeriesService"
                     + ARROW + "dowob.xyz.blog.module.article.service.ArticleQueryService",
-                    "M4：series 階段改走 ArticleFacade"),
-            // 預計 M3（version 階段）：還原改由 ArticleFacade.applyRestoreContent 由 article 自行渲染
-            Map.entry("dowob.xyz.blog.module.version.service.VersioningService"
-                    + ARROW + "dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer",
-                    "M3：version 階段不再 import 渲染器"),
-            Map.entry("dowob.xyz.blog.module.version.service.VersioningService"
-                    + ARROW + "dowob.xyz.blog.module.article.service.ArticleTocCodec",
-                    "M3：version 階段不再 import 渲染器"),
-            Map.entry("dowob.xyz.blog.module.version.service.VersioningService"
-                    + ARROW + "dowob.xyz.blog.module.article.service.RenderResult",
-                    "M3：version 階段不再 import 渲染器"));
+                    "M4：series 階段改走 ArticleFacade"));
 
     @Test
     @DisplayName("模組不得依賴他模組的類別（bytecode ∪ source 聯集；例外清單以外不得有）")

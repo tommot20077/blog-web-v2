@@ -11,18 +11,21 @@ import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent.Action;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.version.config.VersionTestApplication;
 import dowob.xyz.blog.module.version.consumer.ArticleVersionConsumer;
+import dowob.xyz.blog.module.version.consumer.VersionArticleDeletedConsumer;
 import dowob.xyz.blog.module.version.mapper.UserPreferenceMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
 import dowob.xyz.blog.module.version.repository.UserPreferenceRepository;
 import dowob.xyz.blog.module.version.service.PreferenceResolver;
 import dowob.xyz.blog.module.version.service.VersioningService;
+import dowob.xyz.blog.module.version.support.SeededVersionUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -72,7 +75,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *     <li>updateArticle → SAVED event → AUTO 快照寫入</li>
  *     <li>publishArticle → PUBLISHED event → freeze 凍結 + 清除 AUTO 快照</li>
  *     <li>restoreVersion → 文章內容更新 + ArticleUpdatedEvent 觸發</li>
- *     <li>deleteArticle → article_versions ON DELETE CASCADE 清除</li>
+ *     <li>deleteArticle → ArticleDeletedEvent 的 consumer 清除 article_versions（V28 起無 FK CASCADE）</li>
  *     <li>preference disabled → 跳過 AUTO 快照寫入</li>
  * </ol>
  *
@@ -114,6 +117,7 @@ class CrossModuleVersionIT {
     @Autowired private UserPreferenceRepository prefRepo;
     @Autowired private UserPreferenceMapper userPreferenceMapper;
     @Autowired private ArticleVersionConsumer consumer;
+    @Autowired private VersionArticleDeletedConsumer deletedConsumer;
 
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
@@ -150,7 +154,7 @@ class CrossModuleVersionIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, SeededVersionUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -173,11 +177,11 @@ class CrossModuleVersionIT {
     }
 
     /** 直接透過 repository 建立版本快照。 */
-    private ArticleVersion createVersion(Long articleId, Long authorId, String type, String note) {
+    private ArticleVersion createVersion(UUID articleUuid, Long authorId, String type, String note) {
         ArticleVersion v = new ArticleVersion();
         v.setUuid(UUID.randomUUID());
-        v.setArticleId(articleId);
-        v.setAuthorId(authorId);
+        v.setArticleUuid(articleUuid);
+        v.setAuthorUuid(SeededVersionUsers.uuidOf(authorId));
         v.setType(type);
         v.setTitle("Snapshot Title " + UUID.randomUUID());
         v.setSlug("snapshot-slug-" + UUID.randomUUID());
@@ -189,10 +193,10 @@ class CrossModuleVersionIT {
     }
 
     /** 計算某 article 的 AUTO 版本數。 */
-    private long countAutoVersions(Long articleId) {
+    private long countAutoVersions(UUID articleUuid) {
         long count = 0;
         for (ArticleVersion v : versionRepo.findAll()) {
-            if (v.getArticleId().equals(articleId)
+            if (v.getArticleUuid().equals(articleUuid)
                     && VersioningService.TYPE_AUTO.equals(v.getType())) {
                 count++;
             }
@@ -201,10 +205,10 @@ class CrossModuleVersionIT {
     }
 
     /** 計算某 article 的所有版本數。 */
-    private long countAllVersions(Long articleId) {
+    private long countAllVersions(UUID articleUuid) {
         long count = 0;
         for (ArticleVersion v : versionRepo.findAll()) {
-            if (v.getArticleId().equals(articleId)) count++;
+            if (v.getArticleUuid().equals(articleUuid)) count++;
         }
         return count;
     }
@@ -221,9 +225,7 @@ class CrossModuleVersionIT {
         //    AutoSnapshotPolicy 第一次（無先前快照）會回 true
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                article.getId(),
                 article.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.SAVED,
                 Instant.now()
@@ -232,7 +234,7 @@ class CrossModuleVersionIT {
         consumer.onContentChanged(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
 
         // 3. 驗證：article_versions 有至少 1 筆 type=AUTO
-        long autoCount = countAutoVersions(article.getId());
+        long autoCount = countAutoVersions(article.getUuid());
         assertThat(autoCount).isGreaterThanOrEqualTo(1);
     }
 
@@ -244,18 +246,16 @@ class CrossModuleVersionIT {
         // 1. 建立 article + 直接寫 3 個 AUTO 版本
         Article article = createDraftArticle(AUTHOR_ID, "Freeze Test", "freeze content");
         for (int i = 0; i < 3; i++) {
-            createVersion(article.getId(), AUTHOR_ID, VersioningService.TYPE_AUTO, null);
+            createVersion(article.getUuid(), AUTHOR_ID, VersioningService.TYPE_AUTO, null);
         }
 
         // 確認有 3 個 AUTO
-        assertThat(countAutoVersions(article.getId())).isEqualTo(3);
+        assertThat(countAutoVersions(article.getUuid())).isEqualTo(3);
 
         // 2. 呼叫 consumer.onContentChanged with PUBLISHED action
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                article.getId(),
                 article.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.PUBLISHED,
                 Instant.now()
@@ -266,7 +266,7 @@ class CrossModuleVersionIT {
         // 3. 驗證：1 筆 PUBLISHED + 0 筆 AUTO（清光）
         List<ArticleVersion> allVersions = new ArrayList<>();
         versionRepo.findAll().forEach(v -> {
-            if (v.getArticleId().equals(article.getId())) {
+            if (v.getArticleUuid().equals(article.getUuid())) {
                 allVersions.add(v);
             }
         });
@@ -300,8 +300,8 @@ class CrossModuleVersionIT {
         // 2. 寫 1 筆 MANUAL 快照（使用 article 原始資料；status=DRAFT）
         ArticleVersion snapshot = new ArticleVersion();
         snapshot.setUuid(UUID.randomUUID());
-        snapshot.setArticleId(article.getId());
-        snapshot.setAuthorId(AUTHOR_ID);
+        snapshot.setArticleUuid(article.getUuid());
+        snapshot.setAuthorUuid(SeededVersionUsers.USER1_UUID);
         snapshot.setType(VersioningService.TYPE_MANUAL);
         snapshot.setTitle("Title A");
         snapshot.setSlug(article.getSlug());
@@ -357,8 +357,8 @@ class CrossModuleVersionIT {
 
         ArticleVersion snapshot = new ArticleVersion();
         snapshot.setUuid(UUID.randomUUID());
-        snapshot.setArticleId(article.getId());
-        snapshot.setAuthorId(AUTHOR_ID);
+        snapshot.setArticleUuid(article.getUuid());
+        snapshot.setAuthorUuid(SeededVersionUsers.USER1_UUID);
         snapshot.setType(VersioningService.TYPE_MANUAL);
         snapshot.setTitle("Title A");
         snapshot.setSlug(article.getSlug());
@@ -393,24 +393,31 @@ class CrossModuleVersionIT {
                 .isFalse();
     }
 
-    // ─── Test 4: deleteArticle → CASCADE 清除 versions ──────────────────────
+    // ─── Test 4: deleteArticle → 刪除事件 consumer 清除 versions（取代 V28 前的 FK CASCADE）──────
 
     @Test
-    @DisplayName("deleteArticle → article_versions ON DELETE CASCADE 清除")
-    void deleteArticle_cascadesVersions() {
+    @DisplayName("deleteArticle → DB 層不再 CASCADE；ArticleDeletedEvent 的 consumer 清除該文章的所有版本")
+    void deleteArticle_versionsRemovedByDeletedEventConsumer() {
         // 1. 建立 article + 寫 2 筆版本
-        Article article = createDraftArticle(AUTHOR_ID, "Cascade Test", "cascade content");
-        createVersion(article.getId(), AUTHOR_ID, VersioningService.TYPE_AUTO, null);
-        createVersion(article.getId(), AUTHOR_ID, VersioningService.TYPE_MANUAL, "manual snap");
+        Article article = createDraftArticle(AUTHOR_ID, "Delete Test", "delete content");
+        createVersion(article.getUuid(), AUTHOR_ID, VersioningService.TYPE_AUTO, null);
+        createVersion(article.getUuid(), AUTHOR_ID, VersioningService.TYPE_MANUAL, "manual snap");
+        Article other = createDraftArticle(AUTHOR_ID, "Keep Test", "keep content");
+        createVersion(other.getUuid(), AUTHOR_ID, VersioningService.TYPE_MANUAL, "keep me");
 
-        assertThat(countAllVersions(article.getId())).isEqualTo(2);
+        assertThat(countAllVersions(article.getUuid())).isEqualTo(2);
 
-        // 2. 直接透過 repo 刪除 article（觸發 FK ON DELETE CASCADE）
+        // 2. 刪除 article：V28 起 article_versions 沒有 FK，快照不會被資料庫連帶刪除
         articleRepo.delete(article);
+        assertThat(countAllVersions(article.getUuid())).isEqualTo(2);
 
-        // 3. 驗證：article_versions 中該 article 的 row 全清
-        long versionCount = countAllVersions(article.getId());
-        assertThat(versionCount).isZero();
+        // 3. 收到 ArticleDeletedEvent → consumer 刪除該文章的版本，其他文章不受影響（結果與改造前的 CASCADE 一致）
+        ArticleDeletedEvent event = new ArticleDeletedEvent(UUID.randomUUID(), null, article.getUuid(), null, null,
+                List.of(), List.of(), Instant.now(), null, null);
+        deletedConsumer.onArticleDeleted(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
+
+        assertThat(countAllVersions(article.getUuid())).isZero();
+        assertThat(countAllVersions(other.getUuid())).isEqualTo(1);
     }
 
     // ─── Test 5: preferenceDisabled → 跳過 AUTO 快照 ───────────────────────
@@ -422,14 +429,12 @@ class CrossModuleVersionIT {
         Article article = createDraftArticle(AUTHOR_ID, "Pref Disabled Test", "content");
 
         // 2. 透過 userPreferenceMapper.upsert 直接寫 enabled=false
-        userPreferenceMapper.upsert(AUTHOR_ID, PreferenceResolver.KEY_ENABLED, "false");
+        userPreferenceMapper.upsert(SeededVersionUsers.USER1_UUID, PreferenceResolver.KEY_ENABLED, "false");
 
         // 3. 呼叫 consumer.onContentChanged with SAVED
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                article.getId(),
                 article.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.SAVED,
                 Instant.now()
@@ -438,7 +443,7 @@ class CrossModuleVersionIT {
         consumer.onContentChanged(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
 
         // 4. 驗證：article_versions 中該 article 的 AUTO row 為 0
-        long autoCount = countAutoVersions(article.getId());
+        long autoCount = countAutoVersions(article.getUuid());
         assertThat(autoCount).isZero();
     }
 }
