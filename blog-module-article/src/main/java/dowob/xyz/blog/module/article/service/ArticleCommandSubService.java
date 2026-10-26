@@ -290,7 +290,8 @@ class ArticleCommandSubService {
         List<UUID> categoryIds = articleMapper.findCategoryUuidsByArticleId(article.getId());
         List<UUID> tagIds = articleMapper.findTagUuidsByArticleId(article.getId());
 
-        /* DB 刪除（含 FK CASCADE 自動清 article_versions / article_tags / article_categories）*/
+        /* DB 刪除（FK CASCADE 自動清 article_tags / article_categories；article_versions 已無 FK，
+         * 由 version 模組的 ArticleDeletedEvent consumer 與每日校正清除）*/
         transactionTemplate.executeWithoutResult(status -> {
             articleRepository.delete(article);
             /*

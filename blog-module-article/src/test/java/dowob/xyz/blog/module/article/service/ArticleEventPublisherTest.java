@@ -223,6 +223,7 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_PUBLISHED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
+            assertThat(captor.getValue().authorId()).isEqualTo(1L);
         }
     }
 
@@ -292,6 +293,7 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_UPDATED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
+            assertThat(captor.getValue().authorId()).isEqualTo(1L);
             assertThat(warns).anySatisfy(m -> assertThat(m)
                     .contains("ArticleUpdatedEvent").contains(article.getUuid().toString()));
         }
