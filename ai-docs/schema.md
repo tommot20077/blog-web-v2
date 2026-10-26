@@ -457,7 +457,7 @@ PRIMARY KEY (user_id, tag_id)
 | article_uuid | UUID | NOT NULL | V27 新增（取代已 DROP 的 `article_id`，由 `articles.uuid` 回填）。**無 FK** |
 | progress | NUMERIC(4,3) | NOT NULL | 0.000–1.000；CHECK constraint 驗證範圍 |
 | last_heading_anchor | VARCHAR(255) | NULL | 最後停留的標題 anchor（如 `#section-2`） |
-| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
+| updated_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | 值為**使用者送出該進度的 JVM 時間**（非 flush 寫入 DB 的 DB 時鐘），作為單調寫入的版本：`ReadingProgressMapper.upsert` 以 `ON CONFLICT ... DO UPDATE ... WHERE updated_at <= EXCLUDED.updated_at` 只接受不比現有舊的寫入。**JVM 與 DB 需同時區（建議 UTC）**，欄位為 `timestamp without time zone`，不做時區轉換 |
 
 **Constraints:**
 - `uq_user_reading_progress_user_article`: UNIQUE (user_uuid, article_uuid)（V27 於 uuid 欄位上以同名重建；`INSERT ... ON CONFLICT (user_uuid, article_uuid) DO UPDATE` 依賴它）

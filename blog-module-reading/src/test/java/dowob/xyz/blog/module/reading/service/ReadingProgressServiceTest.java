@@ -5,19 +5,31 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import dowob.xyz.blog.module.reading.model.UserReadingProgress;
 import dowob.xyz.blog.module.reading.repository.UserReadingProgressRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,18 +39,23 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
  * {@link ReadingProgressService} 單元測試（M2-c 起使用者與文章一律以 UUID 識別）。
  *
  * @author Yuan
- * @version 2.0
+ * @version 3.0
  */
 @ExtendWith(MockitoExtension.class)
 class ReadingProgressServiceTest {
@@ -51,6 +68,8 @@ class ReadingProgressServiceTest {
     @Mock private UserReadingProgressRepository progressRepo;
     @InjectMocks private ReadingProgressService service;
 
+    private SimpleMeterRegistry meters;
+
     private final UUID userUuid = UUID.randomUUID();
     private final UUID articleUuid = UUID.randomUUID();
 
@@ -60,40 +79,180 @@ class ReadingProgressServiceTest {
         // 用 lenient() — 部分測試（如 unauth path）不會用到 Redis stubs
         org.mockito.Mockito.lenient().when(redisTemplate.opsForHash()).thenReturn((HashOperations) hashOps);
         org.mockito.Mockito.lenient().when(redisTemplate.opsForSet()).thenReturn(setOps);
+        // 預設 DB upsert 成功（影響列數 1）；mock 的 int 預設 0 會被當成「被單調守衛擋下」
+        org.mockito.Mockito.lenient().when(progressMapper.upsert(any(), any(), any(), any(), any())).thenReturn(1);
+        meters = new SimpleMeterRegistry();
+        Metrics.addRegistry(meters);
+    }
+
+    @AfterEach
+    void removeMeterRegistry() {
+        Metrics.removeRegistry(meters);
+    }
+
+    private double rejected(String path) {
+        Counter c = meters.find("reading.progress.write_rejected").tag("path", path).counter();
+        return c == null ? 0 : c.count();
+    }
+
+    private String keyOf() {
+        return RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + articleUuid;
+    }
+
+    private static LocalDateTime at(long epochMillis) {
+        return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault());
     }
 
     @Test
-    @DisplayName("update：進度 < 0.95 → 寫 Redis hash（key 為 reading:progress:{userUuid}:{articleUuid}）並加入 dirty set")
-    void update_progressBelowThreshold_writesRedisAndAddsDirty() {
+    @DisplayName("update：進度 < 0.95 → 只呼叫一次 Redis（WRITE_IF_NEWER Lua，帶 ts、TTL 秒數、dirty 成員），不再有 putAll／expire／add 三個獨立指令")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void update_progressBelowThreshold_callsRedisExactlyOnceWithLua() {
         when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
 
-        service.update(userUuid, articleUuid, new BigDecimal("0.50"), "intro");
+        service.update(userUuid, articleUuid, new BigDecimal("0.50"), "intro", 1730438400000L);
 
-        verify(hashOps).putAll(eq(RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + articleUuid), any(Map.class));
-        verify(setOps).add(RedisKeyConstant.READING_DIRTY_KEY, userUuid + ":" + articleUuid);
+        verify(redisTemplate).execute(any(RedisScript.class),
+                eq(List.of(keyOf(), RedisKeyConstant.READING_DIRTY_KEY)),
+                eq("0.50"), eq("intro"), eq("1730438400000"),
+                eq(String.valueOf(TimeUnit.DAYS.toSeconds(RedisKeyConstant.READING_PROGRESS_TTL_DAYS))),
+                eq(userUuid + ":" + articleUuid));
+        verifyNoMoreInteractions(redisTemplate);
+        verifyNoInteractions(hashOps, setOps, progressMapper);
     }
 
     @Test
-    void update_progressBelowThreshold_setsTTL() {
+    @DisplayName("update：四參數版本以收到請求當下的 System.currentTimeMillis() 作為 ts")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void update_withoutExplicitTs_usesCurrentTimeMillis() {
         when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        long before = System.currentTimeMillis();
 
         service.update(userUuid, articleUuid, new BigDecimal("0.50"), null);
 
-        verify(redisTemplate).expire(any(String.class),
-                eq(RedisKeyConstant.READING_PROGRESS_TTL_DAYS),
-                eq(TimeUnit.DAYS));
+        long after = System.currentTimeMillis();
+        ArgumentCaptor<Object> args = ArgumentCaptor.forClass(Object.class);
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), args.capture(), args.capture(),
+                args.capture(), args.capture(), args.capture());
+        long ts = Long.parseLong(args.getAllValues().get(2).toString());
+        assertThat(ts).isBetween(before, after);
     }
 
     @Test
-    @DisplayName("update：進度 >= 0.95 → 刪 Redis key 並以 uuid upsert DB")
-    void update_progressAboveThreshold_deletesRedisAndUpsertsDb() {
+    @DisplayName("update：進度 >= 0.95 → 先以 ts 對應的 updatedAt 單調 upsert DB，再 WRITE_IF_NEWER 把快取設成完讀值（不帶 dirty 成員）；不再 DEL hash")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void update_progressAboveThreshold_upsertsDbThenWritesCacheWithoutDirtyAndWithoutDelete() {
         when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
 
-        service.update(userUuid, articleUuid, new BigDecimal("0.98"), "end");
+        service.update(userUuid, articleUuid, new BigDecimal("0.98"), "end", 1730438400000L);
 
-        verify(redisTemplate).delete(RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + articleUuid);
-        verify(progressMapper).upsert(eq(userUuid), eq(articleUuid), eq(new BigDecimal("0.98")), eq("end"));
-        verify(hashOps, never()).putAll(any(), any());
+        InOrder order = inOrder(progressMapper, redisTemplate);
+        order.verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.98"), "end", at(1730438400000L));
+        order.verify(redisTemplate).execute(any(RedisScript.class),
+                eq(List.of(keyOf(), RedisKeyConstant.READING_DIRTY_KEY)),
+                eq("0.98"), eq("end"), eq("1730438400000"),
+                eq(String.valueOf(TimeUnit.DAYS.toSeconds(RedisKeyConstant.READING_PROGRESS_TTL_DAYS))),
+                eq(""));
+        verify(redisTemplate, never()).delete(anyString());
+        verify(redisTemplate, never()).delete(anyCollection());
+        verifyNoInteractions(hashOps, setOps);
+    }
+
+    @Test
+    @DisplayName("update：lastHeading 為 null → 以空字串寫入 Lua 參數")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void update_lastHeadingNull_passesEmptyString() {
+        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+
+        service.update(userUuid, articleUuid, new BigDecimal("0.50"), null, 5L);
+
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(),
+                eq("0.50"), eq(""), eq("5"), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("update：不得標註 @Transactional（只剩一條 DB 語句；Redis 寫入在 DB 之後，security.md 原則 10）")
+    void update_isNotTransactional() throws Exception {
+        for (Method m : ReadingProgressService.class.getDeclaredMethods()) {
+            if (m.getName().equals("update")) {
+                assertThat(m.isAnnotationPresent(Transactional.class))
+                        .as("update 簽名 %s 不得有 @Transactional", m).isFalse();
+            }
+        }
+        assertThat(ReadingProgressService.class.isAnnotationPresent(Transactional.class)).isFalse();
+    }
+
+    @Test
+    @DisplayName("update：Lua 回 0（快取已有較新值）→ counter reading.progress.write_rejected{path=cache_update} 加 1")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void update_luaRejects_incrementsCacheUpdateCounter() {
+        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString(),
+                anyString(), anyString())).thenReturn(0L);
+
+        service.update(userUuid, articleUuid, new BigDecimal("0.50"), "x", 1L);
+
+        assertThat(rejected("cache_update")).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("update：完讀路徑 DB upsert 回 0（被單調守衛擋下）→ 跳過 Redis 寫入，counter path=db_completion 加 1")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void update_completionDbGuardRejects_skipsRedisAndCounts() {
+        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(progressMapper.upsert(any(), any(), any(), any(), any())).thenReturn(0);
+
+        service.update(userUuid, articleUuid, new BigDecimal("0.98"), "end", 1L);
+
+        verifyNoInteractions(redisTemplate);
+        assertThat(rejected("db_completion")).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("get：回填時 Lua 回 0（快取已有較新值）→ counter path=cache_backfill 加 1")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void get_backfillLuaRejects_incrementsCacheBackfillCounter() {
+        when(hashOps.entries(any(String.class))).thenReturn(Map.of());
+        UserReadingProgress dbVal = new UserReadingProgress();
+        dbVal.setProgress(new BigDecimal("0.50"));
+        dbVal.setUpdatedAt(at(1730438400000L));
+        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(progressRepo.findByUserUuidAndArticleUuid(userUuid, articleUuid)).thenReturn(Optional.of(dbVal));
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString(),
+                anyString(), anyString())).thenReturn(0L);
+
+        service.get(userUuid, articleUuid);
+
+        assertThat(rejected("cache_backfill")).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("get：回填的 ts 取 min(DB updated_at, 現在)——DB 時鐘較快（updated_at 在未來）時不超過現在")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void get_backfillWithFutureDbTimestamp_capsTsAtNow() {
+        when(hashOps.entries(any(String.class))).thenReturn(Map.of());
+        UserReadingProgress dbVal = new UserReadingProgress();
+        dbVal.setProgress(new BigDecimal("0.50"));
+        dbVal.setUpdatedAt(LocalDateTime.now().plusMinutes(5));
+        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(progressRepo.findByUserUuidAndArticleUuid(userUuid, articleUuid)).thenReturn(Optional.of(dbVal));
+        long before = System.currentTimeMillis();
+
+        service.get(userUuid, articleUuid);
+
+        long after = System.currentTimeMillis();
+        ArgumentCaptor<Object> args = ArgumentCaptor.forClass(Object.class);
+        verify(redisTemplate).execute(any(RedisScript.class), anyList(), args.capture(), args.capture(),
+                args.capture(), args.capture(), args.capture());
+        long ts = Long.parseLong(args.getAllValues().get(2).toString());
+        assertThat(ts).isBetween(before, after);
+    }
+
+    @Test
+    @DisplayName("五參數 update(..., requestTs) 不得是 public（僅供同 package 測試使用）")
+    void update_fiveArgVariant_isNotPublic() throws Exception {
+        Method m = ReadingProgressService.class.getDeclaredMethod("update",
+                UUID.class, UUID.class, BigDecimal.class, String.class, long.class);
+        assertThat(Modifier.isPublic(m.getModifiers())).isFalse();
     }
 
     @Test
@@ -122,12 +281,14 @@ class ReadingProgressServiceTest {
     }
 
     @Test
-    void get_redisMiss_fallsBackToDbAndCachesBack() {
+    @DisplayName("get：Redis 沒有 → 讀 DB 並以 WRITE_IF_NEWER 回填（ts 為 DB 列 updated_at 的 epoch ms、不帶 dirty 成員），不再無條件 HMSET")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void get_redisMiss_fallsBackToDbAndCachesBackMonotonically() {
         when(hashOps.entries(any(String.class))).thenReturn(Map.of());
         UserReadingProgress dbVal = new UserReadingProgress();
         dbVal.setProgress(new BigDecimal("0.50"));
         dbVal.setLastHeadingAnchor("intro");
-        dbVal.setUpdatedAt(LocalDateTime.now());
+        dbVal.setUpdatedAt(at(1730438400000L));
         when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
         when(progressRepo.findByUserUuidAndArticleUuid(userUuid, articleUuid))
                 .thenReturn(Optional.of(dbVal));
@@ -135,7 +296,12 @@ class ReadingProgressServiceTest {
         Optional<?> result = service.get(userUuid, articleUuid);
 
         assertThat(result).isPresent();
-        verify(hashOps).putAll(any(String.class), any(Map.class));
+        verify(redisTemplate).execute(any(RedisScript.class),
+                eq(List.of(keyOf(), RedisKeyConstant.READING_DIRTY_KEY)),
+                eq("0.50"), eq("intro"), eq("1730438400000"),
+                eq(String.valueOf(TimeUnit.DAYS.toSeconds(RedisKeyConstant.READING_PROGRESS_TTL_DAYS))),
+                eq(""));
+        verify(hashOps, never()).putAll(any(), any());
     }
 
     @Test
@@ -184,15 +350,5 @@ class ReadingProgressServiceTest {
         assertThat(result.get(cached)).isEqualByComparingTo("0.30");
         assertThat(result.get(inDb)).isEqualByComparingTo("0.97");
         verifyNoInteractions(articleFacade);
-    }
-
-    @Test
-    void update_lastHeadingNull_storesEmptyString() {
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
-
-        service.update(userUuid, articleUuid, new BigDecimal("0.50"), null);
-
-        verify(hashOps).putAll(any(String.class),
-                argThat((Map<?, ?> m) -> "".equals(m.get("lastHeading"))));
     }
 }

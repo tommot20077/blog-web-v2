@@ -3,6 +3,10 @@ package dowob.xyz.blog.module.reading.job;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,6 +22,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -48,7 +55,7 @@ import static org.mockito.Mockito.when;
  * {@code filterExistingUuids} 批次檢查（PERF-31）。真實 Redis 下的交錯與 Lua 行為見 {@code ReadingProgressFlushJobIT}。</p>
  *
  * @author Yuan
- * @version 3.0
+ * @version 4.0
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("ReadingProgressFlushJob 單元測試")
@@ -61,6 +68,13 @@ class ReadingProgressFlushJobTest {
     @Mock private ReadingProgressMapper progressMapper;
     @InjectMocks private ReadingProgressFlushJob job;
 
+    private SimpleMeterRegistry meters;
+
+    @AfterEach
+    void removeMeterRegistry() {
+        Metrics.removeRegistry(meters);
+    }
+
     private final UUID userUuid = UUID.randomUUID();
 
     @BeforeEach
@@ -68,6 +82,10 @@ class ReadingProgressFlushJobTest {
     void setUp() {
         lenient().when(redisTemplate.opsForHash()).thenReturn((HashOperations) hashOps);
         lenient().when(redisTemplate.opsForSet()).thenReturn(setOps);
+        // 預設 DB upsert 成功（影響列數 1）；mock 的 int 預設 0 會被當成「被單調守衛擋下」
+        lenient().when(progressMapper.upsert(any(), any(), any(), any(), any())).thenReturn(1);
+        meters = new SimpleMeterRegistry();
+        Metrics.addRegistry(meters);
         lenient().when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(1L);
     }
@@ -82,6 +100,11 @@ class ReadingProgressFlushJobTest {
             hash.put("updatedAt", updatedAt);
         }
         return hash;
+    }
+
+    /** 與 flush 相同的轉換：epoch ms → 系統時區的 LocalDateTime。 */
+    private static LocalDateTime at(long epochMillis) {
+        return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault());
     }
 
     private String keyOf(String entry) {
@@ -113,7 +136,7 @@ class ReadingProgressFlushJobTest {
 
         InOrder order = inOrder(hashOps, progressMapper, redisTemplate);
         order.verify(hashOps).entries(keyOf(entry));
-        order.verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), "intro");
+        order.verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), "intro", at(1730438400000L));
         order.verify(redisTemplate).execute(any(RedisScript.class),
                 eq(List.of(keyOf(entry), RedisKeyConstant.READING_DIRTY_KEY)),
                 eq("0.6"), eq("intro"), eq("1730438400000"), eq(entry));
@@ -132,22 +155,22 @@ class ReadingProgressFlushJobTest {
 
         job.flush();
 
-        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), null);
+        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), null, at(1L));
     }
 
     @Test
-    @DisplayName("flush：hash 缺少的欄位（lastHeading、updatedAt）期望值一律為空字串")
-    void flush_hashWithoutUpdatedAt_usesEmptyExpectedValue() {
+    @DisplayName("flush：hash 缺少 lastHeading 時，期望值為空字串")
+    void flush_hashWithoutLastHeading_usesEmptyExpectedValue() {
         UUID articleUuid = UUID.randomUUID();
         String entry = userUuid + ":" + articleUuid;
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
         when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
-        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", null, null));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", null, "5"));
 
         job.flush();
 
-        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), null);
-        verifyCompareAndRemove(entry, "0.6", "", "");
+        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), null, at(5L));
+        verifyCompareAndRemove(entry, "0.6", "", "5");
     }
 
     @Test
@@ -171,7 +194,7 @@ class ReadingProgressFlushJobTest {
 
         job.flush();
 
-        verify(progressMapper, never()).upsert(any(), any(), any(), any());
+        verify(progressMapper, never()).upsert(any(), any(), any(), any(), any());
         verifyCompareAndRemove(entry, "", "", "");
         verify(setOps, never()).remove(anyString(), any(Object[].class));
     }
@@ -184,7 +207,7 @@ class ReadingProgressFlushJobTest {
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
         when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
         when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", null, "1"));
-        when(progressMapper.upsert(any(), any(), any(), any())).thenThrow(new RuntimeException("DB error"));
+        when(progressMapper.upsert(any(), any(), any(), any(), any())).thenThrow(new RuntimeException("DB error"));
 
         job.flush();
 
@@ -205,7 +228,7 @@ class ReadingProgressFlushJobTest {
 
         job.flush();
 
-        verify(progressMapper, never()).upsert(any(), any(), any(), any());
+        verify(progressMapper, never()).upsert(any(), any(), any(), any(), any());
         verifyNoCompareAndRemove();
         verify(setOps, never()).add(anyString(), any(String[].class));
     }
@@ -227,7 +250,7 @@ class ReadingProgressFlushJobTest {
 
         job.flush();
 
-        verify(progressMapper).upsert(userUuid, second, new BigDecimal("0.2"), null);
+        verify(progressMapper).upsert(userUuid, second, new BigDecimal("0.2"), null, at(2L));
         verifyCompareAndRemove(secondEntry, "0.2", "", "2");
         verify(setOps, never()).add(anyString(), any(String[].class));
     }
@@ -244,11 +267,11 @@ class ReadingProgressFlushJobTest {
         when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(failing, healthy));
         when(hashOps.entries(keyOf(failingEntry))).thenReturn(hashOf("0.1", null, "1"));
         when(hashOps.entries(keyOf(healthyEntry))).thenReturn(hashOf("0.2", null, "2"));
-        when(progressMapper.upsert(eq(userUuid), eq(failing), any(), any())).thenThrow(new RuntimeException("boom"));
+        when(progressMapper.upsert(eq(userUuid), eq(failing), any(), any(), any())).thenThrow(new RuntimeException("boom"));
 
         job.flush();
 
-        verify(progressMapper).upsert(userUuid, healthy, new BigDecimal("0.2"), null);
+        verify(progressMapper).upsert(userUuid, healthy, new BigDecimal("0.2"), null, at(2L));
         verifyCompareAndRemove(healthyEntry, "0.2", "", "2");
         verify(redisTemplate, times(1)).execute(any(RedisScript.class), anyList(),
                 anyString(), anyString(), anyString(), anyString());
@@ -267,7 +290,7 @@ class ReadingProgressFlushJobTest {
         InOrder order = inOrder(redisTemplate, setOps);
         order.verify(redisTemplate).delete(keyOf(entry));
         order.verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
-        verify(progressMapper, never()).upsert(any(), any(), any(), any());
+        verify(progressMapper, never()).upsert(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -286,7 +309,105 @@ class ReadingProgressFlushJobTest {
         job.flush();
 
         verify(setOps, never()).remove(RedisKeyConstant.READING_DIRTY_KEY, goneEntry);
-        verify(progressMapper).upsert(userUuid, alive, new BigDecimal("0.5"), null);
+        verify(progressMapper).upsert(userUuid, alive, new BigDecimal("0.5"), null, at(9L));
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void verifyCompareAndDiscard(String entry, String progress, String lastHeading, String updatedAt) {
+        verify(redisTemplate).execute(eq(ReadingProgressFlushJob.COMPARE_AND_DISCARD_SCRIPT),
+                eq(List.of(keyOf(entry), RedisKeyConstant.READING_DIRTY_KEY)),
+                eq(progress), eq(lastHeading), eq(updatedAt), eq(entry));
+    }
+
+    @Test
+    @DisplayName("flush：hash 缺 progress（poison pill）→ 不 upsert、不拋例外，以讀到的內容做 compare-and-discard（移除成員並 DEL hash），同輪其他成員照常 flush")
+    void flush_hashWithoutProgress_discardsBadDataAndFlushesOthers() {
+        UUID bad = UUID.randomUUID();
+        UUID good = UUID.randomUUID();
+        String badEntry = userUuid + ":" + bad;
+        String goodEntry = userUuid + ":" + good;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY))
+                .thenReturn(new LinkedHashSet<>(List.of(badEntry, goodEntry)));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(bad, good));
+        Map<Object, Object> badHash = new HashMap<>();
+        badHash.put("lastHeading", "h");
+        badHash.put("updatedAt", "7");
+        when(hashOps.entries(keyOf(badEntry))).thenReturn(badHash);
+        when(hashOps.entries(keyOf(goodEntry))).thenReturn(hashOf("0.2", null, "2"));
+
+        job.flush();
+
+        verify(progressMapper, never()).upsert(eq(userUuid), eq(bad), any(), any(), any());
+        verifyCompareAndDiscard(badEntry, "", "h", "7");
+        verify(progressMapper).upsert(userUuid, good, new BigDecimal("0.2"), null, at(2L));
+        verifyCompareAndRemove(goodEntry, "0.2", "", "2");
+    }
+
+    @Test
+    @DisplayName("flush：hash 缺 updatedAt → 視為壞資料，不 upsert，compare-and-discard")
+    void flush_hashWithoutUpdatedAt_discardsBadData() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", "intro", null));
+
+        job.flush();
+
+        verify(progressMapper, never()).upsert(any(), any(), any(), any(), any());
+        verifyCompareAndDiscard(entry, "0.6", "intro", "");
+        verify(redisTemplate, never()).execute(eq(ReadingProgressFlushJob.COMPARE_AND_REMOVE_SCRIPT), anyList(),
+                any(Object[].class));
+    }
+
+    @Test
+    @DisplayName("flush：updatedAt 無法解析 → 視為壞資料，不 upsert，以原始字串 compare-and-discard")
+    void flush_unparsableUpdatedAt_discardsBadData() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", null, "not-a-number"));
+
+        job.flush();
+
+        verify(progressMapper, never()).upsert(any(), any(), any(), any(), any());
+        verifyCompareAndDiscard(entry, "0.6", "", "not-a-number");
+    }
+
+    @Test
+    @DisplayName("flush：progress 無法解析 → 同樣視為壞資料（避免每輪例外、永不移除）")
+    void flush_unparsableProgress_discardsBadData() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("abc", null, "3"));
+
+        job.flush();
+
+        verify(progressMapper, never()).upsert(any(), any(), any(), any(), any());
+        verifyCompareAndDiscard(entry, "abc", "", "3");
+    }
+
+    @Test
+    @DisplayName("flush：upsert 回 0（DB 守衛判定 hash 比 DB 舊）→ 不 compare-and-remove，改 compare-and-discard（內容相同才移除成員並刪 hash），counter path=db_flush 加 1")
+    void flush_upsertRejectedByDbGuard_discardsStaleHashAndCounts() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.3", "old", "100"));
+        when(progressMapper.upsert(any(), any(), any(), any(), any())).thenReturn(0);
+
+        job.flush();
+
+        verifyCompareAndDiscard(entry, "0.3", "old", "100");
+        verify(redisTemplate, never()).execute(eq(ReadingProgressFlushJob.COMPARE_AND_REMOVE_SCRIPT), anyList(),
+                any(Object[].class));
+        Counter c = meters.find("reading.progress.write_rejected").tag("path", "db_flush").counter();
+        assertThat(c).isNotNull();
+        assertThat(c.count()).isEqualTo(1.0);
     }
 
     @Test
@@ -310,7 +431,7 @@ class ReadingProgressFlushJobTest {
         assertThat(captor.getValue()).containsExactlyInAnyOrder(shared, second, third);
         verify(articleFacade, never()).existsByUuid(any());
         verify(articleFacade, never()).findIdByUuid(any());
-        verify(progressMapper, times(4)).upsert(any(), any(), any(), any());
+        verify(progressMapper, times(4)).upsert(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -333,8 +454,8 @@ class ReadingProgressFlushJobTest {
         verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, badArticle);
         verify(setOps, never()).add(anyString(), any(String[].class));
         verify(hashOps, never()).entries(keyOf(legacy));
-        verify(progressMapper, times(1)).upsert(any(), any(), any(), any());
-        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.5"), null);
+        verify(progressMapper, times(1)).upsert(any(), any(), any(), any(), any());
+        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.5"), null, at(1L));
     }
 
     @Test

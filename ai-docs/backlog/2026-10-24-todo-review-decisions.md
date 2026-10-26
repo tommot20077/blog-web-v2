@@ -122,6 +122,7 @@
   - (c) `update` 的 HMSET／EXPIRE／SADD 為三個獨立指令，EXPIRE 失敗或 JVM 中止時 hash 為新值卻無 dirty 標記 → 改單一 Lua
   - (d) `get()` 快取 miss 回填無條件 HMSET，可能覆蓋併發 update 的新值 → 改 HSETNX 語意的 Lua
   - (e) hash 缺 `progress` 欄位會成 poison pill（目前無寫入路徑會產生）；(f) Redis Cluster 下 key 無 hash tag 會 CROSSSLOT（目前單機）
+- **閱讀進度 RP-1 後的殘留（LOW，RP-1 審查）**：(1) 同一毫秒、同使用者同文章、兩個 flusher 交錯且內容不同時，守衛 `<=` 的 tie 可能讓舊內容覆寫；(2) 完讀值寫入快取但不標 dirty，文章刪除後 `discardForDeletedArticle` 清不到，已刪文章的完讀進度最多再被讀 3 天（改造前完讀會 DEL hash）——需在刪除 consumer 以 SCAN 清 `reading:progress:*:{articleUuid}` 或接受；(3) `get()` 回填被拒時該次回應仍回 DB 舊值（比改造前好，僅影響與 update 重疊的那次）；(4) JVM 時區若有 DST，重複的一小時 `LocalDateTime` 有歧義——部署固定 UTC。
 - **`ReadingProgressService.update` 在交易內先 DEL 快取（既有，違反 security.md 原則 10）**：DB upsert 尚未 commit 時併發 `get()` 會 cache miss、讀到舊 DB 值並回填 Redis（TTL 數天）。修法：DEL 改 `afterCommit`，或移除不必要的 `@Transactional`。（M2-c 審查）
 - **`ReadingProgressFlushJob` 的 `SMEMBERS` 無界（PERF-31 剩餘部分）**：M2-c 已把逐筆 `findIdByUuid` 改為整輪一次 `filterExistingUuids`；dirty set 一次全讀仍未處理，改 `SSCAN` 分批。
 - **refresh token 可被當 access token 送進 filter（既有）**：`JwtService.validateToken` 不檢查 token type；目前因 refresh token 無 role claim 被 filter 的 catch 偶然擋下。應在 filter 明確檢查 type=access 並補測試。（T0b-2 審查）

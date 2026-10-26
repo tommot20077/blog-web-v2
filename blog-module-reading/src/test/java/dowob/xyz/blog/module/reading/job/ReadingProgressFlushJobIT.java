@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import dowob.xyz.blog.module.reading.service.ReadingProgressService;
+import dowob.xyz.blog.module.reading.service.ReadingProgressTestAccess;
 import dowob.xyz.blog.module.reading.support.ReadingCleanupITSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +17,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -42,7 +46,7 @@ import static org.mockito.Mockito.spy;
  * MyBatis mapper 是 JDK proxy，無法用 Mockito spy 呼叫真實方法。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @DisplayName("ReadingProgressFlushJob 整合測試（RACE-13 交錯、PERF-31、孤兒保護）")
 class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
@@ -60,6 +64,9 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
      */
     private final class HookingMapper implements ReadingProgressMapper {
 
+        /** 下一次 upsert 開始前（flush 已讀完 hash）執行的 hook（一次性） */
+        private Runnable beforeNextUpsert;
+
         /** 下一次 upsert 完成後執行的 hook（一次性） */
         private Runnable afterNextUpsert;
 
@@ -67,12 +74,18 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
         private boolean failNextUpsert;
 
         @Override
-        public int upsert(UUID userUuid, UUID articleUuid, BigDecimal progress, String lastHeading) {
+        public int upsert(UUID userUuid, UUID articleUuid, BigDecimal progress, String lastHeading,
+                          LocalDateTime updatedAt) {
             if (failNextUpsert) {
                 failNextUpsert = false;
                 throw new IllegalStateException("db down");
             }
-            int affected = realMapper.upsert(userUuid, articleUuid, progress, lastHeading);
+            if (beforeNextUpsert != null) {
+                Runnable hook = beforeNextUpsert;
+                beforeNextUpsert = null;
+                hook.run();
+            }
+            int affected = realMapper.upsert(userUuid, articleUuid, progress, lastHeading, updatedAt);
             if (afterNextUpsert != null) {
                 Runnable hook = afterNextUpsert;
                 afterNextUpsert = null;
@@ -125,6 +138,15 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
     private BigDecimal dbProgress(UUID userUuid, UUID articleUuid) {
         return jdbc.query("SELECT progress FROM user_reading_progress WHERE user_uuid = ? AND article_uuid = ?",
                 rs -> rs.next() ? rs.getBigDecimal(1) : null, userUuid, articleUuid);
+    }
+
+    private LocalDateTime dbUpdatedAt(UUID userUuid, UUID articleUuid) {
+        return jdbc.query("SELECT updated_at FROM user_reading_progress WHERE user_uuid = ? AND article_uuid = ?",
+                rs -> rs.next() ? rs.getTimestamp(1).toLocalDateTime() : null, userUuid, articleUuid);
+    }
+
+    private static LocalDateTime at(long epochMillis) {
+        return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault());
     }
 
     private BigDecimal hashProgress(UUID userUuid, UUID articleUuid) {
@@ -341,5 +363,110 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
         assertThat(redis.opsForSet().isMember(RedisKeyConstant.READING_DIRTY_KEY, legacy)).isFalse();
         assertThat(redis.opsForSet().isMember(RedisKeyConstant.READING_DIRTY_KEY, "garbage")).isFalse();
         assertThat(dbProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.20");
+    }
+
+    @Test
+    @DisplayName("兩個 flusher 交錯：F1 讀舊 hash 後停頓，期間新 update 並由 F2 flush 清標記；F1 再 upsert 舊值時被 DB 單調守衛擋下，DB 不回退")
+    void flush_twoFlushersInterleaved_staleUpsertDoesNotRegressDb() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        long t1 = System.currentTimeMillis() - 10_000;
+        ReadingProgressTestAccess.update(progressService, USER_UUID, articleUuid, new BigDecimal("0.30"), "first", t1);
+        ReadingProgressFlushJob otherFlusher = new ReadingProgressFlushJob(redis, articleFacade, realMapper);
+        hookingMapper.beforeNextUpsert = () -> {
+            ReadingProgressTestAccess.update(progressService, USER_UUID, articleUuid, new BigDecimal("0.60"), "second", t1 + 1_000);
+            otherFlusher.flush();
+        };
+
+        job.flush();
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).as("DB 應為較新的 0.60，不被 F1 的舊值蓋掉")
+                .isEqualByComparingTo("0.60");
+        assertThat(dbUpdatedAt(USER_UUID, articleUuid)).isEqualTo(at(t1 + 1_000));
+        assertThat(isDirty(USER_UUID, articleUuid)).isFalse();
+    }
+
+    @Test
+    @DisplayName("完讀路徑與 flush 交錯：flush 讀到 0.30 後，完讀 0.97 寫入 DB；舊 flush 的 upsert 被守衛擋下，快取保留完讀值，下一輪 flush 後 DB 仍為 0.97")
+    void flush_completionInterleavedWithFlush_staleFlushDoesNotOverwriteCompletion() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        long t1 = System.currentTimeMillis() - 10_000;
+        ReadingProgressTestAccess.update(progressService, USER_UUID, articleUuid, new BigDecimal("0.30"), "first", t1);
+        hookingMapper.beforeNextUpsert = () ->
+                ReadingProgressTestAccess.update(progressService, USER_UUID, articleUuid, new BigDecimal("0.97"), "end", t1 + 1_000);
+
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).as("完讀進度 0.97 不得被舊的 0.30 蓋掉")
+                .isEqualByComparingTo("0.97");
+        assertThat(hashProgress(USER_UUID, articleUuid)).as("快取是完讀值").isEqualByComparingTo("0.97");
+        assertThat(isDirty(USER_UUID, articleUuid)).as("hash 內容已變，CAS 保留成員交給下一輪").isTrue();
+
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.97");
+        assertThat(isDirty(USER_UUID, articleUuid)).as("下一輪讀到完讀值並 CAS 移除成員").isFalse();
+    }
+
+    @Test
+    @DisplayName("壞資料（hash 缺 progress，poison pill）：成員被移除、hash 被刪、不 upsert；同輪其他成員照常 flush")
+    void flush_hashWithoutProgress_isDiscardedAndOthersFlushed() {
+        Article bad = createArticle(ArticleStatus.PUBLISHED);
+        Article good = createArticle(ArticleStatus.PUBLISHED);
+        UUID badUuid = bad.getUuid();
+        UUID goodUuid = good.getUuid();
+        redis.opsForHash().putAll(hashKeyOf(USER_UUID, badUuid),
+                Map.of("lastHeading", "h", "updatedAt", String.valueOf(System.currentTimeMillis())));
+        redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, memberOf(USER_UUID, badUuid));
+        progressService.update(USER_UUID, goodUuid, new BigDecimal("0.20"), null);
+
+        job.flush();
+
+        assertThat(isDirty(USER_UUID, badUuid)).as("壞資料成員被移除").isFalse();
+        assertThat(redis.hasKey(hashKeyOf(USER_UUID, badUuid))).as("壞資料 hash 被刪").isFalse();
+        assertThat(countProgress(badUuid)).as("不得 upsert").isZero();
+        assertThat(dbProgress(USER_UUID, goodUuid)).as("其他成員照常 flush").isEqualByComparingTo("0.20");
+        assertThat(isDirty(USER_UUID, goodUuid)).isFalse();
+    }
+
+    @Test
+    @DisplayName("壞資料（hash 缺 updatedAt）：同樣被丟棄，不 upsert、不拋例外")
+    void flush_hashWithoutUpdatedAt_isDiscarded() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        redis.opsForHash().putAll(hashKeyOf(USER_UUID, articleUuid), Map.of("progress", "0.40", "lastHeading", ""));
+        redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, memberOf(USER_UUID, articleUuid));
+
+        job.flush();
+
+        assertThat(isDirty(USER_UUID, articleUuid)).isFalse();
+        assertThat(redis.hasKey(hashKeyOf(USER_UUID, articleUuid))).isFalse();
+        assertThat(countProgress(articleUuid)).isZero();
+    }
+
+    @Test
+    @DisplayName("壞資料丟棄是 compare-and-discard：讀到壞 hash 之後、丟棄之前有新的合法 update → 成員與新 hash 都保留，下一輪寫入 DB")
+    void flush_badHashReplacedByUpdateBeforeDiscard_keepsMemberAndHash() {
+        Article article = createArticle(ArticleStatus.PUBLISHED);
+        UUID articleUuid = article.getUuid();
+        redis.opsForHash().putAll(hashKeyOf(USER_UUID, articleUuid), Map.of("lastHeading", "h", "updatedAt", "1"));
+        redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, memberOf(USER_UUID, articleUuid));
+        StringRedisTemplate spyRedis = spy(redis);
+        doAnswer(invocation -> {
+            progressService.update(USER_UUID, articleUuid, new BigDecimal("0.40"), "x");
+            return invocation.callRealMethod();
+        }).when(spyRedis).execute(any(RedisScript.class), anyList(), any(Object[].class));
+
+        new ReadingProgressFlushJob(spyRedis, articleFacade, hookingMapper).flush();
+
+        assertThat(isDirty(USER_UUID, articleUuid)).as("新 update 的標記不得被丟棄動作抹掉").isTrue();
+        assertThat(hashProgress(USER_UUID, articleUuid)).as("新 hash 不得被 DEL").isEqualByComparingTo("0.40");
+
+        job.flush();
+
+        assertThat(dbProgress(USER_UUID, articleUuid)).isEqualByComparingTo("0.40");
+        assertThat(isDirty(USER_UUID, articleUuid)).isFalse();
     }
 }
