@@ -268,7 +268,7 @@ public class ArticleQueryService {
 
         // 填充 series 導覽資訊（不受登入狀態影響）
         if (articleId != null) {
-            seriesFacade.getSeriesNavigation(articleId).ifPresent(resp::setSeriesNav);
+            seriesFacade.getSeriesNavigation(resp.getUuid()).ifPresent(resp::setSeriesNav);
         }
 
         Long userId = currentUserIdOrNull();

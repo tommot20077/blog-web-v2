@@ -99,11 +99,11 @@ class ArticleSeriesConditionalAssignmentIT {
         jdbc.execute("DELETE FROM articles");
     }
 
-    /** 以 JDBC 直接建立 series（不依賴 series 實體的欄位名稱，使本測試在 M4-b 前後都能編譯）。 */
+    /** 以 JDBC 直接建立 series（只需要一個存在的 series 列）。 */
     private UUID insertSeries(String slug) {
         UUID uuid = UUID.randomUUID();
-        jdbc.update("INSERT INTO series (uuid, title, slug, author_id, article_count) VALUES (?, ?, ?, ?, 0)",
-                uuid, "T-" + slug, slug, SeededUsers.USER1_ID);
+        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid, article_count) VALUES (?, ?, ?, ?, 0)",
+                uuid, "T-" + slug, slug, SeededUsers.USER1_UUID);
         return uuid;
     }
 

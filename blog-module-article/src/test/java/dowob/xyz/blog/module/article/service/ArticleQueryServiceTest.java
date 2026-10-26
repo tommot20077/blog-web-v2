@@ -493,7 +493,7 @@ class ArticleQueryServiceTest {
             when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
             when(readingFacade.isBookmarked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
             when(readingFacade.getProgress(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(progress);
-            when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.empty());
+            when(seriesFacade.getSeriesNavigation(ARTICLE_UUID)).thenReturn(Optional.empty());
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
@@ -527,7 +527,7 @@ class ArticleQueryServiceTest {
 
             when(articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
-            when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.of(nav));
+            when(seriesFacade.getSeriesNavigation(ARTICLE_UUID)).thenReturn(Optional.of(nav));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
 
@@ -549,7 +549,7 @@ class ArticleQueryServiceTest {
 
             when(articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
-            when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.of(nav));
+            when(seriesFacade.getSeriesNavigation(ARTICLE_UUID)).thenReturn(Optional.of(nav));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
 
@@ -570,7 +570,7 @@ class ArticleQueryServiceTest {
 
             when(articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
-            when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.of(nav));
+            when(seriesFacade.getSeriesNavigation(ARTICLE_UUID)).thenReturn(Optional.of(nav));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
 

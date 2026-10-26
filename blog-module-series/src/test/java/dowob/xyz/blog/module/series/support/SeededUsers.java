@@ -32,6 +32,26 @@ public final class SeededUsers {
     /** 管理員的公開 UUID */
     public static final UUID ADMIN_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000c3");
 
+    /**
+     * 由種子使用者主鍵取得其公開 UUID。
+     *
+     * @param userId 種子使用者主鍵（1、2、3）
+     * @return 對應的公開 UUID
+     * @throws IllegalArgumentException 不是種子使用者的主鍵
+     */
+    public static UUID uuidOf(Long userId) {
+        if (USER1_ID.equals(userId)) {
+            return USER1_UUID;
+        }
+        if (USER2_ID.equals(userId)) {
+            return USER2_UUID;
+        }
+        if (ADMIN_ID.equals(userId)) {
+            return ADMIN_UUID;
+        }
+        throw new IllegalArgumentException("不是種子使用者: " + userId);
+    }
+
     /** 工具類別，禁止實例化。 */
     private SeededUsers() {
     }

@@ -19,6 +19,7 @@ import dowob.xyz.blog.module.series.config.SeriesTestApplication;
 import dowob.xyz.blog.module.series.consumer.SeriesArticleDeletedConsumer;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
+import dowob.xyz.blog.module.series.support.SeededUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -152,7 +153,7 @@ class CrossModuleSeriesIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, SeededUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -210,7 +211,7 @@ class CrossModuleSeriesIT {
         series.setTitle(title);
         series.setSlug(slug);
         series.setDescription("IT description");
-        series.setAuthorId(authorId);
+        series.setAuthorUuid(SeededUsers.uuidOf(authorId));
         series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
@@ -441,7 +442,7 @@ class CrossModuleSeriesIT {
         Article pubLast = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getId(), 4);
 
         // 2. pubFirst：首篇，prev 應為 empty；next 跳過 draftMiddle，直接拿到 pubMiddle
-        SeriesNavigation firstNav = seriesFacade.getSeriesNavigation(pubFirst.getId()).orElseThrow();
+        SeriesNavigation firstNav = seriesFacade.getSeriesNavigation(pubFirst.getUuid()).orElseThrow();
         assertThat(firstNav.getPrev()).isNull();
         assertThat(firstNav.getNext()).isNotNull();
         assertThat(firstNav.getNext().getUuid()).isNotNull().isEqualTo(pubMiddle.getUuid());
@@ -449,14 +450,14 @@ class CrossModuleSeriesIT {
         assertThat(firstNav.getNext().getSlug()).isEqualTo(pubMiddle.getSlug());
 
         // 3. pubMiddle：中間篇，prev 跳過 draftMiddle 拿到 pubFirst；next 正常拿到 pubLast
-        SeriesNavigation middleNav = seriesFacade.getSeriesNavigation(pubMiddle.getId()).orElseThrow();
+        SeriesNavigation middleNav = seriesFacade.getSeriesNavigation(pubMiddle.getUuid()).orElseThrow();
         assertThat(middleNav.getPrev()).isNotNull();
         assertThat(middleNav.getPrev().getUuid()).isNotNull().isEqualTo(pubFirst.getUuid());
         assertThat(middleNav.getNext()).isNotNull();
         assertThat(middleNav.getNext().getUuid()).isNotNull().isEqualTo(pubLast.getUuid());
 
         // 4. pubLast：末篇，prev 正常拿到 pubMiddle；next 應為 empty
-        SeriesNavigation lastNav = seriesFacade.getSeriesNavigation(pubLast.getId()).orElseThrow();
+        SeriesNavigation lastNav = seriesFacade.getSeriesNavigation(pubLast.getUuid()).orElseThrow();
         assertThat(lastNav.getPrev()).isNotNull();
         assertThat(lastNav.getPrev().getUuid()).isNotNull().isEqualTo(pubMiddle.getUuid());
         assertThat(lastNav.getNext()).isNull();

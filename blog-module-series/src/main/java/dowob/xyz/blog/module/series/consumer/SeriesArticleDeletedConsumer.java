@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
  * 重送會被 skip 不會多次扣 count。</p>
  *
  * <p>識別：只讀事件的 {@code seriesUuid}，以 series 公開 UUID 扣計數；{@code articleUuid} 僅用於 log。
- * 事件的 Long 過渡欄位（articleId、seriesId）已於 M4-b 移除，series 是它們最後一個讀取者。</p>
+ * 事件舊有的過渡欄位（articleId、seriesId）已於 M4-b 移除，series 是它們最後一個讀取者。</p>
  *
  * <p>ACK 策略：手動 ACK，由 {@link ConsumerExecutor} 統一處理，對齊 ViewCountConsumer pattern：
  * <ul>
