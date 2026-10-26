@@ -79,7 +79,7 @@ class ArticleVersionConsumerTest {
 
     private ArticleContentChangedEvent event(Action action, UUID articleUuid) {
         return new ArticleContentChangedEvent(
-                UUID.randomUUID(), 100L, articleUuid, 1L, null, action, Instant.now());
+                UUID.randomUUID(), articleUuid, null, action, Instant.now());
     }
 
     @Test

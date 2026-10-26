@@ -225,9 +225,7 @@ class CrossModuleVersionIT {
         //    AutoSnapshotPolicy 第一次（無先前快照）會回 true
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                article.getId(),
                 article.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.SAVED,
                 Instant.now()
@@ -257,9 +255,7 @@ class CrossModuleVersionIT {
         // 2. 呼叫 consumer.onContentChanged with PUBLISHED action
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                article.getId(),
                 article.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.PUBLISHED,
                 Instant.now()
@@ -438,9 +434,7 @@ class CrossModuleVersionIT {
         // 3. 呼叫 consumer.onContentChanged with SAVED
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                article.getId(),
                 article.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.SAVED,
                 Instant.now()

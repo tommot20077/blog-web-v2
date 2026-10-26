@@ -150,9 +150,7 @@ class ArticleVersionConsumerIT {
     void onContentChanged_savedAction_writesAutoVersion() {
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                testArticle.getId(),
                 testArticle.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.SAVED,
                 Instant.now()
@@ -195,9 +193,7 @@ class ArticleVersionConsumerIT {
         // 觸發 PUBLISHED action
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                testArticle.getId(),
                 testArticle.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.PUBLISHED,
                 Instant.now()
@@ -223,9 +219,7 @@ class ArticleVersionConsumerIT {
 
         ArticleContentChangedEvent event = new ArticleContentChangedEvent(
                 UUID.randomUUID(),
-                testArticle.getId(),
                 testArticle.getUuid(),
-                AUTHOR_ID,
                 null,
                 Action.RESTORED,
                 Instant.now()

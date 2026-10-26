@@ -76,7 +76,7 @@ class ArticleEventPublisherTest {
     class PublishContentChanged {
 
         @Test
-        @DisplayName("正常：事件帶新的 eventId 與 authorUuid，並保留 articleId／authorId 過渡欄位")
+        @DisplayName("正常：事件帶新的 eventId、articleUuid 與 authorUuid（Long 過渡欄位已移除）")
         void publishContentChanged_shouldFillEventIdAndAuthorUuid() {
             Article article = new Article();
             article.setId(100L);
@@ -95,11 +95,33 @@ class ArticleEventPublisherTest {
                     captor.capture());
             ArticleContentChangedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
-            assertThat(event.articleId()).isEqualTo(100L);
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
-            assertThat(event.authorId()).isEqualTo(1L);
             assertThat(event.authorUuid()).isEqualTo(authorUuid);
             assertThat(event.action()).isEqualTo(ArticleContentChangedEvent.Action.SAVED);
+        }
+
+        @Test
+        @DisplayName("事件序列化後不含 articleId／authorId（version 已是最後一個讀取者，發送端不再填 Long 欄位）")
+        void publishContentChanged_payloadHasNoLongIdentityFields() {
+            Article article = new Article();
+            article.setId(100L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(1L);
+            when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, UUID.randomUUID()));
+
+            publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.SAVED);
+
+            ArgumentCaptor<ArticleContentChangedEvent> captor =
+                    ArgumentCaptor.forClass(ArticleContentChangedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE),
+                    eq(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED),
+                    captor.capture());
+            Map<String, Object> payload = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .findAndRegisterModules()
+                    .convertValue(captor.getValue(), new com.fasterxml.jackson.core.type.TypeReference<>() { });
+            assertThat(payload.keySet())
+                    .containsExactlyInAnyOrder("eventId", "articleUuid", "authorUuid", "action", "occurredAt");
         }
 
         @Test
@@ -120,7 +142,6 @@ class ArticleEventPublisherTest {
                     eq(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED),
                     captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
         }
     }
 
@@ -202,7 +223,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_PUBLISHED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
         }
     }
 
@@ -272,7 +292,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_UPDATED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
             assertThat(warns).anySatisfy(m -> assertThat(m)
                     .contains("ArticleUpdatedEvent").contains(article.getUuid().toString()));
         }
