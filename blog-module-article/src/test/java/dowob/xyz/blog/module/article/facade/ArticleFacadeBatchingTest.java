@@ -107,6 +107,5 @@ class ArticleFacadeBatchingTest {
         List<ArticleData> result = facade.findByIds(List.of(1L));
 
         assertThat(result).hasSize(1);
-        assertThat(result.get(0).authorId()).isEqualTo(7L);
     }
 }

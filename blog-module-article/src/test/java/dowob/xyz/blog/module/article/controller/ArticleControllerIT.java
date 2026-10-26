@@ -272,7 +272,6 @@ class ArticleControllerIT {
     void createAndGetArticle_fullFlow() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立文章 */
         CreateArticleRequest createRequest = new CreateArticleRequest();
@@ -314,7 +313,6 @@ class ArticleControllerIT {
     void getPublishedArticles_authorResolvedByBatchLookup() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
         /** 批次路徑回傳不同暱稱，藉此分辨欄位是由哪條路徑填入 */
         when(userFacade.getAuthorInfoByIds(anyCollection()))
                 .thenReturn(Map.of(AUTHOR_ID, new AuthorInfo(AUTHOR_UUID, "BatchAuthor")));
@@ -344,7 +342,6 @@ class ArticleControllerIT {
     void updateArticle_authorUpdatesOwn() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立文章 */
         CreateArticleRequest createRequest = new CreateArticleRequest();
@@ -377,7 +374,6 @@ class ArticleControllerIT {
     void deleteArticle_authorDeletesOwn() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立文章 */
         CreateArticleRequest createRequest = new CreateArticleRequest();
@@ -409,7 +405,6 @@ class ArticleControllerIT {
     void getMyArticles_success() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立兩篇文章 */
         for (int i = 1; i <= 2; i++) {
@@ -450,7 +445,6 @@ class ArticleControllerIT {
     void publishArticle_alreadyPublished_error() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立並發布文章 */
         CreateArticleRequest createRequest = new CreateArticleRequest();
@@ -481,7 +475,6 @@ class ArticleControllerIT {
     void rejectArticle_adminRejects_success() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立文章並送審 */
         CreateArticleRequest createRequest = new CreateArticleRequest();
@@ -523,7 +516,6 @@ class ArticleControllerIT {
     void getPendingArticles_adminSuccess() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立並送審一篇文章 */
         CreateArticleRequest createRequest = new CreateArticleRequest();
@@ -623,7 +615,6 @@ class ArticleControllerIT {
     void createArticle_adminRole_success() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("AdminUser"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("adminuser"));
 
         CreateArticleRequest request = new CreateArticleRequest();
         request.setTitle("Admin 發文");
@@ -642,7 +633,6 @@ class ArticleControllerIT {
     void getArticle_responseContainsAuthorNickname() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立文章並發布 */
         CreateArticleRequest createRequest = new CreateArticleRequest();
@@ -704,7 +694,6 @@ class ArticleControllerIT {
     void getArticleBySlug_success() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest createRequest = new CreateArticleRequest();
         createRequest.setTitle("Slug 測試文章");
@@ -739,7 +728,6 @@ class ArticleControllerIT {
     void submitForReview_authorSubmitsDraft_success() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest createRequest = new CreateArticleRequest();
         createRequest.setTitle("送審測試文章");
@@ -774,7 +762,6 @@ class ArticleControllerIT {
     void getMyArticles_withStatusFilter() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest createRequest = new CreateArticleRequest();
         createRequest.setTitle("草稿篩選測試");
@@ -848,7 +835,6 @@ class ArticleControllerIT {
     void getArticle_publishesViewedOutsideTransaction() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest createRequest = new CreateArticleRequest();
         createRequest.setTitle("交易邊界驗證文章");
@@ -898,7 +884,6 @@ class ArticleControllerIT {
     @DisplayName("POST /api/v1/articles → 回傳 EditorArticleResponse（有 uuid、content，無 contentHtml、viewCount）")
     void createArticle_returnsEditorArticleResponse() throws Exception {
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest request = new CreateArticleRequest();
         request.setTitle("Editor 建立文章");
@@ -921,7 +906,6 @@ class ArticleControllerIT {
     @DisplayName("PUT /api/v1/articles/{uuid} → DRAFT 狀態 → 成功更新，回傳 EditorArticleResponse（無 contentHtml）")
     void updateArticle_draft_allowed_returnsEditorResponse() throws Exception {
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest createRequest = new CreateArticleRequest();
         createRequest.setTitle("草稿");
@@ -954,7 +938,6 @@ class ArticleControllerIT {
     void updateArticle_published_returns403() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest createRequest = new CreateArticleRequest();
         createRequest.setTitle("待發布文章");
@@ -986,7 +969,6 @@ class ArticleControllerIT {
     @DisplayName("GET /api/v1/articles/{uuid}/edit → 作者本人可取得 EditorArticleResponse")
     void getArticleForEdit_authorCanAccess() throws Exception {
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest createRequest = new CreateArticleRequest();
         createRequest.setTitle("可編輯文章");
@@ -1029,7 +1011,6 @@ class ArticleControllerIT {
     @DisplayName("GET /api/v1/articles/{uuid}/edit → 他人文章 → 400（ARTICLE_ACCESS_DENIED）")
     void getArticleForEdit_otherUserArticle_returns403() throws Exception {
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         CreateArticleRequest createRequest = new CreateArticleRequest();
         createRequest.setTitle("他人文章");
@@ -1061,7 +1042,6 @@ class ArticleControllerIT {
     void getArchive_returns200WithPublishedOnly() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立並發布第一篇（較早發布） */
         String firstUuid = createArticle("歸檔文章 A", "內容 A");
@@ -1164,7 +1144,6 @@ class ArticleControllerIT {
     void withdrawArticle_authorWithdrawsOwnPendingReview_success() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         String uuid = createPendingReviewArticle("待抽回文章");
 
@@ -1190,7 +1169,6 @@ class ArticleControllerIT {
     void withdrawArticle_draftStatus_returnsA0204() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         String uuid = createArticle("草稿文章", "內容");
 
@@ -1205,7 +1183,6 @@ class ArticleControllerIT {
     void withdrawArticle_publishedStatus_returnsA0204() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         String uuid = createArticle("已發布文章", "內容");
         mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
@@ -1223,7 +1200,6 @@ class ArticleControllerIT {
     void withdrawArticle_rejectedStatus_returnsA0204() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         String uuid = createPendingReviewArticle("待駁回文章");
 
@@ -1247,7 +1223,6 @@ class ArticleControllerIT {
     void withdrawArticle_nonOwnerAuthor_returnsA0203() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         String uuid = createPendingReviewArticle("他人的待審文章");
 
@@ -1262,7 +1237,6 @@ class ArticleControllerIT {
     void withdrawArticle_adminOnOthersArticle_returnsA0203() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         String uuid = createPendingReviewArticle("他人送審的文章");
 
@@ -1313,7 +1287,6 @@ class ArticleControllerIT {
     void createArticleWithH2H3_getDetail_tocIsStructuredArray() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立含 h2/h3 標題的文章：h2「安裝步驟」→ h3「Port 被佔用」→ h2「常見問題」（文件順序） */
         String markdown = "## 安裝步驟\n\n安裝說明段落。\n\n### Port 被佔用\n\n子節說明文字。\n\n## 常見問題\n\n常見問題說明段落。";
@@ -1361,7 +1334,6 @@ class ArticleControllerIT {
     void createArticleWithoutHeading_getDetail_tocIsEmptyArray() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立純段落文章（內文無任何 ## / ### 標題） */
         CreateArticleRequest createRequest = new CreateArticleRequest();
@@ -1400,7 +1372,6 @@ class ArticleControllerIT {
     void getArticle_publishedWithStaleRejectReason_maskedFromNonOwner() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         final String internalNote = "INTERNAL-REVIEW-NOTE-DO-NOT-LEAK";
         final Long otherUserId = 42L;
@@ -1477,7 +1448,6 @@ class ArticleControllerIT {
     void rejectedArticle_twoStepBypassToPublished_clearsRejectReasonInDatabase() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         final String internalNote = "INTERNAL-REVIEW-NOTE-TWO-STEP";
 
@@ -1570,7 +1540,6 @@ class ArticleControllerIT {
     private void stubUserFacade() {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
     }
 
     @Test

@@ -362,7 +362,6 @@ class ArticleFacadeImplTest {
 
             when(articleMapper.findAllPublished()).thenReturn(List.of(article));
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of(tagInfo));
-            when(userFacade.getUserUsernameById(10L)).thenReturn(Optional.of("user1"));
             when(userFacade.getUserNicknameById(10L)).thenReturn(Optional.of("User One"));
 
             List<ArticleIndexData> result = facade.findAllPublishedForIndex();
@@ -395,7 +394,6 @@ class ArticleFacadeImplTest {
 
             when(articleMapper.findAllPublished()).thenReturn(List.of(article));
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
-            when(userFacade.getUserUsernameById(10L)).thenReturn(Optional.of("user1"));
             when(userFacade.getUserNicknameById(10L)).thenReturn(Optional.of("User One"));
 
             List<ArticleIndexData> result = facade.findAllPublishedForIndex();
@@ -418,13 +416,11 @@ class ArticleFacadeImplTest {
 
             when(articleMapper.findAllPublished()).thenReturn(List.of(article));
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
-            when(userFacade.getUserUsernameById(999L)).thenReturn(Optional.empty());
             when(userFacade.getUserNicknameById(999L)).thenReturn(Optional.empty());
 
             List<ArticleIndexData> result = facade.findAllPublishedForIndex();
 
             assertThat(result).hasSize(1);
-            assertThat(result.get(0).authorUsername()).isNull();
             assertThat(result.get(0).authorNickname()).isNull();
         }
     }
@@ -537,7 +533,6 @@ class ArticleFacadeImplTest {
             ArticleData data = result.get();
             assertThat(data.id()).isEqualTo(100L);
             assertThat(data.uuid()).isEqualTo(uuid);
-            assertThat(data.authorId()).isEqualTo(99L);
             assertThat(data.status()).isEqualTo("PUBLISHED");
             assertThat(data.seriesId()).isEqualTo(50L);
             assertThat(data.seriesPosition()).isEqualTo(3);
@@ -688,7 +683,6 @@ class ArticleFacadeImplTest {
             ArticleContentData data = result.get();
             assertThat(data.id()).isEqualTo(articleId);
             assertThat(data.uuid()).isEqualTo(articleUuid);
-            assertThat(data.authorId()).isEqualTo(5L);
             assertThat(data.title()).isEqualTo("Test Title");
             assertThat(data.slug()).isEqualTo("test-slug");
             assertThat(data.content()).isEqualTo("# Hello");

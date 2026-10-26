@@ -412,7 +412,7 @@ class CrossModuleVersionIT {
         assertThat(countAllVersions(article.getUuid())).isEqualTo(2);
 
         // 3. 收到 ArticleDeletedEvent → consumer 刪除該文章的版本，其他文章不受影響（結果與改造前的 CASCADE 一致）
-        ArticleDeletedEvent event = new ArticleDeletedEvent(UUID.randomUUID(), article.getUuid(), null, List.of(), List.of(), Instant.now(), null, null);
+        ArticleDeletedEvent event = new ArticleDeletedEvent(UUID.randomUUID(), article.getUuid(), List.of(), List.of(), Instant.now(), null, null);
         deletedConsumer.onArticleDeleted(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
 
         assertThat(countAllVersions(article.getUuid())).isZero();

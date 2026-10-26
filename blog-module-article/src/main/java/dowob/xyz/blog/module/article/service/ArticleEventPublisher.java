@@ -93,14 +93,12 @@ public class ArticleEventPublisher {
             ArticleUpdatedEvent event = new ArticleUpdatedEvent(
                     UUID.randomUUID(),
                     article.getUuid(),
-                    article.getAuthorId(),
                     resolveAuthorUuid("ArticleUpdatedEvent", article),
                     article.getTitle(),
                     article.getPublishedAt(),
                     article.getSlug(),
                     article.getSummary(),
                     stripMarkdown(article.getContent()),
-                    userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
                     userFacade.getUserNicknameById(article.getAuthorId()).orElse(null),
                     tags);
             rabbitTemplate.convertAndSend(
@@ -127,14 +125,12 @@ public class ArticleEventPublisher {
             ArticlePublishedEvent event = new ArticlePublishedEvent(
                     UUID.randomUUID(),
                     article.getUuid(),
-                    article.getAuthorId(),
                     resolveAuthorUuid("ArticlePublishedEvent", article),
                     article.getTitle(),
                     article.getPublishedAt(),
                     article.getSlug(),
                     article.getSummary(),
                     stripMarkdown(article.getContent()),
-                    userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
                     userFacade.getUserNicknameById(article.getAuthorId()).orElse(null),
                     tags);
             rabbitTemplate.convertAndSend(
@@ -174,7 +170,6 @@ public class ArticleEventPublisher {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
                 eventId,
                 article.getUuid(),
-                article.getAuthorId(),
                 categoryIds != null ? categoryIds : List.of(),
                 tagIds != null ? tagIds : List.of(),
                 Instant.now(),

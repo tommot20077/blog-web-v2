@@ -266,8 +266,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 article.getSlug(),
                 article.getSummary(),
                 stripMarkdown(article.getContent()),
-                article.getAuthorId(),
-                userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
                 userFacade.getUserNicknameById(article.getAuthorId()).orElse(null),
                 article.getPublishedAt(),
                 article.getViewCount(),
@@ -640,7 +638,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
         return new ArticleContentData(
                 article.getId(),
                 article.getUuid(),
-                article.getAuthorId(),
                 article.getTitle(),
                 article.getSlug(),
                 article.getContent(),

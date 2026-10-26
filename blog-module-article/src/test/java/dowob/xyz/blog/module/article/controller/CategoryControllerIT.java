@@ -279,7 +279,6 @@ class CategoryControllerIT {
     void deleteCategory_hasArticles_error() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立分類 */
         CreateCategoryRequest createRequest = new CreateCategoryRequest();
@@ -319,7 +318,6 @@ class CategoryControllerIT {
     void getPublishedArticles_filteredByCategorySlug() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立分類 */
         CreateCategoryRequest categoryRequest = new CreateCategoryRequest();
@@ -399,7 +397,6 @@ class CategoryControllerIT {
     void getArticle_responseContainsCategories() throws Exception {
         when(userFacade.getUserUuidById(anyLong())).thenReturn(Optional.of(AUTHOR_UUID));
         when(userFacade.getUserNicknameById(anyLong())).thenReturn(Optional.of("TestAuthor"));
-        when(userFacade.getUserUsernameById(anyLong())).thenReturn(Optional.of("testuser"));
 
         /** 建立分類 */
         CreateCategoryRequest categoryRequest = new CreateCategoryRequest();

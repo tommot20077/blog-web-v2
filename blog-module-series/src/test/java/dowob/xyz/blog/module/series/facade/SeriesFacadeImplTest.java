@@ -47,7 +47,7 @@ class SeriesFacadeImplTest {
 
     /** 文章在 series 內的位置（過渡期的 Long seriesId 刻意留 null：導覽只該讀 UUID 欄位） */
     private ArticleData articleAt(int position) {
-        return new ArticleData(200L, articleUuid, 42L, "PUBLISHED", null, position, UUID.randomUUID(), seriesUuid);
+        return new ArticleData(200L, articleUuid, "PUBLISHED", null, position, UUID.randomUUID(), seriesUuid);
     }
 
     @Test
@@ -88,7 +88,7 @@ class SeriesFacadeImplTest {
     @DisplayName("文章不在任何 series（seriesUuid 為 null）→ empty，不查 series")
     void articleWithoutSeries_returnsEmpty() {
         when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                new ArticleData(200L, articleUuid, 42L, "PUBLISHED", null, null, UUID.randomUUID(), null)));
+                new ArticleData(200L, articleUuid, "PUBLISHED", null, null, UUID.randomUUID(), null)));
 
         assertThat(facade.getSeriesNavigation(articleUuid)).isEmpty();
         verify(seriesRepo, never()).findByUuid(any());

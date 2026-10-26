@@ -90,8 +90,6 @@ class ArticleDataAssemblerTest {
         when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of(3L, seriesUuid));
 
         ArticleData data = assembler.toArticleData(article(1L, 7L, 3L));
-
-        assertThat(data.authorId()).isEqualTo(7L);
         assertThat(data.authorUuid()).isEqualTo(authorUuid);
         assertThat(data.seriesId()).isEqualTo(3L);
         assertThat(data.seriesUuid()).isEqualTo(seriesUuid);

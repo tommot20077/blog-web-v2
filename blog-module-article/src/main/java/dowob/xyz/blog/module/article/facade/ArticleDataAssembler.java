@@ -74,7 +74,6 @@ public class ArticleDataAssembler {
                 .map(a -> new ArticleData(
                         a.getId(),
                         a.getUuid(),
-                        a.getAuthorId(),
                         a.getStatus() != null ? a.getStatus().name() : null,
                         a.getSeriesId(),
                         a.getSeriesPosition(),

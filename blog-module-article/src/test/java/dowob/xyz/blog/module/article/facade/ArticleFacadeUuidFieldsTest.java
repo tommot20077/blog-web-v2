@@ -168,8 +168,6 @@ class ArticleFacadeUuidFieldsTest {
         when(articleService.findById(1L)).thenReturn(Optional.of(article(1L, null)));
 
         ArticleContentData data = facade.findContentById(1L).orElseThrow();
-
-        assertThat(data.authorId()).isEqualTo(7L);
         assertThat(data.authorUuid()).isEqualTo(AUTHOR_UUID);
     }
 
@@ -183,7 +181,6 @@ class ArticleFacadeUuidFieldsTest {
 
         assertThat(result).hasSize(2);
         assertThat(result).extracting(ArticleIndexData::authorUuid).containsOnly(AUTHOR_UUID);
-        assertThat(result).extracting(ArticleIndexData::authorId).containsOnly(7L);
         verify(articleMapper, times(1)).findUserUuidsByIds(anyCollection());
     }
 

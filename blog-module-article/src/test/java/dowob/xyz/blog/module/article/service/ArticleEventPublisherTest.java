@@ -171,7 +171,6 @@ class ArticleEventPublisherTest {
             UUID authorUuid = UUID.randomUUID();
             when(articleMapper.findTagsByArticleUuid(article.getUuid()))
                     .thenReturn(List.of(new TagInfo(UUID.randomUUID(), "Java", "java")));
-            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
             when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
             when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
 
@@ -183,9 +182,7 @@ class ArticleEventPublisherTest {
             ArticleUpdatedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
-            assertThat(event.authorId()).isEqualTo(1L);
             assertThat(event.authorUuid()).isEqualTo(authorUuid);
-            assertThat(event.authorUsername()).isEqualTo("alice");
             assertThat(event.tags()).hasSize(1);
         }
 
@@ -194,7 +191,6 @@ class ArticleEventPublisherTest {
         void publishPublished_shouldFillEventIdAndAuthorUuid() {
             Article article = publishedArticle();
             UUID authorUuid = UUID.randomUUID();
-            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
             when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
             when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
 
@@ -206,7 +202,6 @@ class ArticleEventPublisherTest {
             ArticlePublishedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
-            assertThat(event.authorId()).isEqualTo(1L);
             assertThat(event.authorUuid()).isEqualTo(authorUuid);
             assertThat(event.contentText()).isEqualTo("內容");
         }
@@ -215,7 +210,6 @@ class ArticleEventPublisherTest {
         @DisplayName("防禦：authorUuid 查詢失敗不得阻擋 publishPublished（欄位為 null，事件仍送出）")
         void publishPublished_whenUuidLookupFails_shouldStillPublish() {
             Article article = publishedArticle();
-            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
             when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
             when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
 
@@ -225,7 +219,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_PUBLISHED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
         }
     }
 
@@ -285,7 +278,6 @@ class ArticleEventPublisherTest {
         @DisplayName("publishUpdated：authorUuid 查詢失敗不得阻擋事件發送（欄位為 null），warn 帶事件類型與 articleUuid")
         void publishUpdated_whenUuidLookupFails_shouldStillPublishAndWarnWithContext() {
             Article article = publishedArticle();
-            when(userFacade.getUserUsernameById(1L)).thenReturn(Optional.of("alice"));
             when(userFacade.getUserNicknameById(1L)).thenReturn(Optional.of("愛麗絲"));
             when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
 
@@ -295,7 +287,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_UPDATED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
             assertThat(warns).anySatisfy(m -> assertThat(m)
                     .contains("ArticleUpdatedEvent").contains(article.getUuid().toString()));
         }
@@ -418,7 +409,6 @@ class ArticleEventPublisherTest {
             ArticleDeletedEvent event = captor.getValue();
             assertThat(event.eventId()).isNotNull();
             assertThat(event.articleUuid()).isEqualTo(article.getUuid());
-            assertThat(event.authorId()).isEqualTo(1L);
             assertThat(event.categoryIds()).containsExactly(categoryUuid);
             assertThat(event.tagIds()).containsExactly(tagUuid);
             assertThat(event.occurredAt()).isNotNull();
@@ -463,7 +453,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             ArticleDeletedEvent event = captor.getValue();
-            assertThat(event.authorId()).isEqualTo(1L);
             assertThat(event.authorUuid()).isEqualTo(authorUuid);
             assertThat(event.seriesUuid()).isEqualTo(seriesUuid);
         }
@@ -502,7 +491,6 @@ class ArticleEventPublisherTest {
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
             assertThat(captor.getValue().seriesUuid()).isEqualTo(seriesUuid);
-            assertThat(captor.getValue().authorId()).isEqualTo(1L);
         }
 
         @Test

@@ -168,7 +168,6 @@ class ArticleFacadeRestoreUuidTest {
         ArticleContentData data = result.get();
         assertThat(data.id()).isEqualTo(articleId);
         assertThat(data.uuid()).isEqualTo(articleUuid);
-        assertThat(data.authorId()).isEqualTo(5L);
         assertThat(data.authorUuid()).isEqualTo(authorUuid);
         assertThat(data.content()).isEqualTo("# Hello");
         assertThat(data.status()).isEqualTo("DRAFT");
