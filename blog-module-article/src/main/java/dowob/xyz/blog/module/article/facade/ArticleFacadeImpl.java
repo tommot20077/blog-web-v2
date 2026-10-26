@@ -439,7 +439,9 @@ public class ArticleFacadeImpl implements ArticleFacade {
      *
      * <p>M3-a 新增。純 delegate：委派 articleService.findByUuid 查找 article entity，
      * 轉換方式與 {@link #findContentById(Long)} 相同（同一個 {@code toContentData}），不分狀態；
-     * {@code articleUuid} 為 null 時直接回傳 empty，不查 DB。</p>
+     * {@code articleUuid} 為 null 時直接回傳 empty，不查 DB（與 UUID 版
+     * {@link #applyRestoreContent(UUID, ArticleRestoreSource)} 對 null 拋 NPE 不同：查詢方法對「查無」寬容，
+     * 寫入方法對呼叫端程式錯誤嚴格）。</p>
      */
     @Override
     public Optional<ArticleContentData> findContentByUuid(UUID articleUuid) {
@@ -521,9 +523,18 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * commit 後事件、檔案重新綁定、SEC-02 全部只有一份實作。</p>
      *
      * <p>渲染刻意放在交易之外：純 CPU 運算，不佔用 DB 連線。</p>
+     *
+     * <p>入口以 {@link Objects#requireNonNull} 檢查 {@code articleUuid}、{@code source}、
+     * {@code source.content()}，任一為 null 即拋帶訊息的 {@link NullPointerException}（呼叫端的程式錯誤，
+     * 不是業務錯誤，故不轉為 {@link BusinessException}）；檢查在渲染與任何 DB 存取之前。</p>
+     *
+     * @throws NullPointerException articleUuid、source 或 source.content() 為 null
      */
     @Override
     public void applyRestoreContent(UUID articleUuid, ArticleRestoreSource source) {
+        Objects.requireNonNull(articleUuid, "articleUuid 不可為 null");
+        Objects.requireNonNull(source, "source 不可為 null");
+        Objects.requireNonNull(source.content(), "source.content 不可為 null");
         RenderResult rendered = markdownRenderer.render(source.content());
         ArticleRestoreData data = new ArticleRestoreData(
                 source.title(),

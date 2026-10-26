@@ -41,8 +41,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
@@ -305,6 +307,98 @@ class ArticleFacadeRestoreUuidTest {
 
         assertThat(existing.getTitle()).isEqualTo("舊標題");
         assertThat(existing.getContentHtml()).isEqualTo("<p>舊</p>");
+        verify(articleRepository, never()).save(any(Article.class));
+        verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+    }
+
+    // ─── 事件／綁檔必須在交易 commit 之後（Transaction+MQ 時序）───
+
+    /**
+     * 讓 mock 的 {@code transactionTemplate.execute} 在 callback 回傳「之後」才把 committed 設為 true，
+     * 模擬真實交易的 commit 時點；若事件或綁檔被移進 callback 內，那一刻 committed 仍為 false。
+     */
+    private AtomicBoolean simulateCommitAfterCallback() {
+        AtomicBoolean committed = new AtomicBoolean(false);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            Object result = callback.doInTransaction(mock(TransactionStatus.class));
+            committed.set(true);
+            return result;
+        }).when(transactionTemplate).execute(any());
+        org.mockito.Mockito.doAnswer(inv -> {
+            assertThat(committed).as("publishContentChanged 必須在交易 commit 之後呼叫").isTrue();
+            return null;
+        }).when(articleEventPublisher).publishContentChanged(any(Article.class), any());
+        org.mockito.Mockito.doAnswer(inv -> {
+            assertThat(committed).as("publishUpdated 必須在交易 commit 之後呼叫").isTrue();
+            return null;
+        }).when(articleEventPublisher).publishUpdated(any(Article.class));
+        org.mockito.Mockito.doAnswer(inv -> {
+            assertThat(committed).as("檔案綁定必須在交易 commit 之後呼叫").isTrue();
+            return null;
+        }).when(fileFacade).bindFilesToArticle(any(), any());
+        return committed;
+    }
+
+    @Test
+    @DisplayName("UUID 還原：事件與綁檔在交易 commit 之後才發（不在 callback 內）")
+    void applyRestoreContentByUuid_eventsAndBindingHappenAfterCommit() {
+        simulateCommitAfterCallback();
+
+        facade.applyRestoreContent(articleUuid, source(List.of()));
+
+        verify(articleEventPublisher)
+                .publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
+        verify(fileFacade).bindFilesToArticle(eq(articleUuid), anyList());
+    }
+
+    @Test
+    @DisplayName("Long 還原：事件與綁檔在交易 commit 之後才發（不在 callback 內）")
+    void applyRestoreContentByLong_eventsAndBindingHappenAfterCommit() {
+        simulateCommitAfterCallback();
+
+        facade.applyRestoreContent(articleId, new ArticleRestoreData(
+                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()));
+
+        verify(articleEventPublisher)
+                .publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
+        verify(fileFacade).bindFilesToArticle(eq(articleUuid), anyList());
+    }
+
+    // ─── 入口 null 檢查 ───
+
+    @Test
+    @DisplayName("UUID 還原：articleUuid 為 null → NPE（訊息指明參數），不渲染、不寫入")
+    void applyRestoreContentByUuid_nullArticleUuid_throwsNpeWithMessage() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> facade.applyRestoreContent((UUID) null, source(List.of())))
+                .withMessageContaining("articleUuid").withMessageContaining("不可為 null");
+
+        verify(articleRepository, never()).save(any(Article.class));
+        verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+    }
+
+    @Test
+    @DisplayName("UUID 還原：source 為 null → NPE（訊息指明參數），不寫入")
+    void applyRestoreContentByUuid_nullSource_throwsNpeWithMessage() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> facade.applyRestoreContent(articleUuid, null))
+                .withMessageContaining("source").withMessageContaining("不可為 null");
+
+        verify(articleRepository, never()).save(any(Article.class));
+        verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+    }
+
+    @Test
+    @DisplayName("UUID 還原：source.content() 為 null → NPE（訊息指明 content），不寫入")
+    void applyRestoreContentByUuid_nullContent_throwsNpeWithMessage() {
+        ArticleRestoreSource noContent =
+                new ArticleRestoreSource("T", "s", null, "sum", null, List.of());
+
+        assertThatNullPointerException()
+                .isThrownBy(() -> facade.applyRestoreContent(articleUuid, noContent))
+                .withMessageContaining("source.content").withMessageContaining("不可為 null");
+
         verify(articleRepository, never()).save(any(Article.class));
         verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
     }

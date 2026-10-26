@@ -328,8 +328,13 @@ public interface ArticleFacade {
      * commit 後才發 ContentChanged(RESTORED)（以及現況為 PUBLISHED 時的 Updated）事件，並重新綁定
      * 「檔案 → 文章」。<b>SEC-02：不會改動 article.status</b>。</p>
      *
-     * @param articleUuid 文章公開 UUID
-     * @param source      快照內容（含 tags，不含 contentHtml／toc）
+     * <p><b>null 契約</b>：{@code articleUuid}、{@code source}、{@code source.content()} 任一為 null
+     * 拋帶訊息的 {@link NullPointerException}（呼叫端程式錯誤），不渲染、不寫入。
+     * 對照 {@link #findContentByUuid(UUID)}：傳入 null 回 empty。</p>
+     *
+     * @param articleUuid 文章公開 UUID；不可為 null
+     * @param source      快照內容（含 tags，不含 contentHtml／toc）；不可為 null，content 亦不可為 null
+     * @throws NullPointerException 上述 null 契約被違反
      * @throws dowob.xyz.blog.common.exception.BusinessException ARTICLE_NOT_FOUND 若 articleUuid 對應 article 不存在；
      *                                                          ARTICLE_EDIT_NOT_ALLOWED 若文章目前狀態內容凍結
      */
