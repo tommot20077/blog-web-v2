@@ -44,6 +44,18 @@ public interface SeriesFacade {
     Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(Collection<Long> seriesIds);
 
     /**
+     * 以 series 公開 UUID 批次取得基本資訊（M6-b 新增，取代 Long 版 {@link #batchGetSeriesBasicInfo} 的呼叫端）。
+     *
+     * <p>供 article 模組列表 enrich 時補 {@code seriesUuid} / {@code seriesTitle}：article 已直接儲存
+     * {@code series_uuid}，不再需要主鍵。實作端自行去重、忽略 null，並經 {@code BatchedQuery} 切批；
+     * 查無的 series（已被刪除、事件尚未清空歸屬）不出現在結果中。</p>
+     *
+     * @param seriesUuids series 公開 UUID 集合；null 或空集合回傳空 Map（不查 DB）；null 元素會被忽略
+     * @return series 公開 UUID → 基本資訊；永不回傳 null
+     */
+    Map<UUID, SeriesBasicInfo> batchGetSeriesBasicInfoByUuids(Collection<UUID> seriesUuids);
+
+    /**
      * 篩出 uuids 中「仍存在」的系列 UUID。
      *
      * <p>系列沒有狀態欄位，存在即回傳；被刪除（查無此列）者不會出現在結果中。

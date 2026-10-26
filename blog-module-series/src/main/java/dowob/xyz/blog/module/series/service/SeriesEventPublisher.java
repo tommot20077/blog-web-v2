@@ -32,10 +32,10 @@ public class SeriesEventPublisher {
     /**
      * 發送系列刪除事件至 {@code series.events}（routing key {@code series.deleted}）。
      *
-     * <p>目前沒有 consumer（article 於 M6 訂閱）；exchange 在沒有任何 queue 綁定時直接丟棄訊息，
-     * 發送端不受影響。文章脫離系列在 M6 之前仍由 {@code articles.series_id} 的 FK
-     * {@code ON DELETE SET NULL} 負責，所以發送失敗目前沒有功能性後果，僅記錄 warn
-     * （帶 eventId 與 seriesUuid，供日後 M6 啟用後人工補送）。</p>
+     * <p>article 模組訂閱此事件、把成員文章的 {@code series_uuid} 清空（M6-b 起沒有資料庫 FK 連動）。
+     * 發送失敗時刪除已 commit，不往外拋；但文章的系列歸屬會暫時殘留，故記錄 <b>error</b>
+     * （帶 seriesUuid 與 eventId，供追查）。<b>失敗由 article 端的每日孤兒校正排程兜底</b>
+     * （{@code ArticleSeriesOrphanReconciliationJob} 找出指向已不存在系列的文章並清空歸屬）。</p>
      *
      * @param seriesUuid 已被刪除（且已 commit）的系列公開 UUID
      */
@@ -47,7 +47,8 @@ public class SeriesEventPublisher {
                     SeriesEventContract.ROUTING_KEY_DELETED,
                     new SeriesDeletedEvent(eventId, seriesUuid, Instant.now()));
         } catch (Exception e) {
-            log.warn("SeriesDeletedEvent MQ 發送失敗（best-effort）：seriesUuid={}, eventId={}, error={}",
+            log.error("SeriesDeletedEvent MQ 發送失敗（best-effort），文章的系列歸屬將由 article 端每日校正清空："
+                            + "seriesUuid={}, eventId={}, error={}",
                     seriesUuid, eventId, e.getMessage(), e);
         }
     }

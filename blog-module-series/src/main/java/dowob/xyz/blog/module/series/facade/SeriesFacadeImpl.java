@@ -102,6 +102,27 @@ public class SeriesFacadeImpl implements SeriesFacade {
     /**
      * {@inheritDoc}
      *
+     * <p>先去重並濾掉 null，再經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
+     * 各批 key 不重疊，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Map<UUID, SeriesBasicInfo> batchGetSeriesBasicInfoByUuids(Collection<UUID> seriesUuids) {
+        if (seriesUuids == null || seriesUuids.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<UUID> distinct = seriesUuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        return BatchedQuery.queryInBatches(distinct, seriesMapper::findBasicInfoBySeriesUuids).stream()
+                .collect(Collectors.toMap(
+                        SeriesMapper.SeriesBasicRow::seriesUuid,
+                        row -> new SeriesBasicInfo(row.seriesUuid(), row.seriesTitle())));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * <p>輸入無上界，故去重後經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生
      * {@code IN ()}。結果為集合聯集，屬跨批可合併形狀。</p>
      */
