@@ -36,12 +36,14 @@ import dowob.xyz.blog.module.article.service.ArticleTocCodec;
 import dowob.xyz.blog.module.article.service.RenderResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -826,5 +828,90 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 .collect(Collectors.toMap(ArticleSummaryResponse::getUuid, Function.identity(),
                         (first, second) -> first));
         return foundUuids.stream().map(byUuid::get).filter(Objects::nonNull).toList();
+    }
+
+    // ─── M4-a：series UUID 版（過渡期：M6 改以 articles.series_uuid 直查）───
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>過渡期：先經 SeriesFacade 把 series UUID 換成主鍵，再委派 Long 版的內部查詢；
+     * M6 改以 {@code articles.series_uuid} 直查。series 不存在時不查文章，直接回傳空清單。</p>
+     */
+    @Override
+    public List<ArticleData> findBySeriesUuidOrderByPosition(UUID seriesUuid) {
+        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
+                .map(this::findBySeriesIdOrderByPosition)
+                .orElseGet(List::of);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>過渡期：流程與 Long 版逐項對應——先以 {@code articleUuid} 找文章主鍵（查無即 no-op，
+     * 不檢查 series）；{@code seriesUuid} 為 null 直接寫入 null；非 null 但查無 series 時拋
+     * {@link DataIntegrityViolationException}（等同 Long 版被 {@code articles.series_id} 外鍵拒絕）。
+     * M6 改以 {@code articles.series_uuid} 直寫。</p>
+     *
+     * @throws DataIntegrityViolationException seriesUuid 非 null 但查無此 series
+     */
+    @Override
+    public void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {
+        Long articleId = articleService.findIdByUuid(articleUuid);
+        if (articleId == null) {
+            return;
+        }
+        Long seriesId = null;
+        if (seriesUuid != null) {
+            seriesId = articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
+                    .orElseThrow(() -> new DataIntegrityViolationException(
+                            "series 不存在，無法指派文章：seriesUuid=" + seriesUuid));
+        }
+        articleService.updateSeriesAssignment(articleId, seriesId, seriesPosition);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>過渡期：series UUID 經 {@code SeriesFacade.findIdsByUuids} <b>一次</b>批次換成主鍵
+     * （不逐筆），再委派 Long 版計數並以 UUID 為 key 回傳；M6 改以 {@code articles.series_uuid} 直查。</p>
+     */
+    @Override
+    public Map<UUID, Integer> countPublishedBySeriesUuids(Collection<UUID> seriesUuids) {
+        Map<UUID, Long> idByUuid = articleDataAssembler.resolveSeriesIdsByUuids(seriesUuids);
+        if (idByUuid.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, Integer> countById = countPublishedBySeriesIds(idByUuid.values());
+        Map<UUID, Integer> result = new HashMap<>();
+        idByUuid.forEach((uuid, id) -> {
+            Integer count = countById.get(id);
+            if (count != null) {
+                result.put(uuid, count);
+            }
+        });
+        return result;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>過渡期：先經 SeriesFacade 換成主鍵再委派 Long 版；series 不存在時回傳 empty。</p>
+     */
+    @Override
+    public Optional<ArticleNavRef> findPrevPublishedInSeries(UUID seriesUuid, Integer currentPosition) {
+        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
+                .flatMap(seriesId -> findPrevPublishedInSeries(seriesId, currentPosition));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>過渡期：先經 SeriesFacade 換成主鍵再委派 Long 版；series 不存在時回傳 empty。</p>
+     */
+    @Override
+    public Optional<ArticleNavRef> findNextPublishedInSeries(UUID seriesUuid, Integer currentPosition) {
+        return articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
+                .flatMap(seriesId -> findNextPublishedInSeries(seriesId, currentPosition));
     }
 }

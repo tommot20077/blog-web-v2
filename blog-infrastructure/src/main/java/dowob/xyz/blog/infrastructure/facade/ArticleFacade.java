@@ -174,6 +174,18 @@ public interface ArticleFacade {
      */
     List<ArticleData> findBySeriesIdOrderByPosition(Long seriesId);
 
+    /**
+     * UUID 版 {@link #findBySeriesIdOrderByPosition(Long)}：撈 series 內 article，依 series_position 排序。
+     *
+     * <p>語意與 Long 版完全相同；series 不存在（查無此 UUID）時與 Long 版遇到不存在的 series id 一致，
+     * 回傳空清單。<b>過渡期</b>：{@code articles} 仍以 {@code series_id}（Long）儲存，實作端經
+     * {@code SeriesFacade} 把 series UUID 換成主鍵再查；M6 改以 {@code articles.series_uuid} 直查。</p>
+     *
+     * @param seriesUuid 系列公開 UUID；null 視為查無，回傳空清單
+     * @return 該 series 內 article 按 series_position 排序；查無 series 時為空清單
+     */
+    List<ArticleData> findBySeriesUuidOrderByPosition(UUID seriesUuid);
+
     // ─── SP-B 新增 5 write method（counter / 欄位 set，simple write）───
 
     /**
@@ -252,6 +264,26 @@ public interface ArticleFacade {
      * @param seriesPosition 在 series 內的位置（remove 時傳 null）
      */
     void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition);
+
+    /**
+     * UUID 版 {@link #updateSeriesAssignment(Long, Long, Integer)}：設定文章的 series 歸屬與位置。
+     *
+     * <p>行為與 Long 版逐項一致：</p>
+     * <ul>
+     *   <li>{@code seriesUuid} 為 null 代表移出 series（通常 {@code seriesPosition} 也傳 null）；</li>
+     *   <li>{@code articleUuid} 不存在時為 no-op（不拋例外，也不檢查 series）；</li>
+     *   <li>{@code seriesUuid} 非 null 但查無此 series 時，與 Long 版寫入不存在的 series id 相同，
+     *       不會寫入（Long 版由 {@code articles.series_id → series(id)} 外鍵拒絕，被 Spring Data JDBC 包成
+     *       {@code DbActionExecutionException}、根因為 {@link org.springframework.dao.DataIntegrityViolationException}；
+     *       UUID 版直接拋該 {@code DataIntegrityViolationException}）。</li>
+     * </ul>
+     * <p><b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直寫（屆時無外鍵，行為另行定義）。</p>
+     *
+     * @param articleUuid    文章公開 UUID
+     * @param seriesUuid     系列公開 UUID（移出時傳 null）
+     * @param seriesPosition 在 series 內的位置（移出時傳 null）
+     */
+    void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
 
     // ─── SP-D 新增 1 read ───
 
@@ -358,6 +390,18 @@ public interface ArticleFacade {
     Map<Long, Integer> countPublishedBySeriesIds(Collection<Long> seriesIds);
 
     /**
+     * UUID 版 {@link #countPublishedBySeriesIds(Collection)}：一次取得多個 series 各自的 PUBLISHED 文章數。
+     *
+     * <p>語意與 Long 版相同：<b>只含 count &gt; 0 者</b>；查無的 series UUID 同樣不出現在結果中。
+     * 實作端以 {@code SeriesFacade.findIdsByUuids} <b>一次</b>批次換成主鍵（不逐筆），
+     * <b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直查。</p>
+     *
+     * @param seriesUuids series 公開 UUID 集合；null 或空集合回傳空 Map（不查 DB）
+     * @return series 公開 UUID → PUBLISHED 文章數；<b>只含 count &gt; 0 者</b>
+     */
+    Map<UUID, Integer> countPublishedBySeriesUuids(Collection<UUID> seriesUuids);
+
+    /**
      * series 內 PUBLISHED 且位置小於 current 的最後一篇（prev 導覽）。
      *
      * @param seriesId        series 主鍵
@@ -367,6 +411,18 @@ public interface ArticleFacade {
     Optional<ArticleNavRef> findPrevPublishedInSeries(Long seriesId, Integer currentPosition);
 
     /**
+     * UUID 版 {@link #findPrevPublishedInSeries(Long, Integer)}。
+     *
+     * <p>語意相同；series 查無（或為 null）時回傳 {@code Optional.empty()}。
+     * <b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直查。</p>
+     *
+     * @param seriesUuid      series 公開 UUID
+     * @param currentPosition 當前文章在 series 內的位置
+     * @return 前一篇；當前為第一篇或 series 不存在時為 {@code Optional.empty()}
+     */
+    Optional<ArticleNavRef> findPrevPublishedInSeries(UUID seriesUuid, Integer currentPosition);
+
+    /**
      * series 內 PUBLISHED 且位置大於 current 的第一篇（next 導覽）。
      *
      * @param seriesId        series 主鍵
@@ -374,6 +430,18 @@ public interface ArticleFacade {
      * @return 後一篇；當前為最後一篇時為 {@code Optional.empty()}
      */
     Optional<ArticleNavRef> findNextPublishedInSeries(Long seriesId, Integer currentPosition);
+
+    /**
+     * UUID 版 {@link #findNextPublishedInSeries(Long, Integer)}。
+     *
+     * <p>語意相同；series 查無（或為 null）時回傳 {@code Optional.empty()}。
+     * <b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直查。</p>
+     *
+     * @param seriesUuid      series 公開 UUID
+     * @param currentPosition 當前文章在 series 內的位置
+     * @return 後一篇；當前為最後一篇或 series 不存在時為 {@code Optional.empty()}
+     */
+    Optional<ArticleNavRef> findNextPublishedInSeries(UUID seriesUuid, Integer currentPosition);
 
     /**
      * 集合述詞：篩出 candidateIds 中「對該 viewer 可見」者，<b>維持輸入順序</b>。

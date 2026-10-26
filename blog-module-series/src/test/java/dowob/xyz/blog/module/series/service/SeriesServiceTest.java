@@ -279,7 +279,7 @@ class SeriesServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_PUBLISHED.getMessage());
 
-        verify(articleFacade, never()).updateSeriesAssignment(any(), any(), any());
+        verify(articleFacade, never()).updateSeriesAssignment(any(Long.class), any(Long.class), any());
     }
 
     @Test

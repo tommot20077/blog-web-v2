@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -90,6 +91,44 @@ public class ArticleIdentityResolver {
             return Collections.emptyMap();
         }
         return seriesFacadeProvider.getObject().findUuidsByIds(distinct);
+    }
+
+    /**
+     * 批次把 series 公開 UUID 轉成資料庫主鍵（M4-a 過渡 API；經 {@link SeriesFacade#findIdsByUuids}，延遲取得）。
+     *
+     * <p>輸入去重並忽略 null 後<b>整批一次</b>送出，不逐筆呼叫 {@code findIdByUuid}；
+     * 查無的 UUID 不出現在結果中。M6 以 {@code articles.series_uuid} 直查後移除。</p>
+     *
+     * @param seriesUuids series 公開 UUID 集合（可含 null 與重複）
+     * @return series 公開 UUID → 主鍵；集合中沒有任何 UUID 時不取用 SeriesFacade 並回傳空 Map
+     */
+    public Map<UUID, Long> resolveSeriesIdsByUuids(Collection<UUID> seriesUuids) {
+        if (seriesUuids == null) {
+            return Collections.emptyMap();
+        }
+        Set<UUID> distinct = seriesUuids.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (distinct.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return seriesFacadeProvider.getObject().findIdsByUuids(distinct);
+    }
+
+    /**
+     * 把單一 series 公開 UUID 轉成資料庫主鍵（M4-a 過渡 API；經 {@link SeriesFacade#findIdByUuid}，延遲取得）。
+     *
+     * <p>僅供「單一 series」的查詢使用（單篇導覽、單一 series 的文章清單）；多筆請用
+     * {@link #resolveSeriesIdsByUuids}，不得在迴圈中呼叫本方法。</p>
+     *
+     * @param seriesUuid series 公開 UUID；null 時不取用 SeriesFacade 並回傳 empty
+     * @return series 主鍵；查無時為 {@link Optional#empty()}
+     */
+    public Optional<Long> resolveSeriesIdByUuid(UUID seriesUuid) {
+        if (seriesUuid == null) {
+            return Optional.empty();
+        }
+        return seriesFacadeProvider.getObject().findIdByUuid(seriesUuid);
     }
 
     /**
