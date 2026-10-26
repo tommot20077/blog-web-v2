@@ -3,6 +3,10 @@ package dowob.xyz.blog.module.reading.job;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Metrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -64,6 +68,13 @@ class ReadingProgressFlushJobTest {
     @Mock private ReadingProgressMapper progressMapper;
     @InjectMocks private ReadingProgressFlushJob job;
 
+    private SimpleMeterRegistry meters;
+
+    @AfterEach
+    void removeMeterRegistry() {
+        Metrics.removeRegistry(meters);
+    }
+
     private final UUID userUuid = UUID.randomUUID();
 
     @BeforeEach
@@ -71,6 +82,10 @@ class ReadingProgressFlushJobTest {
     void setUp() {
         lenient().when(redisTemplate.opsForHash()).thenReturn((HashOperations) hashOps);
         lenient().when(redisTemplate.opsForSet()).thenReturn(setOps);
+        // 預設 DB upsert 成功（影響列數 1）；mock 的 int 預設 0 會被當成「被單調守衛擋下」
+        lenient().when(progressMapper.upsert(any(), any(), any(), any(), any())).thenReturn(1);
+        meters = new SimpleMeterRegistry();
+        Metrics.addRegistry(meters);
         lenient().when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(1L);
     }
@@ -373,6 +388,26 @@ class ReadingProgressFlushJobTest {
 
         verify(progressMapper, never()).upsert(any(), any(), any(), any(), any());
         verifyCompareAndDiscard(entry, "abc", "", "3");
+    }
+
+    @Test
+    @DisplayName("flush：upsert 回 0（DB 守衛判定 hash 比 DB 舊）→ 不 compare-and-remove，改 compare-and-discard（內容相同才移除成員並刪 hash），counter path=db_flush 加 1")
+    void flush_upsertRejectedByDbGuard_discardsStaleHashAndCounts() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.3", "old", "100"));
+        when(progressMapper.upsert(any(), any(), any(), any(), any())).thenReturn(0);
+
+        job.flush();
+
+        verifyCompareAndDiscard(entry, "0.3", "old", "100");
+        verify(redisTemplate, never()).execute(eq(ReadingProgressFlushJob.COMPARE_AND_REMOVE_SCRIPT), anyList(),
+                any(Object[].class));
+        Counter c = meters.find("reading.progress.write_rejected").tag("path", "db_flush").counter();
+        assertThat(c).isNotNull();
+        assertThat(c.count()).isEqualTo(1.0);
     }
 
     @Test

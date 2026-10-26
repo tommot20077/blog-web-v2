@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.reading.job;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
+import dowob.xyz.blog.module.reading.service.ReadingProgressMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -57,6 +58,11 @@ import java.util.UUID;
  * 或完讀路徑直寫 DB 後舊 flush 才 upsert，舊值都會被守衛擋下，DB 不會回退；被擋下的 flusher 的 CAS
  * 因 hash 內容已變（或成員已被移除）而不動 dirty，下一輪讀到新值再收斂。</p>
  *
+ * <p><b>upsert 回 0</b>：代表 DB 已有更新的列（hash 比 DB 舊，例如完讀直寫 DB 後 Redis 寫入失敗或 JVM 中止）。
+ * 此時不能照常 compare-and-remove（舊 hash 會在快取留 3 天，{@code get()} 一直回舊值），改走 compare-and-discard：
+ * 內容未變才移除成員並刪 hash，內容已變（有新 update）則保留交給下一輪；並記 warn、累加
+ * {@code reading.progress.write_rejected{path=db_flush}}。</p>
+ *
  * <p><b>壞資料（poison pill）</b>：hash 缺 {@code progress}、{@code updatedAt}，或兩者無法解析時，不 upsert、
  * 不拋例外中斷整輪，記 warn 後以讀到的內容做 {@link #COMPARE_AND_DISCARD_SCRIPT}（原子地「內容未變才 SREM 成員並 DEL hash」）；
  * 內容已變（有新的合法 update）則兩者都保留，交給下一輪。</p>
@@ -64,7 +70,7 @@ import java.util.UUID;
  * <p>已知限制：{@code SMEMBERS} 一次取回整個 dirty set，成員數無上限（PERF-31 的另一半，不在 M2-c 處理）。</p>
  *
  * @author Yuan
- * @version 5.0
+ * @version 6.0
  */
 @Slf4j
 @Component
@@ -209,7 +215,15 @@ public class ReadingProgressFlushJob {
             }
             String lastHeading = rawHeading.isEmpty() ? null : rawHeading;
 
-            progressMapper.upsert(entry.userUuid(), entry.articleUuid(), progress, lastHeading, updatedAt);
+            int affected = progressMapper.upsert(entry.userUuid(), entry.articleUuid(), progress, lastHeading, updatedAt);
+            if (affected == 0) {
+                // DB 單調守衛判定 hash 比 DB 舊（例如完讀已直寫 DB 但 Redis 寫入失敗）：舊 hash 不該繼續被 get() 回傳。
+                // 內容未變才丟棄；內容已變（有新的 update）則保留，交給下一輪。
+                log.warn("flush 的 upsert 被 DB 單調守衛擋下，hash 比 DB 舊，內容未變則丟棄 - {} updatedAt={}", member, rawUpdatedAt);
+                ReadingProgressMetrics.writeRejected(ReadingProgressMetrics.PATH_DB_FLUSH);
+                compareAndDiscard(hashKey, member, rawProgress, rawHeading, rawUpdatedAt);
+                return;
+            }
             compareAndRemove(hashKey, member, rawProgress, rawHeading, rawUpdatedAt);
         } catch (Exception e) {
             log.warn("flush 失敗，成員仍在 dirty set，下輪重試 - {}", member, e);

@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import dowob.xyz.blog.module.reading.service.ReadingProgressService;
+import dowob.xyz.blog.module.reading.service.ReadingProgressTestAccess;
 import dowob.xyz.blog.module.reading.support.ReadingCleanupITSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -370,10 +371,10 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
         Article article = createArticle(ArticleStatus.PUBLISHED);
         UUID articleUuid = article.getUuid();
         long t1 = System.currentTimeMillis() - 10_000;
-        progressService.update(USER_UUID, articleUuid, new BigDecimal("0.30"), "first", t1);
+        ReadingProgressTestAccess.update(progressService, USER_UUID, articleUuid, new BigDecimal("0.30"), "first", t1);
         ReadingProgressFlushJob otherFlusher = new ReadingProgressFlushJob(redis, articleFacade, realMapper);
         hookingMapper.beforeNextUpsert = () -> {
-            progressService.update(USER_UUID, articleUuid, new BigDecimal("0.60"), "second", t1 + 1_000);
+            ReadingProgressTestAccess.update(progressService, USER_UUID, articleUuid, new BigDecimal("0.60"), "second", t1 + 1_000);
             otherFlusher.flush();
         };
 
@@ -392,9 +393,9 @@ class ReadingProgressFlushJobIT extends ReadingCleanupITSupport {
         Article article = createArticle(ArticleStatus.PUBLISHED);
         UUID articleUuid = article.getUuid();
         long t1 = System.currentTimeMillis() - 10_000;
-        progressService.update(USER_UUID, articleUuid, new BigDecimal("0.30"), "first", t1);
+        ReadingProgressTestAccess.update(progressService, USER_UUID, articleUuid, new BigDecimal("0.30"), "first", t1);
         hookingMapper.beforeNextUpsert = () ->
-                progressService.update(USER_UUID, articleUuid, new BigDecimal("0.97"), "end", t1 + 1_000);
+                ReadingProgressTestAccess.update(progressService, USER_UUID, articleUuid, new BigDecimal("0.97"), "end", t1 + 1_000);
 
         job.flush();
 
