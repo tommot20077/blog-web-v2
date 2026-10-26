@@ -159,4 +159,25 @@ public interface SeriesMapper {
      * @param seriesUuid series 公開 UUID
      */
     record SeriesUuidRow(Long seriesId, java.util.UUID seriesUuid) {}
+
+    /**
+     * 批次取得 series 公開 UUID 對應的主鍵（供 {@code SeriesFacade.findIdsByUuids}，M4-a 過渡 API）。
+     *
+     * <p>只投影 id 與 uuid 兩欄；沿用 {@link SeriesUuidRow}（欄位順序 seriesId, seriesUuid 不可調整，
+     * MyBatis 對 record 建構子採位置對應）。</p>
+     *
+     * @param uuids series 公開 UUID 清單（不得為空，由 caller 保證，避免 {@code IN ()} 語法錯誤）
+     * @return 每個存在的 series 的主鍵與 UUID
+     */
+    @Select({
+        "<script>",
+        "SELECT id AS seriesId, uuid AS seriesUuid",
+        "  FROM series",
+        " WHERE uuid IN",
+        "<foreach collection='uuids' item='u' open='(' separator=',' close=')'>",
+        "  #{u}::uuid",
+        "</foreach>",
+        "</script>"
+    })
+    List<SeriesUuidRow> findIdsByUuids(@Param("uuids") List<java.util.UUID> uuids);
 }

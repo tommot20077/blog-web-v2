@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -107,5 +108,25 @@ public class ArticleDataAssembler {
      */
     public Map<Long, UUID> resolveAuthorUuids(Collection<Long> userIds) {
         return identityResolver.resolveAuthorUuids(userIds);
+    }
+
+    /**
+     * 批次把 series 公開 UUID 轉成資料庫主鍵（委派給 {@link ArticleIdentityResolver}，M4-a 過渡 API）。
+     *
+     * @param seriesUuids series 公開 UUID 集合；null 或空集合回傳空 Map 且不發查詢
+     * @return series 公開 UUID → 主鍵
+     */
+    public Map<UUID, Long> resolveSeriesIdsByUuids(Collection<UUID> seriesUuids) {
+        return identityResolver.resolveSeriesIdsByUuids(seriesUuids);
+    }
+
+    /**
+     * 把單一 series 公開 UUID 轉成資料庫主鍵（委派給 {@link ArticleIdentityResolver}，M4-a 過渡 API）。
+     *
+     * @param seriesUuid series 公開 UUID；null 回傳 empty 且不發查詢
+     * @return series 主鍵；查無為 empty
+     */
+    public Optional<Long> resolveSeriesIdByUuid(UUID seriesUuid) {
+        return identityResolver.resolveSeriesIdByUuid(seriesUuid);
     }
 }

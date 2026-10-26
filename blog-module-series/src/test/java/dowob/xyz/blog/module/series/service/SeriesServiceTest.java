@@ -279,7 +279,9 @@ class SeriesServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(SeriesErrorCode.ARTICLE_NOT_PUBLISHED.getMessage());
 
-        verify(articleFacade, never()).updateSeriesAssignment(any(), any(), any());
+        // 強制轉型選定多載：(Long) any() 可匹配 null，才攔得到 (id, null, null) 這類「移出 series」呼叫
+        verify(articleFacade, never()).updateSeriesAssignment((Long) any(), (Long) any(), any());
+        verify(articleFacade, never()).updateSeriesAssignment((UUID) any(), (UUID) any(), any());
     }
 
     @Test

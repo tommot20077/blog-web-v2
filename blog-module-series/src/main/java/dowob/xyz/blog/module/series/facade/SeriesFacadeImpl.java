@@ -142,4 +142,24 @@ public class SeriesFacadeImpl implements SeriesFacade {
                         SeriesMapper.SeriesUuidRow::seriesId,
                         SeriesMapper.SeriesUuidRow::seriesUuid));
     }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>先去重並濾掉 null，再經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
+     * 各批 key 不重疊，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public Map<UUID, Long> findIdsByUuids(Collection<UUID> seriesUuids) {
+        if (seriesUuids == null || seriesUuids.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Set<UUID> distinctUuids = seriesUuids.stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        return BatchedQuery.queryInBatches(distinctUuids, seriesMapper::findIdsByUuids).stream()
+                .collect(Collectors.toMap(
+                        SeriesMapper.SeriesUuidRow::seriesUuid,
+                        SeriesMapper.SeriesUuidRow::seriesId));
+    }
 }
