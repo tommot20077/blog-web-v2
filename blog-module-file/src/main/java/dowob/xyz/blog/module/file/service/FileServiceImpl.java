@@ -4,7 +4,6 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
-import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
@@ -91,12 +90,6 @@ public class FileServiceImpl implements FileService {
      * </p>
      */
     private final ArticleLookupFacade articleLookupFacade;
-
-    /**
-     * 使用者模組跨模組 Facade（將文章作者的 authorId（Long）轉換為 UUID，供 {@link #bindToArticle}
-     * 與 {@link #uploadFile} 的擁有權比對用；見安全複審 CRITICAL / MEDIUM 1 修復）。
-     */
-    private final UserFacade userFacade;
 
     /** Apache Tika MIME 類型偵測器（執行緒安全，可重用單一實例） */
     private final Tika tika = new Tika();
@@ -389,18 +382,17 @@ public class FileServiceImpl implements FileService {
     }
 
     /**
-     * 解析文章作者的 UUID（跨模組：article authorId（Long）→ user UUID）。
+     * 解析文章作者的 UUID（直接取自 {@link ArticleData#authorUuid()}，不再經 user 模組轉換）。
      *
      * <p>用於 {@link #bindToArticle} 與 {@link #resolveOwnedArticleUuid} 的擁有權比對。
-     * 文章不存在、或其作者 UUID 無法解析時，皆回傳 null（fail-safe，由呼叫端決定如何處理）。</p>
+     * 文章不存在、或 {@code authorUuid} 為 null（資料異常）時，皆回傳 null（fail-safe，由呼叫端決定如何處理）。</p>
      *
      * @param articleUuid 文章公開 UUID
      * @return 作者 UUID；無法解析時為 null
      */
     private UUID resolveArticleAuthorUuid(UUID articleUuid) {
         return articleLookupFacade.findByUuid(articleUuid)
-                .map(ArticleData::authorId)
-                .flatMap(userFacade::getUserUuidById)
+                .map(ArticleData::authorUuid)
                 .orElse(null);
     }
 

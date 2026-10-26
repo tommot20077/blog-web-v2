@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.file.service;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
-import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
@@ -84,9 +83,6 @@ class FileServiceTest {
 
     @Mock
     private ArticleLookupFacade articleLookupFacade;
-
-    @Mock
-    private UserFacade userFacade;
 
     private final FileProperties fileProperties = new FileProperties(
             Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)),
@@ -1066,7 +1062,7 @@ class FileServiceTest {
      * <p>
      * 安全複審 CRITICAL 修復：一個檔案只能被綁定到「該檔案的上傳者 == 該文章的作者」的文章上。
      * {@link #stubArticleAuthor} 統一建立「文章 articleUuid 的作者 UUID 為 authorUuid」的
-     * {@code articleLookupFacade}/{@code userFacade} mock 鏈。
+     * {@code articleLookupFacade} mock（作者 UUID 直接取自 {@code ArticleData.authorUuid}，不再經 userFacade 轉換）。
      * </p>
      */
     @Nested
@@ -1075,11 +1071,10 @@ class FileServiceTest {
 
         private static final Long AUTHOR_INTERNAL_ID = 100L;
 
-        /** 建立「文章 articleUuid 的作者為 authorUuid」的 articleLookupFacade + userFacade mock 鏈 */
+        /** 建立「文章 articleUuid 的作者為 authorUuid」的 articleLookupFacade mock */
         private void stubArticleAuthor(UUID articleUuid, UUID authorUuid) {
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null)));
-            when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.of(authorUuid));
+                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null, authorUuid, null)));
         }
 
         /** 新綁定：清單內檔案皆設定 articleUuid（合法情境：檔案 uploader == 文章作者） */
@@ -1286,7 +1281,7 @@ class FileServiceTest {
             verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
         }
 
-        /** fail-safe：文章存在但作者 UUID 無法解析（userFacade 查無）→ 不綁定任何檔案、不拋錯 */
+        /** fail-safe：文章存在但 ArticleData.authorUuid 為 null（資料異常）→ 不綁定任何檔案、不拋錯 */
         @Test
         @DisplayName("bindToArticle_whenAuthorUuidNotResolvable_bindsNothingAndDoesNotThrow")
         void bindToArticle_whenAuthorUuidNotResolvable_bindsNothingAndDoesNotThrow() {
@@ -1297,8 +1292,7 @@ class FileServiceTest {
             metadataA.setUploaderId(UUID.randomUUID());
 
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null)));
-            when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.empty());
+                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null, null, null)));
             when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
             when(fileMetadataRepository.findById(fileA)).thenReturn(Optional.of(metadataA));
 
@@ -1339,7 +1333,7 @@ class FileServiceTest {
             verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
         }
 
-        /** 同上，但失敗點在 userFacade（文章存在，但作者 internal id 解析不出 UUID） */
+        /** 同上，但失敗點在 authorUuid（文章存在，但 ArticleData.authorUuid 為 null） */
         @Test
         @DisplayName("bindToArticle_whenAuthorUuidNotResolvable_doesNotUnbindExistingFiles")
         void bindToArticle_whenAuthorUuidNotResolvable_doesNotUnbindExistingFiles() {
@@ -1350,8 +1344,7 @@ class FileServiceTest {
             alreadyBound.setArticleUuid(articleUuid);
 
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "PUBLISHED", null, null)));
-            when(userFacade.getUserUuidById(AUTHOR_INTERNAL_ID)).thenReturn(Optional.empty());
+                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "PUBLISHED", null, null, null, null)));
             when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(alreadyBound));
 
             assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(UUID.randomUUID())))
@@ -1432,8 +1425,7 @@ class FileServiceTest {
             UUID uploaderId = UUID.randomUUID();
             Long authorInternalId = 200L;
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, authorInternalId, "DRAFT", null, null)));
-            when(userFacade.getUserUuidById(authorInternalId)).thenReturn(Optional.of(uploaderId));
+                    new ArticleData(1L, articleUuid, authorInternalId, "DRAFT", null, null, uploaderId, null)));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -1465,8 +1457,7 @@ class FileServiceTest {
             UUID actualAuthorUuid = UUID.randomUUID();
             Long authorInternalId = 201L;
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, authorInternalId, "PUBLISHED", null, null)));
-            when(userFacade.getUserUuidById(authorInternalId)).thenReturn(Optional.of(actualAuthorUuid));
+                    new ArticleData(1L, articleUuid, authorInternalId, "PUBLISHED", null, null, actualAuthorUuid, null)));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 

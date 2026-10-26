@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.file.controller;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
-import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.file.TestFileApplication;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
@@ -13,7 +12,6 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -38,10 +36,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
-import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -108,9 +104,6 @@ class FileUploadQuotaIT {
     @MockitoBean
     private UserAuthService userAuthService;
 
-    @MockitoBean
-    private UserFacade userFacade;
-
     /**
      * Mock ArticleLookupFacade（FileServiceImpl.canRead 依賴；article 模組實作未在本 IT 的
      * scanBasePackages 內，須 mock 避免 context 啟動失敗）
@@ -119,12 +112,8 @@ class FileUploadQuotaIT {
     private ArticleLookupFacade articleLookupFacade;
 
     private static final Long AUTHOR_ID = 1L;
-    private static final UUID AUTHOR_UUID = UUID.randomUUID();
-
-    @BeforeEach
-    void setUpUserFacade() {
-        when(userFacade.getUserUuidById(AUTHOR_ID)).thenReturn(Optional.of(AUTHOR_UUID));
-    }
+    /** 與 {@link #asUser} 建立的 {@code AuthUser.uuid()} 一致（controller 直接取 principal 的 uuid） */
+    private static final UUID AUTHOR_UUID = new UUID(0L, AUTHOR_ID);
 
     @BeforeAll
     static void setupMinio(@Autowired MinioClient minioClient) throws Exception {

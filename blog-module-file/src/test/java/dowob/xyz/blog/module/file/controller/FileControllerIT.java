@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
-import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.file.TestFileApplication;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -15,7 +14,6 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -167,12 +165,6 @@ class FileControllerIT {
     private UserAuthService userAuthService;
 
     /**
-     * Mock UserFacade（FileController 依賴，用於 userId → UUID 轉換）
-     */
-    @MockitoBean
-    private UserFacade userFacade;
-
-    /**
      * Mock ArticleLookupFacade（FileServiceImpl.canRead 依賴，判斷已綁定文章是否已發布；
      * article 模組實作未在本 IT 的 scanBasePackages 內，須 mock 避免 context 啟動失敗）
      */
@@ -192,21 +184,12 @@ class FileControllerIT {
     /**
      * 測試用使用者 A 的 UUID
      */
-    private static final UUID USER_A_UUID = UUID.randomUUID();
+    private static final UUID USER_A_UUID = new UUID(0L, USER_A_ID);
 
     /**
      * 測試用使用者 B 的 UUID
      */
-    private static final UUID USER_B_UUID = UUID.randomUUID();
-
-    /**
-     * 每次測試前設定 UserFacade mock，回傳測試用 UUID
-     */
-    @BeforeEach
-    void setUpUserFacade() {
-        when(userFacade.getUserUuidById(USER_A_ID)).thenReturn(Optional.of(USER_A_UUID));
-        when(userFacade.getUserUuidById(USER_B_ID)).thenReturn(Optional.of(USER_B_UUID));
-    }
+    private static final UUID USER_B_UUID = new UUID(0L, USER_B_ID);
 
     /**
      * 在所有測試前初始化 MinIO 儲存桶
@@ -231,7 +214,8 @@ class FileControllerIT {
 
     /**
      * 建立具有指定角色及其對應所有 Permission 的模擬認證 RequestPostProcessor。
-     * Principal 為 Long userId，與生產環境 JwtAuthenticationFilter 一致。
+     * Principal 為 {@link AuthUser}（uuid 為 {@code new UUID(0L, userId)}，與 {@link #USER_A_UUID}／{@link #USER_B_UUID} 一致），
+     * 與生產環境 JwtAuthenticationFilter 一致；controller 直接取 {@code AuthUser.uuid()}，不再查 user 模組。
      *
      * @param userId 使用者內部 ID
      * @param role   角色
@@ -648,7 +632,8 @@ class FileControllerIT {
          *
          * <p>
          * MEDIUM 1 修復後的測試資料調整：下方各測試以 {@code new ArticleData(1L, articleUuid,
-         * USER_A_ID, ...)} 宣告 articleUuid 對應文章的作者為 {@code USER_A_ID}——因為
+         * USER_A_ID, ..., USER_A_UUID, null)} 宣告 articleUuid 對應文章的作者為 {@code USER_A_ID}／{@code USER_A_UUID}
+         * （file 模組以 {@code ArticleData.authorUuid} 比對擁有權）——因為
          * {@code uploadAndGetFileId} 呼叫時的上傳者也是 {@code USER_A_ID}，兩者必須一致，
          * 否則 {@code uploadFile} 新增的擁有權檢查（僅本人文章才接受 articleUuid）會使 metadata
          * 存成未綁定（null），導致這些測試原本要驗證的「已綁定 PUBLISHED/DRAFT 文章」情境失真。
@@ -691,7 +676,7 @@ class FileControllerIT {
         void getFileContent_boundToPublishedArticle_anonymous_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, USER_A_ID, "PUBLISHED", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "PUBLISHED", null, null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
@@ -704,7 +689,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_anonymous_returns403() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
@@ -716,7 +701,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_nonUploader_returns403() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
@@ -729,7 +714,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_uploader_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
@@ -743,7 +728,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_admin_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, USER_A_ID, "DRAFT", null, null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
