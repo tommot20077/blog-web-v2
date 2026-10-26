@@ -11,6 +11,7 @@ import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.reading.config.ReadingTestApplication;
 import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
+import dowob.xyz.blog.module.reading.support.SeededReadingUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -109,11 +110,11 @@ class ArticleLikeControllerIT {
     @MockitoBean
     private UserAuthService userAuthService;
 
-    private static final Long USER_ID = 1L;
+    private static final Long USER_ID = SeededReadingUsers.USER_ID;
+    private static final UUID USER_UUID = SeededReadingUsers.USER_UUID;
     private static final Long AUTHOR_ID = 1L;
 
     private UUID articleUuid;
-    private Long articleId;
 
     @BeforeEach
     void setup() {
@@ -132,7 +133,6 @@ class ArticleLikeControllerIT {
         article.setUpdatedAt(LocalDateTime.now());
         Article saved = articleRepository.save(article);
         articleUuid = saved.getUuid();
-        articleId = saved.getId();
     }
 
     @AfterEach
@@ -156,7 +156,7 @@ class ArticleLikeControllerIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, SeededReadingUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -168,7 +168,8 @@ class ArticleLikeControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
-        assertThat(articleLikeRepository.findByUserIdAndArticleId(USER_ID, articleId)).isPresent();
+        assertThat(articleLikeRepository.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isPresent();
+        assertThat(articleRepository.findByUuid(articleUuid).orElseThrow().getLikeCount()).isEqualTo(1);
     }
 
     @Test
@@ -182,8 +183,10 @@ class ArticleLikeControllerIT {
                 .with(asUser(USER_ID, Role.USER)))
                 .andExpect(status().isOk());
 
-        // 重複按讚後仍然只有一筆紀錄
-        assertThat(articleLikeRepository.findByUserIdAndArticleId(USER_ID, articleId)).isPresent();
+        // 重複按讚後仍然只有一筆紀錄，like_count 只 +1
+        assertThat(articleLikeRepository.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isPresent();
+        assertThat(articleLikeRepository.count()).isEqualTo(1L);
+        assertThat(articleRepository.findByUuid(articleUuid).orElseThrow().getLikeCount()).isEqualTo(1);
     }
 
     @Test
@@ -200,7 +203,8 @@ class ArticleLikeControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
-        assertThat(articleLikeRepository.findByUserIdAndArticleId(USER_ID, articleId)).isEmpty();
+        assertThat(articleLikeRepository.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
+        assertThat(articleRepository.findByUuid(articleUuid).orElseThrow().getLikeCount()).isZero();
     }
 
     @Test
@@ -217,5 +221,27 @@ class ArticleLikeControllerIT {
     void likeArticle_unauthenticated_returns401() throws Exception {
         mockMvc.perform(post("/api/v1/articles/{uuid}/like", articleUuid))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("POST /like - 文章不存在：400＋A0201，不落任何列")
+    void likeArticle_articleNotFound_returns400A0201_andWritesNothing() throws Exception {
+        UUID missing = UUID.randomUUID();
+
+        mockMvc.perform(post("/api/v1/articles/{uuid}/like", missing)
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+
+        assertThat(articleLikeRepository.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("DELETE /like - 文章不存在：400＋A0201")
+    void unlikeArticle_articleNotFound_returns400A0201() throws Exception {
+        mockMvc.perform(delete("/api/v1/articles/{uuid}/like", UUID.randomUUID())
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
     }
 }

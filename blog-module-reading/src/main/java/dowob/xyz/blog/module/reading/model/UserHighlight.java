@@ -18,7 +18,7 @@ import java.util.UUID;
  * <p>定位策略：snippet + prefix/suffix anchor — 文章編輯後 self-healing。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @Data
 @NoArgsConstructor
@@ -30,11 +30,13 @@ public class UserHighlight {
 
     private UUID uuid;
 
-    @Column("user_id")
-    private Long userId;
+    /** 劃線者的公開 UUID（跨模組識別；V27 起無 FK） */
+    @Column("user_uuid")
+    private UUID userUuid;
 
-    @Column("article_id")
-    private Long articleId;
+    /** 文章公開 UUID（跨模組識別；V27 起無 FK，文章刪除由事件＋校正排程連動刪除） */
+    @Column("article_uuid")
+    private UUID articleUuid;
 
     private String snippet;
     private String prefix;

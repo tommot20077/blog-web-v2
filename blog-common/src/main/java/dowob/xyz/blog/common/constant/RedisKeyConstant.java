@@ -405,13 +405,16 @@ public class RedisKeyConstant {
 
     /**
      * 閱讀進度 Hash Key 前綴
-     * Key: reading:progress:{userId}:{articleUuid}
+     * Key: reading:progress:{userUuid}:{articleUuid}
+     *
+     * <p>M2-c 起使用者與文章一律以公開 UUID 識別；舊格式 {@code {Long userId}:{articleUuid}} 的 key 不遷移
+     * （無正式環境，TTL 到期自然消失），其 dirty 成員會被 flush job 視為無法解析而移除。</p>
      */
     public static final String READING_PROGRESS_PREFIX = "reading:progress:";
 
     /**
      * 待 flush dirty Set Key
-     * Members: "{userId}:{articleUuid}"
+     * Members: "{userUuid}:{articleUuid}"
      */
     public static final String READING_DIRTY_KEY = "reading:dirty";
 

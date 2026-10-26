@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 
 import java.time.LocalDateTime;
@@ -34,6 +35,8 @@ import java.util.UUID;
  *       incrementLikeCount / decrementLikeCount / updateSeriesAssignment）：counter /
  *       欄位 set 類型，直接更新 article 欄位，無業務邏輯觸發。</li>
  *   <li><b>SP-D 新增 read</b>（findContentById）：完整 content 內容 DTO，給 version 模組 snapshot / restore stash 流程用。</li>
+ *   <li><b>M2-a 新增（reading 模組 UUID 化用，只增不減）</b>（getSummariesByUuids / filterReadableUuids /
+ *       incrementLikeCount(UUID) / decrementLikeCount(UUID)）：語意與對應的 Long 版相同。</li>
  *   <li><b>SP-D 新增 atomic write</b>（applyRestoreContent）：version 模組 restore 用，內部接管 mutate / save / syncArticleTags / publish events 順序。</li>
  * </ul>
  *
@@ -220,6 +223,24 @@ public interface ArticleFacade {
     void decrementLikeCount(Long articleId);
 
     /**
+     * reading 模組 like article 時連動 article.like_count + 1（UUID 版，語意與 {@link #incrementLikeCount(Long)} 相同）。
+     *
+     * <p>原子 +1；文章不存在時不影響任何列（no-op），不拋例外。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     */
+    void incrementLikeCount(UUID articleUuid);
+
+    /**
+     * reading 模組 unlike article 時連動 article.like_count - 1（UUID 版，語意與 {@link #decrementLikeCount(Long)} 相同）。
+     *
+     * <p>原子 -1，守衛 {@code like_count > 0}（防 underflow）；文章不存在時不影響任何列（no-op），不拋例外。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     */
+    void decrementLikeCount(UUID articleUuid);
+
+    /**
      * series 模組 add / remove article from series 時 set article.series_id + series_position。
      *
      * @param articleId      文章主鍵
@@ -329,6 +350,40 @@ public interface ArticleFacade {
      * @return 可見的文章主鍵，順序與輸入一致
      */
     List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, boolean isAdmin);
+
+    /**
+     * 集合述詞：篩出 candidates 中「對該 viewer 可見」者，<b>維持輸入順序</b>（{@link #filterReadableIds} 的 UUID 版）。
+     *
+     * <p>語意與 {@link #filterReadableIds(List, Long, boolean)} 完全相同：可見性委派 {@code blog-common} 的
+     * {@code ArticleVisibility}（單一真相）——PUBLISHED 全公開；非 PUBLISHED 僅作者本人與 ADMIN；
+     * 查無此 uuid（已硬刪）者不會出現在結果中。作者以 UUID 比對（article 內部仍以 JOIN {@code users} 取得，M6 才改）。</p>
+     *
+     * <p><b>傳輸量界限</b>：與 {@code candidates} 大小成正比，非與頁大小成正比；實作端經 {@code BatchedQuery} 切批。
+     * <b>重評門檻：任一使用者 B &gt; 5,000。</b></p>
+     *
+     * @param candidates 候選文章公開 UUID（依 caller 期望的顯示順序）；null 或空清單回傳空清單（不查 DB）
+     * @param viewerUuid 檢視者公開 UUID；匿名為 null
+     * @param isAdmin    檢視者是否為 ADMIN
+     * @return 可見的文章 UUID，順序與輸入一致
+     */
+    List<UUID> filterReadableUuids(List<UUID> candidates, UUID viewerUuid, boolean isAdmin);
+
+    /**
+     * 依文章公開 UUID 批次取得文章摘要，<b>輸出順序與輸入相同</b>。
+     *
+     * <p>語意與 article 模組內部的 {@code ArticleQueryService.getArticleSummariesByIds(List<Long>)} 完全相同：
+     * 含目前登入者的 liked／bookmarked／lastReadProgress 補值（未登入時 liked／bookmarked 為 false、
+     * lastReadProgress 為 null），以及 series 導覽（seriesUuid／seriesTitle）補值；全程批次查詢，不隨文章數 N+1。</p>
+     *
+     * <p><b>可見性</b>：本方法為物件級讀取，<b>不過濾狀態</b>（status-agnostic，見 {@code architecture.md}
+     * 的兩層契約），caller 須先以 {@link #filterReadableUuids} 篩出可見者再傳入。</p>
+     *
+     * <p>輸入中重複的 UUID 只保留第一次出現的位置；查無的 UUID 與 null 元素略過。</p>
+     *
+     * @param uuids 文章公開 UUID（依 caller 期望的顯示順序）；null 或空清單回傳空清單（不查 DB）
+     * @return 文章摘要，順序與輸入一致，查無者略過
+     */
+    List<ArticleSummaryResponse> getSummariesByUuids(List<UUID> uuids);
 
     /**
      * 篩出 uuids 中「仍存在」的文章 UUID，<b>不分狀態</b>。

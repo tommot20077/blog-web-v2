@@ -13,7 +13,7 @@ import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -74,6 +74,8 @@ class ArticleQueryServiceTest {
     private ArticleQueryService articleQueryService;
 
     private static final Long AUTHOR_ID = 1L;
+    /** 與測試中 AuthUser 的 uuid 相同：new UUID(0L, AUTHOR_ID) */
+    private static final UUID AUTHOR_UUID = new UUID(0L, AUTHOR_ID);
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
     private static final Long ARTICLE_DB_ID = 42L;
     private static final Long SERIES_DB_ID = 300L;
@@ -156,7 +158,7 @@ class ArticleQueryServiceTest {
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
             when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
-            when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Set.of(ARTICLE_DB_ID));
+            when(readingFacade.batchIsLiked(AUTHOR_UUID, List.of(ARTICLE_UUID))).thenReturn(Set.of(ARTICLE_UUID));
 
             // 設定登入狀態
             SecurityContextHolder.getContext().setAuthentication(
@@ -176,7 +178,7 @@ class ArticleQueryServiceTest {
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
             when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
-            when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Collections.emptySet());
+            when(readingFacade.batchIsLiked(AUTHOR_UUID, List.of(ARTICLE_UUID))).thenReturn(Collections.emptySet());
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
@@ -224,7 +226,7 @@ class ArticleQueryServiceTest {
             ArticleResponse resp = buildResponse();
             when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
-            when(readingFacade.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
+            when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
@@ -241,7 +243,7 @@ class ArticleQueryServiceTest {
             ArticleResponse resp = buildResponse();
             when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
-            when(readingFacade.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(false);
+            when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(false);
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
@@ -277,7 +279,7 @@ class ArticleQueryServiceTest {
             ArticleResponse resp = buildResponse();
             when(articleService.getArticleBySlug("test-slug", AUTHOR_ID, Role.AUTHOR, "127.0.0.1")).thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
-            when(readingFacade.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
+            when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
@@ -302,7 +304,7 @@ class ArticleQueryServiceTest {
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
             when(articleService.getMyArticles(AUTHOR_ID, 1, 10, null)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
-            when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID))).thenReturn(Set.of(ARTICLE_DB_ID));
+            when(readingFacade.batchIsLiked(AUTHOR_UUID, List.of(ARTICLE_UUID))).thenReturn(Set.of(ARTICLE_UUID));
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
@@ -347,11 +349,11 @@ class ArticleQueryServiceTest {
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
             when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
-            when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+            when(readingFacade.batchIsLiked(AUTHOR_UUID, List.of(ARTICLE_UUID)))
                     .thenReturn(Collections.emptySet());
-            when(readingFacade.batchIsBookmarked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
-                    .thenReturn(Set.of(ARTICLE_DB_ID));
-            when(readingFacade.batchGetProgress(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+            when(readingFacade.batchIsBookmarked(AUTHOR_UUID, List.of(ARTICLE_UUID)))
+                    .thenReturn(Set.of(ARTICLE_UUID));
+            when(readingFacade.batchGetProgress(AUTHOR_UUID, List.of(ARTICLE_UUID)))
                     .thenReturn(Collections.emptyMap());
 
             SecurityContextHolder.getContext().setAuthentication(
@@ -371,12 +373,12 @@ class ArticleQueryServiceTest {
             PageResult<ArticleSummaryResponse> page = PageResult.of(1, 10, 1L, List.of(summary));
             when(articleService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10)).thenReturn(page);
             when(articleMapper.findIdsByUuids(List.of(ARTICLE_UUID))).thenReturn(List.of(buildArticleIdRow()));
-            when(readingFacade.batchIsLiked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+            when(readingFacade.batchIsLiked(AUTHOR_UUID, List.of(ARTICLE_UUID)))
                     .thenReturn(Collections.emptySet());
-            when(readingFacade.batchIsBookmarked(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
+            when(readingFacade.batchIsBookmarked(AUTHOR_UUID, List.of(ARTICLE_UUID)))
                     .thenReturn(Collections.emptySet());
-            when(readingFacade.batchGetProgress(AUTHOR_ID, List.of(ARTICLE_DB_ID)))
-                    .thenReturn(Map.of(ARTICLE_DB_ID, progress));
+            when(readingFacade.batchGetProgress(AUTHOR_UUID, List.of(ARTICLE_UUID)))
+                    .thenReturn(Map.of(ARTICLE_UUID, progress));
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
@@ -488,9 +490,9 @@ class ArticleQueryServiceTest {
             when(articleService.getArticleByUuid(ARTICLE_UUID, AUTHOR_ID, Role.AUTHOR, "127.0.0.1"))
                     .thenReturn(resp);
             when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_DB_ID);
-            when(readingFacade.isLiked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
-            when(readingFacade.isBookmarked(AUTHOR_ID, ARTICLE_DB_ID)).thenReturn(true);
-            when(readingFacade.getProgress(AUTHOR_ID, ARTICLE_UUID)).thenReturn(progress);
+            when(readingFacade.isLiked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
+            when(readingFacade.isBookmarked(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(true);
+            when(readingFacade.getProgress(AUTHOR_UUID, ARTICLE_UUID)).thenReturn(progress);
             when(seriesFacade.getSeriesNavigation(ARTICLE_DB_ID)).thenReturn(Optional.empty());
 
             SecurityContextHolder.getContext().setAuthentication(

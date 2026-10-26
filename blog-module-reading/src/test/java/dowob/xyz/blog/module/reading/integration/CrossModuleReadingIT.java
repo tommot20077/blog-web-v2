@@ -11,18 +11,25 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.reading.config.ReadingTestApplication;
+import dowob.xyz.blog.module.reading.consumer.ReadingArticleDeletedConsumer;
+import dowob.xyz.blog.module.reading.model.ArticleLike;
 import dowob.xyz.blog.module.reading.model.UserBookmark;
 import dowob.xyz.blog.module.reading.model.UserHighlight;
 import dowob.xyz.blog.module.reading.model.UserReadingProgress;
 import dowob.xyz.blog.module.reading.model.dto.request.UpdateProgressRequest;
+import dowob.xyz.blog.module.reading.repository.ArticleLikeRepository;
 import dowob.xyz.blog.module.reading.repository.UserBookmarkRepository;
 import dowob.xyz.blog.module.reading.repository.UserHighlightRepository;
 import dowob.xyz.blog.module.reading.repository.UserReadingProgressRepository;
+import dowob.xyz.blog.module.reading.support.SeededReadingUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,6 +51,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -51,6 +59,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -65,7 +74,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li>ArticleResponse.bookmarked - bookmark 後反映</li>
  *   <li>ArticleResponse.lastReadProgress - PUT progress 後反映</li>
  *   <li>匿名查詢 bookmarked=false, progress 為 null</li>
- *   <li>Article 物理刪除 cascade 清光所有 reading state</li>
+ *   <li>ArticleResponse.liked - 按讚後反映</li>
+ *   <li>Article 物理刪除：reading 四張表（likes／bookmarks／highlights／progress）都已無指向 articles 的 FK
+ *       （V26／V27），刪文章後資料仍在，須由 {@code ReadingArticleDeletedConsumer} 處理刪除事件後才清除</li>
  * </ul>
  * </p>
  *
@@ -99,6 +110,8 @@ class CrossModuleReadingIT {
     @Autowired private ObjectMapper objectMapper;
     @Autowired private ArticleRepository articleRepo;
     @Autowired private UserBookmarkRepository bookmarkRepo;
+    @Autowired private ArticleLikeRepository likeRepo;
+    @Autowired private ReadingArticleDeletedConsumer articleDeletedConsumer;
     @Autowired private UserHighlightRepository highlightRepo;
     @Autowired private UserReadingProgressRepository progressRepo;
     @Autowired private StringRedisTemplate redisTemplate;
@@ -111,7 +124,8 @@ class CrossModuleReadingIT {
     @MockitoBean private FileFacade fileFacade;
     @MockitoBean private UserAuthService userAuthService;
 
-    private static final Long USER_ID = 1L;
+    private static final Long USER_ID = SeededReadingUsers.USER_ID;
+    private static final UUID USER_UUID = SeededReadingUsers.USER_UUID;
 
     private UUID articleUuid;
     private Long articleId;
@@ -136,6 +150,7 @@ class CrossModuleReadingIT {
     @AfterEach
     void cleanUp() {
         bookmarkRepo.deleteAll();
+        likeRepo.deleteAll();
         highlightRepo.deleteAll();
         progressRepo.deleteAll();
         articleRepo.deleteAll();
@@ -148,7 +163,7 @@ class CrossModuleReadingIT {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
-        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userId, SeededReadingUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -192,31 +207,68 @@ class CrossModuleReadingIT {
     }
 
     @Test
-    @DisplayName("Article 物理刪除 cascade - bookmarks/highlights/progress 清空")
-    void deleteArticle_cascadeRemovesAllReadingState() throws Exception {
-        // 建 bookmark
-        UserBookmark bm = new UserBookmark();
-        bm.setUserId(USER_ID); bm.setArticleId(articleId); bm.setCreatedAt(LocalDateTime.now());
-        bookmarkRepo.save(bm);
+    @DisplayName("ArticleResponse.liked - 按讚後變 true，取消後變 false")
+    void articleResponse_includesLikedFlag() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/{uuid}/like", articleUuid)
+                .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
 
-        // 建 highlight
+        mockMvc.perform(get("/api/v1/articles/{uuid}", articleUuid)
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.liked").value(true));
+
+        mockMvc.perform(delete("/api/v1/articles/{uuid}/like", articleUuid)
+                .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/{uuid}", articleUuid)
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.liked").value(false));
+    }
+
+    @Test
+    @DisplayName("Article 物理刪除：四張表的資料刪文章後仍在（FK 已全數移除），須等 consumer 處理刪除事件才清除")
+    void deleteArticle_consumerRemovesAllReadingState() throws Exception {
+        // 四張表都沒有指向 articles 的 FK（V26／V27）
+        UserBookmark bm = new UserBookmark();
+        bm.setUserUuid(USER_UUID); bm.setArticleUuid(articleUuid); bm.setCreatedAt(LocalDateTime.now());
+        bookmarkRepo.save(bm);
+        ArticleLike like = new ArticleLike();
+        like.setUserUuid(USER_UUID); like.setArticleUuid(articleUuid); like.setCreatedAt(LocalDateTime.now());
+        likeRepo.save(like);
+
         UserHighlight h = new UserHighlight();
         h.setUuid(UUID.randomUUID());
-        h.setUserId(USER_ID); h.setArticleId(articleId);
+        h.setUserUuid(USER_UUID); h.setArticleUuid(articleUuid);
         h.setSnippet("seed"); h.setPrefix(""); h.setSuffix(""); h.setColor("#FFEB3B");
         highlightRepo.save(h);
 
-        // 建 progress (DB 直接，繞過 service)
+        // progress 直接寫 DB（繞過 service）
         UserReadingProgress p = new UserReadingProgress();
-        p.setUserId(USER_ID); p.setArticleId(articleId);
+        p.setUserUuid(USER_UUID); p.setArticleUuid(articleUuid);
         p.setProgress(new BigDecimal("0.5"));
         progressRepo.save(p);
 
         // 物理刪除 article
         articleRepo.deleteById(articleId);
 
-        assertThat(bookmarkRepo.findByUserIdAndArticleId(USER_ID, articleId)).isEmpty();
-        assertThat(highlightRepo.findByUserIdAndArticleIdOrderByCreatedAtAsc(USER_ID, articleId)).isEmpty();
-        assertThat(progressRepo.findByUserIdAndArticleId(USER_ID, articleId)).isEmpty();
+        assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid))
+                .as("FK 已移除：僅刪文章不會連帶刪收藏，須等 consumer 處理事件").isPresent();
+        assertThat(likeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid))
+                .as("FK 已移除：僅刪文章不會連帶刪按讚，須等 consumer 處理事件").isPresent();
+        assertThat(highlightRepo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(USER_UUID, articleUuid))
+                .as("FK 已移除（V27）：僅刪文章不會連帶刪劃線，須等 consumer 處理事件").hasSize(1);
+        assertThat(progressRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid))
+                .as("FK 已移除（V27）：僅刪文章不會連帶刪閱讀進度，須等 consumer 處理事件").isPresent();
+
+        // 處理文章刪除事件 → 四張表的資料都消失
+        Channel channel = Mockito.mock(Channel.class);
+        articleDeletedConsumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleId, articleUuid,
+                USER_ID, null, List.of(), List.of(), Instant.now(), null, null), channel, 1L);
+
+        assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
+        assertThat(likeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
+        assertThat(highlightRepo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(USER_UUID, articleUuid)).isEmpty();
+        assertThat(progressRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
     }
 }

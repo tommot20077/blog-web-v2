@@ -112,6 +112,16 @@
 - 前端 ArticleList 左欄 Tags 以標籤**名稱**組 `/tags/${tag}` 連結，TagView 預期 slug——名稱含大寫或空白時可能連到空頁，待查證
 - **認證快取回填競態（BUG-2026-002 型，既有）**：撤銷 afterCommit 刪 `user:auth:{uuid}` 後，併發請求若在 commit 前讀到舊 DB 狀態，會以舊值回填快取（TTL 7 天），舊 access token 仍可通過。T0b-2 後 `/auth/refresh` 也會回填，多一個進入點（但需先通過 refresh ZSet 檢查，窗口很窄）。根治方向：回填帶版本比對的原子寫入（Lua）或回填短 TTL。（T0b-2 審查 F1）
 - **`comment_likes` 缺以 `comment_id` 開頭的索引（既有）**：UNIQUE 為 (user_uuid, comment_id)，刪除留言時 FK CASCADE 找讚列需全表掃描。V25 前即存在（舊 UNIQUE 同樣以 user_id 開頭），不在 M1 授權內。修法：新 migration 加 `idx_comment_likes_comment(comment_id)`。（M1-b 回報）
-- **留言建立與文章刪除的窗口（M1-b 起，設計接受）**：`createComment` 在 `existsByUuid` 與 INSERT 之間文章被刪，會留下孤兒留言，直到每日 `CommentOrphanReconciliationJob` 清除；FK 拿掉後的固有代價。（M1-b 審查）
+- **寫入與文章刪除的窗口（M1-b 起，設計接受）**：寫入端在 `existsByUuid` 與 INSERT 之間文章被刪，會留下孤兒列，直到每日 `OrphanReconciliationJob` 子類別清除；FK 拿掉後的固有代價。適用：留言（M1-b）、按讚與收藏（M2-b）、劃線（M2-c）。（M1-b、M2-b 回報）
 - **comment 列表作者欄位缺端到端測試**：comment 模組 IT 一律 mock `UserFacade`，`UserFacadeImpl` 端由 `UserFacadeIntegrationTest` 覆蓋，兩端以 `Map<UUID, UserDisplayInfo>` 契約銜接，但沒有測試走過「真實 UserFacade → listComments → JSON」。併入 TEST-10 E2E 進 CI gate 時補 author 斷言。（M1-b 審查 MEDIUM）
+- **刪除連動 queue 缺真 broker 的 binding 測試**：`comment.article-deleted`、`reading.article-deleted` 只有 config 單元測試與 ContextSmokeTest（context 能啟動），沒有測試以真 RabbitMQ 發布 `ArticleDeletedEvent` 後證明 consumer 收到。Z3（打開 MQ 重試）前補一個 blog-start 層的 Testcontainers RabbitMQ IT 涵蓋全部刪除連動 queue。（M2-b 審查）
+- **閱讀進度一致性（既有，M2-c 審查以 PoC 重現；建議合併為一個 Task）**：M2-c 已修 RACE-13（flush 改 Lua compare-and-remove，at-least-once），以下仍未處理，PoC 測試存於 `ai-docs/backlog/poc/2026-10-25-reading-progress-Review2PocIT.java.txt`：
+  - (a) 兩個 flusher 交錯（多實例、無 ShedLock）：F1 讀舊值停頓、F2 寫新值並清標記、F1 再寫舊值 → DB 回退（poc2）
+  - (b) 完成路徑（≥ 門檻直寫 DB 並 DEL hash）與 flush 交錯 → DB 被 flush 讀到的舊值覆寫（poc3）
+  - (a)(b) 修法：upsert 加單調守衛 `WHERE user_reading_progress.updated_at <= EXCLUDED.updated_at`，`updated_at` 改傳 hash 的 `updatedAt`（動到時間欄位語意），或 flush 加 Redis 鎖
+  - (c) `update` 的 HMSET／EXPIRE／SADD 為三個獨立指令，EXPIRE 失敗或 JVM 中止時 hash 為新值卻無 dirty 標記 → 改單一 Lua
+  - (d) `get()` 快取 miss 回填無條件 HMSET，可能覆蓋併發 update 的新值 → 改 HSETNX 語意的 Lua
+  - (e) hash 缺 `progress` 欄位會成 poison pill（目前無寫入路徑會產生）；(f) Redis Cluster 下 key 無 hash tag 會 CROSSSLOT（目前單機）
+- **`ReadingProgressService.update` 在交易內先 DEL 快取（既有，違反 security.md 原則 10）**：DB upsert 尚未 commit 時併發 `get()` 會 cache miss、讀到舊 DB 值並回填 Redis（TTL 數天）。修法：DEL 改 `afterCommit`，或移除不必要的 `@Transactional`。（M2-c 審查）
+- **`ReadingProgressFlushJob` 的 `SMEMBERS` 無界（PERF-31 剩餘部分）**：M2-c 已把逐筆 `findIdByUuid` 改為整輪一次 `filterExistingUuids`；dirty set 一次全讀仍未處理，改 `SSCAN` 分批。
 - **refresh token 可被當 access token 送進 filter（既有）**：`JwtService.validateToken` 不檢查 token type；目前因 refresh token 無 role claim 被 filter 的 catch 偶然擋下。應在 filter 明確檢查 type=access 並補測試。（T0b-2 審查）

@@ -89,9 +89,11 @@ class HighlightControllerIT {
 
     private static final Long USER_ID = 1L;
     private static final Long OTHER_USER_ID = 2L;
+    /** asUser 以 {@code new UUID(0L, userId)} 作為登入者 UUID；劃線表已無 users FK，不需要 seed 使用者 */
+    private static final UUID USER_UUID = new UUID(0L, USER_ID);
+    private static final UUID OTHER_USER_UUID = new UUID(0L, OTHER_USER_ID);
 
     private UUID articleUuid;
-    private Long articleId;
 
     @BeforeEach
     void setup() {
@@ -107,7 +109,6 @@ class HighlightControllerIT {
         article.setCreatedAt(LocalDateTime.now()); article.setUpdatedAt(LocalDateTime.now());
         Article saved = articleRepo.save(article);
         articleUuid = saved.getUuid();
-        articleId = saved.getId();
     }
 
     @AfterEach
@@ -124,10 +125,10 @@ class HighlightControllerIT {
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
-    private UserHighlight createHighlight(Long ownerId) {
+    private UserHighlight createHighlight(UUID ownerUuid) {
         UserHighlight h = new UserHighlight();
         h.setUuid(UUID.randomUUID());
-        h.setUserId(ownerId); h.setArticleId(articleId);
+        h.setUserUuid(ownerUuid); h.setArticleUuid(articleUuid);
         h.setSnippet("seed"); h.setPrefix(""); h.setSuffix("");
         h.setColor("#FFEB3B");
         return highlightRepo.save(h);
@@ -184,13 +185,13 @@ class HighlightControllerIT {
     void list_returnsOnlyMine() throws Exception {
         UserHighlight mine = new UserHighlight();
         mine.setUuid(UUID.randomUUID());
-        mine.setUserId(USER_ID); mine.setArticleId(articleId);
+        mine.setUserUuid(USER_UUID); mine.setArticleUuid(articleUuid);
         mine.setSnippet("mine"); mine.setPrefix(""); mine.setSuffix(""); mine.setColor("#FFEB3B");
         highlightRepo.save(mine);
 
         UserHighlight other = new UserHighlight();
         other.setUuid(UUID.randomUUID());
-        other.setUserId(OTHER_USER_ID); other.setArticleId(articleId);
+        other.setUserUuid(OTHER_USER_UUID); other.setArticleUuid(articleUuid);
         other.setSnippet("other"); other.setPrefix(""); other.setSuffix(""); other.setColor("#FFEB3B");
         highlightRepo.save(other);
 
@@ -204,7 +205,7 @@ class HighlightControllerIT {
     @Test
     @DisplayName("PUT /highlights/{uuid} - 200 by owner")
     void put_byOwner_returns200() throws Exception {
-        UserHighlight h = createHighlight(USER_ID);
+        UserHighlight h = createHighlight(USER_UUID);
 
         UpdateHighlightRequest req = new UpdateHighlightRequest();
         req.setColor("#00FF00");
@@ -220,7 +221,7 @@ class HighlightControllerIT {
     @Test
     @DisplayName("PUT - 400 (R0202) by non-owner")
     void put_byNonOwner_returns400_R0202() throws Exception {
-        UserHighlight h = createHighlight(USER_ID);
+        UserHighlight h = createHighlight(USER_UUID);
 
         UpdateHighlightRequest req = new UpdateHighlightRequest();
         req.setColor("#00FF00");
@@ -236,13 +237,65 @@ class HighlightControllerIT {
     @Test
     @DisplayName("DELETE /highlights/{uuid} - 200 by owner")
     void delete_byOwner_returns200() throws Exception {
-        UserHighlight h = createHighlight(USER_ID);
+        UserHighlight h = createHighlight(USER_UUID);
 
         mockMvc.perform(delete("/api/v1/highlights/{uuid}", h.getUuid())
                 .with(asUser(USER_ID, Role.USER)))
                 .andExpect(status().isOk());
 
         assertThat(highlightRepo.findByUuid(h.getUuid())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("POST /highlights - 文章不存在 → 400 + A0201（與改造前相同）")
+    void post_articleNotFound_returns400_A0201() throws Exception {
+        CreateHighlightRequest req = new CreateHighlightRequest();
+        req.setSnippet("hello"); req.setColor("#FFEB3B");
+
+        mockMvc.perform(post("/api/v1/articles/{uuid}/highlights", UUID.randomUUID())
+                .with(asUser(USER_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+    }
+
+    @Test
+    @DisplayName("GET /highlights - 文章不存在 → 400 + A0201（與改造前相同）")
+    void list_articleNotFound_returns400_A0201() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/{uuid}/highlights", UUID.randomUUID())
+                .with(asUser(USER_ID, Role.USER)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+    }
+
+    @Test
+    @DisplayName("POST /highlights - 劃線以登入者 uuid 與文章 uuid 落庫")
+    void post_validRequest_persistsUserAndArticleUuid() throws Exception {
+        CreateHighlightRequest req = new CreateHighlightRequest();
+        req.setSnippet("persisted"); req.setColor("#FFEB3B");
+
+        mockMvc.perform(post("/api/v1/articles/{uuid}/highlights", articleUuid)
+                .with(asUser(USER_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk());
+
+        assertThat(highlightRepo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(USER_UUID, articleUuid))
+                .extracting(UserHighlight::getSnippet).containsExactly("persisted");
+    }
+
+    @Test
+    @DisplayName("DELETE /highlights/{uuid} - 他人的劃線 → 400 + R0202 且不刪除")
+    void delete_byNonOwner_returns400_R0202_andKeepsRow() throws Exception {
+        UserHighlight h = createHighlight(USER_UUID);
+
+        mockMvc.perform(delete("/api/v1/highlights/{uuid}", h.getUuid())
+                .with(asUser(OTHER_USER_ID, Role.USER)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("R0202"));
+
+        assertThat(highlightRepo.findByUuid(h.getUuid())).isPresent();
     }
 
     @Test

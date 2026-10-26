@@ -432,6 +432,60 @@ public interface ArticleMapper {
     record SeriesPublishedCountRow(Long seriesId, Integer publishedCount) {}
 
     /**
+     * 集合述詞（UUID 版）：取回一批文章的可見性判斷所需欄位。
+     *
+     * <p>只投影 uuid / status / 作者 uuid 三欄（不拉 TEXT 內容欄位）。作者 uuid 以 {@code LEFT JOIN users}
+     * 取得——article 內部的 {@code users} 仍是 reference data（M6 才改為 {@code author_uuid} 欄位）；
+     * 用 LEFT JOIN 是為了作者資料缺失的文章仍會出現在結果中（公開者照常可見）。
+     * 政策判斷在 {@code ArticleFacadeImpl} 委派 {@code ArticleVisibility}，<b>不在 SQL 內重寫</b>。</p>
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（uuid, status, authorUuid）必須與 {@link ArticleUuidVisibilityRow} 的元件順序一致，不可調整。</p>
+     *
+     * @param articleUuids 文章公開 UUID 集合（不得為空，由 caller 保證）
+     * @return 可見性判斷所需的欄位列
+     */
+    @Select({
+        "<script>",
+        "SELECT a.uuid AS uuid, a.status AS status, u.uuid AS authorUuid",
+        "  FROM articles a",
+        "  LEFT JOIN users u ON u.id = a.author_id",
+        " WHERE a.uuid IN",
+        "<foreach collection='articleUuids' item='articleUuid' open='(' separator=',' close=')'>",
+        "  #{articleUuid}::uuid",
+        "</foreach>",
+        "</script>"
+    })
+    List<ArticleUuidVisibilityRow> findVisibilityRowsByUuids(@Param("articleUuids") Collection<UUID> articleUuids);
+
+    /**
+     * 以公開 UUID 原子性遞增文章按讚計數（{@link #incrementLikeCount(Long)} 的 UUID 版）。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 受影響列數（文章不存在為 0）
+     */
+    @Update("UPDATE articles SET like_count = like_count + 1 WHERE uuid = #{uuid}::uuid")
+    int incrementLikeCountByUuid(@Param("uuid") UUID uuid);
+
+    /**
+     * 以公開 UUID 原子性遞減文章按讚計數，守衛 {@code > 0} 防 underflow。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 受影響列數（文章不存在或計數已為 0 時為 0）
+     */
+    @Update("UPDATE articles SET like_count = like_count - 1 WHERE uuid = #{uuid}::uuid AND like_count > 0")
+    int decrementLikeCountByUuid(@Param("uuid") UUID uuid);
+
+    /**
+     * {@link #findVisibilityRowsByUuids} 的投影列。
+     *
+     * @param uuid       文章公開 UUID
+     * @param status     文章狀態名稱
+     * @param authorUuid 作者公開 UUID
+     */
+    record ArticleUuidVisibilityRow(UUID uuid, String status, UUID authorUuid) {}
+
+    /**
      * {@link #findVisibilityRowsByIds} 的投影列。
      *
      * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），

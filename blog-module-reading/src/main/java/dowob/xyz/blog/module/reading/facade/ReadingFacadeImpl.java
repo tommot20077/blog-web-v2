@@ -35,33 +35,33 @@ public class ReadingFacadeImpl implements ReadingFacade {
     private final ArticleLikeService articleLikeService;
 
     @Override
-    public Set<Long> batchIsBookmarked(Long userId, List<Long> articleIds) {
-        return bookmarkService.batchIsBookmarked(userId, articleIds);
+    public Set<UUID> batchIsBookmarked(UUID userUuid, List<UUID> articleUuids) {
+        return bookmarkService.batchIsBookmarked(userUuid, articleUuids);
     }
 
     @Override
-    public boolean isBookmarked(Long userId, Long articleId) {
-        return bookmarkService.isBookmarked(userId, articleId);
+    public boolean isBookmarked(UUID userUuid, UUID articleUuid) {
+        return bookmarkService.isBookmarked(userUuid, articleUuid);
     }
 
     @Override
-    public Map<Long, BigDecimal> batchGetProgress(Long userId, List<Long> articleIds) {
-        return readingProgressService.batchGetProgress(userId, articleIds);
+    public Map<UUID, BigDecimal> batchGetProgress(UUID userUuid, List<UUID> articleUuids) {
+        return readingProgressService.batchGetProgress(userUuid, articleUuids);
     }
 
     @Override
-    public BigDecimal getProgress(Long userId, UUID articleUuid) {
-        Optional<ProgressResponse> opt = readingProgressService.get(userId, articleUuid);
+    public BigDecimal getProgress(UUID userUuid, UUID articleUuid) {
+        Optional<ProgressResponse> opt = readingProgressService.get(userUuid, articleUuid);
         return opt.map(ProgressResponse::getProgress).orElse(null);
     }
 
     @Override
-    public Set<Long> batchIsLiked(Long userId, List<Long> articleIds) {
-        return articleLikeService.batchIsLiked(userId, articleIds);
+    public Set<UUID> batchIsLiked(UUID userUuid, List<UUID> articleUuids) {
+        return articleLikeService.batchIsLiked(userUuid, articleUuids);
     }
 
     @Override
-    public boolean isLiked(Long userId, Long articleId) {
-        return articleLikeService.isLiked(userId, articleId);
+    public boolean isLiked(UUID userUuid, UUID articleUuid) {
+        return articleLikeService.isLiked(userUuid, articleUuid);
     }
 }

@@ -14,6 +14,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
@@ -27,9 +28,11 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleContentFreezePolicy;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleFileBinder;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.article.service.ArticleTocCodec;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -42,6 +45,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -118,6 +122,15 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * SeriesFacade 在其內以 ObjectProvider 延遲取得，避免與 SeriesFacadeImpl 形成 bean 循環）
      */
     private final ArticleDataAssembler articleDataAssembler;
+
+    /**
+     * 文章查詢服務的延遲取得入口（M2-a 新增：供 {@link #getSummariesByUuids} 重用既有摘要組裝與登入者補值）
+     *
+     * <p>必須用 {@link ObjectProvider} 而非直接注入：{@code ArticleQueryService} 注入 {@code ReadingFacade}，
+     * 而 reading 的實作類別注入 {@code ArticleFacade}，直接建構子注入會形成 bean 循環。
+     * 比照 {@code ArticleIdentityResolver} 處理 {@code SeriesFacade} 的做法，只在方法被呼叫時才取得。</p>
+     */
+    private final ObjectProvider<ArticleQueryService> articleQueryServiceProvider;
 
     /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
@@ -655,5 +668,83 @@ public class ArticleFacadeImpl implements ArticleFacade {
     @Override
     public void decrementCommentCount(UUID articleUuid) {
         articleMapper.decrementCommentCountByUuid(articleUuid);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void incrementLikeCount(UUID articleUuid) {
+        articleMapper.incrementLikeCountByUuid(articleUuid);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void decrementLikeCount(UUID articleUuid) {
+        articleMapper.decrementLikeCountByUuid(articleUuid);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>輸入為 caller 的全量候選集（例如某使用者的全部收藏），無上界，故去重後經 {@link BatchedQuery} 切批。
+     * 可見性過濾在各批獨立成立，屬跨批可合併形狀；回傳順序由最後對 {@code candidates} 的重排保證，
+     * 不依賴各批查詢的回傳順序。可見性判斷委派 {@link ArticleVisibility}（單一真相），不在 SQL 內重寫。</p>
+     */
+    @Override
+    public List<UUID> filterReadableUuids(List<UUID> candidates, UUID viewerUuid, boolean isAdmin) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> distinct = candidates.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Set<UUID> readable = BatchedQuery
+                .queryInBatches(distinct, articleMapper::findVisibilityRowsByUuids).stream()
+                .filter(row -> ArticleVisibility.isReadableBy(
+                        row.status(), row.authorUuid(), viewerUuid, isAdmin))
+                .map(ArticleMapper.ArticleUuidVisibilityRow::uuid)
+                .collect(Collectors.toSet());
+        return candidates.stream().filter(readable::contains).toList();
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>做法：先以 {@link BatchedQuery} 批次把 uuid 轉成 id（沿用 {@code ArticleMapper#findIdsByUuids}），
+     * 再委派既有的 {@link ArticleQueryService#getArticleSummariesByIds(List)}，因此摘要組裝、
+     * 登入者 liked／bookmarked／progress 補值與 series 導覽補值與 Long 版<b>由同一份程式碼產生</b>，
+     * 不會出現兩份語意。最後依輸入 uuids 的順序重排，使順序契約不依賴下游實作。</p>
+     *
+     * <p>{@link ArticleQueryService} 以 {@link ObjectProvider} 延遲取得（見欄位說明），
+     * 且只在確實有文章要查時才取得，空輸入與全部查無時不會碰它。</p>
+     */
+    @Override
+    public List<ArticleSummaryResponse> getSummariesByUuids(List<UUID> uuids) {
+        if (uuids == null || uuids.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> distinct = uuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (distinct.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, Long> uuidToId = BatchedQuery.queryInBatches(distinct, articleMapper::findIdsByUuids).stream()
+                .collect(Collectors.toMap(Article::getUuid, Article::getId, (first, second) -> first));
+        List<UUID> foundUuids = distinct.stream().filter(uuidToId::containsKey).toList();
+        if (foundUuids.isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = foundUuids.stream().map(uuidToId::get).toList();
+        Map<UUID, ArticleSummaryResponse> byUuid = articleQueryServiceProvider.getObject()
+                .getArticleSummariesByIds(ids).stream()
+                .collect(Collectors.toMap(ArticleSummaryResponse::getUuid, Function.identity(),
+                        (first, second) -> first));
+        return foundUuids.stream().map(byUuid::get).filter(Objects::nonNull).toList();
     }
 }

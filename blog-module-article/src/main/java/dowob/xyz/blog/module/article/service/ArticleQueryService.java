@@ -14,7 +14,7 @@ import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -198,6 +198,7 @@ public class ArticleQueryService {
             return;
         }
         Long userId = currentUserIdOrNull();
+        UUID userUuid = currentUserUuidOrNull();
 
         // 批量取得 uuid → id 對應
         List<UUID> uuids = records.stream()
@@ -206,11 +207,6 @@ public class ArticleQueryService {
         List<Article> idRows = BatchedQuery.queryInBatches(uuids, articleMapper::findIdsByUuids);
         Map<UUID, Long> uuidToId = idRows.stream()
                 .collect(Collectors.toMap(Article::getUuid, Article::getId));
-
-        List<Long> articleIds = uuids.stream()
-                .map(uuidToId::get)
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.toList());
 
         Map<Long, Long> articleIdToSeriesId = idRows.stream()
                 .filter(a -> a.getSeriesId() != null)
@@ -243,15 +239,16 @@ public class ArticleQueryService {
             return;
         }
 
-        Set<Long> likedIds = readingFacade.batchIsLiked(userId, articleIds);
-        Set<Long> bookmarkedIds = readingFacade.batchIsBookmarked(userId, articleIds);
-        Map<Long, BigDecimal> progressMap = readingFacade.batchGetProgress(userId, articleIds);
+        // 按讚／收藏（M2-b）與閱讀進度（M2-c）都以 UUID 識別
+        Set<UUID> likedUuids = readingFacade.batchIsLiked(userUuid, uuids);
+        Set<UUID> bookmarkedUuids = readingFacade.batchIsBookmarked(userUuid, uuids);
+        Map<UUID, BigDecimal> progressMap = readingFacade.batchGetProgress(userUuid, uuids);
 
         records.forEach(r -> {
             Long id = uuidToId.get(r.getUuid());
-            r.setLiked(id != null && likedIds.contains(id));
-            r.setBookmarked(id != null && bookmarkedIds.contains(id));
-            r.setLastReadProgress(id != null ? progressMap.get(id) : null);
+            r.setLiked(id != null && likedUuids.contains(r.getUuid()));
+            r.setBookmarked(id != null && bookmarkedUuids.contains(r.getUuid()));
+            r.setLastReadProgress(id != null ? progressMap.get(r.getUuid()) : null);
         });
     }
 
@@ -275,16 +272,17 @@ public class ArticleQueryService {
         }
 
         Long userId = currentUserIdOrNull();
+        UUID userUuid = currentUserUuidOrNull();
         if (userId == null) {
             resp.setLiked(false);
             resp.setBookmarked(false);
             resp.setLastReadProgress(null);
             return;
         }
-        resp.setLiked(articleId != null && readingFacade.isLiked(userId, articleId));
-        resp.setBookmarked(articleId != null && readingFacade.isBookmarked(userId, articleId));
+        resp.setLiked(articleId != null && readingFacade.isLiked(userUuid, resp.getUuid()));
+        resp.setBookmarked(articleId != null && readingFacade.isBookmarked(userUuid, resp.getUuid()));
         if (resp.getUuid() != null) {
-            resp.setLastReadProgress(readingFacade.getProgress(userId, resp.getUuid()));
+            resp.setLastReadProgress(readingFacade.getProgress(userUuid, resp.getUuid()));
         }
     }
 
@@ -298,5 +296,18 @@ public class ArticleQueryService {
     private Long currentUserIdOrNull() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         return SecurityUtils.currentAuthUser(auth).map(AuthUser::id).orElse(null);
+    }
+
+    /**
+     * 從 SecurityContextHolder 取得當前登入使用者 UUID，未登入時回傳 null。
+     *
+     * <p>與 {@link #currentUserIdOrNull()} 同源（{@link AuthUser}）。按讚／收藏的查詢已改以 UUID 識別（M2-b），
+     * 閱讀進度（M2-c）亦已改為 UUID；{@link #currentUserIdOrNull()} 僅剩判斷是否登入之用。</p>
+     *
+     * @return 使用者公開 UUID，或 null（匿名 / 未認證）
+     */
+    private UUID currentUserUuidOrNull() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return SecurityUtils.currentAuthUser(auth).map(AuthUser::uuid).orElse(null);
     }
 }

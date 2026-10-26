@@ -70,7 +70,7 @@ public class SeriesController {
      * </p>
      * <ol>
      *   <li>{@code SecurityConfig} 明確 {@code permitAll} {@code GET /api/v1/series/**}（對得上 Public Endpoints 表）；</li>
-     *   <li>{@code currentUserId} 允許為 null，僅用於選填的閱讀進度（myProgress）個人化；</li>
+     *   <li>{@code currentUserUuid}（{@code user.uuid()}）允許為 null，僅用於選填的閱讀進度（myProgress）個人化；</li>
      *   <li>本 JavaDoc 即為所需的豁免標註。</li>
      * </ol>
      * <p>
@@ -86,7 +86,7 @@ public class SeriesController {
     public ApiResponse<SeriesDetailResponse> get(
             @PathVariable String slug,
             @AuthenticationPrincipal AuthUser user) {
-        return ApiResponse.success(seriesService.getSeriesDetail(slug, (user == null ? null : user.id())));
+        return ApiResponse.success(seriesService.getSeriesDetail(slug, (user == null ? null : user.uuid())));
     }
 
     @PostMapping

@@ -2,7 +2,6 @@ package dowob.xyz.blog.module.reading.service;
 
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import dowob.xyz.blog.module.reading.model.UserReadingProgress;
 import dowob.xyz.blog.module.reading.model.dto.response.ProgressResponse;
@@ -25,7 +24,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 /**
  * 閱讀進度 Service：Redis 主、DB 備份。
@@ -34,7 +32,7 @@ import java.util.stream.Collectors;
  * 加入 dirty Set，由 ReadingProgressFlushJob 5 分鐘 flush 到 DB。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @Slf4j
 @Service
@@ -46,16 +44,27 @@ public class ReadingProgressService {
     private final ReadingProgressMapper progressMapper;
     private final UserReadingProgressRepository progressRepo;
 
+    /**
+     * 更新閱讀進度。
+     *
+     * <p>文章不存在（不分狀態）時靜默略過：不寫 Redis、不加 dirty、不落 DB（進度表已無指向 articles 的 FK，
+     * 這個檢查是「不寫出孤兒列」的防線）。Redis key 為 {@code reading:progress:{userUuid}:{articleUuid}}，
+     * dirty set 成員為 {@code {userUuid}:{articleUuid}}。</p>
+     *
+     * @param userUuid    讀者公開 UUID
+     * @param articleUuid 文章公開 UUID
+     * @param progress    進度（0.00 ~ 1.00）
+     * @param lastHeading 最後閱讀的標題錨點（可為 null）
+     */
     @Transactional
-    public void update(Long userId, UUID articleUuid, BigDecimal progress, String lastHeading) {
-        Long articleId = articleFacade.findIdByUuid(articleUuid);
-        if (articleId == null) return;
+    public void update(UUID userUuid, UUID articleUuid, BigDecimal progress, String lastHeading) {
+        if (!articleFacade.existsByUuid(articleUuid)) return;
 
-        String key = RedisKeyConstant.READING_PROGRESS_PREFIX + userId + ":" + articleUuid;
+        String key = RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + articleUuid;
 
         if (progress.compareTo(RedisKeyConstant.READING_PROGRESS_COMPLETED_THRESHOLD) >= 0) {
             redisTemplate.delete(key);
-            progressMapper.upsert(userId, articleId, progress, lastHeading);
+            progressMapper.upsert(userUuid, articleUuid, progress, lastHeading);
         } else {
             Map<String, String> hash = new HashMap<>();
             hash.put("progress", progress.toPlainString());
@@ -63,51 +72,65 @@ public class ReadingProgressService {
             hash.put("updatedAt", String.valueOf(System.currentTimeMillis()));
             redisTemplate.opsForHash().putAll(key, hash);
             redisTemplate.expire(key, RedisKeyConstant.READING_PROGRESS_TTL_DAYS, TimeUnit.DAYS);
-            redisTemplate.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, userId + ":" + articleUuid);
+            redisTemplate.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, userUuid + ":" + articleUuid);
         }
     }
 
-    public Optional<ProgressResponse> get(Long userId, UUID articleUuid) {
-        String key = RedisKeyConstant.READING_PROGRESS_PREFIX + userId + ":" + articleUuid;
+    /**
+     * 查詢閱讀進度（Redis 優先，沒有時讀 DB 並回填 Redis）。
+     *
+     * <p>Redis 沒有且文章不存在時回 empty（不查 DB）。</p>
+     *
+     * @param userUuid    讀者公開 UUID
+     * @param articleUuid 文章公開 UUID
+     * @return 閱讀進度；無紀錄為 empty
+     */
+    public Optional<ProgressResponse> get(UUID userUuid, UUID articleUuid) {
+        String key = RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + articleUuid;
         Map<Object, Object> hash = redisTemplate.opsForHash().entries(key);
         if (!hash.isEmpty()) {
             return Optional.of(fromHash(hash));
         }
-        Long articleId = articleFacade.findIdByUuid(articleUuid);
-        if (articleId == null) return Optional.empty();
+        if (!articleFacade.existsByUuid(articleUuid)) return Optional.empty();
 
-        Optional<UserReadingProgress> dbVal = progressRepo.findByUserIdAndArticleId(userId, articleId);
+        Optional<UserReadingProgress> dbVal = progressRepo.findByUserUuidAndArticleUuid(userUuid, articleUuid);
         dbVal.ifPresent(p -> cacheToRedis(key, p));
         return dbVal.map(this::toResponse);
     }
 
-    public Map<Long, BigDecimal> batchGetProgress(Long userId, List<Long> articleIds) {
-        if (userId == null || articleIds == null || articleIds.isEmpty()) {
+    /**
+     * 批次查詢閱讀進度：Redis 命中的直接用，沒命中的以單一 DB 查詢補齊。
+     *
+     * <p>以呼叫端給的文章 UUID 直接組 Redis key 與查 DB，不經 {@link ArticleFacade}（不再做 id↔uuid 轉換）。
+     * 呼叫端傳入的本來就是已存在的文章；不存在的文章只會是「沒有進度」，結果中不含該 key。</p>
+     *
+     * @param userUuid     讀者公開 UUID；null 回空 Map（未登入）
+     * @param articleUuids 文章公開 UUID 列表
+     * @return articleUuid → progress（無紀錄則不含該 key）
+     */
+    public Map<UUID, BigDecimal> batchGetProgress(UUID userUuid, List<UUID> articleUuids) {
+        if (userUuid == null || articleUuids == null || articleUuids.isEmpty()) {
             return Collections.emptyMap();
         }
 
-        List<ArticleData> articles = articleFacade.findByIds(articleIds);
-        Map<Long, UUID> idToUuid = articles.stream()
-                .collect(Collectors.toMap(ArticleData::id, ArticleData::uuid));
-
-        Map<Long, BigDecimal> result = new HashMap<>();
-        List<Long> missingIds = new ArrayList<>();
-        for (Map.Entry<Long, UUID> entry : idToUuid.entrySet()) {
-            String key = RedisKeyConstant.READING_PROGRESS_PREFIX + userId + ":" + entry.getValue();
+        Map<UUID, BigDecimal> result = new HashMap<>();
+        List<UUID> missingUuids = new ArrayList<>();
+        for (UUID articleUuid : articleUuids) {
+            String key = RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + articleUuid;
             Map<Object, Object> hash = redisTemplate.opsForHash().entries(key);
             if (!hash.isEmpty()) {
                 Object pVal = hash.get("progress");
                 if (pVal != null) {
-                    result.put(entry.getKey(), new BigDecimal(pVal.toString()));
+                    result.put(articleUuid, new BigDecimal(pVal.toString()));
                 }
             } else {
-                missingIds.add(entry.getKey());
+                missingUuids.add(articleUuid);
             }
         }
 
-        if (!missingIds.isEmpty()) {
-            List<UserReadingProgress> dbRows = progressRepo.findByUserIdAndArticleIdIn(userId, missingIds);
-            dbRows.forEach(p -> result.put(p.getArticleId(), p.getProgress()));
+        if (!missingUuids.isEmpty()) {
+            List<UserReadingProgress> dbRows = progressRepo.findByUserUuidAndArticleUuidIn(userUuid, missingUuids);
+            dbRows.forEach(p -> result.put(p.getArticleUuid(), p.getProgress()));
         }
         return result;
     }
@@ -129,7 +152,7 @@ public class ReadingProgressService {
         r.setLastHeading(hVal != null && !hVal.toString().isEmpty() ? hVal.toString() : null);
         Object uVal = hash.get("updatedAt");
         if (uVal != null) {
-            r.setUpdatedAt(LocalDateTime.ofInstant(Instant.ofEpochMilli(Long.parseLong(uVal.toString())), ZoneId.systemDefault()));
+            r.setUpdatedAt(LocalDateTime.ofInstant(Instant.ofEpochMilli(Long.valueOf(uVal.toString())), ZoneId.systemDefault()));
         }
         return r;
     }

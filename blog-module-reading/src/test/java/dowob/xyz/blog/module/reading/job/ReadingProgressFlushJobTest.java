@@ -4,28 +4,54 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+/**
+ * {@link ReadingProgressFlushJob} 單元測試。
+ *
+ * <p>flush 的順序是「讀 hash（記下 updatedAt）→ upsert → Lua compare-and-remove」（RACE-13／DATA-08，at-least-once）：
+ * 失敗時不動 dirty set（成員本來就還在），不需要補回；整輪文章存在性只用一次
+ * {@code filterExistingUuids} 批次檢查（PERF-31）。真實 Redis 下的交錯與 Lua 行為見 {@code ReadingProgressFlushJobIT}。</p>
+ *
+ * @author Yuan
+ * @version 3.0
+ */
 @ExtendWith(MockitoExtension.class)
+@DisplayName("ReadingProgressFlushJob 單元測試")
 class ReadingProgressFlushJobTest {
 
     @Mock private StringRedisTemplate redisTemplate;
@@ -35,73 +61,295 @@ class ReadingProgressFlushJobTest {
     @Mock private ReadingProgressMapper progressMapper;
     @InjectMocks private ReadingProgressFlushJob job;
 
+    private final UUID userUuid = UUID.randomUUID();
+
     @BeforeEach
     @SuppressWarnings({"unchecked", "rawtypes"})
     void setUp() {
-        org.mockito.Mockito.lenient().when(redisTemplate.opsForHash()).thenReturn((HashOperations) hashOps);
-        org.mockito.Mockito.lenient().when(redisTemplate.opsForSet()).thenReturn(setOps);
+        lenient().when(redisTemplate.opsForHash()).thenReturn((HashOperations) hashOps);
+        lenient().when(redisTemplate.opsForSet()).thenReturn(setOps);
+        lenient().when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(1L);
+    }
+
+    private static Map<Object, Object> hashOf(String progress, String lastHeading, String updatedAt) {
+        Map<Object, Object> hash = new HashMap<>();
+        hash.put("progress", progress);
+        if (lastHeading != null) {
+            hash.put("lastHeading", lastHeading);
+        }
+        if (updatedAt != null) {
+            hash.put("updatedAt", updatedAt);
+        }
+        return hash;
+    }
+
+    private String keyOf(String entry) {
+        return RedisKeyConstant.READING_PROGRESS_PREFIX + entry;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void verifyCompareAndRemove(String entry, String progress, String lastHeading, String updatedAt) {
+        verify(redisTemplate).execute(any(RedisScript.class),
+                eq(List.of(keyOf(entry), RedisKeyConstant.READING_DIRTY_KEY)),
+                eq(progress), eq(lastHeading), eq(updatedAt), eq(entry));
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void verifyNoCompareAndRemove() {
+        verify(redisTemplate, never()).execute(any(RedisScript.class), anyList(), any(Object[].class));
     }
 
     @Test
-    void flush_dirtyEntries_upsertedAndRemovedFromDirty() {
+    @DisplayName("flush：順序為 讀 hash → upsert → compare-and-remove（以讀到的 progress、lastHeading、updatedAt 為期望值），不使用無條件 SREM")
+    void flush_dirtyEntry_readsThenUpsertsThenCompareAndRemoves() {
         UUID articleUuid = UUID.randomUUID();
-        String entry = "1:" + articleUuid;
+        String entry = userUuid + ":" + articleUuid;
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
-
-        Map<Object, Object> hash = new HashMap<>();
-        hash.put("progress", "0.6");
-        hash.put("lastHeading", "intro");
-        when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(100L);
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", "intro", "1730438400000"));
 
         job.flush();
 
-        verify(progressMapper).upsert(eq(1L), eq(100L), eq(new BigDecimal("0.6")), eq("intro"));
-        verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
+        InOrder order = inOrder(hashOps, progressMapper, redisTemplate);
+        order.verify(hashOps).entries(keyOf(entry));
+        order.verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), "intro");
+        order.verify(redisTemplate).execute(any(RedisScript.class),
+                eq(List.of(keyOf(entry), RedisKeyConstant.READING_DIRTY_KEY)),
+                eq("0.6"), eq("intro"), eq("1730438400000"), eq(entry));
+        verify(setOps, never()).remove(anyString(), any(Object[].class));
+        verify(setOps, never()).add(anyString(), any(String[].class));
     }
 
     @Test
-    void flush_redisKeyExpiredButDirtyExists_removesDirtyEntry() {
-        String entry = "1:" + UUID.randomUUID();
+    @DisplayName("flush：lastHeading 為空字串時以 null upsert")
+    void flush_emptyLastHeading_upsertsNull() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
-        when(hashOps.entries(any(String.class))).thenReturn(Map.of());
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", "", "1"));
+
+        job.flush();
+
+        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), null);
+    }
+
+    @Test
+    @DisplayName("flush：hash 缺少的欄位（lastHeading、updatedAt）期望值一律為空字串")
+    void flush_hashWithoutUpdatedAt_usesEmptyExpectedValue() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", null, null));
+
+        job.flush();
+
+        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.6"), null);
+        verifyCompareAndRemove(entry, "0.6", "", "");
+    }
+
+    @Test
+    @DisplayName("flush：dirty 沒有成員 → 什麼都不做，也不查文章存在性")
+    void flush_emptyDirtySet_doesNothing() {
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of());
+
+        job.flush();
+
+        verifyNoInteractions(articleFacade, progressMapper, hashOps);
+    }
+
+    @Test
+    @DisplayName("flush：hash 已過期 → 不 upsert，三個欄位都以空字串為期望值做 compare-and-remove（僅在 hash 仍不存在時才移除）")
+    void flush_redisKeyExpiredButDirtyExists_compareAndRemovesWithEmptyExpectation() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(Map.of());
 
         job.flush();
 
         verify(progressMapper, never()).upsert(any(), any(), any(), any());
-        verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
+        verifyCompareAndRemove(entry, "", "", "");
+        verify(setOps, never()).remove(anyString(), any(Object[].class));
     }
 
     @Test
-    void flush_dbErrorOnSingleEntry_keepsItInDirtyForRetry() {
+    @DisplayName("flush：upsert 失敗 → 不做 compare-and-remove、不 SREM、不 SADD（成員本來就還在，下輪重試），hash 保留")
+    void flush_upsertFails_leavesDirtySetUntouched() {
         UUID articleUuid = UUID.randomUUID();
-        String entry = "1:" + articleUuid;
+        String entry = userUuid + ":" + articleUuid;
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
-        Map<Object, Object> hash = new HashMap<>();
-        hash.put("progress", "0.6");
-        when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(100L);
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenReturn(hashOf("0.6", null, "1"));
         when(progressMapper.upsert(any(), any(), any(), any())).thenThrow(new RuntimeException("DB error"));
 
         job.flush();
 
-        verify(setOps, never()).remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
+        verifyNoCompareAndRemove();
+        verify(setOps, never()).remove(anyString(), any(Object[].class));
+        verify(setOps, never()).add(anyString(), any(String[].class));
+        verify(redisTemplate, never()).delete(anyString());
     }
 
     @Test
-    void flush_articleAlreadyDeleted_removesDirtyAndKey() {
+    @DisplayName("flush：讀 hash 失敗 → 不 upsert、不動 dirty set")
+    void flush_redisReadError_leavesDirtySetUntouched() {
         UUID articleUuid = UUID.randomUUID();
-        String entry = "1:" + articleUuid;
+        String entry = userUuid + ":" + articleUuid;
         when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
-        Map<Object, Object> hash = new HashMap<>();
-        hash.put("progress", "0.6");
-        when(hashOps.entries(any(String.class))).thenReturn(hash);
-        when(articleFacade.findIdByUuid(articleUuid)).thenReturn(null);
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(entry))).thenThrow(new RuntimeException("redis down"));
 
         job.flush();
 
-        verify(redisTemplate).delete(RedisKeyConstant.READING_PROGRESS_PREFIX + entry);
-        verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
         verify(progressMapper, never()).upsert(any(), any(), any(), any());
+        verifyNoCompareAndRemove();
+        verify(setOps, never()).add(anyString(), any(String[].class));
+    }
+
+    @Test
+    @DisplayName("flush：compare-and-remove 本身失敗 → 例外被吞掉、不 SADD，同一輪其他成員照常 flush")
+    void flush_compareAndRemoveFails_doesNotAbortRound() {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        String firstEntry = userUuid + ":" + first;
+        String secondEntry = userUuid + ":" + second;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY))
+                .thenReturn(new LinkedHashSet<>(List.of(firstEntry, secondEntry)));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(first, second));
+        when(hashOps.entries(keyOf(firstEntry))).thenReturn(hashOf("0.1", null, "1"));
+        when(hashOps.entries(keyOf(secondEntry))).thenReturn(hashOf("0.2", null, "2"));
+        when(redisTemplate.execute(any(RedisScript.class), eq(List.of(keyOf(firstEntry), RedisKeyConstant.READING_DIRTY_KEY)),
+                anyString(), anyString(), anyString(), anyString())).thenThrow(new RuntimeException("redis down"));
+
+        job.flush();
+
+        verify(progressMapper).upsert(userUuid, second, new BigDecimal("0.2"), null);
+        verifyCompareAndRemove(secondEntry, "0.2", "", "2");
+        verify(setOps, never()).add(anyString(), any(String[].class));
+    }
+
+    @Test
+    @DisplayName("flush：單一成員 upsert 失敗不影響同一輪其他成員")
+    void flush_oneEntryFails_otherEntriesStillFlushed() {
+        UUID failing = UUID.randomUUID();
+        UUID healthy = UUID.randomUUID();
+        String failingEntry = userUuid + ":" + failing;
+        String healthyEntry = userUuid + ":" + healthy;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY))
+                .thenReturn(new LinkedHashSet<>(List.of(failingEntry, healthyEntry)));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(failing, healthy));
+        when(hashOps.entries(keyOf(failingEntry))).thenReturn(hashOf("0.1", null, "1"));
+        when(hashOps.entries(keyOf(healthyEntry))).thenReturn(hashOf("0.2", null, "2"));
+        when(progressMapper.upsert(eq(userUuid), eq(failing), any(), any())).thenThrow(new RuntimeException("boom"));
+
+        job.flush();
+
+        verify(progressMapper).upsert(userUuid, healthy, new BigDecimal("0.2"), null);
+        verifyCompareAndRemove(healthyEntry, "0.2", "", "2");
+        verify(redisTemplate, times(1)).execute(any(RedisScript.class), anyList(),
+                anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("flush：文章已被刪除 → 先 DEL hash 再 SREM、不 upsert（FK 已移除，不得寫出孤兒列）")
+    void flush_articleAlreadyDeleted_deletesKeyThenRemovesDirtyWithoutUpsert() {
+        UUID articleUuid = UUID.randomUUID();
+        String entry = userUuid + ":" + articleUuid;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(entry));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of());
+
+        job.flush();
+
+        InOrder order = inOrder(redisTemplate, setOps);
+        order.verify(redisTemplate).delete(keyOf(entry));
+        order.verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, entry);
+        verify(progressMapper, never()).upsert(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("flush：文章已刪除但 DEL hash 拋例外 → 不 SREM（成員留在 dirty set，「下輪再試」名實相符），整輪不中斷")
+    void flush_articleDeletedButDelFails_keepsMemberInDirtySet() {
+        UUID gone = UUID.randomUUID();
+        UUID alive = UUID.randomUUID();
+        String goneEntry = userUuid + ":" + gone;
+        String aliveEntry = userUuid + ":" + alive;
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY))
+                .thenReturn(new LinkedHashSet<>(List.of(goneEntry, aliveEntry)));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(alive));
+        doThrow(new RuntimeException("redis down")).when(redisTemplate).delete(keyOf(goneEntry));
+        when(hashOps.entries(keyOf(aliveEntry))).thenReturn(hashOf("0.5", null, "9"));
+
+        job.flush();
+
+        verify(setOps, never()).remove(RedisKeyConstant.READING_DIRTY_KEY, goneEntry);
+        verify(progressMapper).upsert(userUuid, alive, new BigDecimal("0.5"), null);
+    }
+
+    @Test
+    @DisplayName("PERF-31：整輪的文章存在性只呼叫一次 filterExistingUuids（去重後的全部 article uuid），不逐筆查")
+    void flush_manyEntries_checksExistenceInOneBatch() {
+        UUID shared = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        UUID third = UUID.randomUUID();
+        UUID otherUser = UUID.randomUUID();
+        Set<String> entries = new LinkedHashSet<>(List.of(
+                userUuid + ":" + shared, otherUser + ":" + shared, userUuid + ":" + second, userUuid + ":" + third));
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(entries);
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(shared, second, third));
+        lenient().when(hashOps.entries(anyString())).thenReturn(hashOf("0.5", null, "1"));
+
+        job.flush();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Collection<UUID>> captor = ArgumentCaptor.forClass(Collection.class);
+        verify(articleFacade, times(1)).filterExistingUuids(captor.capture());
+        assertThat(captor.getValue()).containsExactlyInAnyOrder(shared, second, third);
+        verify(articleFacade, never()).existsByUuid(any());
+        verify(articleFacade, never()).findIdByUuid(any());
+        verify(progressMapper, times(4)).upsert(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("無法解析的成員（舊格式 {Long}:{uuid}、亂碼）→ 從 dirty set 移除、不 upsert、不重試；其他成員照常 flush")
+    void flush_unparsableMembers_areRemovedAndNotRetried() {
+        UUID articleUuid = UUID.randomUUID();
+        String valid = userUuid + ":" + articleUuid;
+        String legacy = "1:" + UUID.randomUUID();
+        String garbage = "garbage";
+        String badArticle = userUuid + ":not-a-uuid";
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY))
+                .thenReturn(new LinkedHashSet<>(List.of(legacy, garbage, badArticle, valid)));
+        when(articleFacade.filterExistingUuids(any())).thenReturn(Set.of(articleUuid));
+        when(hashOps.entries(keyOf(valid))).thenReturn(hashOf("0.5", null, "1"));
+
+        job.flush();
+
+        verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, legacy);
+        verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, garbage);
+        verify(setOps).remove(RedisKeyConstant.READING_DIRTY_KEY, badArticle);
+        verify(setOps, never()).add(anyString(), any(String[].class));
+        verify(hashOps, never()).entries(keyOf(legacy));
+        verify(progressMapper, times(1)).upsert(any(), any(), any(), any());
+        verify(progressMapper).upsert(userUuid, articleUuid, new BigDecimal("0.5"), null);
+    }
+
+    @Test
+    @DisplayName("文章存在性檢查拋例外 → 整輪放棄，dirty set 一個成員都不動（下一輪重試）")
+    void flush_existenceCheckThrows_leavesDirtySetUntouched() {
+        UUID articleUuid = UUID.randomUUID();
+        when(setOps.members(RedisKeyConstant.READING_DIRTY_KEY)).thenReturn(Set.of(userUuid + ":" + articleUuid));
+        when(articleFacade.filterExistingUuids(any())).thenThrow(new IllegalStateException("article service down"));
+
+        job.flush();
+
+        verify(setOps, never()).remove(anyString(), any(Object[].class));
+        verify(setOps, never()).add(anyString(), any(String[].class));
+        verifyNoInteractions(progressMapper);
+        verifyNoCompareAndRemove();
+        verify(redisTemplate, never()).delete(anyString());
     }
 }

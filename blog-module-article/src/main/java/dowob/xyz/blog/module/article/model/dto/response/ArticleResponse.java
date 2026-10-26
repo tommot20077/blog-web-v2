@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.model.dto.response;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
+import dowob.xyz.blog.infrastructure.facade.dto.TagSummaryResponse;
 import lombok.Builder;
 import lombok.Data;
 

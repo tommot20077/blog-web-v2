@@ -7,7 +7,7 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
-import dowob.xyz.blog.module.article.model.dto.response.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.service.BookmarkQueryService;
 import dowob.xyz.blog.module.reading.service.BookmarkService;
@@ -42,8 +42,8 @@ public class BookmarkController {
     @Operation(summary = "收藏文章（idempotent）")
     public ApiResponse<Void> bookmark(@AuthenticationPrincipal AuthUser user,
                                         @PathVariable UUID articleUuid) {
-        Long articleId = resolveArticleId(articleUuid);
-        bookmarkService.bookmark(user.id(), articleId);
+        requireArticleExists(articleUuid);
+        bookmarkService.bookmark(user.uuid(), articleUuid);
         return ApiResponse.success();
     }
 
@@ -52,8 +52,8 @@ public class BookmarkController {
     @Operation(summary = "取消收藏（idempotent）")
     public ApiResponse<Void> unbookmark(@AuthenticationPrincipal AuthUser user,
                                           @PathVariable UUID articleUuid) {
-        Long articleId = resolveArticleId(articleUuid);
-        bookmarkService.unbookmark(user.id(), articleId);
+        requireArticleExists(articleUuid);
+        bookmarkService.unbookmark(user.uuid(), articleUuid);
         return ApiResponse.success();
     }
 
@@ -78,25 +78,21 @@ public class BookmarkController {
             Authentication authentication,
             PageQuery pageQuery) {
         return ApiResponse.success(bookmarkQueryService.listMyBookmarks(
-                user.id(), SecurityUtils.isAdmin(authentication), pageQuery.page(), pageQuery.sizeOrDefault(20)));
+                user.uuid(), SecurityUtils.isAdmin(authentication), pageQuery.page(), pageQuery.sizeOrDefault(20)));
     }
 
     /**
-     * UUID → DB id，查無此文章時回 404（{@code A0201}）。
+     * 確認文章存在（不分狀態），不存在時以 {@code A0201} 回應（HTTP 400，與解耦前相同）。
      *
-     * <p>與 {@code ArticleLikeController.resolveArticleId} 同一套 idiom：
-     * {@code articleFacade.findIdByUuid} 查無時回 {@code null}，caller 必須自行判斷，
-     * 否則 null id 會一路傳進 {@code BookmarkService} 造成未預期的 500（AUTH-08）。</p>
+     * <p>與 {@code ArticleLikeController.requireArticleExists} 同一套 idiom：必須在寫入前呼叫，
+     * 不存在的文章不得落任何列（AUTH-08：避免未預期的 500）。</p>
      *
      * @param articleUuid 文章公開 UUID
-     * @return 文章資料庫主鍵
      * @throws BusinessException {@code ARTICLE_NOT_FOUND} 若查無此文章
      */
-    private Long resolveArticleId(UUID articleUuid) {
-        Long articleId = articleFacade.findIdByUuid(articleUuid);
-        if (articleId == null) {
+    private void requireArticleExists(UUID articleUuid) {
+        if (!articleFacade.existsByUuid(articleUuid)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }
-        return articleId;
     }
 }
