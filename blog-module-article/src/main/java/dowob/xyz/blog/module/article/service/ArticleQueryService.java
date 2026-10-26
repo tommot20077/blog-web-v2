@@ -266,10 +266,8 @@ public class ArticleQueryService {
         }
         Long articleId = articleService.findIdByUuid(resp.getUuid());
 
-        // 填充 series 導覽資訊（不受登入狀態影響）
-        if (articleId != null) {
-            seriesFacade.getSeriesNavigation(resp.getUuid()).ifPresent(resp::setSeriesNav);
-        }
+        // 填充 series 導覽資訊（不受登入狀態影響；SeriesFacade 以 uuid 自行處理文章不存在）
+        seriesFacade.getSeriesNavigation(resp.getUuid()).ifPresent(resp::setSeriesNav);
 
         Long userId = currentUserIdOrNull();
         UUID userUuid = currentUserUuidOrNull();

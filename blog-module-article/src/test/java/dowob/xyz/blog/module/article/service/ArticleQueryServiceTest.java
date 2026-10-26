@@ -539,6 +539,21 @@ class ArticleQueryServiceTest {
         }
 
         @Test
+        @DisplayName("導覽直接以文章 uuid 查詢，不依賴 id 查詢結果（SeriesFacade 自己處理文章不存在）")
+        void enrichSingle_navLookupDoesNotDependOnArticleIdLookup() {
+            ArticleResponse resp = buildResponse();
+            SeriesNavigation nav = new SeriesNavigation(
+                    UUID.randomUUID(), "測試系列", "test-series", 1, 1, null, null);
+            when(articleService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1")).thenReturn(resp);
+            when(articleService.findIdByUuid(ARTICLE_UUID)).thenReturn(null);
+            when(seriesFacade.getSeriesNavigation(ARTICLE_UUID)).thenReturn(Optional.of(nav));
+
+            ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, null, null, "127.0.0.1");
+
+            assertThat(result.getSeriesNav()).isSameAs(nav);
+        }
+
+        @Test
         @DisplayName("文章在 series 第一位：seriesNav.prev 為 null")
         void enrichSingle_seriesPositionFirst_prevIsNull() {
             ArticleResponse resp = buildResponse();

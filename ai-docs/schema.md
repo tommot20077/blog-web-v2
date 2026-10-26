@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V28 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V29 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V28**
+> 最後更新版本：**V29**
 
 ---
 

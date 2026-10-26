@@ -53,9 +53,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -1102,7 +1104,7 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent（精準驗 4 params）")
+        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent（精準驗 4 params；seriesUuid 於刪除前取得）")
         void deleteArticle_shouldPublishDeletedEvent() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
@@ -1113,36 +1115,40 @@ class ArticleCommandSubServiceTest {
 
             verify(articleEventPublisher).publishDeleted(
                     eq(article),
-                    eq(article.getSeriesId()),
+                    (UUID) isNull(),
                     eq(List.of(CATEGORY_UUID)),
                     eq(List.of(TAG_UUID))
             );
         }
 
         @Test
-        @DisplayName("正常：delete 前讀 categoryIds/tagIds 並正確傳給 publisher")
-        void deleteArticle_collectsCategoryAndTagIds_passesToPublisher() {
+        @DisplayName("M4-b：delete 前先取得 seriesUuid（先於 articleRepository.delete），並傳給 publisher；刪除後不再查")
+        void deleteArticle_resolvesSeriesUuidBeforeDelete_andPassesToPublisher() {
             Article article = buildArticle(ArticleStatus.DRAFT);
             article.setSeriesId(50L);
+            UUID seriesUuid = UUID.randomUUID();
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of(CATEGORY_UUID));
             when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of(TAG_UUID));
+            when(articleEventPublisher.resolveSeriesUuidForDelete(50L)).thenReturn(seriesUuid);
 
             commandSubService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID);
 
-            verify(articleMapper).findCategoryUuidsByArticleId(article.getId());
-            verify(articleMapper).findTagUuidsByArticleId(article.getId());
-            verify(articleEventPublisher).publishDeleted(
+            org.mockito.InOrder order = org.mockito.Mockito.inOrder(articleEventPublisher, articleRepository);
+            order.verify(articleEventPublisher).resolveSeriesUuidForDelete(50L);
+            order.verify(articleRepository).delete(article);
+            order.verify(articleEventPublisher).publishDeleted(
                     eq(article),
-                    eq(50L),
+                    eq(seriesUuid),
                     eq(List.of(CATEGORY_UUID)),
                     eq(List.of(TAG_UUID))
             );
+            verify(articleEventPublisher, times(1)).resolveSeriesUuidForDelete(any());
         }
 
         @Test
-        @DisplayName("邊界：刪除無 seriesId 的文章時 publisher 收到 null seriesId")
-        void deleteArticle_withoutSeriesId_publisherReceivesNullSeriesId() {
+        @DisplayName("邊界：刪除無 seriesId 的文章時 publisher 收到 null seriesUuid")
+        void deleteArticle_withoutSeriesId_publisherReceivesNullSeriesUuid() {
             Article article = buildArticle(ArticleStatus.DRAFT);
             // seriesId 為 null（buildArticle 預設未設置）
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
@@ -1154,10 +1160,25 @@ class ArticleCommandSubServiceTest {
             verify(articleRepository).delete(article);
             verify(articleEventPublisher).publishDeleted(
                     eq(article),
-                    eq((Long) null),
+                    (UUID) isNull(),
                     eq(List.of()),
                     eq(List.of())
             );
+        }
+
+        @Test
+        @DisplayName("M4-b：刪除前取得 seriesUuid 失敗 → 刪除不動手（不會刪了文章卻發出沒有 seriesUuid 的事件）")
+        void deleteArticle_whenSeriesUuidLookupFails_doesNotDelete() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setSeriesId(50L);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleEventPublisher.resolveSeriesUuidForDelete(50L)).thenThrow(new IllegalStateException("series down"));
+
+            assertThatThrownBy(() -> commandSubService.deleteArticle(AUTHOR_ID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(IllegalStateException.class);
+
+            verify(articleRepository, never()).delete(any());
+            verify(articleEventPublisher, never()).publishDeleted(any(), any(UUID.class), any(), any());
         }
     }
 

@@ -38,6 +38,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.never;
@@ -299,18 +301,6 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("publishDeleted：series 查詢失敗的 warn 帶事件類型與 articleUuid")
-        void publishDeleted_whenSeriesLookupFails_warnShouldCarryContext() {
-            Article article = publishedArticle();
-            when(identityResolver.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
-
-            List<String> warns = warnMessagesWhile(() -> publisher.publishDeleted(article, 200L, List.of(), List.of()));
-
-            assertThat(warns).anySatisfy(m -> assertThat(m)
-                    .contains("ArticleDeletedEvent").contains(article.getUuid().toString()));
-        }
-
-        @Test
         @DisplayName("publishUpdated：作者查詢恰 1 次，不查 series")
         void publishUpdated_resolvesAuthorExactlyOnce() {
             Article article = publishedArticle();
@@ -341,20 +331,20 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("publishDeleted（有系列）：作者 1 次 ＋ 系列 1 次")
-        void publishDeleted_withSeries_resolvesAuthorOnceAndSeriesOnce() {
+        @DisplayName("publishDeleted（有系列）：作者 1 次；series 已由呼叫端在刪除前取得，這裡 0 次")
+        void publishDeleted_withSeries_resolvesAuthorOnceAndNoSeriesLookup() {
             Article article = publishedArticle();
-            publisher.publishDeleted(article, 200L, List.of(), List.of());
+            publisher.publishDeleted(article, UUID.randomUUID(), List.of(), List.of());
 
             verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
-            verify(identityResolver, times(1)).resolveSeriesUuids(anyCollection());
+            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
         }
 
         @Test
         @DisplayName("publishDeleted（無系列）：作者 1 次，系列 0 次")
         void publishDeleted_withoutSeries_resolvesAuthorOnceAndNoSeries() {
             Article article = publishedArticle();
-            publisher.publishDeleted(article, null, List.of(), List.of());
+            publisher.publishDeleted(article, (UUID) null, List.of(), List.of());
 
             verify(identityResolver, times(1)).resolveAuthorUuids(anyCollection());
             verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
@@ -364,6 +354,47 @@ class ArticleEventPublisherTest {
     @Nested
     @DisplayName("publishDeleted")
     class PublishDeleted {
+
+        @Test
+        @DisplayName("M4-b：seriesUuid 由呼叫端在刪除前取得並傳入 → 即使此時 series 查詢會失敗，事件仍帶正確的 seriesUuid，且不再查 series")
+        void publishDeleted_withPrecomputedSeriesUuid_neverQueriesSeriesAndKeepsUuid() {
+            Article article = new Article();
+            article.setId(100L);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorId(1L);
+            UUID seriesUuid = UUID.randomUUID();
+            lenient().when(identityResolver.resolveSeriesUuids(anyCollection()))
+                    .thenThrow(new IllegalStateException("series down"));
+
+            publisher.publishDeleted(article, seriesUuid, List.of(), List.of());
+
+            ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
+            assertThat(captor.getValue().seriesUuid()).isEqualTo(seriesUuid);
+            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
+        }
+
+        @Test
+        @DisplayName("M4-b：resolveSeriesUuidForDelete 查得到 → 回傳 uuid；seriesId 為 null → null 且不查詢")
+        void resolveSeriesUuidForDelete_returnsUuidOrNull() {
+            UUID seriesUuid = UUID.randomUUID();
+            when(identityResolver.resolveSeriesUuids(anyCollection())).thenReturn(Map.of(200L, seriesUuid));
+
+            assertThat(publisher.resolveSeriesUuidForDelete(200L)).isEqualTo(seriesUuid);
+            assertThat(publisher.resolveSeriesUuidForDelete(null)).isNull();
+
+            verify(identityResolver, times(1)).resolveSeriesUuids(anyCollection());
+        }
+
+        @Test
+        @DisplayName("M4-b：resolveSeriesUuidForDelete 查詢失敗 → 例外往外拋（讓刪除在動手前就失敗，而不是事後發出 null）")
+        void resolveSeriesUuidForDelete_whenLookupFails_propagates() {
+            when(identityResolver.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
+
+            assertThatThrownBy(() -> publisher.resolveSeriesUuidForDelete(200L))
+                    .isInstanceOf(IllegalStateException.class);
+        }
 
         @Test
         @DisplayName("正常：publishDeleted 帶 rich payload 應正確構造 ArticleDeletedEvent")
@@ -376,7 +407,7 @@ class ArticleEventPublisherTest {
             UUID tagUuid = UUID.randomUUID();
             UUID categoryUuid = UUID.randomUUID();
 
-            publisher.publishDeleted(article, 200L, List.of(categoryUuid), List.of(tagUuid));
+            publisher.publishDeleted(article, UUID.randomUUID(), List.of(categoryUuid), List.of(tagUuid));
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
@@ -401,7 +432,7 @@ class ArticleEventPublisherTest {
             article.setUuid(UUID.randomUUID());
             article.setAuthorId(5L);
 
-            publisher.publishDeleted(article, null, List.of(), List.of());
+            publisher.publishDeleted(article, (UUID) null, List.of(), List.of());
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
@@ -416,7 +447,7 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("正常：事件帶 authorUuid 與 seriesUuid（經 ArticleDataAssembler 批次取得，不 JOIN series）")
+        @DisplayName("正常：事件帶 authorUuid（批次取得）與呼叫端傳入的 seriesUuid")
         void publishDeleted_shouldFillAuthorUuidAndSeriesUuid() {
             Article article = new Article();
             article.setId(100L);
@@ -425,9 +456,8 @@ class ArticleEventPublisherTest {
             UUID authorUuid = UUID.randomUUID();
             UUID seriesUuid = UUID.randomUUID();
             when(identityResolver.resolveAuthorUuids(anyCollection())).thenReturn(Map.of(1L, authorUuid));
-            when(identityResolver.resolveSeriesUuids(anyCollection())).thenReturn(Map.of(200L, seriesUuid));
 
-            publisher.publishDeleted(article, 200L, List.of(), List.of());
+            publisher.publishDeleted(article, seriesUuid, List.of(), List.of());
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
@@ -446,7 +476,7 @@ class ArticleEventPublisherTest {
             article.setUuid(UUID.randomUUID());
             article.setAuthorId(5L);
 
-            publisher.publishDeleted(article, null, List.of(), List.of());
+            publisher.publishDeleted(article, (UUID) null, List.of(), List.of());
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
@@ -456,22 +486,22 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("防禦：uuid 過渡欄位查詢失敗不得阻擋事件發送（欄位為 null，事件仍送出）")
-        void publishDeleted_whenUuidLookupFails_shouldStillPublishWithNullUuids() {
+        @DisplayName("防禦：authorUuid 過渡欄位查詢失敗不得阻擋事件發送（authorUuid 為 null，seriesUuid 仍為傳入值）")
+        void publishDeleted_whenAuthorLookupFails_shouldStillPublishWithSeriesUuid() {
             Article article = new Article();
             article.setId(30L);
             article.setUuid(UUID.randomUUID());
             article.setAuthorId(1L);
             when(identityResolver.resolveAuthorUuids(anyCollection())).thenThrow(new IllegalStateException("db down"));
-            when(identityResolver.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
+            UUID seriesUuid = UUID.randomUUID();
 
-            publisher.publishDeleted(article, 200L, List.of(), List.of());
+            publisher.publishDeleted(article, seriesUuid, List.of(), List.of());
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             assertThat(captor.getValue().authorUuid()).isNull();
-            assertThat(captor.getValue().seriesUuid()).isNull();
+            assertThat(captor.getValue().seriesUuid()).isEqualTo(seriesUuid);
             assertThat(captor.getValue().authorId()).isEqualTo(1L);
         }
 
@@ -483,7 +513,7 @@ class ArticleEventPublisherTest {
             article.setUuid(UUID.randomUUID());
             article.setAuthorId(3L);
 
-            publisher.publishDeleted(article, null, null, null);
+            publisher.publishDeleted(article, (UUID) null, null, null);
 
             ArgumentCaptor<ArticleDeletedEvent> captor = ArgumentCaptor.forClass(ArticleDeletedEvent.class);
             verify(rabbitTemplate).convertAndSend(
@@ -517,7 +547,7 @@ class ArticleEventPublisherTest {
 
             CapturingAppender appender = attachAppender();
             try {
-                publisher.publishDeleted(article, null, null, null);
+                publisher.publishDeleted(article, (UUID) null, null, null);
             } finally {
                 detachAppender(appender);
             }
@@ -542,7 +572,7 @@ class ArticleEventPublisherTest {
                             eq(ArticleEventContract.ROUTING_KEY_DELETED),
                             any(Object.class));
 
-            assertThatCode(() -> publisher.publishDeleted(article, null, null, null))
+            assertThatCode(() -> publisher.publishDeleted(article, (UUID) null, null, null))
                     .doesNotThrowAnyException();
         }
     }

@@ -161,11 +161,13 @@ public class ArticleEventPublisher {
      * 讓維運可告警並人工補送。</p>
      *
      * @param article      文章 entity（提供 uuid / authorId）
-     * @param seriesId     文章所屬 series id（nullable；僅用於換算事件的 seriesUuid，事件本身不再帶 Long seriesId）
+     * @param seriesUuid   文章所屬 series 公開 UUID（nullable；caller 必須在 delete <b>之前</b>以
+     *                     {@link #resolveSeriesUuidForDelete} 取得，本方法不再查 series——
+     *                     它是 series 模組扣計數的唯一依據，不能在刪除後才查、查失敗就發出 null）
      * @param categoryIds  文章 categories（caller 在 delete 前讀取；空 list 不可 null）
      * @param tagIds       文章 tags（caller 在 delete 前讀取；空 list 不可 null）
      */
-    public void publishDeleted(Article article, Long seriesId,
+    public void publishDeleted(Article article, UUID seriesUuid,
                                List<UUID> categoryIds, List<UUID> tagIds) {
         UUID eventId = UUID.randomUUID();
         try {
@@ -177,7 +179,7 @@ public class ArticleEventPublisher {
                 tagIds != null ? tagIds : List.of(),
                 Instant.now(),
                 resolveAuthorUuid("ArticleDeletedEvent", article),
-                resolveSeriesUuid("ArticleDeletedEvent", article, seriesId)
+                seriesUuid
             );
             rabbitTemplate.convertAndSend(
                     ArticleEventContract.EXCHANGE,
@@ -188,6 +190,25 @@ public class ArticleEventPublisher {
                             + "需人工補送：articleUuid={}, eventId={}, error={}",
                     article.getUuid(), eventId, e.getMessage(), e);
         }
+    }
+
+    /**
+     * 於<b>刪除文章之前</b>取得其所屬 series 的公開 UUID，供 {@link #publishDeleted} 帶入事件。
+     *
+     * <p>為什麼必須在刪除前、且失敗要往外拋：{@code ArticleDeletedEvent} 不再帶 Long {@code seriesId}，
+     * {@code seriesUuid} 成為 series 模組扣 {@code article_count} 的唯一依據。若等文章刪除之後才查、
+     * 查詢又失敗，事件就會帶著 null 發出，series 的計數永遠不會被扣。改成刪除前取得：查詢失敗時
+     * 刪除根本不動手，使用者看到錯誤可重試；成功時 uuid 一路傳給 publisher，事件發送前不再查詢。</p>
+     *
+     * @param seriesId series 主鍵；null（文章不在 series）回傳 null 且不發任何查詢
+     * @return series 公開 UUID；查無（資料異常）為 null
+     * @throws RuntimeException 查詢失敗時直接往外拋（不吞掉）
+     */
+    public UUID resolveSeriesUuidForDelete(Long seriesId) {
+        if (seriesId == null) {
+            return null;
+        }
+        return identityResolver.resolveSeriesUuids(List.of(seriesId)).get(seriesId);
     }
 
     // ──────────────────────────────────────────────
@@ -290,29 +311,6 @@ public class ArticleEventPublisher {
         } catch (Exception e) {
             log.warn("{} 的 authorUuid 查詢失敗，以 null 發送（過渡欄位）：articleUuid={}, authorId={}, error={}",
                     eventType, article.getUuid(), authorId, e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * 取得 series 公開 UUID（事件的過渡 uuid 欄位），經 {@link ArticleIdentityResolver}，不 JOIN series 表。
-     *
-     * <p>失敗處理同 {@link #resolveAuthorUuid(String, Article)}。</p>
-     *
-     * @param eventType 事件類型名稱（僅供 warn 日誌）
-     * @param article   事件所屬文章（僅供 warn 日誌）
-     * @param seriesId  series 主鍵；null（文章不在 series）回傳 null 且不發任何查詢
-     * @return series UUID；查無或查詢失敗為 null
-     */
-    private UUID resolveSeriesUuid(String eventType, Article article, Long seriesId) {
-        if (seriesId == null) {
-            return null;
-        }
-        try {
-            return identityResolver.resolveSeriesUuids(List.of(seriesId)).get(seriesId);
-        } catch (Exception e) {
-            log.warn("{} 的 seriesUuid 查詢失敗，以 null 發送（過渡欄位）：articleUuid={}, seriesId={}, error={}",
-                    eventType, article.getUuid(), seriesId, e.getMessage());
             return null;
         }
     }
