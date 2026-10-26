@@ -22,7 +22,6 @@ import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -146,9 +145,9 @@ class ThumbnailConsumerTest {
 
         thumbnailConsumer.handleImageUploaded(event, channel, 99L);
 
-        ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
-        verify(fileMetadataRepository).save(captor.capture());
-        assertThat(captor.getValue().getHasThumbnail()).isTrue();
+        /* 只做單欄位 UPDATE，絕不 save 整個實體（否則處理期間被 bindToArticle 寫入的 article_uuid 會被蓋回舊值） */
+        verify(fileMetadataRepository).markThumbnailGenerated(fileId);
+        verify(fileMetadataRepository, never()).save(any());
         verify(channel).basicAck(99L, false);
     }
 
@@ -181,6 +180,8 @@ class ThumbnailConsumerTest {
         thumbnailConsumer.handleImageUploaded(event, channel, 50L);
 
         verify(fileMetadataRepository, never()).save(any());
+        /* 單欄位 UPDATE 對已不存在的檔案影響 0 列（mock 預設回 0），屬正常 no-op，仍 ack */
+        verify(fileMetadataRepository).markThumbnailGenerated(fileId);
         verify(channel).basicAck(50L, false);
     }
 
@@ -312,6 +313,7 @@ class ThumbnailConsumerTest {
         verify(minioClient, never()).getObject(any(GetObjectArgs.class));
         verify(minioClient, never()).putObject(any(PutObjectArgs.class));
         verify(fileMetadataRepository, never()).save(any());
+        verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
         verify(channel).basicAck(11L, false);
     }
 
@@ -332,7 +334,10 @@ class ThumbnailConsumerTest {
         metadata.setId(fileId);
         metadata.setHasThumbnail(false);
         when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
-        when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(fileMetadataRepository.markThumbnailGenerated(fileId)).thenAnswer(inv -> {
+            metadata.setHasThumbnail(true);
+            return 1;
+        });
         when(minioClient.getObject(any(GetObjectArgs.class))).thenAnswer(inv -> jpegResponse());
 
         thumbnailConsumer.handleImageUploaded(event, channel, 21L);
@@ -340,7 +345,7 @@ class ThumbnailConsumerTest {
 
         verify(minioClient, times(1)).getObject(any(GetObjectArgs.class));
         verify(minioClient, times(1)).putObject(any(PutObjectArgs.class));
-        verify(fileMetadataRepository, times(1)).save(any());
+        verify(fileMetadataRepository, times(1)).markThumbnailGenerated(fileId);
         verify(channel).basicAck(21L, false);
         verify(channel).basicAck(22L, false);
     }
@@ -361,14 +366,69 @@ class ThumbnailConsumerTest {
         metadata.setId(fileId);
         metadata.setHasThumbnail(false);
         when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
-        when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(minioClient.getObject(any(GetObjectArgs.class))).thenAnswer(inv -> jpegResponse());
 
         thumbnailConsumer.handleImageUploaded(event, channel, 31L);
 
         verify(minioClient).putObject(any(PutObjectArgs.class));
-        assertThat(metadata.getHasThumbnail()).isTrue();
+        verify(fileMetadataRepository).markThumbnailGenerated(fileId);
         verify(channel).basicAck(31L, false);
+    }
+
+    /**
+     * 情境：下載原圖失敗 → 不得把縮圖標成完成（旗標更新完全不被呼叫），訊息 nack。
+     *
+     * <p>守住「失敗後重試仍會重做」：若旗標寫入被移到 finally，失敗的處理也會被標成完成，
+     * 之後重送就被當成已完成而永遠沒有縮圖。</p>
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handleImageUploaded_whenDownloadFails_doesNotMarkThumbnailGeneratedAndNacks")
+    void handleImageUploaded_whenDownloadFails_doesNotMarkThumbnailGeneratedAndNacks() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        FileMetadata metadata = new FileMetadata();
+        metadata.setId(fileId);
+        metadata.setHasThumbnail(false);
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+        when(minioClient.getObject(any(GetObjectArgs.class)))
+                .thenThrow(new RuntimeException("MinIO connection failed"));
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 41L);
+
+        verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
+        verify(fileMetadataRepository, never()).save(any());
+        verify(channel).basicNack(41L, false, false);
+        verify(channel, never()).basicAck(eq(41L), eq(false));
+    }
+
+    /**
+     * 情境：縮圖上傳失敗（下載與縮圖都成功）→ 不得把縮圖標成完成，訊息 nack。
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handleImageUploaded_whenUploadFails_doesNotMarkThumbnailGeneratedAndNacks")
+    void handleImageUploaded_whenUploadFails_doesNotMarkThumbnailGeneratedAndNacks() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        FileMetadata metadata = new FileMetadata();
+        metadata.setId(fileId);
+        metadata.setHasThumbnail(false);
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenAnswer(inv -> jpegResponse());
+        when(minioClient.putObject(any(PutObjectArgs.class))).thenThrow(new RuntimeException("MinIO put failed"));
+
+        thumbnailConsumer.handleImageUploaded(event, channel, 42L);
+
+        verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
+        verify(channel).basicNack(42L, false, false);
+        verify(channel, never()).basicAck(eq(42L), eq(false));
     }
 
     /**

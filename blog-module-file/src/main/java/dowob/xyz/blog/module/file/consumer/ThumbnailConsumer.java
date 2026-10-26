@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.file.consumer;
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
-import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
@@ -20,7 +19,6 @@ import org.springframework.stereotype.Component;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
-import java.util.Optional;
 
 /**
  * 縮圖產生消費者
@@ -89,8 +87,7 @@ public class ThumbnailConsumer {
              * 兩次遞送若在旗標寫入前併發，結果只是同一個縮圖物件被覆寫一次（內容相同），無害。
              * 舊格式 in-flight 訊息的 eventId 為 null，本邏輯不依賴 eventId，故照常處理。
              */
-            Optional<FileMetadata> existing = fileMetadataRepository.findById(event.fileId());
-            if (existing.map(m -> Boolean.TRUE.equals(m.getHasThumbnail())).orElse(false)) {
+            if (fileMetadataRepository.findById(event.fileId()).map(m -> Boolean.TRUE.equals(m.getHasThumbnail())).orElse(false)) {
                 log.debug("縮圖已存在，跳過重複處理: fileId={}", event.fileId());
                 return;
             }
@@ -121,10 +118,12 @@ public class ThumbnailConsumer {
                                 .build());
             }
 
-            existing.ifPresent(metadata -> {
-                metadata.setHasThumbnail(true);
-                fileMetadataRepository.save(metadata);
-            });
+            /*
+             * 只做單欄位 UPDATE，不 save 開頭讀出的舊實體：縮圖處理耗時，save 會以舊值覆寫所有欄位，
+             * 把處理期間 bindToArticle 寫入的 article_uuid 蓋回 null（已發布文章的圖片變 403）。
+             * 檔案若在處理期間被刪除，影響 0 列，屬正常 no-op。
+             */
+            fileMetadataRepository.markThumbnailGenerated(event.fileId());
 
             log.info("縮圖產生成功: {}", thumbPath);
         });

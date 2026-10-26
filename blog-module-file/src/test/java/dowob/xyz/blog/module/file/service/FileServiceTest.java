@@ -1469,6 +1469,49 @@ class FileServiceTest {
         }
 
         /**
+         * 安全 fail-safe：文章存在但 {@code ArticleData.authorUuid} 為 null（資料異常）→ 視為無法確認擁有權，
+         * 不綁定（存成 null），不拋錯。若誤把「作者未知」當成通過，任何人都能把檔案綁到這篇文章。
+         */
+        @Test
+        @DisplayName("uploadFile_withArticleWhoseAuthorUuidIsNull_savesWithNullArticleUuid")
+        void uploadFile_withArticleWhoseAuthorUuidIsNull_savesWithNullArticleUuid() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            UUID articleUuid = UUID.randomUUID();
+            UUID uploaderId = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(1L, articleUuid, 202L, "DRAFT", null, null, null, null)));
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR", articleUuid);
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isNull();
+        }
+
+        /**
+         * 安全 fail-safe：articleUuid 對應的文章不存在 → 視為無法確認擁有權，存成 null，不拋錯。
+         */
+        @Test
+        @DisplayName("uploadFile_withNonExistentArticle_savesWithNullArticleUuid")
+        void uploadFile_withNonExistentArticle_savesWithNullArticleUuid() throws Exception {
+            byte[] jpegBytes = minimalJpegBytes();
+            MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR", articleUuid);
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            assertThat(captor.getValue().getArticleUuid()).isNull();
+        }
+
+        /**
          * articleUuid 參數為 null（未指定綁定）→ 直接存 null，不涉及擁有權解析。
          */
         @Test
