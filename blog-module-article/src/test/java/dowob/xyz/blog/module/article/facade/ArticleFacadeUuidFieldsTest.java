@@ -78,7 +78,7 @@ class ArticleFacadeUuidFieldsTest {
         facade = new ArticleFacadeImpl(
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
-                new ArticleFileBinder(fileFacade), assembler, null);
+                new ArticleFileBinder(fileFacade), assembler, null, null, null);
         when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
         when(articleMapper.findUserUuidsByIds(anyCollection()))
                 .thenReturn(List.of(new ArticleMapper.UserUuidRow(7L, AUTHOR_UUID)));
