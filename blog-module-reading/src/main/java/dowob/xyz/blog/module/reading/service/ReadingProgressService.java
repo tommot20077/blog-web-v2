@@ -113,7 +113,7 @@ public class ReadingProgressService {
         if (progress.compareTo(RedisKeyConstant.READING_PROGRESS_COMPLETED_THRESHOLD) >= 0) {
             int affected = progressMapper.upsert(userUuid, articleUuid, progress, lastHeading, toLocalDateTime(requestTs));
             if (affected == 0) {
-                // DB 已有更新的列（例如其他 pod 的寫入或時鐘偏移）：不把較舊的完讀值寫進快取，避免快取與 DB 分歧
+                /* DB 已有更新的列（例如其他 pod 的寫入或時鐘偏移）：不把較舊的完讀值寫進快取，避免快取與 DB 分歧 */
                 log.warn("完讀寫入被 DB 單調守衛擋下，略過 Redis 寫入 - user={} article={} ts={}", userUuid, articleUuid, requestTs);
                 ReadingProgressMetrics.writeRejected(ReadingProgressMetrics.PATH_DB_COMPLETION);
                 return;

@@ -217,8 +217,10 @@ public class ReadingProgressFlushJob {
 
             int affected = progressMapper.upsert(entry.userUuid(), entry.articleUuid(), progress, lastHeading, updatedAt);
             if (affected == 0) {
-                // DB 單調守衛判定 hash 比 DB 舊（例如完讀已直寫 DB 但 Redis 寫入失敗）：舊 hash 不該繼續被 get() 回傳。
-                // 內容未變才丟棄；內容已變（有新的 update）則保留，交給下一輪。
+                /*
+                 * DB 單調守衛判定 hash 比 DB 舊（例如完讀已直寫 DB 但 Redis 寫入失敗）：舊 hash 不該繼續被 get() 回傳。
+                 * 內容未變才丟棄；內容已變（有新的 update）則保留，交給下一輪。
+                 */
                 log.warn("flush 的 upsert 被 DB 單調守衛擋下，hash 比 DB 舊，內容未變則丟棄 - {} updatedAt={}", member, rawUpdatedAt);
                 ReadingProgressMetrics.writeRejected(ReadingProgressMetrics.PATH_DB_FLUSH);
                 compareAndDiscard(hashKey, member, rawProgress, rawHeading, rawUpdatedAt);
