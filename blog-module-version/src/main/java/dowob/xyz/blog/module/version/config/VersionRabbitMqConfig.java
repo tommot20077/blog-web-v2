@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
 import java.util.Map;
 
 /**
- * Version 模組 RabbitMQ 設定。訂閱 article.events / article.content.changed。
+ * Version 模組 RabbitMQ 設定。訂閱 article.events 的 article.content.changed（寫快照）與 article.deleted（清除快照）。
  *
  * @author Yuan
  * @version 1.0
@@ -21,6 +21,9 @@ import java.util.Map;
 public class VersionRabbitMqConfig {
 
     public static final String QUEUE_VERSION_SNAPSHOT = "version.snapshot";
+
+    /** 文章刪除事件的 queue 名稱 */
+    public static final String QUEUE_VERSION_ARTICLE_DELETED = "version.article-deleted";
 
     @Bean
     public Queue versionSnapshotQueue() {
@@ -35,6 +38,33 @@ public class VersionRabbitMqConfig {
                 .bind(versionSnapshotQueue)
                 .to(articleEventsExchange)
                 .with(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED);
+    }
+
+    /**
+     * 宣告文章刪除事件的 queue（durable，失敗訊息轉往 DLQ）。
+     *
+     * @return queue
+     */
+    @Bean
+    public Queue versionArticleDeletedQueue() {
+        return new Queue(QUEUE_VERSION_ARTICLE_DELETED, true, false, false, dlqArgs());
+    }
+
+    /**
+     * 將 queue 綁定到文章事件 exchange 的 {@code article.deleted} routing key。
+     *
+     * @param versionArticleDeletedQueue 本模組的 queue
+     * @param articleEventsExchange      article 模組宣告的文章事件 exchange
+     * @return binding
+     */
+    @Bean
+    public Binding bindVersionArticleDeleted(
+            Queue versionArticleDeletedQueue,
+            @Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
+        return BindingBuilder
+                .bind(versionArticleDeletedQueue)
+                .to(articleEventsExchange)
+                .with(ArticleEventContract.ROUTING_KEY_DELETED);
     }
 
     /**

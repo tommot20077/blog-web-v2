@@ -35,6 +35,8 @@
         <dependency>
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-article</artifactId>
+            <!-- main 不 import article（只經 facade）；VersionTestApplication 的 IT 需要 article 的真實程式碼 -->
+            <scope>test</scope>
         </dependency>
 
         <!-- Test Dependencies -->

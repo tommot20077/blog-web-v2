@@ -13,6 +13,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
@@ -28,9 +29,11 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleContentFreezePolicy;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleFileBinder;
+import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.article.service.ArticleTocCodec;
+import dowob.xyz.blog.module.article.service.RenderResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
@@ -46,6 +49,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -131,6 +135,16 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * 比照 {@code ArticleIdentityResolver} 處理 {@code SeriesFacade} 的做法，只在方法被呼叫時才取得。</p>
      */
     private final ObjectProvider<ArticleQueryService> articleQueryServiceProvider;
+
+    /**
+     * Markdown 渲染器（M3-a 新增：供 UUID 版 {@link #applyRestoreContent(UUID, ArticleRestoreSource)} 在 article 內部渲染）
+     */
+    private final ArticleMarkdownRenderer markdownRenderer;
+
+    /**
+     * TOC JSON 編解碼器（M3-a 新增：把渲染出的章節導覽序列化後與 HTML 一併回填）
+     */
+    private final ArticleTocCodec tocCodec;
 
     /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
@@ -423,6 +437,23 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
+     * <p>M3-a 新增。純 delegate：委派 articleService.findByUuid 查找 article entity，
+     * 轉換方式與 {@link #findContentById(Long)} 相同（同一個 {@code toContentData}），不分狀態；
+     * {@code articleUuid} 為 null 時直接回傳 empty，不查 DB（與 UUID 版
+     * {@link #applyRestoreContent(UUID, ArticleRestoreSource)} 對 null 拋 NPE 不同：查詢方法對「查無」寬容，
+     * 寫入方法對呼叫端程式錯誤嚴格）。</p>
+     */
+    @Override
+    public Optional<ArticleContentData> findContentByUuid(UUID articleUuid) {
+        if (articleUuid == null) {
+            return Optional.empty();
+        }
+        return articleService.findByUuid(articleUuid).map(this::toContentData);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * <p>flow：交易內（撈 article → mutate 內容欄位 → save → syncArticleTags）→ commit →
      * best-effort publish events。</p>
      *
@@ -479,8 +510,57 @@ public class ArticleFacadeImpl implements ArticleFacade {
      */
     @Override
     public void applyRestoreContent(Long articleId, ArticleRestoreData data) {
+        restoreContent(() -> articleRepository.findById(articleId), data);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>M3-a 新增。先在 article 內部以 {@link ArticleMarkdownRenderer} 渲染 {@code source.content()}，
+     * HTML 與 TOC 取自<b>同一次</b> {@link RenderResult}（只回填 HTML 會讓 {@code articles.toc} 停在還原前那版，
+     * 章節導覽指向不存在的錨點），TOC 以 {@link ArticleTocCodec} 序列化；組成 {@link ArticleRestoreData} 後，
+     * 與 Long 版共用同一個 {@link #restoreContent} 內部方法，交易、內容凍結守衛、tag 同步、
+     * commit 後事件、檔案重新綁定、SEC-02 全部只有一份實作。</p>
+     *
+     * <p>渲染刻意放在交易之外：純 CPU 運算，不佔用 DB 連線。</p>
+     *
+     * <p>入口以 {@link Objects#requireNonNull} 檢查 {@code articleUuid}、{@code source}、
+     * {@code source.content()}，任一為 null 即拋帶訊息的 {@link NullPointerException}（呼叫端的程式錯誤，
+     * 不是業務錯誤，故不轉為 {@link BusinessException}）；檢查在渲染與任何 DB 存取之前。</p>
+     *
+     * @throws NullPointerException articleUuid、source 或 source.content() 為 null
+     */
+    @Override
+    public void applyRestoreContent(UUID articleUuid, ArticleRestoreSource source) {
+        Objects.requireNonNull(articleUuid, "articleUuid 不可為 null");
+        Objects.requireNonNull(source, "source 不可為 null");
+        Objects.requireNonNull(source.content(), "source.content 不可為 null");
+        RenderResult rendered = markdownRenderer.render(source.content());
+        ArticleRestoreData data = new ArticleRestoreData(
+                source.title(),
+                source.slug(),
+                source.content(),
+                source.summary(),
+                source.coverImageUrl(),
+                rendered.html(),
+                tocCodec.serialize(rendered.toc()),
+                source.tags()
+        );
+        restoreContent(() -> articleRepository.findByUuid(articleUuid), data);
+    }
+
+    /**
+     * Long 版與 UUID 版 {@code applyRestoreContent} 共用的還原流程（M3-a 抽出，兩個入口只差「怎麼找到文章」）。
+     *
+     * <p>flow 與原 Long 版完全相同，詳見 {@link #applyRestoreContent(Long, ArticleRestoreData)} 的說明
+     * （SEC-02、F-H1、commit 後發事件、檔案綁定回填）。</p>
+     *
+     * @param loader 在交易內查找目標文章的來源；查無須回傳 empty（本方法會拋 ARTICLE_NOT_FOUND）
+     * @param data   已含 contentHtml／toc 的完整還原資料
+     */
+    private void restoreContent(Supplier<Optional<Article>> loader, ArticleRestoreData data) {
         Article saved = transactionTemplate.execute(status -> {
-            Article article = articleRepository.findById(articleId)
+            Article article = loader.get()
                     .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
 
             /*

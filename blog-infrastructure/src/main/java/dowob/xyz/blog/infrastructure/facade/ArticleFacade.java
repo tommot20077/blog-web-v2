@@ -5,6 +5,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
@@ -37,6 +38,9 @@ import java.util.UUID;
  *   <li><b>SP-D 新增 read</b>（findContentById）：完整 content 內容 DTO，給 version 模組 snapshot / restore stash 流程用。</li>
  *   <li><b>M2-a 新增（reading 模組 UUID 化用，只增不減）</b>（getSummariesByUuids / filterReadableUuids /
  *       incrementLikeCount(UUID) / decrementLikeCount(UUID)）：語意與對應的 Long 版相同。</li>
+ *   <li><b>M3-a 新增（version 模組 UUID 化用，只增不減）</b>（findContentByUuid /
+ *       applyRestoreContent(UUID, ArticleRestoreSource)）：語意與對應的 Long 版相同；
+ *       UUID 版的 restore 由 article 自行渲染 Markdown，caller 不再需要 import 渲染器。</li>
  *   <li><b>SP-D 新增 atomic write</b>（applyRestoreContent）：version 模組 restore 用，內部接管 mutate / save / syncArticleTags / publish events 順序。</li>
  * </ul>
  *
@@ -261,6 +265,18 @@ public interface ArticleFacade {
      */
     Optional<ArticleContentData> findContentById(Long articleId);
 
+    /**
+     * 公開 UUID → ArticleContentData（{@link #findContentById(Long)} 的 UUID 版，M3-a 新增）。
+     *
+     * <p>語意與 {@link #findContentById(Long)} 完全相同：<b>不分狀態</b>（DRAFT、PENDING_REVIEW、REJECTED、
+     * PUBLISHED、ARCHIVED 皆回傳），查無（含已硬刪）回傳 empty。回傳的 {@code authorUuid} 必須有值
+     * （正常情況下；作者查無時 owner 模組會記 warn，同 Long 版）。</p>
+     *
+     * @param articleUuid 文章公開 UUID；{@code null} 回傳 empty
+     * @return ArticleContentData Optional；查無時 empty
+     */
+    Optional<ArticleContentData> findContentByUuid(UUID articleUuid);
+
     // ─── SP-D 新增 1 atomic write ───
 
     /**
@@ -298,6 +314,31 @@ public interface ArticleFacade {
      *                                                          ARTICLE_EDIT_NOT_ALLOWED 若文章目前狀態內容凍結
      */
     void applyRestoreContent(Long articleId, ArticleRestoreData data);
+
+    /**
+     * 還原 article 內容到指定快照（atomic，UUID 版，M3-a 新增）。
+     *
+     * <p>與 {@link #applyRestoreContent(Long, ArticleRestoreData)} 的差別只有兩點：
+     * 以公開 UUID 定位文章；且 caller 只交出 Markdown 原文（{@link ArticleRestoreSource}），
+     * 由 article 模組在內部以 {@code ArticleMarkdownRenderer} 渲染，<b>HTML 與 TOC 出自同一次 render</b>
+     * （只回填 HTML 會讓 {@code articles.toc} 停在還原前那版，章節導覽指向不存在的錨點）。</p>
+     *
+     * <p>渲染完成後走與 Long 版<b>完全相同</b>的還原流程（共用同一個內部方法）：單一交易內撈文章
+     * （不存在 throw ARTICLE_NOT_FOUND）→ 內容凍結守衛（F-H1）→ mutate 內容欄位 → save → syncArticleTags，
+     * commit 後才發 ContentChanged(RESTORED)（以及現況為 PUBLISHED 時的 Updated）事件，並重新綁定
+     * 「檔案 → 文章」。<b>SEC-02：不會改動 article.status</b>。</p>
+     *
+     * <p><b>null 契約</b>：{@code articleUuid}、{@code source}、{@code source.content()} 任一為 null
+     * 拋帶訊息的 {@link NullPointerException}（呼叫端程式錯誤），不渲染、不寫入。
+     * 對照 {@link #findContentByUuid(UUID)}：傳入 null 回 empty。</p>
+     *
+     * @param articleUuid 文章公開 UUID；不可為 null
+     * @param source      快照內容（含 tags，不含 contentHtml／toc）；不可為 null，content 亦不可為 null
+     * @throws NullPointerException 上述 null 契約被違反
+     * @throws dowob.xyz.blog.common.exception.BusinessException ARTICLE_NOT_FOUND 若 articleUuid 對應 article 不存在；
+     *                                                          ARTICLE_EDIT_NOT_ALLOWED 若文章目前狀態內容凍結
+     */
+    void applyRestoreContent(UUID articleUuid, ArticleRestoreSource source);
 
     // ─── 集合述詞（Set Predicate，architecture.md §跨模組邊界規則）───
 

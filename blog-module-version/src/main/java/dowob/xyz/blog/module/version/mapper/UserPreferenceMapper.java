@@ -4,6 +4,8 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 
+import java.util.UUID;
+
 /**
  * UserPreference UPSERT mapper。
  *
@@ -17,12 +19,12 @@ public interface UserPreferenceMapper {
      * UPSERT 一筆 user preference。
      */
     @Update({
-        "INSERT INTO user_preferences (user_id, pref_key, pref_value)",
-        "VALUES (#{userId}, #{prefKey}, #{prefValue})",
-        "ON CONFLICT (user_id, pref_key) DO UPDATE",
+        "INSERT INTO user_preferences (user_uuid, pref_key, pref_value)",
+        "VALUES (#{userUuid}::uuid, #{prefKey}, #{prefValue})",
+        "ON CONFLICT (user_uuid, pref_key) DO UPDATE",
         "  SET pref_value = EXCLUDED.pref_value, updated_at = CURRENT_TIMESTAMP"
     })
-    int upsert(@Param("userId") Long userId,
+    int upsert(@Param("userUuid") UUID userUuid,
                @Param("prefKey") String prefKey,
                @Param("prefValue") String prefValue);
 }

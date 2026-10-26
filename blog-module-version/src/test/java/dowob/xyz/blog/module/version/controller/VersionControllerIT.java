@@ -16,6 +16,7 @@ import dowob.xyz.blog.module.version.config.VersionTestApplication;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
 import dowob.xyz.blog.module.version.service.VersioningService;
+import dowob.xyz.blog.module.version.support.SeededVersionUsers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -125,7 +126,7 @@ class VersionControllerIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userId, SeededVersionUsers.uuidOf(userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -156,11 +157,11 @@ class VersionControllerIT {
     }
 
     /** 建立並儲存測試版本快照。 */
-    private ArticleVersion createVersion(Long articleId, Long authorId, String type, String note) {
+    private ArticleVersion createVersion(UUID articleUuid, Long authorId, String type, String note) {
         ArticleVersion v = new ArticleVersion();
         v.setUuid(UUID.randomUUID());
-        v.setArticleId(articleId);
-        v.setAuthorId(authorId);
+        v.setArticleUuid(articleUuid);
+        v.setAuthorUuid(SeededVersionUsers.uuidOf(authorId));
         v.setType(type);
         v.setTitle("Version Title");
         v.setSlug("version-slug-" + UUID.randomUUID());
@@ -177,8 +178,8 @@ class VersionControllerIT {
     @DisplayName("GET /versions - owner 取得版本列表 200")
     void list_byOwner_returns200() throws Exception {
         Article article = createArticle(USER1_ID);
-        createVersion(article.getId(), USER1_ID, VersioningService.TYPE_AUTO, null);
-        createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "重要存檔");
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "重要存檔");
 
         mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid())
                         .with(asUser(USER1_ID, Role.AUTHOR)))
@@ -195,12 +196,24 @@ class VersionControllerIT {
     @DisplayName("GET /versions - 非 owner 存取 → 400 V0102")
     void list_byNonOwner_returnsV0102() throws Exception {
         Article article = createArticle(USER1_ID);
-        createVersion(article.getId(), USER1_ID, VersioningService.TYPE_AUTO, null);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
 
         mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid())
                         .with(asUser(USER2_ID, Role.AUTHOR)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("V0102"));
+    }
+
+    @Test
+    @DisplayName("GET /versions - admin 可看他人文章的版本列表 200")
+    void list_byAdmin_returns200() throws Exception {
+        Article article = createArticle(USER1_ID);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid())
+                        .with(asUser(ADMIN_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
     }
 
     // ─────────────────────────────── GET DETAIL ─────────────────────────────
@@ -209,7 +222,7 @@ class VersionControllerIT {
     @DisplayName("GET /versions/{versionUuid} - owner 取得詳情 200 含 content")
     void getDetail_byOwner_returns200WithContent() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "detail test");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "detail test");
 
         mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
                         article.getUuid(), v.getUuid())
@@ -262,9 +275,55 @@ class VersionControllerIT {
         // 確認版本已寫入 DB
         long count = 0;
         for (ArticleVersion v : versionRepo.findAll()) {
-            if (v.getArticleId().equals(article.getId())) count++;
+            if (v.getArticleUuid().equals(article.getUuid())) count++;
         }
         assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("POST /versions/manual - admin 替他人文章建立快照：author_uuid 記的是文章作者而非 admin")
+    void createManual_byAdmin_recordsArticleAuthorUuid() throws Exception {
+        Article article = createArticle(USER1_ID);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", article.getUuid())
+                        .with(asUser(ADMIN_ID, Role.ADMIN))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        ArticleVersion saved = null;
+        for (ArticleVersion v : versionRepo.findAll()) {
+            if (article.getUuid().equals(v.getArticleUuid())) saved = v;
+        }
+        assertThat(saved).isNotNull();
+        assertThat(saved.getAuthorUuid()).isEqualTo(SeededVersionUsers.USER1_UUID);
+        assertThat(saved.getArticleUuid()).isEqualTo(article.getUuid());
+    }
+
+    @Test
+    @DisplayName("POST /versions/manual - 非作者且非 admin → 400 V0102，不寫快照")
+    void createManual_byNonOwner_returnsV0102() throws Exception {
+        Article article = createArticle(USER1_ID);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", article.getUuid())
+                        .with(asUser(USER2_ID, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0102"));
+
+        assertThat(versionRepo.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("POST /versions/manual - 文章不存在 → 400 V0106")
+    void createManual_articleNotFound_returnsV0106() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", UUID.randomUUID())
+                        .with(asUser(USER1_ID, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0106"));
     }
 
     @Test
@@ -297,7 +356,7 @@ class VersionControllerIT {
 
         long count = 0;
         for (ArticleVersion v : versionRepo.findAll()) {
-            if (v.getArticleId().equals(article.getId())) count++;
+            if (v.getArticleUuid().equals(article.getUuid())) count++;
         }
         assertThat(count)
                 .as("權限不足時不得產生任何快照寫入副作用")
@@ -310,7 +369,7 @@ class VersionControllerIT {
     @DisplayName("POST /versions/{versionUuid}/restore - owner 還原成功 200")
     void restore_byOwner_returns200() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
                         article.getUuid(), v.getUuid())
@@ -335,7 +394,7 @@ class VersionControllerIT {
     @DisplayName("POST /versions/{versionUuid}/restore - 內容凍結狀態 → 400 A0209 且內容未被改寫")
     void restore_frozenStatus_returnsA0209AndKeepsContent(ArticleStatus frozen) throws Exception {
         Article article = createArticle(USER1_ID, frozen);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "TOCTOU 用快照");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "TOCTOU 用快照");
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
                         article.getUuid(), v.getUuid())
@@ -359,7 +418,7 @@ class VersionControllerIT {
     @DisplayName("POST /versions/{versionUuid}/restore - DRAFT / REJECTED → 200 且內容確實被還原")
     void restore_editableStatus_returns200AndRestoresContent(ArticleStatus editable) throws Exception {
         Article article = createArticle(USER1_ID, editable);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
                         article.getUuid(), v.getUuid())
@@ -384,7 +443,7 @@ class VersionControllerIT {
     @DisplayName("POST /versions/{versionUuid}/restore - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
     void restore_roleUserWithoutArticleEdit_returns403() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
                         article.getUuid(), v.getUuid())
@@ -401,7 +460,7 @@ class VersionControllerIT {
     @DisplayName("POST /versions/{versionUuid}/restore - 非作者（且非 ADMIN）→ 400 V0102")
     void restore_byNonOwner_returnsV0102() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
                         article.getUuid(), v.getUuid())
@@ -422,7 +481,7 @@ class VersionControllerIT {
     @DisplayName("POST /versions/{versionUuid}/promote - AUTO 升級成功 200")
     void promote_autoVersion_returns200() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_AUTO, null);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
                         article.getUuid(), v.getUuid())
@@ -442,7 +501,7 @@ class VersionControllerIT {
     @DisplayName("POST /versions/{versionUuid}/promote - MANUAL 升級 → 400 V0104")
     void promote_manualVersion_returnsV0104() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "already manual");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "already manual");
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
                         article.getUuid(), v.getUuid())
@@ -459,7 +518,7 @@ class VersionControllerIT {
     @DisplayName("POST /versions/{versionUuid}/promote - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
     void promote_roleUserWithoutArticleEdit_returns403() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_AUTO, null);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
                         article.getUuid(), v.getUuid())
@@ -478,7 +537,7 @@ class VersionControllerIT {
     @DisplayName("DELETE /versions/{versionUuid} - MANUAL 快照刪除成功 200")
     void delete_manualVersion_returns200() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "to delete");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "to delete");
 
         mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
                         article.getUuid(), v.getUuid())
@@ -493,7 +552,7 @@ class VersionControllerIT {
     @DisplayName("DELETE /versions/{versionUuid} - PUBLISHED 快照不可刪 → 400 V0103")
     void delete_publishedVersion_returnsV0103() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_PUBLISHED, "Published v1");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_PUBLISHED, "Published v1");
 
         mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
                         article.getUuid(), v.getUuid())
@@ -511,7 +570,7 @@ class VersionControllerIT {
     @DisplayName("DELETE /versions/{versionUuid} - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
     void delete_roleUserWithoutArticleEdit_returns403() throws Exception {
         Article article = createArticle(USER1_ID);
-        ArticleVersion v = createVersion(article.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "to delete");
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "to delete");
 
         mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
                         article.getUuid(), v.getUuid())
@@ -530,7 +589,7 @@ class VersionControllerIT {
     void getDetail_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
         Article articleA = createArticle(USER1_ID);
         Article articleB = createArticle(USER1_ID);
-        ArticleVersion vOfB = createVersion(articleB.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "B's version");
+        ArticleVersion vOfB = createVersion(articleB.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "B's version");
 
         mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
                         articleA.getUuid(), vOfB.getUuid())
@@ -544,7 +603,7 @@ class VersionControllerIT {
     void restore_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
         Article articleA = createArticle(USER1_ID);
         Article articleB = createArticle(USER1_ID);
-        ArticleVersion vOfB = createVersion(articleB.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "B's snap");
+        ArticleVersion vOfB = createVersion(articleB.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "B's snap");
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
                         articleA.getUuid(), vOfB.getUuid())
@@ -558,7 +617,7 @@ class VersionControllerIT {
     void promote_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
         Article articleA = createArticle(USER1_ID);
         Article articleB = createArticle(USER1_ID);
-        ArticleVersion vOfB = createVersion(articleB.getId(), USER1_ID, VersioningService.TYPE_AUTO, null);
+        ArticleVersion vOfB = createVersion(articleB.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
 
         mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
                         articleA.getUuid(), vOfB.getUuid())
@@ -572,7 +631,7 @@ class VersionControllerIT {
     void delete_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
         Article articleA = createArticle(USER1_ID);
         Article articleB = createArticle(USER1_ID);
-        ArticleVersion vOfB = createVersion(articleB.getId(), USER1_ID, VersioningService.TYPE_MANUAL, "B's");
+        ArticleVersion vOfB = createVersion(articleB.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "B's");
 
         mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
                         articleA.getUuid(), vOfB.getUuid())

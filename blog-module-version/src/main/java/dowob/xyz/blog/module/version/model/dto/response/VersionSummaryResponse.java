@@ -14,7 +14,7 @@ import java.util.UUID;
  * 依 {@code architecture.md}「All external IDs must be UUIDs」，本 DTO 不含任何內部 Long ID。
  * 原有的 {@code authorId} 已移除，理由同 {@link VersionDetailResponse}：其值為文章作者而非
  * 快照建立者，對呼叫端無資訊價值。移除後 {@code VersionMapper.listSummaries} 的 SQL
- * 不再投影 {@code author_id}，故列表也不需為此 JOIN users。
+ * 不再投影作者欄位，故列表也不需為此 JOIN users。
  * </p>
  *
  * @author Yuan

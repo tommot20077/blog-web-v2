@@ -107,12 +107,6 @@ class EventContractTest {
      * 規則 (b) 例外清單：仍含 Long 欄位的事件。key 為 {@code 類別全名#欄位}，value 為「階段：說明」。
      */
     private static final Map<String, String> LONG_FIELD_EXEMPT = Map.ofEntries(
-            // 預計 M3／M6：ArticleContentChangedEvent 沒有任何模組讀 Long 欄位，由發送端 article 於 M6 移除
-            // （實作計畫 §4.2 步驟 7：本模組發送的事件移除 Long 過渡欄位）
-            Map.entry("dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent#articleId",
-                    "M6：過渡欄位，無 consumer 讀取，article 階段發送端移除"),
-            Map.entry("dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent#authorId",
-                    "M6：過渡欄位，無 consumer 讀取，article 階段發送端移除"),
             // 預計 M4／M6：ArticleDeletedEvent 的 Long 欄位依 owner 模組階段分批移除
             Map.entry("dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent#articleId",
                     "M4：過渡欄位，series 階段（最後一個讀取者）改讀 articleUuid 後移除"),

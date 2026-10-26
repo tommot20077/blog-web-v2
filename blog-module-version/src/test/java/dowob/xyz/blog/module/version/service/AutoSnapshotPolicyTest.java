@@ -26,13 +26,13 @@ class AutoSnapshotPolicyTest {
     @Mock private PreferenceResolver preferenceResolver;
     @InjectMocks private AutoSnapshotPolicy policy;
 
-    private final Long articleId = 100L;
-    private final Long authorId = 1L;
+    private final UUID articleUuid = UUID.randomUUID();
+    private final UUID authorUuid = UUID.randomUUID();
 
-    private ArticleContentData buildContentData(Long id, Long authorId, String content) {
+    private ArticleContentData buildContentData(UUID articleUuid, UUID authorUuid, String content) {
         return new ArticleContentData(
-            id, UUID.randomUUID(), authorId,
-            "T", "s", content, "sum", null, "PUBLISHED"
+            100L, articleUuid, 1L,
+            "T", "s", content, "sum", null, "PUBLISHED", authorUuid
         );
     }
 
@@ -45,65 +45,72 @@ class AutoSnapshotPolicyTest {
 
     @Test
     void shouldSnapshot_disabled_returnsFalse() {
-        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "aaa")));
-        when(preferenceResolver.resolveForUser(authorId))
+        when(articleFacade.findContentByUuid(articleUuid)).thenReturn(Optional.of(buildContentData(articleUuid, authorUuid, "aaa")));
+        when(preferenceResolver.resolveForUser(authorUuid))
             .thenReturn(new AutoSnapshotConfig(false, 50, 60, 50));
 
-        assertThat(policy.shouldSnapshot(articleId)).isFalse();
+        assertThat(policy.shouldSnapshot(articleUuid)).isFalse();
     }
 
     @Test
     void shouldSnapshot_firstTime_returnsTrue() {
-        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "aaa")));
-        when(preferenceResolver.resolveForUser(authorId))
+        when(articleFacade.findContentByUuid(articleUuid)).thenReturn(Optional.of(buildContentData(articleUuid, authorUuid, "aaa")));
+        when(preferenceResolver.resolveForUser(authorUuid))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
-        when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
+        when(versionRepo.findLatestByArticleUuidAndType(articleUuid, "AUTO"))
             .thenReturn(Optional.empty());
 
-        assertThat(policy.shouldSnapshot(articleId)).isTrue();
+        assertThat(policy.shouldSnapshot(articleUuid)).isTrue();
     }
 
     @Test
     void shouldSnapshot_intervalNotElapsed_returnsFalse() {
-        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "a".repeat(200))));
-        when(preferenceResolver.resolveForUser(authorId))
+        when(articleFacade.findContentByUuid(articleUuid)).thenReturn(Optional.of(buildContentData(articleUuid, authorUuid, "a".repeat(200))));
+        when(preferenceResolver.resolveForUser(authorUuid))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
-        when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
+        when(versionRepo.findLatestByArticleUuidAndType(articleUuid, "AUTO"))
             .thenReturn(Optional.of(lastAuto("a".repeat(100), LocalDateTime.now().minusSeconds(30))));
 
-        assertThat(policy.shouldSnapshot(articleId)).isFalse();
+        assertThat(policy.shouldSnapshot(articleUuid)).isFalse();
     }
 
     @Test
     void shouldSnapshot_diffNotEnough_returnsFalse() {
-        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "a".repeat(110))));
-        when(preferenceResolver.resolveForUser(authorId))
+        when(articleFacade.findContentByUuid(articleUuid)).thenReturn(Optional.of(buildContentData(articleUuid, authorUuid, "a".repeat(110))));
+        when(preferenceResolver.resolveForUser(authorUuid))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
-        when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
+        when(versionRepo.findLatestByArticleUuidAndType(articleUuid, "AUTO"))
             .thenReturn(Optional.of(lastAuto("a".repeat(100), LocalDateTime.now().minusSeconds(120))));
 
-        assertThat(policy.shouldSnapshot(articleId)).isFalse();
+        assertThat(policy.shouldSnapshot(articleUuid)).isFalse();
     }
 
     @Test
     void shouldSnapshot_diffCharsZero_skipsDiffCheck_returnsTrueWhenIntervalPassed() {
-        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "a".repeat(100))));
-        when(preferenceResolver.resolveForUser(authorId))
+        when(articleFacade.findContentByUuid(articleUuid)).thenReturn(Optional.of(buildContentData(articleUuid, authorUuid, "a".repeat(100))));
+        when(preferenceResolver.resolveForUser(authorUuid))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 0));
-        when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
+        when(versionRepo.findLatestByArticleUuidAndType(articleUuid, "AUTO"))
             .thenReturn(Optional.of(lastAuto("a".repeat(100), LocalDateTime.now().minusSeconds(120))));
 
-        assertThat(policy.shouldSnapshot(articleId)).isTrue();
+        assertThat(policy.shouldSnapshot(articleUuid)).isTrue();
     }
 
     @Test
     void shouldSnapshot_intervalAndDiffPass_returnsTrue() {
-        when(articleFacade.findContentById(articleId)).thenReturn(Optional.of(buildContentData(articleId, authorId, "a".repeat(200))));
-        when(preferenceResolver.resolveForUser(authorId))
+        when(articleFacade.findContentByUuid(articleUuid)).thenReturn(Optional.of(buildContentData(articleUuid, authorUuid, "a".repeat(200))));
+        when(preferenceResolver.resolveForUser(authorUuid))
             .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
-        when(versionRepo.findLatestByArticleAndType(articleId, "AUTO"))
+        when(versionRepo.findLatestByArticleUuidAndType(articleUuid, "AUTO"))
             .thenReturn(Optional.of(lastAuto("a".repeat(100), LocalDateTime.now().minusSeconds(120))));
 
-        assertThat(policy.shouldSnapshot(articleId)).isTrue();
+        assertThat(policy.shouldSnapshot(articleUuid)).isTrue();
+    }
+
+    @Test
+    void shouldSnapshot_articleNotFound_returnsFalse() {
+        when(articleFacade.findContentByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        assertThat(policy.shouldSnapshot(articleUuid)).isFalse();
     }
 }

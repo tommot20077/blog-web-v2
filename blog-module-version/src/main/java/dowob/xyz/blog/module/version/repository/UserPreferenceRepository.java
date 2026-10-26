@@ -6,16 +6,17 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * User Preference Repository。
  *
  * @author Yuan
- * @version 1.0
+ * @version 1.1
  */
 @Repository
 public interface UserPreferenceRepository extends CrudRepository<UserPreference, Long> {
-    Optional<UserPreference> findByUserIdAndPrefKey(Long userId, String prefKey);
-    List<UserPreference> findByUserId(Long userId);
-    void deleteByUserIdAndPrefKey(Long userId, String prefKey);
+    Optional<UserPreference> findByUserUuidAndPrefKey(UUID userUuid, String prefKey);
+    List<UserPreference> findByUserUuid(UUID userUuid);
+    void deleteByUserUuidAndPrefKey(UUID userUuid, String prefKey);
 }

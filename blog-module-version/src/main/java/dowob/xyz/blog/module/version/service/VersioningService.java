@@ -6,10 +6,7 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
-import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
-import dowob.xyz.blog.module.article.service.ArticleTocCodec;
-import dowob.xyz.blog.module.article.service.RenderResult;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
@@ -19,7 +16,6 @@ import dowob.xyz.blog.module.version.model.dto.response.VersionSummaryResponse;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -37,9 +33,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class VersioningService {
 
-    private static final String POSTGRES_FOREIGN_KEY_VIOLATION = "23503";
-    private static final String ARTICLE_VERSION_ARTICLE_ID_FK = "article_versions_article_id_fkey";
-
     public static final String TYPE_AUTO = "AUTO";
     public static final String TYPE_MANUAL = "MANUAL";
     public static final String TYPE_PUBLISHED = "PUBLISHED";
@@ -48,14 +41,6 @@ public class VersioningService {
     private final ArticleVersionRepository versionRepo;
     private final VersionMapper versionMapper;
     private final PreferenceResolver preferenceResolver;
-    private final ArticleMarkdownRenderer markdownRenderer;
-
-    /**
-     * TOC JSON 編解碼器：還原時把重算出的章節導覽序列化後交給 ArticleFacade 一併寫回。
-     * 與 markdownRenderer 同屬 article 模組的無狀態元件，跨模組注入的既有慣例。
-     */
-    private final ArticleTocCodec tocCodec;
-
     private final TagFacade tagFacade;
 
     /** Spring 宣告式事務模板（用於縮小事務範圍，確保 restore 的 MQ 於 DB commit 後才發送） */
@@ -64,94 +49,51 @@ public class VersioningService {
     /**
      * restore 第一階段（stash 交易）的產出：待還原的目標文章與來源版本。
      *
-     * @param articleId 目標文章主鍵
-     * @param version   要還原的版本快照
+     * @param articleUuid 目標文章公開 UUID
+     * @param version     要還原的版本快照
      */
-    private record RestorePlan(Long articleId, ArticleVersion version) {
+    private record RestorePlan(UUID articleUuid, ArticleVersion version) {
     }
 
     /**
      * 記錄自動快照並套用滾動保留策略。
-     * <p>若 articleId 不存在則靜默返回（冪等）。</p>
+     * <p>若文章不存在則靜默返回（冪等）。</p>
      *
-     * @param articleId 文章主鍵
+     * <p>V28 起 {@code article_versions} 沒有指向 {@code articles} 的 FK：若文章在「查內容」與「寫快照」之間
+     * 被刪除，這裡不會再被資料庫拒絕，而是留下一筆孤兒快照；此情況由 {@code VersionArticleDeletedConsumer}
+     * （文章刪除事件）與 {@code ArticleVersionOrphanReconciliationJob}（每日校正）清除。
+     * 寫入時的 {@code DataIntegrityViolationException} 因此一律是真正的錯誤，不再吞掉。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @throws IllegalStateException 文章作者 UUID 缺失（資料異常）
      */
     @Transactional
-    public void recordAutoSnapshot(Long articleId) {
-        ArticleContentData article = articleFacade.findContentById(articleId).orElse(null);
+    public void recordAutoSnapshot(UUID articleUuid) {
+        ArticleContentData article = articleFacade.findContentByUuid(articleUuid).orElse(null);
         if (article == null) return;
 
-        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorId());
+        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(requireAuthorUuid(article));
 
-        ArticleVersion v = snapshotFromContent(article, TYPE_AUTO, null);
-        try {
-            versionRepo.save(v);
-        } catch (DataIntegrityViolationException ex) {
-            if (isMissingArticleForeignKey(ex)) {
-                return;
-            }
-            throw ex;
-        }
+        versionRepo.save(snapshotFromContent(article, TYPE_AUTO, null));
 
-        versionMapper.retainAuto(articleId, cfg.retain());
+        versionMapper.retainAuto(articleUuid, cfg.retain());
     }
 
     /**
      * 記錄手動快照（type=MANUAL）。
      * <p>不執行 retention；article 不存在時拋 V0106。</p>
      *
-     * @param articleId 文章主鍵
-     * @param note      備注說明（可為 null）
+     * @param articleUuid 文章公開 UUID
+     * @param note        備注說明（可為 null）
      * @return 已持久化的 ArticleVersion
      */
     @Transactional
-    public ArticleVersion recordManualSnapshot(Long articleId, String note) {
-        ArticleContentData article = articleFacade.findContentById(articleId)
+    public ArticleVersion recordManualSnapshot(UUID articleUuid, String note) {
+        ArticleContentData article = articleFacade.findContentByUuid(articleUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
 
         ArticleVersion v = snapshotFromContent(article, TYPE_MANUAL, note);
         return versionRepo.save(v);
-    }
-
-    private boolean isMissingArticleForeignKey(DataIntegrityViolationException ex) {
-        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
-            if (hasClassNamed(cause, "org.postgresql.util.PSQLException")) {
-                Object serverError = invokeNoArg(cause, "getServerErrorMessage");
-                String sqlState = asString(invokeNoArg(serverError, "getSQLState"));
-                String constraint = asString(invokeNoArg(serverError, "getConstraint"));
-                if (POSTGRES_FOREIGN_KEY_VIOLATION.equals(sqlState)
-                    && ARTICLE_VERSION_ARTICLE_ID_FK.equals(constraint)) {
-                    return true;
-                }
-            }
-        }
-
-        String message = ex.getMessage();
-        return message != null && message.contains(ARTICLE_VERSION_ARTICLE_ID_FK);
-    }
-
-    private boolean hasClassNamed(Object target, String className) {
-        for (Class<?> type = target.getClass(); type != null; type = type.getSuperclass()) {
-            if (className.equals(type.getName())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private Object invokeNoArg(Object target, String methodName) {
-        if (target == null) {
-            return null;
-        }
-        try {
-            return target.getClass().getMethod(methodName).invoke(target);
-        } catch (ReflectiveOperationException ignored) {
-            return null;
-        }
-    }
-
-    private String asString(Object value) {
-        return value == null ? null : value.toString();
     }
 
     /**
@@ -159,20 +101,20 @@ public class VersioningService {
      * <p>note 格式為 "Published vN"，N = 既有 PUBLISHED 數 + 1。</p>
      * <p>article 不存在時靜默返回。</p>
      *
-     * @param articleId 文章主鍵
+     * @param articleUuid 文章公開 UUID
      */
     @Transactional
-    public void freezePublished(Long articleId) {
-        ArticleContentData article = articleFacade.findContentById(articleId).orElse(null);
+    public void freezePublished(UUID articleUuid) {
+        ArticleContentData article = articleFacade.findContentByUuid(articleUuid).orElse(null);
         if (article == null) return;
 
-        int count = versionMapper.countPublished(articleId);
+        int count = versionMapper.countPublished(articleUuid);
         String note = "Published v" + (count + 1);
 
         ArticleVersion v = snapshotFromContent(article, TYPE_PUBLISHED, note);
         versionRepo.save(v);
 
-        versionMapper.deleteAutoByArticle(articleId);
+        versionMapper.deleteAutoByArticle(articleUuid);
     }
 
     /**
@@ -184,15 +126,15 @@ public class VersioningService {
      * </ul>
      *
      * @param versionUuid   版本 UUID
-     * @param currentUserId 當前操作者 ID
+     * @param currentUserUuid 當前操作者公開 UUID
      * @param isAdmin       是否為管理員（繞過 owner 檢查）
      * @return 更新後的 ArticleVersion
      */
     @Transactional
-    public ArticleVersion promote(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+    public ArticleVersion promote(UUID versionUuid, UUID currentUserUuid, boolean isAdmin) {
         ArticleVersion v = versionRepo.findByUuid(versionUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
-        if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+        if (!isAdmin && !isOwner(v.getAuthorUuid(), currentUserUuid)) {
             throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
         }
         if (!TYPE_AUTO.equals(v.getType())) {
@@ -211,14 +153,14 @@ public class VersioningService {
      * </ul>
      *
      * @param versionUuid   版本 UUID
-     * @param currentUserId 當前操作者 ID
+     * @param currentUserUuid 當前操作者公開 UUID
      * @param isAdmin       是否為管理員（繞過 owner 檢查）
      */
     @Transactional
-    public void delete(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+    public void delete(UUID versionUuid, UUID currentUserUuid, boolean isAdmin) {
         ArticleVersion v = versionRepo.findByUuid(versionUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
-        if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+        if (!isAdmin && !isOwner(v.getAuthorUuid(), currentUserUuid)) {
             throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
         }
         if (TYPE_PUBLISHED.equals(v.getType())) {
@@ -234,8 +176,8 @@ public class VersioningService {
      * <ol>
      *   <li>先將當前 article 狀態 stash 為 AUTO 快照（保護現有內容）</li>
      *   <li>執行 AUTO 保留策略（retainAuto）</li>
-     *   <li>呼叫 ArticleFacade.applyRestoreContent atomic 寫回內容
-     *       （mutate / save / syncArticleTags / publish events 全由 facade 內部接管）</li>
+     *   <li>呼叫 ArticleFacade.applyRestoreContent(UUID, ArticleRestoreSource) atomic 寫回內容
+     *       （渲染 HTML／TOC、mutate / save / syncArticleTags / publish events 全由 article 模組內部接管）</li>
      * </ol>
      * </p>
      *
@@ -250,51 +192,48 @@ public class VersioningService {
      * 該欄位永遠 null）。</p>
      *
      * @param versionUuid   要還原的版本 UUID
-     * @param currentUserId 當前操作者 ID
+     * @param currentUserUuid 當前操作者公開 UUID
      * @param isAdmin       是否為管理員（繞過 owner 檢查）
      */
-    public void restore(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+    public void restore(UUID versionUuid, UUID currentUserUuid, boolean isAdmin) {
         /* 1. stash 交易：權限檢查 + 將當前 article 狀態存為 AUTO snapshot（保護現有內容）。
          *    此段先行 commit；若後續還原失敗，僅多一筆忠實反映「未還原」現況的 AUTO 快照，
          *    且不會有任何 MQ 送出（事件由 applyRestoreContent 於其 commit 後才發）。 */
         RestorePlan plan = transactionTemplate.execute(status -> {
             ArticleVersion v = versionRepo.findByUuid(versionUuid)
                 .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
-            if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+            if (!isAdmin && !isOwner(v.getAuthorUuid(), currentUserUuid)) {
                 throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
             }
 
-            ArticleContentData article = articleFacade.findContentById(v.getArticleId())
+            ArticleContentData article = articleFacade.findContentByUuid(v.getArticleUuid())
                 .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
 
             ArticleVersion stash = snapshotFromContent(article, TYPE_AUTO, null);
             versionRepo.save(stash);
-            AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorId());
-            versionMapper.retainAuto(article.id(), cfg.retain());
+            AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(requireAuthorUuid(article));
+            versionMapper.retainAuto(article.uuid(), cfg.retain());
 
-            return new RestorePlan(article.id(), v);
+            return new RestorePlan(article.uuid(), v);
         });
 
         /* 2. stash 已 commit，且此處不在任何交易作用域內：
          *    交由 ArticleFacade 以自身交易還原內容，並於其 commit 後 best-effort 發事件。 */
         ArticleVersion v = plan.version();
-        /* HTML 與 TOC 必須出自同一次 render，兩者一起回填；只回填 HTML 會讓 article.toc
-         * 停在還原前那版，章節導覽指向不存在的錨點。 */
-        RenderResult rendered = markdownRenderer.render(v.getContent());
-        /* SEC-02：刻意不傳 v.getStatus()。還原只還原內容，文章狀態一律不動——
+        /* 只交出 Markdown 原文：HTML 與 TOC 由 article 模組在 applyRestoreContent 內以同一次 render 算出，
+         * version 不 import 渲染器（跨模組只經 facade）。
+         * SEC-02：刻意不傳 v.getStatus()。還原只還原內容，文章狀態一律不動——
          * 快照的 status 只作為「這份快照是哪個階段的內容」的紀錄（版本詳情 API 仍回傳），
          * 不再被套回文章；狀態轉換的唯一真相是 ArticleCommandSubService.VALID_TRANSITIONS。 */
-        ArticleRestoreData restoreData = new ArticleRestoreData(
+        ArticleRestoreSource source = new ArticleRestoreSource(
             v.getTitle(),
             v.getSlug(),
             v.getContent(),
             v.getSummary(),
             v.getCoverImageUrl(),
-            rendered.html(),
-            tocCodec.serialize(rendered.toc()),
             v.getTags() != null ? v.getTags() : List.of()
         );
-        articleFacade.applyRestoreContent(plan.articleId(), restoreData);
+        articleFacade.applyRestoreContent(plan.articleUuid(), source);
     }
 
     /**
@@ -308,23 +247,19 @@ public class VersioningService {
      * @param typeFilter    類型篩選（可為 null = 全部）
      * @param page          頁碼（從 1 開始）
      * @param size          每頁筆數
-     * @param currentUserId 當前操作者 ID
+     * @param currentUserUuid 當前操作者公開 UUID
      * @param isAdmin       是否為管理員
      * @return 版本 summary 分頁結果
      */
     @Transactional(readOnly = true)
     public PageResult<VersionSummaryResponse> listByArticle(
             UUID articleUuid, String typeFilter, int page, int size,
-            Long currentUserId, boolean isAdmin) {
-        ArticleData article = articleFacade.findByUuid(articleUuid)
-            .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
-        if (!isAdmin && !article.authorId().equals(currentUserId)) {
-            throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
-        }
+            UUID currentUserUuid, boolean isAdmin) {
+        assertArticleOwnerOrAdmin(articleUuid, currentUserUuid, isAdmin);
         int offset = Math.max(0, (page - 1) * size);
         List<VersionSummaryResponse> rows = versionMapper
-            .listSummaries(article.id(), typeFilter, size, offset);
-        long total = versionMapper.countSummaries(article.id(), typeFilter);
+            .listSummaries(articleUuid, typeFilter, size, offset);
+        long total = versionMapper.countSummaries(articleUuid, typeFilter);
         return PageResult.of(page, size, total, rows);
     }
 
@@ -336,40 +271,40 @@ public class VersioningService {
      * </ul>
      *
      * @param versionUuid   版本 UUID
-     * @param currentUserId 當前操作者 ID
+     * @param currentUserUuid 當前操作者公開 UUID
      * @param isAdmin       是否為管理員
      * @return 版本詳情 DTO
      */
     @Transactional(readOnly = true)
-    public VersionDetailResponse getDetail(UUID versionUuid, Long currentUserId, boolean isAdmin) {
+    public VersionDetailResponse getDetail(UUID versionUuid, UUID currentUserUuid, boolean isAdmin) {
         ArticleVersion v = versionRepo.findByUuid(versionUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
-        if (!isAdmin && !v.getAuthorId().equals(currentUserId)) {
+        if (!isAdmin && !isOwner(v.getAuthorUuid(), currentUserUuid)) {
             throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
         }
         return toDetailResponse(v);
     }
 
     /**
-     * 查詢 article by UUID，檢查 ownership，回傳 article.id。
+     * 檢查文章存在且操作者為其作者（或 admin）。
+     * <p>取代過去回傳 article 主鍵的 {@code findArticleIdByUuidOrThrow}：跨模組識別一律用 UUID，
+     * 不再把 article 的 Long 主鍵帶出本模組，故只做檢查、不回傳。</p>
      * <ul>
      *   <li>V0106：article 不存在</li>
      *   <li>V0102：非 owner 且非 admin</li>
      * </ul>
      *
-     * @param articleUuid   文章 UUID
-     * @param currentUserId 當前操作者 ID
-     * @param isAdmin       是否為管理員
-     * @return article 主鍵 id
+     * @param articleUuid     文章 UUID
+     * @param currentUserUuid 當前操作者公開 UUID
+     * @param isAdmin         是否為管理員
      */
     @Transactional(readOnly = true)
-    public Long findArticleIdByUuidOrThrow(UUID articleUuid, Long currentUserId, boolean isAdmin) {
+    public void assertArticleOwnerOrAdmin(UUID articleUuid, UUID currentUserUuid, boolean isAdmin) {
         ArticleData article = articleFacade.findByUuid(articleUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
-        if (!isAdmin && !article.authorId().equals(currentUserId)) {
+        if (!isAdmin && !isOwner(article.authorUuid(), currentUserUuid)) {
             throw new BusinessException(VersionErrorCode.VERSION_ACCESS_DENIED);
         }
-        return article.id();
     }
 
     /**
@@ -389,9 +324,10 @@ public class VersioningService {
     public void assertVersionBelongsToArticle(UUID articleUuid, UUID versionUuid) {
         ArticleVersion v = versionRepo.findByUuid(versionUuid)
             .orElseThrow(() -> new BusinessException(VersionErrorCode.VERSION_NOT_FOUND));
-        ArticleData article = articleFacade.findByUuid(articleUuid)
-            .orElseThrow(() -> new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND));
-        if (!v.getArticleId().equals(article.id())) {
+        if (!articleFacade.existsByUuid(articleUuid)) {
+            throw new BusinessException(VersionErrorCode.ARTICLE_NOT_FOUND);
+        }
+        if (!articleUuid.equals(v.getArticleUuid())) {
             throw new BusinessException(VersionErrorCode.VERSION_ARTICLE_MISMATCH);
         }
     }
@@ -400,7 +336,7 @@ public class VersioningService {
      * 轉換 ArticleVersion 為 VersionDetailResponse。
      *
      * <p>
-     * 不映射 entity 的 authorId / categoryId / id / articleId —— 對外只出 UUID
+     * 不映射 entity 的 authorUuid / articleUuid / categoryId / id —— 對外只出 UUID
      * （{@code architecture.md}），理由見 {@link VersionDetailResponse} 的 javadoc。
      * </p>
      *
@@ -440,8 +376,8 @@ public class VersioningService {
     protected ArticleVersion snapshotFromContent(ArticleContentData article, String type, String note) {
         ArticleVersion v = new ArticleVersion();
         v.setUuid(UUID.randomUUID());
-        v.setArticleId(article.id());
-        v.setAuthorId(article.authorId());
+        v.setArticleUuid(article.uuid());
+        v.setAuthorUuid(requireAuthorUuid(article));
         v.setType(type);
         v.setTitle(article.title());
         v.setSlug(article.slug());
@@ -454,5 +390,31 @@ public class VersioningService {
         v.setNote(note);
         v.setCreatedAt(LocalDateTime.now());
         return v;
+    }
+
+    /**
+     * 取得文章作者 UUID；缺失代表資料異常（文章的作者在 users 表有 FK 且使用者只軟刪除，正常必有值）。
+     * 明確拋例外而不是讓 {@code author_uuid NOT NULL} 約束在寫入時才失敗，訊息才指得出是哪篇文章。
+     *
+     * @param article 文章內容 DTO
+     * @return 作者公開 UUID（非 null）
+     * @throws IllegalStateException 作者 UUID 為 null
+     */
+    private UUID requireAuthorUuid(ArticleContentData article) {
+        if (article.authorUuid() == null) {
+            throw new IllegalStateException("文章缺少作者 UUID，無法建立版本快照 articleUuid=" + article.uuid());
+        }
+        return article.authorUuid();
+    }
+
+    /**
+     * 判斷操作者是否為資源擁有者。擁有者 UUID 為 null（資料異常）時一律視為不是（fail-closed）。
+     *
+     * @param ownerUuid       資源擁有者公開 UUID（可為 null）
+     * @param currentUserUuid 當前操作者公開 UUID
+     * @return 是擁有者為 true
+     */
+    private static boolean isOwner(UUID ownerUuid, UUID currentUserUuid) {
+        return ownerUuid != null && ownerUuid.equals(currentUserUuid);
     }
 }

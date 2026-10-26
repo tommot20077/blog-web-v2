@@ -74,7 +74,7 @@ public class VersionController {
             PageQuery pageQuery) {
         boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(
-            versioningService.listByArticle(articleUuid, type, pageQuery.page(), pageQuery.sizeOrDefault(20), user.id(), isAdmin));
+            versioningService.listByArticle(articleUuid, type, pageQuery.page(), pageQuery.sizeOrDefault(20), user.uuid(), isAdmin));
     }
 
     /**
@@ -91,7 +91,7 @@ public class VersionController {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
         return ApiResponse.success(
-            versioningService.getDetail(versionUuid, user.id(), isAdmin));
+            versioningService.getDetail(versionUuid, user.uuid(), isAdmin));
     }
 
     /**
@@ -109,9 +109,9 @@ public class VersionController {
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody(required = false) CreateManualSnapshotRequest req) {
         boolean isAdmin = SecurityUtils.isAdmin();
-        Long articleId = versioningService.findArticleIdByUuidOrThrow(articleUuid, user.id(), isAdmin);
+        versioningService.assertArticleOwnerOrAdmin(articleUuid, user.uuid(), isAdmin);
         String note = req != null ? req.getNote() : null;
-        ArticleVersion v = versioningService.recordManualSnapshot(articleId, note);
+        ArticleVersion v = versioningService.recordManualSnapshot(articleUuid, note);
         return ApiResponse.success(versioningService.toDetailResponse(v));
     }
 
@@ -135,7 +135,7 @@ public class VersionController {
             @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
-        versioningService.restore(versionUuid, user.id(), isAdmin);
+        versioningService.restore(versionUuid, user.uuid(), isAdmin);
         return ApiResponse.success();
     }
 
@@ -155,7 +155,7 @@ public class VersionController {
             @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
-        ArticleVersion v = versioningService.promote(versionUuid, user.id(), isAdmin);
+        ArticleVersion v = versioningService.promote(versionUuid, user.uuid(), isAdmin);
         return ApiResponse.success(versioningService.toDetailResponse(v));
     }
 
@@ -176,7 +176,7 @@ public class VersionController {
             @AuthenticationPrincipal AuthUser user) {
         boolean isAdmin = SecurityUtils.isAdmin();
         versioningService.assertVersionBelongsToArticle(articleUuid, versionUuid);
-        versioningService.delete(versionUuid, user.id(), isAdmin);
+        versioningService.delete(versionUuid, user.uuid(), isAdmin);
         return ApiResponse.success();
     }
 

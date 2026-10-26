@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * 自動快照觸發判斷（時間 + 字元差距雙門檻）。
@@ -28,14 +29,20 @@ public class AutoSnapshotPolicy {
     private final ArticleVersionRepository versionRepo;
     private final PreferenceResolver preferenceResolver;
 
-    public boolean shouldSnapshot(Long articleId) {
-        ArticleContentData article = articleFacade.findContentById(articleId).orElse(null);
+    /**
+     * 判斷這次內容變更是否該寫一筆 AUTO 快照（開關、時間間隔、字元差距三道門檻）。
+     *
+     * @param articleUuid 文章公開 UUID
+     * @return 該寫快照為 true；文章不存在、功能關閉或未達門檻為 false
+     */
+    public boolean shouldSnapshot(UUID articleUuid) {
+        ArticleContentData article = articleFacade.findContentByUuid(articleUuid).orElse(null);
         if (article == null) return false;
 
-        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorId());
+        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(article.authorUuid());
         if (!cfg.enabled()) return false;
 
-        Optional<ArticleVersion> lastOpt = versionRepo.findLatestByArticleAndType(articleId, TYPE_AUTO);
+        Optional<ArticleVersion> lastOpt = versionRepo.findLatestByArticleUuidAndType(articleUuid, TYPE_AUTO);
         if (lastOpt.isEmpty()) return true;
 
         ArticleVersion last = lastOpt.get();
