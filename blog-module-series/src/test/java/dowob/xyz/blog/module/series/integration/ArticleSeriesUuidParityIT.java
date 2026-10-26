@@ -36,7 +36,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -102,6 +101,8 @@ class ArticleSeriesUuidParityIT {
     private Series seriesB;
     /** 沒有任何文章的 series */
     private Series seriesC;
+    /** 有 2 篇 PUBLISHED 的 series（與 A 的 count 不同，用來驗證 count 配對到正確的 uuid） */
+    private Series seriesD;
     private Article a1;
     private Article a2Draft;
     private Article a4;
@@ -113,11 +114,14 @@ class ArticleSeriesUuidParityIT {
         seriesA = createSeries("parity-a");
         seriesB = createSeries("parity-b");
         seriesC = createSeries("parity-c");
+        seriesD = createSeries("parity-d");
         a4 = createArticle(seriesA.getId(), 4, ArticleStatus.PUBLISHED);
         a9 = createArticle(seriesA.getId(), 9, ArticleStatus.PUBLISHED);
         a1 = createArticle(seriesA.getId(), 1, ArticleStatus.PUBLISHED);
         a2Draft = createArticle(seriesA.getId(), 2, ArticleStatus.DRAFT);
         createArticle(seriesB.getId(), 1, ArticleStatus.DRAFT);
+        createArticle(seriesD.getId(), 1, ArticleStatus.PUBLISHED);
+        createArticle(seriesD.getId(), 2, ArticleStatus.PUBLISHED);
     }
 
     @AfterEach
@@ -225,22 +229,15 @@ class ArticleSeriesUuidParityIT {
     // ─── countPublishedBySeriesUuids ───
 
     @Test
-    @DisplayName("countPublishedBySeriesUuids → 與 Long 版逐 series 相同；只含 count > 0（A=3），B（僅 DRAFT）、C（空）、未知皆不出現")
+    @DisplayName("countPublishedBySeriesUuids → A=3、D=2 各自配對正確，且與 Long 版相同；B（僅 DRAFT）、C（空）、未知皆不出現")
     void countPublished_matchesLongVersion_onlyPositive() {
-        UUID unknown = UUID.randomUUID();
-        Map<UUID, Integer> byUuid = articleFacade.countPublishedBySeriesUuids(
-                List.of(seriesA.getUuid(), seriesB.getUuid(), seriesC.getUuid(), unknown));
-        Map<Long, Integer> byId = articleFacade.countPublishedBySeriesIds(
-                List.of(seriesA.getId(), seriesB.getId(), seriesC.getId(), Long.MAX_VALUE));
+        Map<UUID, Integer> byUuid = articleFacade.countPublishedBySeriesUuids(List.of(
+                seriesA.getUuid(), seriesB.getUuid(), seriesC.getUuid(), seriesD.getUuid(), UUID.randomUUID()));
+        Map<Long, Integer> byId = articleFacade.countPublishedBySeriesIds(List.of(
+                seriesA.getId(), seriesB.getId(), seriesC.getId(), seriesD.getId(), Long.MAX_VALUE));
 
-        Map<UUID, Integer> expected = new HashMap<>();
-        byId.forEach((id, count) -> {
-            if (id.equals(seriesA.getId())) {
-                expected.put(seriesA.getUuid(), count);
-            }
-        });
-        assertThat(byId).containsOnlyKeys(seriesA.getId()).containsEntry(seriesA.getId(), 3);
-        assertThat(byUuid).isEqualTo(expected).containsOnlyKeys(seriesA.getUuid()).containsEntry(seriesA.getUuid(), 3);
+        assertThat(byId).isEqualTo(Map.of(seriesA.getId(), 3, seriesD.getId(), 2));
+        assertThat(byUuid).isEqualTo(Map.of(seriesA.getUuid(), 3, seriesD.getUuid(), 2));
     }
 
     @Test
@@ -331,15 +328,15 @@ class ArticleSeriesUuidParityIT {
     }
 
     @Test
-    @DisplayName("updateSeriesAssignment(UUID…) → series 不存在時與 Long 版同樣被 FK 拒絕（Long 版被 Spring Data JDBC 包成 "
-            + "DbActionExecutionException，根因為 DataIntegrityViolationException；UUID 版直接拋根因）且不改動文章")
-    void updateSeriesAssignment_unknownSeries_throwsLikeLongVersion() {
+    @DisplayName("updateSeriesAssignment(UUID…) → series 不存在時於寫入前以 IllegalArgumentException 拒絕；"
+            + "Long 版則被 FK 拒絕（Spring Data JDBC 包成 DbActionExecutionException，根因為 DataIntegrityViolationException）；兩者皆不改動文章")
+    void updateSeriesAssignment_unknownSeries_isRejectedAndNothingChanges() {
         Article target = createArticle(seriesA.getId(), 20, ArticleStatus.PUBLISHED);
 
         assertThatThrownBy(() -> articleFacade.updateSeriesAssignment(target.getId(), Long.MAX_VALUE, 1))
                 .hasCauseInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> articleFacade.updateSeriesAssignment(target.getUuid(), UUID.randomUUID(), 1))
-                .isInstanceOf(DataIntegrityViolationException.class);
+                .isInstanceOf(IllegalArgumentException.class);
 
         ArticleData unchanged = articleFacade.findById(target.getId()).orElseThrow();
         assertThat(unchanged.seriesId()).isEqualTo(seriesA.getId());

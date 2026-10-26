@@ -36,7 +36,6 @@ import dowob.xyz.blog.module.article.service.ArticleTocCodec;
 import dowob.xyz.blog.module.article.service.RenderResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -849,11 +848,11 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * {@inheritDoc}
      *
      * <p>過渡期：流程與 Long 版逐項對應——先以 {@code articleUuid} 找文章主鍵（查無即 no-op，
-     * 不檢查 series）；{@code seriesUuid} 為 null 直接寫入 null；非 null 但查無 series 時拋
-     * {@link DataIntegrityViolationException}（等同 Long 版被 {@code articles.series_id} 外鍵拒絕）。
-     * M6 改以 {@code articles.series_uuid} 直寫。</p>
+     * 不檢查 series）；{@code seriesUuid} 為 null 直接寫入 null；非 null 但查無 series 時，
+     * 於寫入前拋 {@link IllegalArgumentException}。這是呼叫端的程式錯誤（應先驗證 series 存在），
+     * 不是業務錯誤，故不轉為 {@code BusinessException}。M6 改以 {@code articles.series_uuid} 直寫。</p>
      *
-     * @throws DataIntegrityViolationException seriesUuid 非 null 但查無此 series
+     * @throws IllegalArgumentException seriesUuid 非 null 但查無此 series（文章不會被改動）
      */
     @Override
     public void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition) {
@@ -864,8 +863,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
         Long seriesId = null;
         if (seriesUuid != null) {
             seriesId = articleDataAssembler.resolveSeriesIdByUuid(seriesUuid)
-                    .orElseThrow(() -> new DataIntegrityViolationException(
-                            "series 不存在，無法指派文章：seriesUuid=" + seriesUuid));
+                    .orElseThrow(() -> new IllegalArgumentException("series 不存在: " + seriesUuid));
         }
         articleService.updateSeriesAssignment(articleId, seriesId, seriesPosition);
     }
@@ -879,11 +877,12 @@ public class ArticleFacadeImpl implements ArticleFacade {
     @Override
     public Map<UUID, Integer> countPublishedBySeriesUuids(Collection<UUID> seriesUuids) {
         Map<UUID, Long> idByUuid = articleDataAssembler.resolveSeriesIdsByUuids(seriesUuids);
+        // 與 Long 版一致：結果一律是可變的 HashMap（空結果也是）
+        Map<UUID, Integer> result = new HashMap<>();
         if (idByUuid.isEmpty()) {
-            return Map.of();
+            return result;
         }
         Map<Long, Integer> countById = countPublishedBySeriesIds(idByUuid.values());
-        Map<UUID, Integer> result = new HashMap<>();
         idByUuid.forEach((uuid, id) -> {
             Integer count = countById.get(id);
             if (count != null) {

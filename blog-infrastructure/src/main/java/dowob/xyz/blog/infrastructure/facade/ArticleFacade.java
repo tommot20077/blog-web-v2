@@ -272,16 +272,18 @@ public interface ArticleFacade {
      * <ul>
      *   <li>{@code seriesUuid} 為 null 代表移出 series（通常 {@code seriesPosition} 也傳 null）；</li>
      *   <li>{@code articleUuid} 不存在時為 no-op（不拋例外，也不檢查 series）；</li>
-     *   <li>{@code seriesUuid} 非 null 但查無此 series 時，與 Long 版寫入不存在的 series id 相同，
-     *       不會寫入（Long 版由 {@code articles.series_id → series(id)} 外鍵拒絕，被 Spring Data JDBC 包成
-     *       {@code DbActionExecutionException}、根因為 {@link org.springframework.dao.DataIntegrityViolationException}；
-     *       UUID 版直接拋該 {@code DataIntegrityViolationException}）。</li>
+     *   <li>{@code seriesUuid} 非 null 但查無此 series 時，於寫入前拋 {@link IllegalArgumentException}
+     *       （文章不被改動）。這是呼叫端的程式錯誤——呼叫端應先驗證 series 存在——不是業務錯誤，
+     *       故不是 {@code BusinessException}。Long 版寫入不存在的 series id 則由
+     *       {@code articles.series_id → series(id)} 外鍵拒絕（被 Spring Data JDBC 包成
+     *       {@code DbActionExecutionException}），兩者皆不會寫入。</li>
      * </ul>
      * <p><b>過渡期</b>：M6 改以 {@code articles.series_uuid} 直寫（屆時無外鍵，行為另行定義）。</p>
      *
      * @param articleUuid    文章公開 UUID
      * @param seriesUuid     系列公開 UUID（移出時傳 null）
      * @param seriesPosition 在 series 內的位置（移出時傳 null）
+     * @throws IllegalArgumentException seriesUuid 非 null 但查無此 series
      */
     void updateSeriesAssignment(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
 

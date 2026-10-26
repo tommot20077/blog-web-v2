@@ -17,7 +17,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,6 +27,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
@@ -164,6 +164,33 @@ class ArticleFacadeSeriesUuidTest {
             verify(seriesFacade, times(1)).findIdsByUuids(anyCollection());
             verify(seriesFacade, never()).findIdByUuid(any());
             verify(articleMapper, times(1)).countPublishedBySeriesIds(anyCollection());
+        }
+
+        @Test
+        @DisplayName("兩個以上 series 都有公開文章 → 各自的 count 配對到正確的 UUID（A=3、B=2）")
+        void multiplePositiveSeries_countsAreAssignedToCorrectUuids() {
+            seriesFacadeAvailable();
+            when(seriesFacade.findIdsByUuids(anyCollection())).thenReturn(Map.of(SERIES_A, 10L, SERIES_B, 20L));
+            when(articleMapper.countPublishedBySeriesIds(anyCollection())).thenReturn(List.of(
+                    new ArticleMapper.SeriesPublishedCountRow(20L, 2),
+                    new ArticleMapper.SeriesPublishedCountRow(10L, 3)));
+
+            Map<UUID, Integer> result = facade.countPublishedBySeriesUuids(List.of(SERIES_A, SERIES_B));
+
+            assertThat(result).isEqualTo(Map.of(SERIES_A, 3, SERIES_B, 2));
+        }
+
+        @Test
+        @DisplayName("回傳的 Map 一律可變（空輸入、全未知、非空皆同），與 Long 版一致")
+        void result_isAlwaysMutableLikeLongVersion() {
+            seriesFacadeAvailable();
+            when(seriesFacade.findIdsByUuids(anyCollection())).thenReturn(Map.of());
+
+            Map<UUID, Integer> emptyInput = facade.countPublishedBySeriesUuids(List.of());
+            Map<UUID, Integer> allUnknown = facade.countPublishedBySeriesUuids(List.of(SERIES_UNKNOWN));
+
+            assertThatCode(() -> emptyInput.put(SERIES_A, 1)).doesNotThrowAnyException();
+            assertThatCode(() -> allUnknown.put(SERIES_A, 1)).doesNotThrowAnyException();
         }
 
         @Test
@@ -309,14 +336,15 @@ class ArticleFacadeSeriesUuidTest {
         }
 
         @Test
-        @DisplayName("series 不存在 → 拋 DataIntegrityViolationException（等同 Long 版寫入不存在 series id 被 FK 拒絕），不寫入")
-        void unknownSeries_throwsDataIntegrityViolation() {
+        @DisplayName("series 不存在 → 拋 IllegalArgumentException（呼叫端程式錯誤，非 BusinessException），寫入前即拒絕")
+        void unknownSeries_throwsIllegalArgument() {
             seriesFacadeAvailable();
             when(articleService.findIdByUuid(articleUuid)).thenReturn(5L);
             when(seriesFacade.findIdByUuid(SERIES_UNKNOWN)).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> facade.updateSeriesAssignment(articleUuid, SERIES_UNKNOWN, 1))
-                    .isInstanceOf(DataIntegrityViolationException.class);
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(SERIES_UNKNOWN.toString());
 
             verify(articleService, never()).updateSeriesAssignment(eq(5L), any(), any());
         }
