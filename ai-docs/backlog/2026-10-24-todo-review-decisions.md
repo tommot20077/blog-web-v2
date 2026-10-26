@@ -126,4 +126,6 @@
 - **`ReadingProgressService.update` 在交易內先 DEL 快取（既有，違反 security.md 原則 10）**：DB upsert 尚未 commit 時併發 `get()` 會 cache miss、讀到舊 DB 值並回填 Redis（TTL 數天）。修法：DEL 改 `afterCommit`，或移除不必要的 `@Transactional`。（M2-c 審查）
 - **`ReadingProgressFlushJob` 的 `SMEMBERS` 無界（PERF-31 剩餘部分）**：M2-c 已把逐筆 `findIdByUuid` 改為整輪一次 `filterExistingUuids`；dirty set 一次全讀仍未處理，改 `SSCAN` 分批。
 - **M6 前置（M4-b 審查）**：(1) `SeriesDeletedEvent` 發送失敗目前只記 warn——M6 移除 `articles.series_id` 的 `ON DELETE SET NULL` 後事件遺失會留下孤兒成員，M6 前升為 error 並由 article 端校正排程兜底；(2) `TransactionMqBoundaryTest` 只偵測直接呼叫 `RabbitTemplate`，看不到經 `*EventPublisher` 的間接呼叫——考慮擴充守衛規則；(3) `deleteSeries` 與 add／remove 的鎖順序相反（series→article vs article→series，既有），併發下有死鎖可能，M6 改寫時一併檢視。
+- **Z 階段文件修訂（M6-a 審查）**：`architecture.md` :49/:70/:74/:86 仍以已刪除的 `ArticleFacade.filterReadableIds` 為例，應改為 `filterReadableUuids`——併入 Z 階段 architecture.md 修訂提案交 Yuan 簽核。
+- **模組測試預設不載入 MyBatis XML mapper（M6-a 發現）**：各模組 `*TestApplication`／`application-test.yaml` 未設 `mybatis.mapper-locations`，`ArticleRecommendMapper.xml`（全 repo 唯一的 XML mapper）在 M6-a 之前從未在模組 IT 對真 PG 執行；正式環境與 e2e 有載入。M6-a 的 `ArticleFacadeRecommendAuthorIT` 已自行設定。新增 XML mapper 時須同步確認測試設定。
 - **refresh token 可被當 access token 送進 filter（既有）**：`JwtService.validateToken` 不檢查 token type；目前因 refresh token 無 role claim 被 filter 的 catch 偶然擋下。應在 filter 明確檢查 type=access 並補測試。（T0b-2 審查）
