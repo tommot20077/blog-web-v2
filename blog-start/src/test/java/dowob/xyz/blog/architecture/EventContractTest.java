@@ -89,11 +89,6 @@ class EventContractTest {
      * 規則 (a) 例外清單：缺少 {@code UUID eventId} 的事件。key 為類別全名，value 為「階段：說明」。
      */
     private static final Map<String, String> MISSING_EVENT_ID_EXEMPT = Map.ofEntries(
-            // 預計 M7（search 階段）：search 的鏡像 DTO 補 eventId，讓 listener 冪等
-            Map.entry("dowob.xyz.blog.module.search.listener.dto.ArticleDeletedMessage",
-                    "M7：search 鏡像 DTO（listener 參數），search 階段補 eventId"),
-            Map.entry("dowob.xyz.blog.module.search.listener.dto.ArticlePublishedMessage",
-                    "M7：search 鏡像 DTO（listener 參數），search 階段補 eventId"),
             // 預計 M8（user 階段）：模組內事件（註冊、重設密碼）一併改 uuid＋eventId
             Map.entry("dowob.xyz.blog.module.user.model.event.UserRegisteredEvent",
                     "M8：user 模組內部事件，user 階段補 eventId"),
@@ -112,9 +107,6 @@ class EventContractTest {
                     "M6：過渡欄位，article 階段發送端只帶 authorUuid 後移除"),
             Map.entry("dowob.xyz.blog.infrastructure.event.ArticleUpdatedEvent#authorId",
                     "M6：過渡欄位，article 階段發送端只帶 authorUuid 後移除"),
-            // 預計 M6（M6-c）：search 鏡像 DTO 與 article 事件同 PR 改讀 uuid（實作計畫 §4.3）
-            Map.entry("dowob.xyz.blog.module.search.listener.dto.ArticlePublishedMessage#authorId",
-                    "M6：search 鏡像 DTO，M6-c 與 article 事件同 PR 最小修改改讀 authorUuid"),
             // 預計 M8（user 階段）：模組內事件改 uuid
             Map.entry("dowob.xyz.blog.module.user.model.event.UserRegisteredEvent#userId",
                     "M8：user 模組內部事件，user 階段改 userUuid"),

@@ -1,5 +1,7 @@
 package dowob.xyz.blog.module.search.listener;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -48,6 +51,12 @@ import static org.mockito.Mockito.verify;
 @DisplayName("ArticleSearchListener 單元測試")
 class ArticleSearchListenerTest {
 
+    /** 測試用作者公開 UUID（ES 文件 author.uuid 的來源） */
+    private static final UUID AUTHOR_UUID = UUID.fromString("aaaaaaaa-1111-2222-3333-444444444444");
+
+    /** 測試用事件 dedup key（失敗日誌須帶出，供人工補送對回原事件） */
+    private static final UUID EVENT_ID = UUID.fromString("eeeeeeee-1111-2222-3333-444444444444");
+
     @Mock
     private SearchService searchService;
 
@@ -67,13 +76,13 @@ class ArticleSearchListenerTest {
     private ArticlePublishedMessage buildPublishedMessage() {
         ArticlePublishedMessage message = new ArticlePublishedMessage();
         message.setArticleUuid(UUID.randomUUID());
-        message.setAuthorId(1L);
+        message.setAuthorUuid(AUTHOR_UUID);
         message.setTitle("測試標題");
         message.setSummary("測試摘要");
         message.setContentText("測試內容純文字");
+        message.setEventId(EVENT_ID);
         message.setSlug("test-slug");
         message.setPublishedAt(LocalDateTime.now());
-        message.setAuthorUsername("yuan");
         message.setAuthorNickname("Yuan");
         message.setTags(List.of());
         return message;
@@ -95,6 +104,22 @@ class ArticleSearchListenerTest {
 
             verify(searchService).indexArticle(any(ArticleDocument.class));
             verify(channel).basicAck(1L, false);
+        }
+
+        @Test
+        @DisplayName("正常：ES 文件的 author 應只含訊息的 authorUuid 與 authorNickname（不含 id／username）")
+        void onArticlePublished_shouldBuildAuthorFromUuidAndNicknameOnly() throws Exception {
+            ArticlePublishedMessage message = buildPublishedMessage();
+
+            listener.onArticlePublished(message, channel, 10L);
+
+            ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
+            verify(searchService).indexArticle(captor.capture());
+            ArticleDocument.AuthorInfo author = captor.getValue().getAuthor();
+            assertThat(author.getUuid()).isEqualTo(AUTHOR_UUID.toString());
+            assertThat(author.getNickname()).isEqualTo("Yuan");
+            JsonNode authorJson = new ObjectMapper().valueToTree(author);
+            assertThat(authorJson.fieldNames()).toIterable().containsExactlyInAnyOrder("uuid", "nickname");
         }
 
         @Test
@@ -146,14 +171,13 @@ class ArticleSearchListenerTest {
         void onArticleUpdated_shouldReindex() throws IOException {
             ArticlePublishedMessage message = new ArticlePublishedMessage();
             message.setArticleUuid(UUID.randomUUID());
-            message.setAuthorId(1L);
+            message.setAuthorUuid(AUTHOR_UUID);
             message.setTitle("更新後標題");
             message.setSummary("更新後摘要");
             message.setContentText("更新後內容");
             message.setSlug("updated-slug");
             message.setPublishedAt(LocalDateTime.now());
-            message.setAuthorUsername("yuan");
-            message.setAuthorNickname("Yuan");
+                message.setAuthorNickname("Yuan");
             message.setTags(List.of());
 
             listener.onArticleUpdated(message, channel, 1L);
@@ -163,11 +187,42 @@ class ArticleSearchListenerTest {
         }
 
         @Test
+        @DisplayName("正常：更新事件也應只以 authorUuid 與 authorNickname 組 ES 文件的 author")
+        void onArticleUpdated_shouldBuildAuthorFromUuidAndNicknameOnly() throws Exception {
+            ArticlePublishedMessage message = buildPublishedMessage();
+
+            listener.onArticleUpdated(message, channel, 11L);
+
+            ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
+            verify(searchService).indexArticle(captor.capture());
+            ArticleDocument.AuthorInfo author = captor.getValue().getAuthor();
+            assertThat(author.getUuid()).isEqualTo(AUTHOR_UUID.toString());
+            assertThat(author.getNickname()).isEqualTo("Yuan");
+            JsonNode authorJson = new ObjectMapper().valueToTree(author);
+            assertThat(authorJson.fieldNames()).toIterable().containsExactlyInAnyOrder("uuid", "nickname");
+        }
+
+        @Test
+        @DisplayName("邊界：訊息沒有 authorUuid（舊訊息）時，author.uuid 為 null 且不拋例外")
+        void onArticlePublished_withoutAuthorUuid_shouldIndexWithNullAuthorUuid() throws Exception {
+            ArticlePublishedMessage message = buildPublishedMessage();
+            message.setAuthorUuid(null);
+
+            listener.onArticlePublished(message, channel, 12L);
+
+            ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
+            verify(searchService).indexArticle(captor.capture());
+            assertThat(captor.getValue().getAuthor().getUuid()).isNull();
+            assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo("Yuan");
+            verify(channel).basicAck(12L, false);
+        }
+
+        @Test
         @DisplayName("異常：重新索引失敗時，應 NACK 至 DLQ")
         void onArticleUpdated_onError_shouldNack() throws IOException {
             ArticlePublishedMessage message = new ArticlePublishedMessage();
             message.setArticleUuid(UUID.randomUUID());
-            message.setAuthorId(1L);
+            message.setAuthorUuid(AUTHOR_UUID);
             message.setTitle("會失敗的標題");
             message.setTags(List.of());
 
@@ -307,7 +362,7 @@ class ArticleSearchListenerTest {
             UUID uuid = UUID.randomUUID();
             ArticleDeletedMessage message = new ArticleDeletedMessage();
             message.setArticleUuid(uuid);
-            message.setDeletedAt(Instant.now());
+            message.setOccurredAt(Instant.now());
 
             listener.onArticleDeleted(message, channel, 1L);
 
@@ -321,7 +376,7 @@ class ArticleSearchListenerTest {
             UUID uuid = UUID.randomUUID();
             ArticleDeletedMessage message = new ArticleDeletedMessage();
             message.setArticleUuid(uuid);
-            message.setDeletedAt(Instant.now());
+            message.setOccurredAt(Instant.now());
 
             doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
 
@@ -374,6 +429,7 @@ class ArticleSearchListenerTest {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
                         .contains(message.getArticleUuid().toString());
+                assertThat(e.getMessage().getFormattedMessage()).contains(EVENT_ID.toString());
             });
         } finally {
             Metrics.removeRegistry(registry);
@@ -424,6 +480,7 @@ class ArticleSearchListenerTest {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
                         .contains(message.getArticleUuid().toString());
+                assertThat(e.getMessage().getFormattedMessage()).contains(EVENT_ID.toString());
             });
         } finally {
             Metrics.removeRegistry(registry);
@@ -441,7 +498,7 @@ class ArticleSearchListenerTest {
     void onArticleDeleted_success_recordsProcessedMetric() throws Exception {
         ArticleDeletedMessage message = new ArticleDeletedMessage();
         message.setArticleUuid(UUID.randomUUID());
-        message.setDeletedAt(Instant.now());
+        message.setOccurredAt(Instant.now());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -465,7 +522,8 @@ class ArticleSearchListenerTest {
     void onArticleDeleted_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ArticleDeletedMessage message = new ArticleDeletedMessage();
         message.setArticleUuid(UUID.randomUUID());
-        message.setDeletedAt(Instant.now());
+        message.setEventId(EVENT_ID);
+        message.setOccurredAt(Instant.now());
         doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
@@ -477,7 +535,8 @@ class ArticleSearchListenerTest {
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
-                        .contains(message.getArticleUuid().toString());
+                        .contains(message.getArticleUuid().toString())
+                        .contains(EVENT_ID.toString());
             });
         } finally {
             Metrics.removeRegistry(registry);

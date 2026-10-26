@@ -13,7 +13,8 @@ import java.util.UUID;
  * <p>
  * 對應 {@code blog-module-article} 的 {@code ArticlePublishedEvent} JSON 結構，
  * 搜尋模組自定義反序列化 DTO，不直接依賴 article 模組的類別，
- * 以保持模組間低耦合。
+ * 以保持模組間低耦合。事件中搜尋用不到的欄位（如過渡期的 Long 作者主鍵與登入帳號名稱）
+ * 不在此宣告，由 Jackson 忽略。
  * </p>
  *
  * @author Yuan
@@ -24,14 +25,19 @@ import java.util.UUID;
 public class ArticlePublishedMessage {
 
     /**
+     * 事件 dedup key（producer 端產生，對應事件欄位 {@code eventId}）
+     */
+    private UUID eventId;
+
+    /**
      * 文章公開 UUID
      */
     private UUID articleUuid;
 
     /**
-     * 作者資料庫主鍵
+     * 作者公開 UUID
      */
-    private Long authorId;
+    private UUID authorUuid;
 
     /**
      * 文章標題
@@ -57,11 +63,6 @@ public class ArticlePublishedMessage {
      * Markdown 去格式後的純文字
      */
     private String contentText;
-
-    /**
-     * 作者帳號名稱
-     */
-    private String authorUsername;
 
     /**
      * 作者暱稱
