@@ -2,13 +2,11 @@ package dowob.xyz.blog.module.file.controller;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
-import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
-import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadRequest;
@@ -59,11 +57,6 @@ public class FileController {
     private final FileService fileService;
 
     /**
-     * 用戶 Facade（用於將 userId 轉換為 UUID）
-     */
-    private final UserFacade userFacade;
-
-    /**
      * {@code /content} 302 導向回應的快取秒數。
      *
      * <p>刻意短於 {@code FileServiceImpl} 產生 presigned URL 的 5 分鐘效期，
@@ -97,7 +90,7 @@ public class FileController {
             @Parameter(hidden = true) @RequestParam(value = "articleUuid", required = false) UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
-        UUID uploaderId = resolveUserUuid(user.id());
+        UUID uploaderId = user.uuid();
         Role roleEnum = SecurityUtils.resolveRole(authentication);
         String role = roleEnum != null ? roleEnum.name() : "USER";
         return ApiResponse.success(fileService.uploadFile(file, usageType, uploaderId, role, articleUuid));
@@ -124,7 +117,7 @@ public class FileController {
             @PathVariable UUID id,
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
-        UUID requesterId = resolveOptionalUserUuid(user == null ? null : user.id());
+        UUID requesterId = user == null ? null : user.uuid();
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
         /* 先取一次 metadata 再授權，避免 canRead(id,..) 與 getFileMetadata(id) 各查一次 DB */
         FileMetadata metadata = fileService.getFileMetadata(id);
@@ -159,7 +152,7 @@ public class FileController {
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication,
             HttpServletResponse response) {
-        UUID requesterId = resolveOptionalUserUuid(user == null ? null : user.id());
+        UUID requesterId = user == null ? null : user.uuid();
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
 
         /*
@@ -211,7 +204,7 @@ public class FileController {
             @PathVariable UUID id,
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
-        UUID requesterId = resolveUserUuid(user.id());
+        UUID requesterId = user.uuid();
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
         fileService.deleteFile(id, requesterId, isAdmin);
         return ApiResponse.success();
@@ -229,7 +222,7 @@ public class FileController {
     public ApiResponse<List<FileMetadata>> getUserFiles(
             @AuthenticationPrincipal AuthUser user,
             Pageable pageable) {
-        UUID uploaderId = resolveUserUuid(user.id());
+        UUID uploaderId = user.uuid();
         return ApiResponse.success(fileService.getUserFiles(uploaderId, pageable));
     }
 
@@ -245,43 +238,10 @@ public class FileController {
     public ApiResponse<QuotaResponse> getQuota(
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
-        UUID uploaderId = resolveUserUuid(user.id());
+        UUID uploaderId = user.uuid();
         Role roleEnum = SecurityUtils.resolveRole(authentication);
         String role = roleEnum != null ? roleEnum.name() : "USER";
         return ApiResponse.success(fileService.getQuota(uploaderId, role));
-    }
-
-    /**
-     * 根據 userId 查詢使用者 UUID（供 FileService 使用）
-     *
-     * @param userId 用戶內部 ID
-     * @return 用戶 UUID
-     * @throws BusinessException 若使用者不存在
-     */
-    private UUID resolveUserUuid(Long userId) {
-        if (userId == null) {
-            throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
-        }
-        return userFacade.getUserUuidById(userId)
-                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
-    }
-
-    /**
-     * 根據 userId 查詢使用者 UUID，匿名請求（userId 為 null）回傳 null
-     *
-     * <p>供 {@link #getFileContent} 等允許匿名存取的端點使用，與 {@link #resolveUserUuid} 的差異在於
-     * 匿名時不拋例外，因為授權判斷（{@link FileService#canRead}）本身接受 {@code requesterId = null}。</p>
-     *
-     * @param userId 用戶內部 ID；可為 null（匿名）
-     * @return 用戶 UUID；匿名時為 null
-     * @throws BusinessException 若 userId 非 null 但查無對應使用者
-     */
-    private UUID resolveOptionalUserUuid(Long userId) {
-        if (userId == null) {
-            return null;
-        }
-        return userFacade.getUserUuidById(userId)
-                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
     }
 
 }
