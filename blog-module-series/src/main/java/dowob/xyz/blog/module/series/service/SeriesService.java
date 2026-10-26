@@ -310,8 +310,10 @@ public class SeriesService {
     /**
      * 刪除 Series（需 ownership 或 admin），commit 後發送 {@code SeriesDeletedEvent}。
      *
-     * <p>文章脫離系列由資料庫的 {@code articles.series_id → series(id) ON DELETE SET NULL} 負責（M6 才改為
-     * 由 article 訂閱事件處理），語意不變。</p>
+     * <p>文章脫離系列由 article 模組訂閱 {@code SeriesDeletedEvent} 處理（M6-b 起，V32 已移除
+     * {@code articles.series_id} 與其 FK），並以每日校正排程兜底；刪除語意不變（文章留存、歸屬清空）。
+     * 事件被消費前，文章仍帶著已不存在的 {@code series_uuid}（最終一致）——
+     * {@link #addArticleToSeries} 會條件式清掉這種殘留歸屬。刪除只動 series 列、不再觸碰 articles 的列。</p>
      *
      * <p><b>刻意不標註 {@code @Transactional}</b>：DB 操作以 {@link TransactionTemplate} 收斂為單一交易，
      * commit 成功後才 best-effort 發事件（{@code code-standards.md}「Transaction + MQ 時序」）。
@@ -340,7 +342,9 @@ public class SeriesService {
      * <ul>
      *   <li>文章必須為 PUBLISHED 狀態（S0103）</li>
      *   <li>非 admin 只能加入自己的文章（S0102，以 {@code authorUuid} 比對）</li>
-     *   <li>文章若已屬於另一個 Series 則拒絕（S0106）</li>
+     *   <li>文章若已屬於另一個 <b>仍存在的</b> Series 則拒絕（S0106）；若舊歸屬指向<b>已被刪除</b>的 series
+     *       （刪除事件尚未被 article 消費的最終一致視窗），先以條件式寫入清掉殘留歸屬再加入，
+     *       不動任何 article_count（舊 series 已不在）</li>
      *   <li>文章已在同一個 Series 中時，僅更新位置，不重複 +1 計數</li>
      * </ul>
      * </p>
@@ -349,10 +353,14 @@ public class SeriesService {
      * 兩個請求同時加入同一篇文章，都讀到「無 series」，都 +1），而是由寫入本身決定——
      * {@link ArticleFacade#assignToSeriesIfUnassigned} 回傳 true 才 {@code article_count + 1}。
      * 回傳 false 代表文章已屬於某個 series（含同一個，或剛被另一個請求加入），此時重讀判斷：
-     * 同一個 series 以條件式 UPDATE（{@code WHERE series_id = ?}）只更新位置——同樣不是讀改寫，
+     * 同一個 series 以條件式 UPDATE（{@code WHERE series_uuid = ?}）只更新位置——同樣不是讀改寫，
      * 兩個請求同時更新位置不會因樂觀鎖衝突失敗，與併發移出交錯時也不會把文章重新寫回 series 而漏算計數；
      * 其他 series 回 S0106。條件式更新回 false（文章剛被移出或移到別處）時回到迴圈重新判斷；
      * 兩次嘗試都無法定案則回 {@code ARTICLE_CONCURRENT_UPDATE}。</p>
+     *
+     * <p><b>ghost 歸屬防護</b>：加入的條件式 UPDATE 成功後，{@code article_count + 1} 若影響 0 列，代表 series 在讀取之後
+     * 被另一個交易刪除並 commit（沒有 FK 擋下寫入）。此時拋 {@code SERIES_NOT_FOUND} 讓整個交易回滾，
+     * 文章不會歸屬到已不存在的 series。</p>
      *
      * @param seriesUuid  Series 公開 UUID
      * @param articleUuid 文章公開 UUID
@@ -374,17 +382,22 @@ public class SeriesService {
         if (!isAdmin && !(userUuid != null && userUuid.equals(article.authorUuid()))) {
             throw new BusinessException(SeriesErrorCode.SERIES_ACCESS_DENIED);
         }
+        article = releaseStaleMembership(article, s.getUuid());
         if (article.seriesUuid() != null && !article.seriesUuid().equals(s.getUuid())) {
             throw new BusinessException(SeriesErrorCode.ARTICLE_IN_OTHER_SERIES);
         }
 
         for (int attempt = 1; attempt <= MAX_ASSIGN_ATTEMPTS; attempt++) {
             if (articleFacade.assignToSeriesIfUnassigned(articleUuid, s.getUuid(), position)) {
-                mapper.incrementArticleCount(s.getId());
+                if (mapper.incrementArticleCount(s.getId()) == 0) {
+                    /* series 在讀取後被另一個交易刪除：回滾，避免文章歸屬到已不存在的 series（ghost） */
+                    throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
+                }
                 return;
             }
             ArticleData current = articleFacade.findByUuid(articleUuid)
                     .orElseThrow(() -> new BusinessException(SeriesErrorCode.ARTICLE_NOT_FOUND));
+            current = releaseStaleMembership(current, s.getUuid());
             if (current.seriesUuid() == null) {
                 /* 兩次讀寫之間被另一個請求移出了：再試一次條件式指派 */
                 continue;
@@ -399,6 +412,31 @@ public class SeriesService {
         }
         /* 兩次都無法定案：歸屬不斷被併發改變，並非「屬於其他 series」，回報通用的併發衝突讓使用者重試 */
         throw new BusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE);
+    }
+
+    /**
+     * 清掉文章殘留的「指向已不存在系列」的歸屬（刪除事件尚未被 article 消費的最終一致視窗）。
+     *
+     * <p>文章的 {@code seriesUuid} 為 null、等於目標系列，或舊系列仍存在時原樣回傳（舊系列仍存在代表文章真的屬於它，
+     * 呼叫端照舊以 S0106 拒絕）。舊系列已不存在時，以 {@link ArticleFacade#removeFromSeriesIfAssigned} 條件式清空
+     * 歸屬——<b>不動任何 article_count</b>（舊系列已不在，沒有計數可扣）——再重讀文章。
+     * 條件式寫入回 false（已被 consumer 或另一個請求清掉）也無妨，重讀即可。</p>
+     *
+     * @param article    目前讀到的文章
+     * @param targetUuid 要加入的系列公開 UUID
+     * @return 清除殘留後（必要時重讀）的文章
+     */
+    private ArticleData releaseStaleMembership(ArticleData article, UUID targetUuid) {
+        UUID current = article.seriesUuid();
+        if (current == null || current.equals(targetUuid)) {
+            return article;
+        }
+        if (!mapper.findExistingUuidsIn(List.of(current)).isEmpty()) {
+            return article;
+        }
+        articleFacade.removeFromSeriesIfAssigned(article.uuid(), current);
+        return articleFacade.findByUuid(article.uuid())
+                .orElseThrow(() -> new BusinessException(SeriesErrorCode.ARTICLE_NOT_FOUND));
     }
 
     /**
