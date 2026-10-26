@@ -44,7 +44,12 @@ public class SearchIndexInitializer implements ApplicationRunner {
 
     /**
      * 確認 ES index 存在且 mapping 對齊 Java annotation；
-     * 不對齊則砍掉重建（資料需 admin reindex 灌回）。
+     * status／tags 不對齊則砍掉重建（資料需 admin reindex 灌回）。
+     *
+     * <p>{@code author.uuid} 不屬於「砍掉重建」的判準：沒有任何查詢、排序、aggregation 用到
+     * {@code author.*}，舊 author mapping 不影響搜尋；刪索引會讓搜尋在 admin reindex 前整個回空，
+     * 多台機器同時啟動時還會互相刪掉對方剛建好的索引。遷移由 {@code reindexAll} 以 id 覆寫文件完成
+     * （舊文件的 author 欄位整份被取代），這裡偵測到舊 author mapping 只記 warn。</p>
      */
     public void ensureCorrectMapping() {
         IndexOperations indexOps = elasticsearchOperations.indexOps(ArticleDocument.class);
@@ -53,6 +58,7 @@ public class SearchIndexInitializer implements ApplicationRunner {
             log.info("Elasticsearch index 'blog_articles' 已建立並套用 Java annotation mapping");
             return;
         }
+        warnIfLegacyAuthorMapping(indexOps);
         if (isMappingValid(indexOps)) {
             log.debug("Elasticsearch index 'blog_articles' mapping 已對齊");
             return;
@@ -87,5 +93,38 @@ public class SearchIndexInitializer implements ApplicationRunner {
             return false;
         }
         return "nested".equals(tagsField.get("type"));
+    }
+
+    /**
+     * 偵測舊 author mapping（沒有 {@code author.uuid} keyword），只記 warn，不刪除也不重建
+     *
+     * @param indexOps 索引操作
+     */
+    private void warnIfLegacyAuthorMapping(IndexOperations indexOps) {
+        Map<String, Object> mapping = indexOps.getMapping();
+        if (mapping == null || !(mapping.get("properties") instanceof Map<?, ?> properties)) {
+            return;
+        }
+        if (!isAuthorUuidKeyword(properties)) {
+            log.warn("Elasticsearch index 'blog_articles' 的 author mapping 為舊版（缺少 author.uuid keyword），"
+                    + "不影響搜尋，索引不會被刪除；需執行 POST /api/v1/admin/search/reindex 以移除舊作者欄位");
+        }
+    }
+
+    /**
+     * 檢查 {@code author.uuid} 是否為 keyword 型別
+     *
+     * @param properties 索引 mapping 的頂層 properties
+     * @return {@code author.properties.uuid.type} 為 keyword 時 true
+     */
+    private boolean isAuthorUuidKeyword(Map<?, ?> properties) {
+        if (!(properties.get("author") instanceof Map<?, ?> authorField)) {
+            return false;
+        }
+        if (!(authorField.get("properties") instanceof Map<?, ?> authorProps)) {
+            return false;
+        }
+        return authorProps.get("uuid") instanceof Map<?, ?> uuidField
+                && "keyword".equals(uuidField.get("type"));
     }
 }

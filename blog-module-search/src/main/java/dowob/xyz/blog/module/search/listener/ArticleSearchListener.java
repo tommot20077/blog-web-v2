@@ -68,8 +68,8 @@ public class ArticleSearchListener {
     public void onArticlePublished(ArticlePublishedMessage message,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        log.info("收到文章發布事件，開始建立索引：uuid={}", message.getArticleUuid());
-        consumerExecutor.execute(CONSUMER_NAME_INDEX, () -> "articleUuid=" + message.getArticleUuid(),
+        log.info("收到文章發布事件，開始建立索引：uuid={}, eventId={}", message.getArticleUuid(), message.getEventId());
+        consumerExecutor.execute(CONSUMER_NAME_INDEX, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 channel, deliveryTag, () -> {
                     ArticleDocument document = toDocument(message);
                     searchService.indexArticle(document);
@@ -93,8 +93,8 @@ public class ArticleSearchListener {
     public void onArticleUpdated(ArticlePublishedMessage message,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        log.info("收到文章更新事件，重新索引：uuid={}", message.getArticleUuid());
-        consumerExecutor.execute(CONSUMER_NAME_INDEX_UPDATE, () -> "articleUuid=" + message.getArticleUuid(),
+        log.info("收到文章更新事件，重新索引：uuid={}, eventId={}", message.getArticleUuid(), message.getEventId());
+        consumerExecutor.execute(CONSUMER_NAME_INDEX_UPDATE, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 channel, deliveryTag, () -> {
                     ArticleDocument document = toDocument(message);
                     searchService.indexArticle(document);
@@ -113,8 +113,8 @@ public class ArticleSearchListener {
     public void onArticleDeleted(ArticleDeletedMessage message,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        log.info("收到文章刪除事件，移除索引：uuid={}", message.getArticleUuid());
-        consumerExecutor.execute(CONSUMER_NAME_INDEX_DELETE, () -> "articleUuid=" + message.getArticleUuid(),
+        log.info("收到文章刪除事件，移除索引：uuid={}, eventId={}", message.getArticleUuid(), message.getEventId());
+        consumerExecutor.execute(CONSUMER_NAME_INDEX_DELETE, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 channel, deliveryTag, () -> {
                     searchService.deleteIndex(message.getArticleUuid().toString());
                     log.debug("文章索引移除成功：uuid={}", message.getArticleUuid());
@@ -178,8 +178,7 @@ public class ArticleSearchListener {
                 .content(message.getContentText())
                 .slug(message.getSlug())
                 .author(new ArticleDocument.AuthorInfo(
-                        message.getAuthorId(),
-                        message.getAuthorUsername(),
+                        message.getAuthorUuid() == null ? null : message.getAuthorUuid().toString(),
                         message.getAuthorNickname()))
                 .tags(tags)
                 .publishedAt(message.getPublishedAt())

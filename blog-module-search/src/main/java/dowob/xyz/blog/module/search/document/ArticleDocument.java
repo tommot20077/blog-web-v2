@@ -102,6 +102,9 @@ public class ArticleDocument {
 
     /**
      * 作者資訊嵌套物件
+     *
+     * <p>只存公開 UUID 與暱稱：Long 使用者主鍵屬 user 模組內部識別、username 是登入識別符，
+     * 兩者都不寫進搜尋索引（設計 §5 第 7 列）。</p>
      */
     @Data
     @NoArgsConstructor
@@ -109,16 +112,10 @@ public class ArticleDocument {
     public static class AuthorInfo {
 
         /**
-         * 作者資料庫主鍵
+         * 作者公開 UUID（字串形式）
          */
         @Field(type = FieldType.Keyword)
-        private Long id;
-
-        /**
-         * 作者帳號名稱
-         */
-        @Field(type = FieldType.Keyword)
-        private String username;
+        private String uuid;
 
         /**
          * 作者暱稱（用於顯示）

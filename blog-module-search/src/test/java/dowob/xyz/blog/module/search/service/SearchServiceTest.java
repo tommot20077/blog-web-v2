@@ -7,6 +7,8 @@ import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.repository.ArticleSearchRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LogEvent;
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -251,7 +254,7 @@ class SearchServiceTest {
                 .summary("本文介紹 Spring Boot 基礎")
                 .content("Spring Boot 是一個 Java 框架...")
                 .slug("spring-boot-tutorial")
-                .author(new ArticleDocument.AuthorInfo(1L, "yuan", "Yuan"))
+                .author(new ArticleDocument.AuthorInfo(USER_UUID.toString(), "Yuan"))
                 .tags(List.of(new ArticleDocument.TagInfo(UUID.randomUUID(), "Java", "java")))
                 .publishedAt(LocalDateTime.now())
                 .viewCount(100L)
@@ -399,7 +402,7 @@ class SearchServiceTest {
                     .title("No Tags")
                     .summary("summary")
                     .slug("no-tags")
-                    .author(new ArticleDocument.AuthorInfo(1L, "yuan", "Yuan"))
+                    .author(new ArticleDocument.AuthorInfo(USER_UUID.toString(), "Yuan"))
                     .tags(null)
                     .publishedAt(LocalDateTime.now())
                     .viewCount(0L)
@@ -882,6 +885,48 @@ class SearchServiceTest {
             searchService.reindexAll();
 
             verify(articleSearchRepository).saveAll(any());
+        }
+
+        /**
+         * 重建時 author 只可由 {@code authorUuid} 與 {@code authorNickname} 組成，
+         * 不得帶入 Long 主鍵與 username（登入識別符不應寫進 ES）。
+         * 這裡刻意讓 authorId／authorUsername 帶可辨識的哨兵值，若被複製進文件就會現形。
+         */
+        @Test
+        @DisplayName("重建時 author 應取 authorUuid 與暱稱，且不含 id／username")
+        @SuppressWarnings("unchecked")
+        void reindexAll_buildsAuthorFromUuidAndNicknameOnly() {
+            UUID authorUuid = UUID.fromString("bbbbbbbb-1111-2222-3333-444444444444");
+            ArticleIndexData data = new ArticleIndexData(
+                    UUID.randomUUID(), "標題", "slug", "summary", "content",
+                    987654L, "login-name-sentinel", "暱稱",
+                    LocalDateTime.now(), 0L, 0L, List.of(), authorUuid);
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
+
+            searchService.reindexAll();
+
+            ArgumentCaptor<Iterable<ArticleDocument>> captor = ArgumentCaptor.forClass(Iterable.class);
+            verify(articleSearchRepository).saveAll(captor.capture());
+            ArticleDocument saved = captor.getValue().iterator().next();
+            assertThat(saved.getAuthor().getUuid()).isEqualTo(authorUuid.toString());
+            assertThat(saved.getAuthor().getNickname()).isEqualTo("暱稱");
+            JsonNode authorJson = new ObjectMapper().valueToTree(saved.getAuthor());
+            assertThat(authorJson.fieldNames()).toIterable().containsExactlyInAnyOrder("uuid", "nickname");
+            assertThat(authorJson.toString()).doesNotContain("login-name-sentinel").doesNotContain("987654");
+        }
+
+        @Test
+        @DisplayName("ArticleIndexData 的 authorUuid 為 null（資料異常）時，author.uuid 為 null 且不拋例外")
+        @SuppressWarnings("unchecked")
+        void reindexAll_whenAuthorUuidNull_keepsNullUuid() {
+            ArticleIndexData data = indexData(UUID.randomUUID());
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
+
+            assertThatCode(() -> searchService.reindexAll()).doesNotThrowAnyException();
+
+            ArgumentCaptor<Iterable<ArticleDocument>> captor = ArgumentCaptor.forClass(Iterable.class);
+            verify(articleSearchRepository).saveAll(captor.capture());
+            assertThat(captor.getValue().iterator().next().getAuthor().getUuid()).isNull();
         }
 
         /**
