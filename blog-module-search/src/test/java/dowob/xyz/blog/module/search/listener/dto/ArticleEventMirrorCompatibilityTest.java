@@ -51,8 +51,10 @@ class ArticleEventMirrorCompatibilityTest {
     void publishedEvent_shouldDeserializeIntoMirrorMessage() {
         UUID articleUuid = UUID.randomUUID();
         UUID tagId = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
         ArticlePublishedEvent event = new ArticlePublishedEvent(
-                UUID.randomUUID(), articleUuid, 7L, UUID.randomUUID(), "標題",
+                eventId, articleUuid, 7L, authorUuid, "標題",
                 LocalDateTime.of(2026, 10, 24, 12, 0), "slug", "摘要", "純文字",
                 "alice", "愛麗絲", List.of(new TagInfo(tagId, "Java", "java")));
 
@@ -61,12 +63,12 @@ class ArticleEventMirrorCompatibilityTest {
 
         assertThat(restored).isInstanceOfSatisfying(ArticlePublishedMessage.class, m -> {
             assertThat(m.getArticleUuid()).isEqualTo(articleUuid);
-            assertThat(m.getAuthorId()).isEqualTo(7L);
+            assertThat(m.getEventId()).isEqualTo(eventId);
+            assertThat(m.getAuthorUuid()).isEqualTo(authorUuid);
             assertThat(m.getTitle()).isEqualTo("標題");
             assertThat(m.getPublishedAt()).isEqualTo(LocalDateTime.of(2026, 10, 24, 12, 0));
             assertThat(m.getSlug()).isEqualTo("slug");
             assertThat(m.getContentText()).isEqualTo("純文字");
-            assertThat(m.getAuthorUsername()).isEqualTo("alice");
             assertThat(m.getAuthorNickname()).isEqualTo("愛麗絲");
             assertThat(m.getTags()).singleElement().satisfies(t -> assertThat(t.getId()).isEqualTo(tagId));
         });
@@ -76,8 +78,10 @@ class ArticleEventMirrorCompatibilityTest {
     @DisplayName("ArticleUpdatedEvent（舊 __TypeId__ 為 article 模組全名）可被 ArticlePublishedMessage 反序列化")
     void updatedEvent_withLegacyTypeId_shouldDeserializeIntoMirrorMessage() {
         UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
         ArticleUpdatedEvent event = new ArticleUpdatedEvent(
-                UUID.randomUUID(), articleUuid, 7L, UUID.randomUUID(), "新標題",
+                eventId, articleUuid, 7L, authorUuid, "新標題",
                 LocalDateTime.of(2026, 10, 24, 12, 0), "slug", "摘要", "純文字",
                 "alice", "愛麗絲", List.of());
 
@@ -86,7 +90,8 @@ class ArticleEventMirrorCompatibilityTest {
 
         assertThat(restored).isInstanceOfSatisfying(ArticlePublishedMessage.class, m -> {
             assertThat(m.getArticleUuid()).isEqualTo(articleUuid);
-            assertThat(m.getAuthorId()).isEqualTo(7L);
+            assertThat(m.getEventId()).isEqualTo(eventId);
+            assertThat(m.getAuthorUuid()).isEqualTo(authorUuid);
             assertThat(m.getTitle()).isEqualTo("新標題");
         });
     }
@@ -95,14 +100,45 @@ class ArticleEventMirrorCompatibilityTest {
     @DisplayName("ArticleDeletedEvent（含 authorUuid／seriesUuid）可被 ArticleDeletedMessage 反序列化")
     void deletedEvent_withLegacyTypeId_shouldDeserializeIntoMirrorMessage() {
         UUID articleUuid = UUID.randomUUID();
+        Instant occurredAt = Instant.parse("2026-10-24T00:00:00Z");
+        UUID eventId = UUID.randomUUID();
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-                UUID.randomUUID(), articleUuid, 1L, List.of(), List.of(), Instant.parse("2026-10-24T00:00:00Z"), UUID.randomUUID(), UUID.randomUUID());
+                eventId, articleUuid, 1L, List.of(), List.of(), occurredAt, UUID.randomUUID(), UUID.randomUUID());
 
         Object restored = roundTrip(event, "dowob.xyz.blog.module.article.event.ArticleDeletedEvent",
                 ArticleDeletedMessage.class);
 
-        assertThat(restored).isInstanceOfSatisfying(ArticleDeletedMessage.class,
-                m -> assertThat(m.getArticleUuid()).isEqualTo(articleUuid));
+        assertThat(restored).isInstanceOfSatisfying(ArticleDeletedMessage.class, m -> {
+            assertThat(m.getArticleUuid()).isEqualTo(articleUuid);
+            assertThat(m.getEventId()).isEqualTo(eventId);
+            assertThat(m.getOccurredAt())
+                    .as("事件欄位 occurredAt 必須對得上鏡像 DTO（原 deletedAt 永遠為 null）")
+                    .isEqualTo(occurredAt);
+        });
+    }
+
+    @Test
+    @DisplayName("含舊欄位（authorId／authorUsername）的發布訊息 JSON 仍可反序列化，且 authorUuid 正確帶入")
+    void publishedJson_withLegacyAuthorFields_shouldStillDeserialize() {
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        String json = """
+                {"eventId":"%s","articleUuid":"%s","authorId":7,"authorUuid":"%s",
+                 "title":"舊格式","publishedAt":"2026-10-24T12:00:00","slug":"s","summary":"x",
+                 "contentText":"c","authorUsername":"alice","authorNickname":"愛麗絲","tags":[]}
+                """.formatted(UUID.randomUUID(), articleUuid, authorUuid);
+        MessageProperties props = new MessageProperties();
+        props.setContentType(MessageProperties.CONTENT_TYPE_JSON);
+        props.setHeader("__TypeId__", "dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent");
+        props.setInferredArgumentType(ArticlePublishedMessage.class);
+
+        Object restored = converter.fromMessage(new Message(json.getBytes(java.nio.charset.StandardCharsets.UTF_8), props));
+
+        assertThat(restored).isInstanceOfSatisfying(ArticlePublishedMessage.class, m -> {
+            assertThat(m.getArticleUuid()).isEqualTo(articleUuid);
+            assertThat(m.getAuthorUuid()).isEqualTo(authorUuid);
+            assertThat(m.getAuthorNickname()).isEqualTo("愛麗絲");
+        });
     }
 
     @Test

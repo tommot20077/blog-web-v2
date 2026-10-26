@@ -22,12 +22,17 @@ import java.util.UUID;
 public class ArticleDeletedMessage {
 
     /**
+     * 事件 dedup key（producer 端產生，對應事件欄位 {@code eventId}）
+     */
+    private UUID eventId;
+
+    /**
      * 文章公開 UUID
      */
     private UUID articleUuid;
 
     /**
-     * 刪除時間戳
+     * 事件發生時間戳（對應事件欄位 {@code occurredAt}）
      */
-    private Instant deletedAt;
+    private Instant occurredAt;
 }

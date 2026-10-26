@@ -485,7 +485,8 @@ public class SearchServiceImpl implements SearchService {
                 .content(data.contentText())
                 .slug(data.slug())
                 .author(new ArticleDocument.AuthorInfo(
-                        data.authorId(), data.authorUsername(), data.authorNickname()))
+                        data.authorUuid() == null ? null : data.authorUuid().toString(),
+                        data.authorNickname()))
                 .tags(tags)
                 .publishedAt(data.publishedAt())
                 .viewCount(data.viewCount())
