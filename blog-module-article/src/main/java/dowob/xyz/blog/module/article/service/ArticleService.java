@@ -286,21 +286,22 @@ public interface ArticleService {
     /**
      * 更新文章的 series 歸屬與排序位置（供 Series 模組使用）。
      *
-     * <p>傳入 null 表示解除 series 歸屬。</p>
+     * <p>傳入 null 表示解除 series 歸屬。M6-b 起以系列公開 UUID 寫入 {@code articles.series_uuid}，
+     * 不檢查系列是否存在（跨模組沒有 FK；系列存在性由呼叫端負責）。</p>
      *
      * @param articleId      文章資料庫主鍵
-     * @param seriesId       所屬 series 主鍵（null 表示解除）
+     * @param seriesUuid     所屬 series 公開 UUID（null 表示解除）
      * @param seriesPosition 在 series 中的排序位置（null 表示解除）
      */
-    void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition);
+    void updateSeriesAssignment(Long articleId, UUID seriesUuid, Integer seriesPosition);
 
     /**
      * 查詢指定 Series 內的所有文章，按 series_position 排序（供 Series 詳情頁使用）。
      *
-     * @param seriesId Series 資料庫主鍵
+     * @param seriesUuid Series 公開 UUID
      * @return 按 series_position 升冪排序的文章列表
      */
-    java.util.List<dowob.xyz.blog.module.article.model.Article> findBySeriesIdOrderByPosition(Long seriesId);
+    java.util.List<dowob.xyz.blog.module.article.model.Article> findBySeriesUuidOrderByPosition(UUID seriesUuid);
 
     /**
      * 根據資料庫主鍵查詢文章實體（供 SeriesFacade 等跨模組使用）。

@@ -1,9 +1,12 @@
 package dowob.xyz.blog.module.article.config;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
+import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.core.type.filter.AnnotationTypeFilter;
@@ -70,6 +73,40 @@ class ArticleRabbitMqConfigTest {
     @DisplayName("ROUTING_KEY_PUBLISHED 仍存在（producer 發布事件、search/recommend 模組訂閱皆需要）")
     void routingKeyPublished_stillExists() {
         assertThat(ArticleEventContract.ROUTING_KEY_PUBLISHED).isEqualTo("article.published");
+    }
+
+    @Test
+    @DisplayName("series.events exchange：Topic、durable、不自動刪除；名稱取自 series 事件契約（與 series 模組宣告的參數相同，重複宣告不衝突）")
+    void seriesEventsExchange_matchesContractAndIsDurableTopic() {
+        TopicExchange exchange = config.articleSeriesEventsExchange();
+
+        assertThat(exchange.getName()).isEqualTo(SeriesEventContract.EXCHANGE).isEqualTo("series.events");
+        assertThat(exchange.getType()).isEqualTo("topic");
+        assertThat(exchange.isDurable()).isTrue();
+        assertThat(exchange.isAutoDelete()).isFalse();
+    }
+
+    @Test
+    @DisplayName("queue：article.series-deleted、durable，並帶 DLQ 參數")
+    void seriesDeletedQueue_isDurableWithDlqArgs() {
+        Queue queue = config.articleSeriesDeletedQueue();
+
+        assertThat(queue.getName()).isEqualTo("article.series-deleted").isEqualTo(ArticleRabbitMqConfig.QUEUE_SERIES_DELETED);
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+                .containsEntry("x-dead-letter-exchange", "blog.dlq")
+                .containsEntry("x-dead-letter-routing-key", "dead-letter");
+    }
+
+    @Test
+    @DisplayName("binding：綁定 series.events exchange 與 series.deleted routing key（取自契約常數）")
+    void bindSeriesDeleted_bindsSeriesContract() {
+        Binding binding = config.articleSeriesDeletedBinding(
+                config.articleSeriesDeletedQueue(), config.articleSeriesEventsExchange());
+
+        assertThat(binding.getExchange()).isEqualTo(SeriesEventContract.EXCHANGE);
+        assertThat(binding.getRoutingKey()).isEqualTo(SeriesEventContract.ROUTING_KEY_DELETED);
+        assertThat(binding.getDestination()).isEqualTo("article.series-deleted");
     }
 
     @Test

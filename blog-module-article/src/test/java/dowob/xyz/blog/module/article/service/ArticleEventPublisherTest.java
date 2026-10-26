@@ -39,10 +39,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
@@ -68,9 +65,6 @@ class ArticleEventPublisherTest {
 
     @Mock
     private ArticleMapper articleMapper;
-
-    @Mock
-    private ArticleIdentityResolver identityResolver;
 
     @InjectMocks
     private ArticleEventPublisher publisher;
@@ -289,23 +283,23 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("publishContentChanged：不碰 UserFacade 與 ArticleIdentityResolver")
+        @DisplayName("publishContentChanged：不碰 UserFacade")
         void publishContentChanged_noLookups() {
             publisher.publishContentChanged(publishedArticle(), ArticleContentChangedEvent.Action.SAVED);
 
-            verifyNoInteractions(userFacade, identityResolver);
+            verifyNoInteractions(userFacade);
         }
 
         @Test
-        @DisplayName("publishDeleted：不碰 UserFacade；series 已由呼叫端在刪除前取得，不查 identityResolver")
+        @DisplayName("publishDeleted：不碰 UserFacade；seriesUuid 由呼叫端（取自文章的 series_uuid）傳入，不查任何東西")
         void publishDeleted_noLookups() {
             publisher.publishDeleted(publishedArticle(), UUID.randomUUID(), List.of(), List.of());
 
-            verifyNoInteractions(userFacade, identityResolver);
+            verifyNoInteractions(userFacade);
         }
 
         @Test
-        @DisplayName("publishPublished／publishUpdated：作者暱稱各只呼叫 UserFacade 一次；不查 series")
+        @DisplayName("publishPublished／publishUpdated：作者暱稱各只呼叫 UserFacade 一次")
         void publishPublishedAndUpdated_resolveNicknameOnceEach() {
             Article article = publishedArticle();
             when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(displayInfo(AUTHOR_UUID, "愛麗絲"));
@@ -314,7 +308,6 @@ class ArticleEventPublisherTest {
             publisher.publishUpdated(article);
 
             verify(userFacade, times(2)).getDisplayInfoByUuids(List.of(AUTHOR_UUID));
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
         }
 
         @Test
@@ -335,15 +328,13 @@ class ArticleEventPublisherTest {
     class PublishDeleted {
 
         @Test
-        @DisplayName("M4-b：seriesUuid 由呼叫端在刪除前取得並傳入 → 即使此時 series 查詢會失敗，事件仍帶正確的 seriesUuid，且不再查 series")
-        void publishDeleted_withPrecomputedSeriesUuid_neverQueriesSeriesAndKeepsUuid() {
+        @DisplayName("M6-b：seriesUuid 由呼叫端（取自文章自己的 series_uuid）傳入 → 事件帶同一個 seriesUuid")
+        void publishDeleted_withSeriesUuid_keepsUuidInEvent() {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
             article.setAuthorUuid(AUTHOR_UUID);
             UUID seriesUuid = UUID.randomUUID();
-            lenient().when(identityResolver.resolveSeriesUuids(anyCollection()))
-                    .thenThrow(new IllegalStateException("series down"));
 
             publisher.publishDeleted(article, seriesUuid, List.of(), List.of());
 
@@ -351,28 +342,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             assertThat(captor.getValue().seriesUuid()).isEqualTo(seriesUuid);
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
-        }
-
-        @Test
-        @DisplayName("M4-b：resolveSeriesUuidForDelete 查得到 → 回傳 uuid；seriesId 為 null → null 且不查詢")
-        void resolveSeriesUuidForDelete_returnsUuidOrNull() {
-            UUID seriesUuid = UUID.randomUUID();
-            when(identityResolver.resolveSeriesUuids(anyCollection())).thenReturn(Map.of(200L, seriesUuid));
-
-            assertThat(publisher.resolveSeriesUuidForDelete(200L)).isEqualTo(seriesUuid);
-            assertThat(publisher.resolveSeriesUuidForDelete(null)).isNull();
-
-            verify(identityResolver, times(1)).resolveSeriesUuids(anyCollection());
-        }
-
-        @Test
-        @DisplayName("M4-b：resolveSeriesUuidForDelete 查詢失敗 → 例外往外拋（讓刪除在動手前就失敗，而不是事後發出 null）")
-        void resolveSeriesUuidForDelete_whenLookupFails_propagates() {
-            when(identityResolver.resolveSeriesUuids(anyCollection())).thenThrow(new IllegalStateException("series down"));
-
-            assertThatThrownBy(() -> publisher.resolveSeriesUuidForDelete(200L))
-                    .isInstanceOf(IllegalStateException.class);
         }
 
         @Test
@@ -458,7 +427,6 @@ class ArticleEventPublisherTest {
             verify(rabbitTemplate).convertAndSend(
                     eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_DELETED), captor.capture());
             assertThat(captor.getValue().seriesUuid()).isNull();
-            verify(identityResolver, never()).resolveSeriesUuids(anyCollection());
         }
 
         @Test

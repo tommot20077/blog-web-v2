@@ -25,7 +25,6 @@ import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -42,24 +41,23 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * M4-a：{@link ArticleFacade} series UUID 版方法與 Long 版的結果對照整合測試（真 PostgreSQL、真實 facade）。
+ * {@link ArticleFacade} series UUID 版方法對真實 PostgreSQL 的整合測試（M4-a 建立，M6-b 改為直查 {@code series_uuid}）。
  *
- * <p>以同一批資料分別呼叫 UUID 版與 Long 版，斷言結果相同（含 series_position 順序、
- * count 只含 &gt; 0、prev／next 的邊界與位置落差、未知 series、寫入行為）。
- * 放在 series 模組，因為 {@link SeriesTestApplication} 同時載入 article 與 series 的真實 facade 實作
- * （UUID 版需要 {@link SeriesFacade} 的真實轉換）。</p>
+ * <p>M6-b 之前本測試把 UUID 版與 Long 版的結果對照（parity）；Long 版隨 {@code articles.series_id} 一併移除後，
+ * 改以<b>明確的預期值</b>斷言（含 series_position 順序、count 只含 &gt; 0、prev／next 的邊界與位置落差、
+ * 未知 series、寫入行為）。放在 series 模組，因為 {@link SeriesTestApplication} 同時載入 article 與 series 的
+ * 真實實作（{@link SeriesFacade#findIdsByUuids} 的真 SQL 也在這裡驗證）。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @SpringBootTest(classes = SeriesTestApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
-@DisplayName("ArticleFacade series UUID 版 vs Long 版對照整合測試")
-class ArticleSeriesUuidParityIT {
+@DisplayName("ArticleFacade series UUID 版整合測試")
+class ArticleSeriesUuidFacadeIT {
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
@@ -116,20 +114,20 @@ class ArticleSeriesUuidParityIT {
         seriesB = createSeries("parity-b");
         seriesC = createSeries("parity-c");
         seriesD = createSeries("parity-d");
-        a4 = createArticle(seriesA.getId(), 4, ArticleStatus.PUBLISHED);
-        a9 = createArticle(seriesA.getId(), 9, ArticleStatus.PUBLISHED);
-        a1 = createArticle(seriesA.getId(), 1, ArticleStatus.PUBLISHED);
-        a2Draft = createArticle(seriesA.getId(), 2, ArticleStatus.DRAFT);
-        createArticle(seriesB.getId(), 1, ArticleStatus.DRAFT);
-        createArticle(seriesD.getId(), 1, ArticleStatus.PUBLISHED);
-        createArticle(seriesD.getId(), 2, ArticleStatus.PUBLISHED);
+        a4 = createArticle(seriesA.getUuid(), 4, ArticleStatus.PUBLISHED);
+        a9 = createArticle(seriesA.getUuid(), 9, ArticleStatus.PUBLISHED);
+        a1 = createArticle(seriesA.getUuid(), 1, ArticleStatus.PUBLISHED);
+        a2Draft = createArticle(seriesA.getUuid(), 2, ArticleStatus.DRAFT);
+        createArticle(seriesB.getUuid(), 1, ArticleStatus.DRAFT);
+        createArticle(seriesD.getUuid(), 1, ArticleStatus.PUBLISHED);
+        createArticle(seriesD.getUuid(), 2, ArticleStatus.PUBLISHED);
     }
 
     @AfterEach
     void cleanUp() {
         jdbcTemplate.execute("DELETE FROM processed_events");
         articleRepo.findAll().forEach(a -> {
-            a.setSeriesId(null);
+            a.setSeriesUuid(null);
             a.setSeriesPosition(null);
             articleRepo.save(a);
         });
@@ -137,7 +135,7 @@ class ArticleSeriesUuidParityIT {
         articleRepo.deleteAll();
     }
 
-    private Article createArticle(Long seriesId, Integer position, ArticleStatus status) {
+    private Article createArticle(UUID seriesUuid, Integer position, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
         article.setAuthorUuid(SeededUsers.uuidOf(AUTHOR_1));
@@ -149,7 +147,7 @@ class ArticleSeriesUuidParityIT {
         article.setLikeCount(0);
         article.setCommentCount(0);
         article.setViewCount(0L);
-        article.setSeriesId(seriesId);
+        article.setSeriesUuid(seriesUuid);
         article.setSeriesPosition(position);
         article.setCreatedAt(LocalDateTime.now());
         article.setUpdatedAt(LocalDateTime.now());
@@ -204,66 +202,66 @@ class ArticleSeriesUuidParityIT {
     // ─── findBySeriesUuidOrderByPosition ───
 
     @Test
-    @DisplayName("findBySeriesUuidOrderByPosition → 與 Long 版完全相同（含順序與 DRAFT），位置為 1,2,4,9")
-    void findBySeriesUuid_matchesLongVersion() {
+    @DisplayName("findBySeriesUuidOrderByPosition → 含 DRAFT、依位置排序 1,2,4,9，每篇都帶出 seriesUuid")
+    void findBySeriesUuid_returnsAllStatusesInPositionOrder() {
         List<ArticleData> byUuid = articleFacade.findBySeriesUuidOrderByPosition(seriesA.getUuid());
-        List<ArticleData> byId = articleFacade.findBySeriesIdOrderByPosition(seriesA.getId());
 
-        assertThat(byUuid).isEqualTo(byId);
         assertThat(byUuid).extracting(ArticleData::seriesPosition).containsExactly(1, 2, 4, 9);
         assertThat(byUuid).extracting(ArticleData::id)
                 .containsExactly(a1.getId(), a2Draft.getId(), a4.getId(), a9.getId());
+        assertThat(byUuid).extracting(ArticleData::seriesUuid).containsOnly(seriesA.getUuid());
+        assertThat(byUuid).extracting(ArticleData::status)
+                .containsExactly("PUBLISHED", "DRAFT", "PUBLISHED", "PUBLISHED");
     }
 
     @Test
-    @DisplayName("findBySeriesUuidOrderByPosition → 空 series 與未知 series 皆為空清單，與 Long 版一致")
-    void findBySeriesUuid_emptyAndUnknown_matchLongVersion() {
-        assertThat(articleFacade.findBySeriesUuidOrderByPosition(seriesC.getUuid()))
-                .isEqualTo(articleFacade.findBySeriesIdOrderByPosition(seriesC.getId()))
-                .isEmpty();
-        assertThat(articleFacade.findBySeriesUuidOrderByPosition(UUID.randomUUID()))
-                .isEqualTo(articleFacade.findBySeriesIdOrderByPosition(Long.MAX_VALUE))
-                .isEmpty();
+    @DisplayName("findBySeriesUuidOrderByPosition → 空 series、未知 series 與 null 皆為空清單")
+    void findBySeriesUuid_emptyUnknownAndNull_areEmpty() {
+        assertThat(articleFacade.findBySeriesUuidOrderByPosition(seriesC.getUuid())).isEmpty();
+        assertThat(articleFacade.findBySeriesUuidOrderByPosition(UUID.randomUUID())).isEmpty();
         assertThat(articleFacade.findBySeriesUuidOrderByPosition(null)).isEmpty();
     }
 
     // ─── countPublishedBySeriesUuids ───
 
     @Test
-    @DisplayName("countPublishedBySeriesUuids → A=3、D=2 各自配對正確，且與 Long 版相同；B（僅 DRAFT）、C（空）、未知皆不出現")
-    void countPublished_matchesLongVersion_onlyPositive() {
+    @DisplayName("countPublishedBySeriesUuids → A=3、D=2 各自配對正確；B（僅 DRAFT）、C（空）、未知皆不出現")
+    void countPublished_onlyPositive_pairedWithCorrectUuid() {
         Map<UUID, Integer> byUuid = articleFacade.countPublishedBySeriesUuids(List.of(
                 seriesA.getUuid(), seriesB.getUuid(), seriesC.getUuid(), seriesD.getUuid(), UUID.randomUUID()));
-        Map<Long, Integer> byId = articleFacade.countPublishedBySeriesIds(List.of(
-                seriesA.getId(), seriesB.getId(), seriesC.getId(), seriesD.getId(), Long.MAX_VALUE));
 
-        assertThat(byId).isEqualTo(Map.of(seriesA.getId(), 3, seriesD.getId(), 2));
         assertThat(byUuid).isEqualTo(Map.of(seriesA.getUuid(), 3, seriesD.getUuid(), 2));
     }
 
     @Test
-    @DisplayName("countPublishedBySeriesUuids → 空輸入回空 Map，與 Long 版一致")
-    void countPublished_emptyInput_matchesLongVersion() {
-        assertThat(articleFacade.countPublishedBySeriesUuids(List.of()))
-                .isEqualTo(articleFacade.countPublishedBySeriesIds(List.of()))
-                .isEmpty();
+    @DisplayName("countPublishedBySeriesUuids → 空輸入與 null 回空 Map")
+    void countPublished_emptyInput_returnsEmpty() {
+        assertThat(articleFacade.countPublishedBySeriesUuids(List.of())).isEmpty();
         assertThat(articleFacade.countPublishedBySeriesUuids(null)).isEmpty();
     }
 
     // ─── prev / next ───
 
     @Test
-    @DisplayName("findPrev/NextPublishedInSeries → 位置 0..10 逐一與 Long 版相同（含首尾邊界、DRAFT 被跳過、位置落差）")
-    void prevNext_matchLongVersionAtEveryPosition() {
+    @DisplayName("findPrev/NextPublishedInSeries → 位置 0..10 逐一符合預期（含首尾邊界、DRAFT 被跳過、位置落差）")
+    void prevNext_atEveryPosition_matchExpected() {
+        // 已發布的位置 → 文章 uuid（位置 2 是 DRAFT，必須被跳過）
+        Map<Integer, UUID> published = Map.of(1, a1.getUuid(), 4, a4.getUuid(), 9, a9.getUuid());
         for (int position = 0; position <= 10; position++) {
+            final int current = position;
+            UUID expectedPrev = published.entrySet().stream()
+                    .filter(e -> e.getKey() < current)
+                    .max(Map.Entry.comparingByKey()).map(Map.Entry::getValue).orElse(null);
+            UUID expectedNext = published.entrySet().stream()
+                    .filter(e -> e.getKey() > current)
+                    .min(Map.Entry.comparingByKey()).map(Map.Entry::getValue).orElse(null);
+
             assertThat(articleFacade.findPrevPublishedInSeries(seriesA.getUuid(), position))
-                    .as("prev @%d", position)
-                    .isEqualTo(articleFacade.findPrevPublishedInSeries(seriesA.getId(), position));
+                    .as("prev @%d", position).map(ArticleNavRef::uuid).isEqualTo(java.util.Optional.ofNullable(expectedPrev));
             assertThat(articleFacade.findNextPublishedInSeries(seriesA.getUuid(), position))
-                    .as("next @%d", position)
-                    .isEqualTo(articleFacade.findNextPublishedInSeries(seriesA.getId(), position));
+                    .as("next @%d", position).map(ArticleNavRef::uuid).isEqualTo(java.util.Optional.ofNullable(expectedNext));
         }
-        // 明確的預期值（防止兩邊同時錯）：第一篇（1）沒有 prev；DRAFT(2) 被跳過所以 1 的 next 是 4；最後一篇（9）沒有 next
+        // 明確的預期值（防止預期值的推導與實作同時錯）：第一篇（1）沒有 prev；DRAFT(2) 被跳過所以 1 的 next 是 4；最後一篇（9）沒有 next
         assertThat(articleFacade.findPrevPublishedInSeries(seriesA.getUuid(), 1)).isEmpty();
         assertThat(articleFacade.findNextPublishedInSeries(seriesA.getUuid(), 1))
                 .map(ArticleNavRef::uuid).contains(a4.getUuid());
@@ -273,15 +271,11 @@ class ArticleSeriesUuidParityIT {
     }
 
     @Test
-    @DisplayName("findPrev/NextPublishedInSeries → 未知 series 與 null 皆為 empty，與 Long 版一致")
-    void prevNext_unknownSeries_matchLongVersion() {
+    @DisplayName("findPrev/NextPublishedInSeries → 未知 series 與 null 皆為 empty")
+    void prevNext_unknownSeriesAndNull_areEmpty() {
         UUID unknown = UUID.randomUUID();
-        assertThat(articleFacade.findPrevPublishedInSeries(unknown, 5))
-                .isEqualTo(articleFacade.findPrevPublishedInSeries(Long.MAX_VALUE, 5))
-                .isEmpty();
-        assertThat(articleFacade.findNextPublishedInSeries(unknown, 5))
-                .isEqualTo(articleFacade.findNextPublishedInSeries(Long.MAX_VALUE, 5))
-                .isEmpty();
+        assertThat(articleFacade.findPrevPublishedInSeries(unknown, 5)).isEmpty();
+        assertThat(articleFacade.findNextPublishedInSeries(unknown, 5)).isEmpty();
         assertThat(articleFacade.findPrevPublishedInSeries((UUID) null, 5)).isEmpty();
         assertThat(articleFacade.findNextPublishedInSeries((UUID) null, 5)).isEmpty();
     }
@@ -289,58 +283,46 @@ class ArticleSeriesUuidParityIT {
     // ─── updateSeriesAssignment ───
 
     @Test
-    @DisplayName("updateSeriesAssignment(UUID…) → 加入 series 與移出 series，結果與 Long 版對同形資料一致")
-    void updateSeriesAssignment_addAndRemove_matchLongVersion() {
-        Article byUuidArticle = createArticle(null, null, ArticleStatus.PUBLISHED);
-        Article byIdArticle = createArticle(null, null, ArticleStatus.PUBLISHED);
+    @DisplayName("updateSeriesAssignment(UUID…) → 加入 series 與移出 series，seriesUuid／position 正確寫入與清空")
+    void updateSeriesAssignment_addAndRemove() {
+        Article article = createArticle(null, null, ArticleStatus.PUBLISHED);
 
-        articleFacade.updateSeriesAssignment(byUuidArticle.getUuid(), seriesC.getUuid(), 3);
-        articleFacade.updateSeriesAssignment(byIdArticle.getId(), seriesC.getId(), 3);
+        articleFacade.updateSeriesAssignment(article.getUuid(), seriesC.getUuid(), 3);
 
-        ArticleData afterUuid = articleFacade.findById(byUuidArticle.getId()).orElseThrow();
-        ArticleData afterId = articleFacade.findById(byIdArticle.getId()).orElseThrow();
-        assertThat(afterUuid.seriesId()).isEqualTo(seriesC.getId()).isEqualTo(afterId.seriesId());
-        assertThat(afterUuid.seriesUuid()).isEqualTo(seriesC.getUuid()).isEqualTo(afterId.seriesUuid());
-        assertThat(afterUuid.seriesPosition()).isEqualTo(3).isEqualTo(afterId.seriesPosition());
+        ArticleData afterAdd = articleFacade.findById(article.getId()).orElseThrow();
+        assertThat(afterAdd.seriesUuid()).isEqualTo(seriesC.getUuid());
+        assertThat(afterAdd.seriesPosition()).isEqualTo(3);
 
-        articleFacade.updateSeriesAssignment(byUuidArticle.getUuid(), null, null);
-        articleFacade.updateSeriesAssignment(byIdArticle.getId(), null, null);
+        articleFacade.updateSeriesAssignment(article.getUuid(), null, null);
 
-        ArticleData removedUuid = articleFacade.findById(byUuidArticle.getId()).orElseThrow();
-        ArticleData removedId = articleFacade.findById(byIdArticle.getId()).orElseThrow();
-        assertThat(removedUuid.seriesId()).isNull();
-        assertThat(removedUuid.seriesUuid()).isNull();
-        assertThat(removedUuid.seriesPosition()).isNull();
-        assertThat(removedId.seriesId()).isNull();
-        assertThat(removedId.seriesPosition()).isNull();
+        ArticleData afterRemove = articleFacade.findById(article.getId()).orElseThrow();
+        assertThat(afterRemove.seriesUuid()).isNull();
+        assertThat(afterRemove.seriesPosition()).isNull();
     }
 
     @Test
-    @DisplayName("updateSeriesAssignment(UUID…) → 文章不存在為 no-op（即使 series 也不存在），與 Long 版一致")
-    void updateSeriesAssignment_unknownArticle_isNoOpLikeLongVersion() {
+    @DisplayName("updateSeriesAssignment(UUID…) → 文章不存在為 no-op（即使 series 也不存在）")
+    void updateSeriesAssignment_unknownArticle_isNoOp() {
         long before = articleRepo.count();
 
         articleFacade.updateSeriesAssignment(UUID.randomUUID(), seriesC.getUuid(), 1);
         articleFacade.updateSeriesAssignment(UUID.randomUUID(), UUID.randomUUID(), 1);
-        articleFacade.updateSeriesAssignment(Long.MAX_VALUE, Long.MAX_VALUE, 1);
 
         assertThat(articleRepo.count()).isEqualTo(before);
         assertThat(articleFacade.findBySeriesUuidOrderByPosition(seriesC.getUuid())).isEmpty();
     }
 
     @Test
-    @DisplayName("updateSeriesAssignment(UUID…) → series 不存在時於寫入前以 IllegalArgumentException 拒絕；"
-            + "Long 版則被 FK 拒絕（Spring Data JDBC 包成 DbActionExecutionException，根因為 DataIntegrityViolationException）；兩者皆不改動文章")
-    void updateSeriesAssignment_unknownSeries_isRejectedAndNothingChanges() {
-        Article target = createArticle(seriesA.getId(), 20, ArticleStatus.PUBLISHED);
+    @DisplayName("updateSeriesAssignment(UUID…) → article 不檢查 series 是否存在（M6-b 起沒有 FK、也不依賴 series），"
+            + "存在性由呼叫端 SeriesService 負責；不存在的 series uuid 照寫，之後由刪除事件或每日校正清空")
+    void updateSeriesAssignment_unknownSeries_isWrittenAsIs() {
+        Article target = createArticle(seriesA.getUuid(), 20, ArticleStatus.PUBLISHED);
+        UUID ghostSeries = UUID.randomUUID();
 
-        assertThatThrownBy(() -> articleFacade.updateSeriesAssignment(target.getId(), Long.MAX_VALUE, 1))
-                .hasCauseInstanceOf(DataIntegrityViolationException.class);
-        assertThatThrownBy(() -> articleFacade.updateSeriesAssignment(target.getUuid(), UUID.randomUUID(), 1))
-                .isInstanceOf(IllegalArgumentException.class);
+        articleFacade.updateSeriesAssignment(target.getUuid(), ghostSeries, 1);
 
-        ArticleData unchanged = articleFacade.findById(target.getId()).orElseThrow();
-        assertThat(unchanged.seriesId()).isEqualTo(seriesA.getId());
-        assertThat(unchanged.seriesPosition()).isEqualTo(20);
+        ArticleData written = articleFacade.findById(target.getId()).orElseThrow();
+        assertThat(written.seriesUuid()).isEqualTo(ghostSeries);
+        assertThat(written.seriesPosition()).isEqualTo(1);
     }
 }

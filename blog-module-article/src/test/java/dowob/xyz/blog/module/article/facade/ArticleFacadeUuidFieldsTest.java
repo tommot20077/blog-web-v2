@@ -1,10 +1,8 @@
 package dowob.xyz.blog.module.article.facade;
 
-import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
@@ -25,7 +23,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
@@ -35,7 +32,6 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -64,8 +60,6 @@ class ArticleFacadeUuidFieldsTest {
     @Mock private ArticleEventPublisher articleEventPublisher;
     @Mock private TransactionTemplate transactionTemplate;
     @Mock private FileFacade fileFacade;
-    @Mock private ObjectProvider<SeriesFacade> seriesFacadeProvider;
-    @Mock private SeriesFacade seriesFacade;
 
     private ArticleFacadeImpl facade;
 
@@ -74,16 +68,14 @@ class ArticleFacadeUuidFieldsTest {
 
     @BeforeEach
     void setUp() {
-        ArticleDataAssembler assembler = new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider));
+        ArticleDataAssembler assembler = new ArticleDataAssembler();
         facade = new ArticleFacadeImpl(
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
                 new ArticleFileBinder(fileFacade), assembler, null, null, null);
-        when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
-        when(seriesFacade.findUuidsByIds(anyCollection())).thenReturn(Map.of(3L, SERIES_UUID));
     }
 
-    private static Article article(long id, Long seriesId) {
+    private static Article article(long id, UUID seriesUuid) {
         Article a = new Article();
         a.setId(id);
         a.setUuid(UUID.randomUUID());
@@ -91,15 +83,15 @@ class ArticleFacadeUuidFieldsTest {
         a.setStatus(ArticleStatus.PUBLISHED);
         a.setTitle("t");
         a.setSlug("s");
-        a.setSeriesId(seriesId);
-        a.setSeriesPosition(seriesId == null ? null : 1);
+        a.setSeriesUuid(seriesUuid);
+        a.setSeriesPosition(seriesUuid == null ? null : 1);
         return a;
     }
 
     @Test
     @DisplayName("findById → authorUuid 與 seriesUuid 非 null 且正確")
     void findById_fillsAuthorUuidAndSeriesUuid() {
-        when(articleService.findById(1L)).thenReturn(Optional.of(article(1L, 3L)));
+        when(articleService.findById(1L)).thenReturn(Optional.of(article(1L, SERIES_UUID)));
 
         ArticleData data = facade.findById(1L).orElseThrow();
 
@@ -117,34 +109,31 @@ class ArticleFacadeUuidFieldsTest {
 
         assertThat(data.authorUuid()).isEqualTo(AUTHOR_UUID);
         assertThat(data.seriesUuid()).isNull();
-        verify(seriesFacade, never()).findUuidsByIds(anyCollection());
     }
 
     @Test
-    @DisplayName("findByIds → 作者 uuid 直接取自文章（不查詢），整批只查一次系列 uuid；不呼叫 UserFacade")
-    void findByIds_resolvesBatchOnce() {
+    @DisplayName("findByIds → 作者 uuid 與系列 uuid 都直接取自文章（M6-b：不再經任何 facade 轉換）；不呼叫 UserFacade")
+    void findByIds_readsUuidsStraightFromArticles() {
         when(articleService.findByIds(List.of(1L, 2L, 3L)))
-                .thenReturn(List.of(article(1L, 3L), article(2L, 3L), article(3L, null)));
+                .thenReturn(List.of(article(1L, SERIES_UUID), article(2L, SERIES_UUID), article(3L, null)));
 
         List<ArticleData> result = facade.findByIds(List.of(1L, 2L, 3L));
 
         assertThat(result).extracting(ArticleData::authorUuid).containsOnly(AUTHOR_UUID);
         assertThat(result).extracting(ArticleData::seriesUuid).containsExactly(SERIES_UUID, SERIES_UUID, null);
-        verify(seriesFacade, times(1)).findUuidsByIds(anyCollection());
         verifyNoInteractions(userFacade);
     }
 
     @Test
-    @DisplayName("findBySeriesIdOrderByPosition → 每篇 authorUuid / seriesUuid 都被填值")
-    void findBySeriesIdOrderByPosition_fillsUuids() {
-        when(articleService.findBySeriesIdOrderByPosition(3L))
-                .thenReturn(List.of(article(1L, 3L), article(2L, 3L)));
+    @DisplayName("findBySeriesUuidOrderByPosition → 每篇 authorUuid / seriesUuid 都被填值")
+    void findBySeriesUuidOrderByPosition_fillsUuids() {
+        when(articleService.findBySeriesUuidOrderByPosition(SERIES_UUID))
+                .thenReturn(List.of(article(1L, SERIES_UUID), article(2L, SERIES_UUID)));
 
-        List<ArticleData> result = facade.findBySeriesIdOrderByPosition(3L);
+        List<ArticleData> result = facade.findBySeriesUuidOrderByPosition(SERIES_UUID);
 
         assertThat(result).extracting(ArticleData::authorUuid).containsOnly(AUTHOR_UUID);
         assertThat(result).extracting(ArticleData::seriesUuid).containsOnly(SERIES_UUID);
-        verify(seriesFacade, times(1)).findUuidsByIds(anyCollection());
     }
 
     @Test

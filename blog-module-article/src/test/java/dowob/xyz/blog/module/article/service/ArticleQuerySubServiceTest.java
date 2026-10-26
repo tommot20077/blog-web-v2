@@ -67,7 +67,7 @@ class ArticleQuerySubServiceTest {
     private static final UUID AUTHOR_UUID = new UUID(0L, 1L);
     private static final UUID OTHER_USER_UUID = new UUID(0L, 2L);
     private static final Long ARTICLE_ID = 11L;
-    private static final Long SERIES_ID = 99L;
+    private static final UUID SERIES_UUID = UUID.randomUUID();
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
 
     @BeforeEach
@@ -615,15 +615,15 @@ class ArticleQuerySubServiceTest {
         }
 
         @Test
-        @DisplayName("findBySeriesIdOrderByPosition delegates to mapper")
-        void findBySeriesIdOrderByPosition_delegatesToMapper() {
+        @DisplayName("findBySeriesUuidOrderByPosition delegates to mapper")
+        void findBySeriesUuidOrderByPosition_delegatesToMapper() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
-            when(articleMapper.findBySeriesIdOrderByPosition(SERIES_ID)).thenReturn(List.of(article));
+            when(articleMapper.findBySeriesUuidOrderByPosition(SERIES_UUID)).thenReturn(List.of(article));
 
-            List<Article> result = querySubService.findBySeriesIdOrderByPosition(SERIES_ID);
+            List<Article> result = querySubService.findBySeriesUuidOrderByPosition(SERIES_UUID);
 
             assertThat(result).containsExactly(article);
-            verify(articleMapper).findBySeriesIdOrderByPosition(SERIES_ID);
+            verify(articleMapper).findBySeriesUuidOrderByPosition(SERIES_UUID);
         }
 
         @Test

@@ -207,23 +207,21 @@ public class ArticleQueryService {
         Map<UUID, Long> uuidToId = idRows.stream()
                 .collect(Collectors.toMap(Article::getUuid, Article::getId));
 
-        Map<Long, Long> articleIdToSeriesId = idRows.stream()
-                .filter(a -> a.getSeriesId() != null)
-                .collect(Collectors.toMap(Article::getId, Article::getSeriesId));
+        // 文章 uuid → 所屬系列 uuid（M6-b：直接取自 articles.series_uuid，不再經 series 主鍵轉換）
+        Map<UUID, UUID> articleToSeriesUuid = idRows.stream()
+                .filter(a -> a.getSeriesUuid() != null)
+                .collect(Collectors.toMap(Article::getUuid, Article::getSeriesUuid));
 
         // 補充 seriesUuid / seriesTitle（批次查詢，避免 N+1）；caller 若自行覆寫這兩欄可傳 false 略過
-        if (includeSeriesNav && !articleIdToSeriesId.isEmpty()) {
-            Map<Long, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfo(
-                    new HashSet<>(articleIdToSeriesId.values()));
+        if (includeSeriesNav && !articleToSeriesUuid.isEmpty()) {
+            Map<UUID, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfoByUuids(
+                    new HashSet<>(articleToSeriesUuid.values()));
             records.forEach(r -> {
                 if (r.getSeriesPosition() != null) {
-                    Long id = uuidToId.get(r.getUuid());
-                    if (id != null) {
-                        SeriesBasicInfo info = seriesMap.get(articleIdToSeriesId.get(id));
-                        if (info != null) {
-                            r.setSeriesUuid(info.getSeriesUuid());
-                            r.setSeriesTitle(info.getSeriesTitle());
-                        }
+                    SeriesBasicInfo info = seriesMap.get(articleToSeriesUuid.get(r.getUuid()));
+                    if (info != null) {
+                        r.setSeriesUuid(info.getSeriesUuid());
+                        r.setSeriesTitle(info.getSeriesTitle());
                     }
                 }
             });

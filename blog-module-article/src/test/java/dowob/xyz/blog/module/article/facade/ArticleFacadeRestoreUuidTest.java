@@ -5,7 +5,6 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
-import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
@@ -17,7 +16,6 @@ import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleFileBinder;
-import dowob.xyz.blog.module.article.service.ArticleIdentityResolver;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.article.service.ArticleTocCodec;
@@ -33,7 +31,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -95,8 +92,6 @@ class ArticleFacadeRestoreUuidTest {
     @Mock private ArticleEventPublisher articleEventPublisher;
     @Mock private TransactionTemplate transactionTemplate;
     @Mock private FileFacade fileFacade;
-    @Mock private ObjectProvider<SeriesFacade> seriesFacadeProvider;
-    @Mock private SeriesFacade seriesFacade;
 
     private final ArticleMarkdownRenderer renderer = new ArticleMarkdownRenderer();
     private final ArticleTocCodec tocCodec = new ArticleTocCodec(new ObjectMapper());
@@ -114,10 +109,8 @@ class ArticleFacadeRestoreUuidTest {
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
                 new ArticleFileBinder(fileFacade),
-                new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)),
+                new ArticleDataAssembler(),
                 null, renderer, tocCodec);
-        when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
-        when(seriesFacade.findUuidsByIds(any())).thenReturn(java.util.Map.of());
         when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
             TransactionCallback<?> callback = invocation.getArgument(0);
             return callback.doInTransaction(mock(TransactionStatus.class));

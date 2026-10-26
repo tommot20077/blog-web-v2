@@ -57,7 +57,6 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -1104,7 +1103,7 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent（精準驗 4 params；seriesUuid 於刪除前取得）")
+        @DisplayName("正常：刪除文章時應發送 ArticleDeletedEvent（精準驗 4 params；無系列的文章 seriesUuid 為 null）")
         void deleteArticle_shouldPublishDeletedEvent() {
             Article article = buildArticle(ArticleStatus.PUBLISHED);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
@@ -1122,20 +1121,18 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("M4-b：delete 前先取得 seriesUuid（先於 articleRepository.delete），並傳給 publisher；刪除後不再查")
-        void deleteArticle_resolvesSeriesUuidBeforeDelete_andPassesToPublisher() {
+        @DisplayName("M6-b：事件帶文章自己的 series_uuid（刪除前已在文章實體上，不再查 series），先 delete 再發事件")
+        void deleteArticle_passesArticleOwnSeriesUuidToPublisher() {
             Article article = buildArticle(ArticleStatus.DRAFT);
-            article.setSeriesId(50L);
             UUID seriesUuid = UUID.randomUUID();
+            article.setSeriesUuid(seriesUuid);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of(CATEGORY_UUID));
             when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of(TAG_UUID));
-            when(articleEventPublisher.resolveSeriesUuidForDelete(50L)).thenReturn(seriesUuid);
 
             commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
 
             org.mockito.InOrder order = org.mockito.Mockito.inOrder(articleEventPublisher, articleRepository);
-            order.verify(articleEventPublisher).resolveSeriesUuidForDelete(50L);
             order.verify(articleRepository).delete(article);
             order.verify(articleEventPublisher).publishDeleted(
                     eq(article),
@@ -1143,14 +1140,14 @@ class ArticleCommandSubServiceTest {
                     eq(List.of(CATEGORY_UUID)),
                     eq(List.of(TAG_UUID))
             );
-            verify(articleEventPublisher, times(1)).resolveSeriesUuidForDelete(any());
+            org.mockito.Mockito.verifyNoMoreInteractions(articleEventPublisher);
         }
 
         @Test
-        @DisplayName("邊界：刪除無 seriesId 的文章時 publisher 收到 null seriesUuid")
+        @DisplayName("邊界：刪除無系列的文章時 publisher 收到 null seriesUuid")
         void deleteArticle_withoutSeriesId_publisherReceivesNullSeriesUuid() {
             Article article = buildArticle(ArticleStatus.DRAFT);
-            // seriesId 為 null（buildArticle 預設未設置）
+            // seriesUuid 為 null（buildArticle 預設未設置）
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
             when(articleMapper.findCategoryUuidsByArticleId(article.getId())).thenReturn(List.of());
             when(articleMapper.findTagUuidsByArticleId(article.getId())).thenReturn(List.of());
@@ -1167,17 +1164,16 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("M4-b：刪除前取得 seriesUuid 失敗 → 刪除不動手（不會刪了文章卻發出沒有 seriesUuid 的事件）")
-        void deleteArticle_whenSeriesUuidLookupFails_doesNotDelete() {
+        @DisplayName("刪除失敗（資料庫例外）→ 例外往外拋，且不發出 ArticleDeletedEvent")
+        void deleteArticle_whenDeleteFails_doesNotPublishEvent() {
             Article article = buildArticle(ArticleStatus.DRAFT);
-            article.setSeriesId(50L);
+            article.setSeriesUuid(UUID.randomUUID());
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
-            when(articleEventPublisher.resolveSeriesUuidForDelete(50L)).thenThrow(new IllegalStateException("series down"));
+            org.mockito.Mockito.doThrow(new IllegalStateException("db down")).when(articleRepository).delete(article);
 
             assertThatThrownBy(() -> commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
                     .isInstanceOf(IllegalStateException.class);
 
-            verify(articleRepository, never()).delete(any());
             verify(articleEventPublisher, never()).publishDeleted(any(), any(UUID.class), any(), any());
         }
     }
@@ -2163,9 +2159,10 @@ class ArticleCommandSubServiceTest {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(articleRepository.findById(1L)).thenReturn(Optional.of(article));
 
-            commandSubService.updateSeriesAssignment(1L, 10L, 2);
+            UUID seriesUuid = UUID.randomUUID();
+            commandSubService.updateSeriesAssignment(1L, seriesUuid, 2);
 
-            assertThat(article.getSeriesId()).isEqualTo(10L);
+            assertThat(article.getSeriesUuid()).isEqualTo(seriesUuid);
             assertThat(article.getSeriesPosition()).isEqualTo(2);
             verify(articleRepository).save(article);
         }
@@ -2175,7 +2172,7 @@ class ArticleCommandSubServiceTest {
         void updateSeriesAssignment_articleMissing_doesNotSave() {
             when(articleRepository.findById(1L)).thenReturn(Optional.empty());
 
-            commandSubService.updateSeriesAssignment(1L, 10L, 2);
+            commandSubService.updateSeriesAssignment(1L, UUID.randomUUID(), 2);
 
             verify(articleRepository, never()).save(any());
         }

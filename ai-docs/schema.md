@@ -92,8 +92,8 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 | like_count | INTEGER | NOT NULL DEFAULT 0 | V13 由 BIGINT 改為 INTEGER |
 | comment_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數 |
 | version | BIGINT | NOT NULL DEFAULT 1 | V7 新增；樂觀鎖 |
-| series_id | BIGINT | NULL REFERENCES series(id) ON DELETE SET NULL | V15 新增；所屬系列 |
-| series_position | INTEGER | NULL | V15 新增；在系列內的排序位置 |
+| series_uuid | UUID | NULL | V32 新增（取代已 DROP 的 `series_id`，由 `series.uuid` 回填；無系列者維持 NULL）。所屬系列，對應 `series.uuid`，**無 FK**；系列被刪除時由 article 訂閱 `SeriesDeletedEvent` 清空（`ArticleSeriesDeletedConsumer`），並以每日校正排程 `ArticleSeriesOrphanReconciliationJob`（03:53）兜底 |
+| series_position | INTEGER | NULL | V15 新增；在系列內的排序位置（與 `series_uuid` 一起被清空） |
 | toc | TEXT | | V19 新增；章節導覽 JSON |
 | published_at | TIMESTAMP | | |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
@@ -107,12 +107,11 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `idx_articles_status`（V2）on status
 - `idx_articles_created_at`（V2）on created_at DESC
 - ~~`idx_articles_uuid`~~ V13 已 DROP（與 UNIQUE constraint 重複）
-- `idx_articles_series_position`（V15, partial）on (series_id, series_position) WHERE series_id IS NOT NULL
+- `idx_articles_series_position`（V15, partial；V32 起以同名重建於 `series_uuid`）on (series_uuid, series_position) WHERE series_uuid IS NOT NULL
 - `idx_articles_published_latest`（V22, partial）on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'——公開列表預設排序；`view_count` / `comment_count` 刻意不建排序索引（頻繁回寫，避免失去 HOT update）
 
 **Foreign keys:**
-- `series_id` → `series(id)`（ON DELETE SET NULL；M6-b 才改為 `series_uuid`）
-- 無指向其他模組（users）的 FK——V31 已移除 `author_id` → `users(id)`。使用者只做軟刪除，不新增連動（匿名化另案 DATA-02）
+- **無任何外向 FK（M6 完成）**：V31 已移除 `author_id` → `users(id)`（使用者只做軟刪除，不新增連動，匿名化另案 DATA-02）；V32 已移除 `series_id` → `series(id)`（ON DELETE SET NULL）。「series 刪除 → 文章脫離系列」改由 `SeriesDeletedEvent` consumer＋每日校正負責：只清空 `series_uuid`／`series_position`，**文章留存**；與原 FK 的 SET NULL 相同，**不遞增 `version`、不更新 `updated_at`**
 
 ---
 
@@ -249,7 +248,7 @@ PRIMARY KEY (user_id, tag_id)
 - `idx_series_author`（V15 建立於 `author_id`；V29 以同名在 `author_uuid` 上重建）on author_uuid
 
 **Foreign keys:** 無（V29 已移除 `author_id` → `users(id)`（NO ACTION）；使用者只做軟刪除，該 FK 從未觸發，拿掉後行為不變，故不新增連動）。
-被參照：`articles.series_id` → `series(id)`（ON DELETE SET NULL，article 模組的 FK，M6 才改為 `series_uuid`；刪除 series 時文章脫離系列的行為不變）。
+被參照：無（V32 已移除 `articles.series_id` → `series(id)` 的 FK；`articles.series_uuid` 不建 FK。刪除 series 時文章脫離系列的行為不變，改由事件＋每日校正負責；刪除 series 也不再觸碰 `articles` 的列）。
 
 ---
 
@@ -560,6 +559,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V29** | 跨模組識別全面改 UUID（series 模組）：`series` 新增 `author_uuid UUID`，由 `users.uuid` 回填後 `SET NOT NULL`（找不到作者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `author_id`（連帶移除 `series_author_id_fkey` → `users(id)` 與 `idx_series_author` (author_id)）；以同名在 `author_uuid` 上重建 `idx_series_author`。新 uuid 欄位不建 FK；`articles.series_id` → `series(id)` ON DELETE SET NULL 是 article 模組的 FK，到 M6 才動。使用者只做軟刪除，不新增連動 |
 | **V30** | DROP 舊 `files` 表（V1 建立、V8 起被 `file_metadata` 取代，無任何程式碼讀寫；連帶移除 `files_pkey`／`files_uuid_key`／`files_storage_key_key`／`idx_files_uploader`／`idx_files_reference` 與 `uploader_id` → `users(id)` 的 FK）。設計 §4「Migration 授權」明列整張 DROP；`file_metadata` 不動（`uploader_id` 本來就是 UUID，`article_uuid` 依 V20 刻意無 FK） |
 | **V31** | 跨模組識別全面改 UUID（article 模組，作者維度）：`articles` 新增 `author_uuid UUID`，由 `users.uuid` 回填後 `SET NOT NULL`（找不到作者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `author_id`（連帶移除 `articles_author_id_fkey` → `users(id)` 與 `idx_articles_author_id` (author_id)）；以同名在 `author_uuid` 上重建 `idx_articles_author_id`。新 uuid 欄位不建 FK；`articles.series_id` → `series(id)` ON DELETE SET NULL 是系列維度，到 M6-b 才動。使用者只做軟刪除，不新增連動 |
+| **V32** | 跨模組識別全面改 UUID（article 模組，系列維度，M6 完成）：`articles` 新增 `series_uuid UUID`，由 `series.uuid` 回填（`series_id` 為 NULL 者維持 NULL；`series_id` 非 NULL 卻找不到系列時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `series_id`（連帶移除 `articles_series_id_fkey` → `series(id)` ON DELETE SET NULL 與 partial index `idx_articles_series_position` (series_id, series_position)）；以同名在 (series_uuid, series_position) 上重建 partial index（WHERE series_uuid IS NOT NULL）。`series_uuid` 維持可 NULL、**不建 FK**；`series_position` 不動。刪除連動改由 article 訂閱 `SeriesDeletedEvent`（queue `article.series-deleted`）清空 `series_uuid`／`series_position`，並以每日校正排程兜底。至此 `articles` 沒有任何跨模組 FK |
 
 ---
 

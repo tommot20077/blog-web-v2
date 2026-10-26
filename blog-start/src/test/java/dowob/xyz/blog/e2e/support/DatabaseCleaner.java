@@ -43,7 +43,7 @@ public class DatabaseCleaner {
         jdbcTemplate.execute("DELETE FROM article_versions");
         jdbcTemplate.execute("DELETE FROM user_preferences");
 
-        // 實體表（articles 在 series 之前刪：series_id ON DELETE SET NULL，順序不衝突）
+        // 實體表（articles 在 series 之前刪；V32 起兩者之間沒有 FK，順序不影響結果）
         jdbcTemplate.execute("DELETE FROM file_metadata");
         jdbcTemplate.execute("DELETE FROM verification_tokens");
         jdbcTemplate.execute("DELETE FROM articles");

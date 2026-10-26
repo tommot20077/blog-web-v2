@@ -286,9 +286,9 @@ class ArticleCommandSubService {
 
         /* delete 前讀取：article 刪除後 FK CASCADE 會清 article_tags / article_categories，
          * series consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。
-         * seriesUuid 是 series 扣 article_count 的唯一依據（事件不再帶 Long seriesId），同樣在刪除前取得：
-         * 查詢失敗時刪除不動手，而不是刪除後才發現、發出 null。*/
-        UUID seriesUuid = articleEventPublisher.resolveSeriesUuidForDelete(article.getSeriesId());
+         * seriesUuid 是 series 扣 article_count 的唯一依據（事件不再帶 series 的 Long 主鍵）；M6-b 起文章自己就存有
+         * series_uuid，直接讀取（不再查 SeriesFacade，沒有查詢失敗的可能）。*/
+        UUID seriesUuid = article.getSeriesUuid();
         List<UUID> categoryIds = articleMapper.findCategoryUuidsByArticleId(article.getId());
         List<UUID> tagIds = articleMapper.findTagUuidsByArticleId(article.getId());
 
@@ -297,7 +297,7 @@ class ArticleCommandSubService {
         transactionTemplate.executeWithoutResult(status -> {
             articleRepository.delete(article);
             /*
-             * SP-A: 移除 seriesFacade.notifyArticleDeletedFromSeries(seriesId)
+             * SP-A: 移除 seriesFacade.notifyArticleDeletedFromSeries
              * 改由 SeriesArticleDeletedConsumer 訂閱 ArticleDeletedEvent 處理（冪等）。
              * ArticleServiceImpl 不再依賴 SeriesFacade interface。
              */
@@ -782,13 +782,13 @@ class ArticleCommandSubService {
      * 更新文章的 series 歸屬與排序位置。
      *
      * @param articleId      文章資料庫主鍵
-     * @param seriesId       所屬 series 主鍵（null 表示解除）
+     * @param seriesUuid     所屬 series 公開 UUID（null 表示解除）
      * @param seriesPosition 在 series 中的排序位置（null 表示解除）
      */
     @Transactional
-    public void updateSeriesAssignment(Long articleId, Long seriesId, Integer seriesPosition) {
+    public void updateSeriesAssignment(Long articleId, UUID seriesUuid, Integer seriesPosition) {
         articleRepository.findById(articleId).ifPresent(a -> {
-            a.setSeriesId(seriesId);
+            a.setSeriesUuid(seriesUuid);
             a.setSeriesPosition(seriesPosition);
             articleRepository.save(a);
         });

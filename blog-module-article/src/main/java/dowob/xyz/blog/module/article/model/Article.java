@@ -115,10 +115,12 @@ public class Article {
     private LocalDateTime publishedAt;
 
     /**
-     * 所屬系列 ID（FK → series.id，nullable）
+     * 所屬系列的公開 UUID（nullable；對應 series.uuid；跨模組識別一律為 UUID，故<b>沒有</b>資料庫 FK；
+     * V32 起取代舊的 Long 系列主鍵欄位）。系列被刪除時由 article 訂閱 {@code SeriesDeletedEvent} 清空，
+     * 並以每日校正排程兜底。
      */
-    @Column("series_id")
-    private Long seriesId;
+    @Column("series_uuid")
+    private UUID seriesUuid;
 
     /**
      * 在系列中的排序位置（nullable）

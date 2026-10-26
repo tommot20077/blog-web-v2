@@ -23,33 +23,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FacadeDtoTransitionFieldsTest {
 
     @Test
-    @DisplayName("ArticleData 舊 5 參數建構子 → 新增的 authorUuid / seriesUuid 為 null，其餘欄位不變")
-    void articleData_legacyFiveArgConstructor_newUuidFieldsAreNull() {
+    @DisplayName("ArticleData 舊 4 參數建構子（M6-b 移除 seriesId 參數）→ authorUuid / seriesUuid 為 null，其餘欄位不變")
+    void articleData_legacyFourArgConstructor_uuidFieldsAreNull() {
         UUID articleUuid = UUID.randomUUID();
 
-        ArticleData data = new ArticleData(1L, articleUuid, "PUBLISHED", 3L, 2);
+        ArticleData data = new ArticleData(1L, articleUuid, "PUBLISHED", 2);
 
         assertThat(data.id()).isEqualTo(1L);
         assertThat(data.uuid()).isEqualTo(articleUuid);
         assertThat(data.status()).isEqualTo("PUBLISHED");
-        assertThat(data.seriesId()).isEqualTo(3L);
         assertThat(data.seriesPosition()).isEqualTo(2);
         assertThat(data.authorUuid()).isNull();
         assertThat(data.seriesUuid()).isNull();
     }
 
     @Test
-    @DisplayName("ArticleData 新 7 參數建構子 → 所有欄位原樣保留")
+    @DisplayName("ArticleData 新 6 參數建構子 → 所有欄位原樣保留")
     void articleData_canonicalConstructor_keepsAllFields() {
         UUID articleUuid = UUID.randomUUID();
         UUID authorUuid = UUID.randomUUID();
         UUID seriesUuid = UUID.randomUUID();
 
-        ArticleData data = new ArticleData(1L, articleUuid, "DRAFT", 3L, 2, authorUuid, seriesUuid);
+        ArticleData data = new ArticleData(1L, articleUuid, "DRAFT", 2, authorUuid, seriesUuid);
 
         assertThat(data.authorUuid()).isEqualTo(authorUuid);
         assertThat(data.seriesUuid()).isEqualTo(seriesUuid);
-        assertThat(data.seriesId()).isEqualTo(3L);
+        assertThat(data.seriesPosition()).isEqualTo(2);
     }
 
     @Test
