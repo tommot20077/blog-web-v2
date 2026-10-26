@@ -363,8 +363,8 @@ public interface ArticleFacade {
      * 公開 UUID → ArticleContentData（{@link #findContentById(Long)} 的 UUID 版，M3-a 新增）。
      *
      * <p>語意與 {@link #findContentById(Long)} 完全相同：<b>不分狀態</b>（DRAFT、PENDING_REVIEW、REJECTED、
-     * PUBLISHED、ARCHIVED 皆回傳），查無（含已硬刪）回傳 empty。回傳的 {@code authorUuid} 必須有值
-     * （正常情況下；作者查無時 owner 模組會記 warn，同 Long 版）。</p>
+     * PUBLISHED、ARCHIVED 皆回傳），查無（含已硬刪）回傳 empty。回傳的 {@code authorUuid} 直接取自
+     * {@code articles.author_uuid}，必定有值（M6-a 起該欄位為 NOT NULL）。</p>
      *
      * @param articleUuid 文章公開 UUID；{@code null} 回傳 empty
      * @return ArticleContentData Optional；查無時 empty
@@ -506,28 +506,14 @@ public interface ArticleFacade {
     Optional<ArticleNavRef> findNextPublishedInSeries(UUID seriesUuid, Integer currentPosition);
 
     /**
-     * 集合述詞：篩出 candidateIds 中「對該 viewer 可見」者，<b>維持輸入順序</b>。
+     * 集合述詞：篩出 candidates 中「對該 viewer 可見」者，<b>維持輸入順序</b>。
      *
-     * <p>可見性委派 {@code blog-common} 的 {@code ArticleVisibility}（單一真相）：
-     * PUBLISHED 全公開；非 PUBLISHED 僅作者本人與 ADMIN。查無此 id（已硬刪）者不會出現在結果中。</p>
+     * <p>可見性委派 {@code blog-common} 的 {@code ArticleVisibility}（單一真相）——PUBLISHED 全公開；
+     * 非 PUBLISHED 僅作者本人與 ADMIN；查無此 uuid（已硬刪）者不會出現在結果中。
+     * 作者以 UUID 比對（直接取自 {@code articles.author_uuid}）。</p>
      *
-     * <p><b>傳輸量界限</b>：與 {@code candidateIds} 大小成正比，非與頁大小成正比。
-     * 目前唯一 caller 是收藏列表，界限為單一使用者的收藏數 B；payload 僅 id。
-     * <b>重評門檻：任一使用者 B &gt; 5,000。</b></p>
-     *
-     * @param candidateIds 候選文章主鍵（依 caller 期望的顯示順序）；空清單回傳空清單
-     * @param viewerId     檢視者主鍵；匿名為 null
-     * @param isAdmin      檢視者是否為 ADMIN
-     * @return 可見的文章主鍵，順序與輸入一致
-     */
-    List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, boolean isAdmin);
-
-    /**
-     * 集合述詞：篩出 candidates 中「對該 viewer 可見」者，<b>維持輸入順序</b>（{@link #filterReadableIds} 的 UUID 版）。
-     *
-     * <p>語意與 {@link #filterReadableIds(List, Long, boolean)} 完全相同：可見性委派 {@code blog-common} 的
-     * {@code ArticleVisibility}（單一真相）——PUBLISHED 全公開；非 PUBLISHED 僅作者本人與 ADMIN；
-     * 查無此 uuid（已硬刪）者不會出現在結果中。作者以 UUID 比對（article 內部仍以 JOIN {@code users} 取得，M6 才改）。</p>
+     * <p>M6-a：原本以 Long 主鍵識別作者的 {@code filterReadableIds(List<Long>, Long, boolean)} 已移除——
+     * 作者不再有 Long 主鍵，且它沒有任何呼叫端。</p>
      *
      * <p><b>傳輸量界限</b>：與 {@code candidates} 大小成正比，非與頁大小成正比；實作端經 {@code BatchedQuery} 切批。
      * <b>重評門檻：任一使用者 B &gt; 5,000。</b></p>

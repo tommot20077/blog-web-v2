@@ -113,7 +113,7 @@ class SeriesServiceTest {
     }
 
     private ArticleData article(UUID uuid, UUID authorUuid, ArticleStatus status, UUID inSeriesUuid, Integer position) {
-        return new ArticleData(articleId, uuid, 42L, status.name(), null, position, authorUuid, inSeriesUuid);
+        return new ArticleData(articleId, uuid, status.name(), null, position, authorUuid, inSeriesUuid);
     }
 
     private void stubAuthor(UUID uuid, String nickname) {

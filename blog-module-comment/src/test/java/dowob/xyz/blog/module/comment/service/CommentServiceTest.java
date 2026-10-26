@@ -725,7 +725,7 @@ class CommentServiceTest {
     private void stubArticle(String status, UUID ownerUuid) {
         when(articleFacade.findByUuid(articleUuid))
                 .thenReturn(Optional.of(new ArticleData(
-                        articleId, articleUuid, 7L, status, null, null, ownerUuid, null)));
+                        articleId, articleUuid, status, null, null, ownerUuid, null)));
     }
 
     /**

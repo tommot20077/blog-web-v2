@@ -91,7 +91,7 @@ class VersioningServiceTest {
     /** 建立帶有固定 uuid 的 ArticleContentData stub（snapshot 流程用；Long 主鍵只是 article 的過渡欄位）。 */
     private ArticleContentData contentData(UUID aArticleUuid, UUID aAuthorUuid, String title, String content) {
         return new ArticleContentData(
-            100L, aArticleUuid, 1L,
+            100L, aArticleUuid,
             title, "test-slug", content, "summary", null, "DRAFT", aAuthorUuid
         );
     }
@@ -111,7 +111,7 @@ class VersioningServiceTest {
 
     /** 建立只帶 uuid 與作者 uuid 的 ArticleData（ownership 檢查用）。 */
     private ArticleData articleData(UUID aArticleUuid, UUID aAuthorUuid) {
-        return new ArticleData(100L, aArticleUuid, 1L, "DRAFT", null, null, aAuthorUuid, null);
+        return new ArticleData(100L, aArticleUuid, "DRAFT", null, null, aAuthorUuid, null);
     }
 
     // ─── recordAutoSnapshot ─────────────

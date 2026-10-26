@@ -114,7 +114,7 @@ class ArticleFacadeRestoreUuidTest {
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
                 new ArticleFileBinder(fileFacade),
-                new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)),
+                new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)),
                 null, renderer, tocCodec);
         when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
         when(seriesFacade.findUuidsByIds(any())).thenReturn(java.util.Map.of());
@@ -130,15 +130,13 @@ class ArticleFacadeRestoreUuidTest {
         when(articleRepository.findById(articleId)).thenReturn(Optional.of(existing));
         when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(existing));
         when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(articleMapper.findUserUuidsByIds(anyCollection()))
-                .thenReturn(List.of(new ArticleMapper.UserUuidRow(5L, authorUuid)));
     }
 
     private Article draftArticle() {
         Article a = new Article();
         a.setId(articleId);
         a.setUuid(articleUuid);
-        a.setAuthorId(5L);
+        a.setAuthorUuid(authorUuid);
         a.setTitle("舊標題");
         a.setSlug("old-slug");
         a.setContent("舊內容");
@@ -168,7 +166,6 @@ class ArticleFacadeRestoreUuidTest {
         ArticleContentData data = result.get();
         assertThat(data.id()).isEqualTo(articleId);
         assertThat(data.uuid()).isEqualTo(articleUuid);
-        assertThat(data.authorId()).isEqualTo(5L);
         assertThat(data.authorUuid()).isEqualTo(authorUuid);
         assertThat(data.content()).isEqualTo("# Hello");
         assertThat(data.status()).isEqualTo("DRAFT");

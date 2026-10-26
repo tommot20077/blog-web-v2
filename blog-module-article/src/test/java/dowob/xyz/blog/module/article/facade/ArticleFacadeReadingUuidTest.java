@@ -285,7 +285,7 @@ class ArticleFacadeReadingUuidTest {
         }
 
         @Test
-        @DisplayName("重複與 null 候選：查詢只送去重後的 uuid，輸出比照 filterReadableIds 保留輸入中的重複、丟棄 null")
+        @DisplayName("重複與 null 候選：查詢只送去重後的 uuid，輸出保留輸入中的重複、丟棄 null")
         void duplicatesAndNulls_queryIsDistinct() {
             UUID a = UUID.randomUUID();
             List<UUID> candidates = new ArrayList<>(List.of(a, a));

@@ -120,7 +120,7 @@ class ArticleLikeControllerIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(AUTHOR_ID);
+        article.setAuthorUuid(SeededReadingUsers.uuidOf(AUTHOR_ID));
         article.setTitle("Test Article");
         article.setSlug("test-article-" + UUID.randomUUID());
         article.setContent("test content");

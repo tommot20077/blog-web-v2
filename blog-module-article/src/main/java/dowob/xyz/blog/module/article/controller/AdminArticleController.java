@@ -96,7 +96,7 @@ public class AdminArticleController {
                                                        @AuthenticationPrincipal AuthUser user,
                                                        Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.archiveArticle(user.id(), operatorRole, uuid));
+        return ApiResponse.success(articleService.archiveArticle(user.uuid(), operatorRole, uuid));
     }
 
     /**
@@ -123,7 +123,7 @@ public class AdminArticleController {
                                                          @AuthenticationPrincipal AuthUser user,
                                                          Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleService.unarchiveArticle(user.id(), operatorRole, uuid));
+        return ApiResponse.success(articleService.unarchiveArticle(user.uuid(), operatorRole, uuid));
     }
 
 }

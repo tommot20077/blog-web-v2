@@ -40,22 +40,22 @@ class ArticleQuerySubService {
     private final ArticleEntityFinder entityFinder;
     private final ArticleResponseMapper responseMapper;
 
-    ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole) {
+    ArticleResponse getArticleByUuid(UUID articleUuid, UUID viewerUuid, Role viewerRole) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
-        checkReadPermission(article, viewerId, viewerRole);
+        checkReadPermission(article, viewerUuid, viewerRole);
         return responseMapper.toResponse(article);
     }
 
-    ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole) {
+    ArticleResponse getArticleBySlug(String slug, UUID viewerUuid, Role viewerRole) {
         Article article = articleRepository.findBySlug(slug)
                 .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
-        checkReadPermission(article, viewerId, viewerRole);
+        checkReadPermission(article, viewerUuid, viewerRole);
         return responseMapper.toResponse(article);
     }
 
-    EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
+    EditorArticleResponse getArticleForEdit(UUID articleUuid, UUID requesterUuid) {
         Article article = entityFinder.findByUuidOrThrow(articleUuid);
-        if (!article.getAuthorId().equals(requesterId)) {
+        if (!article.getAuthorUuid().equals(requesterUuid)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
         }
         return responseMapper.toEditorResponse(article);
@@ -80,16 +80,16 @@ class ArticleQuerySubService {
         return PageResult.of(page, size, total, toSummaryResponses(articles));
     }
 
-    PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int page, int size, ArticleStatus status) {
+    PageResult<ArticleSummaryResponse> getMyArticles(UUID authorUuid, int page, int size, ArticleStatus status) {
         long offset = (long) (page - 1) * size;
         List<Article> articles;
         long total;
         if (status != null) {
-            articles = articleMapper.findByAuthorIdAndStatus(authorId, status, offset, size);
-            total = articleMapper.countByAuthorIdAndStatus(authorId, status);
+            articles = articleMapper.findByAuthorUuidAndStatus(authorUuid, status, offset, size);
+            total = articleMapper.countByAuthorUuidAndStatus(authorUuid, status);
         } else {
-            articles = articleMapper.findByAuthorIdPaged(authorId, offset, size);
-            total = articleMapper.countByAuthorId(authorId);
+            articles = articleMapper.findByAuthorUuidPaged(authorUuid, offset, size);
+            total = articleMapper.countByAuthorUuid(authorUuid);
         }
         List<ArticleSummaryResponse> list = toSummaryResponses(articles);
         return PageResult.of(page, size, total, list);
@@ -181,12 +181,12 @@ class ArticleQuerySubService {
     private List<ArticleSummaryResponse> toSummaryResponses(List<Article> articles) {
         List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
         Map<UUID, List<TagSummaryResponse>> tagMap = responseMapper.batchToTagResponsesMap(uuids);
-        List<Long> authorIds = articles.stream()
-                .map(Article::getAuthorId)
+        List<UUID> authorUuids = articles.stream()
+                .map(Article::getAuthorUuid)
                 .filter(Objects::nonNull)
                 .distinct()
                 .toList();
-        Map<Long, AuthorInfo> authorMap = responseMapper.batchToAuthorInfoMap(authorIds);
+        Map<UUID, AuthorInfo> authorMap = responseMapper.batchToAuthorInfoMap(authorUuids);
         return articles.stream()
                 .map(article -> responseMapper.toSummaryResponse(article, tagMap, authorMap))
                 .collect(Collectors.toList());
@@ -201,12 +201,12 @@ class ArticleQuerySubService {
      * （不回 403，避免成為存在性探測器）。</p>
      *
      * @param article    文章實體
-     * @param viewerId   檢視者資料庫主鍵；匿名為 null
+     * @param viewerUuid   檢視者公開 UUID；匿名為 null
      * @param viewerRole 檢視者角色
      */
-    private void checkReadPermission(Article article, Long viewerId, Role viewerRole) {
+    private void checkReadPermission(Article article, UUID viewerUuid, Role viewerRole) {
         boolean readable = ArticleVisibility.isReadableBy(
-                article.getStatus(), article.getAuthorId(), viewerId, Role.ADMIN == viewerRole);
+                article.getStatus(), article.getAuthorUuid(), viewerUuid, Role.ADMIN == viewerRole);
 
         if (!readable) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);

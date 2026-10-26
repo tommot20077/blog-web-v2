@@ -17,6 +17,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
@@ -155,11 +156,14 @@ public class ArticleFacadeImpl implements ArticleFacade {
     @Override
     public List<ArticleIndexData> findAllPublishedForIndex() {
         List<Article> articles = articleMapper.findAllPublished();
-        /** authorUuid 整批一次取得（設計 §3.1），不隨文章逐筆查詢 */
-        Map<Long, UUID> authorUuids = articleDataAssembler.resolveAuthorUuids(
-                articles.stream().map(Article::getAuthorId).toList());
+        if (articles.isEmpty()) {
+            return List.of();
+        }
+        /** 作者暱稱整批一次取得（去重與切批由 UserFacade 實作負責），不隨文章逐筆查詢 */
+        Map<UUID, UserDisplayInfo> authors = userFacade.getDisplayInfoByUuids(
+                articles.stream().map(Article::getAuthorUuid).filter(Objects::nonNull).distinct().toList());
         return articles.stream()
-                .map(article -> toIndexData(article, authorUuids))
+                .map(article -> toIndexData(article, authors))
                 .toList();
     }
 
@@ -249,31 +253,29 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * 將文章實體轉換為索引資料 DTO（供搜尋模組使用）
      *
-     * @param article     文章實體
-     * @param authorUuids 作者主鍵 → 公開 UUID（整批一次取得）
+     * @param article 文章實體
+     * @param authors 作者公開 UUID → 顯示資訊（整批一次取得；查無的作者暱稱為 null）
      * @return ArticleIndexData
      */
-    private ArticleIndexData toIndexData(Article article, Map<Long, UUID> authorUuids) {
+    private ArticleIndexData toIndexData(Article article, Map<UUID, UserDisplayInfo> authors) {
         List<TagInfo> tags = articleMapper.findTagsByArticleUuid(article.getUuid());
         List<ArticleIndexData.TagData> tagData = tags.stream()
                 .map(t -> new ArticleIndexData.TagData(t.id(), t.name(), t.slug()))
                 .toList();
 
-        ArticleDataAssembler.warnIfAuthorUuidMissing(article.getId(), article.getAuthorId(), authorUuids);
+        UserDisplayInfo author = authors.get(article.getAuthorUuid());
         return new ArticleIndexData(
                 article.getUuid(),
                 article.getTitle(),
                 article.getSlug(),
                 article.getSummary(),
                 stripMarkdown(article.getContent()),
-                article.getAuthorId(),
-                userFacade.getUserUsernameById(article.getAuthorId()).orElse(null),
-                userFacade.getUserNicknameById(article.getAuthorId()).orElse(null),
+                author == null ? null : author.nickname(),
                 article.getPublishedAt(),
                 article.getViewCount(),
                 article.getLikeCount(),
                 tagData,
-                authorUuids.get(article.getAuthorId()));
+                article.getAuthorUuid());
     }
 
     /**
@@ -301,14 +303,25 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * 將 ArticleSummaryRow 列表組裝為 ArticleSummaryInfo 列表
      *
      * <p>
-     * 批次查詢所有文章的標籤名稱，避免 N+1 查詢問題，
-     * 再以 articleId 為索引建立 Map 對應。
+     * 作者暱稱整頁只呼叫一次 {@code UserFacade.getDisplayInfoByUuids}（取代原本對 users 表的 INNER JOIN）；
+     * <b>查無作者的文章被排除</b>，與 INNER JOIN 時「找不到對應使用者的文章整列不出現」的語意相同。
+     * 排除發生在 SQL 的 {@code LIMIT} 之後，因此極端情況下回傳筆數可能少於 {@code limit}
+     * （使用者只做軟刪除、作者必定查得到，正常資料不會發生）。
+     * 其餘文章再批次查詢標籤名稱，避免 N+1 查詢問題，並以文章 UUID 為索引建立 Map 對應。
      * </p>
      *
-     * @param rows 原始查詢結果列表
+     * @param allRows 原始查詢結果列表
      * @return 組裝完成的 ArticleSummaryInfo 列表
      */
-    private List<ArticleSummaryInfo> assembleSummaryInfoList(List<ArticleSummaryRow> rows) {
+    private List<ArticleSummaryInfo> assembleSummaryInfoList(List<ArticleSummaryRow> allRows) {
+        if (allRows.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Map<UUID, UserDisplayInfo> authors = userFacade.getDisplayInfoByUuids(
+                allRows.stream().map(ArticleSummaryRow::getAuthorUuid).filter(Objects::nonNull).distinct().toList());
+        List<ArticleSummaryRow> rows = allRows.stream()
+                .filter(row -> row.getAuthorUuid() != null && authors.containsKey(row.getAuthorUuid()))
+                .toList();
         if (rows.isEmpty()) {
             return Collections.emptyList();
         }
@@ -330,7 +343,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
                         row.getTitle(),
                         row.getSlug(),
                         row.getSummary(),
-                        row.getAuthorNickname(),
+                        authors.get(row.getAuthorUuid()).nickname(),
                         tagNamesByArticleUuid.getOrDefault(row.getUuid(), Collections.emptyList()),
                         row.getViewCount(),
                         row.getLikeCount(),
@@ -633,21 +646,16 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * @return ArticleContentData record
      */
     private ArticleContentData toContentData(Article article) {
-        Map<Long, UUID> authorUuids = articleDataAssembler.resolveAuthorUuids(
-                article.getAuthorId() == null ? List.of() : List.of(article.getAuthorId()));
-        ArticleDataAssembler.warnIfAuthorUuidMissing(article.getId(), article.getAuthorId(), authorUuids);
-        UUID authorUuid = article.getAuthorId() == null ? null : authorUuids.get(article.getAuthorId());
         return new ArticleContentData(
                 article.getId(),
                 article.getUuid(),
-                article.getAuthorId(),
                 article.getTitle(),
                 article.getSlug(),
                 article.getContent(),
                 article.getSummary(),
                 article.getCoverImageUrl(),
                 article.getStatus() != null ? article.getStatus().name() : null,
-                authorUuid
+                article.getAuthorUuid()
         );
     }
 
@@ -682,27 +690,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
     @Override
     public Optional<ArticleNavRef> findNextPublishedInSeries(Long seriesId, Integer currentPosition) {
         return Optional.ofNullable(articleMapper.findNextPublishedInSeries(seriesId, currentPosition));
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * <p>輸入為 caller 的全量候選集（例如某使用者的全部收藏），無上界，
-     * 故經 {@link BatchedQuery} 切批。可見性過濾在各批獨立成立，屬跨批可合併形狀；
-     * 回傳順序由最後對 {@code candidateIds} 的重排保證，不依賴各批查詢的回傳順序。</p>
-     */
-    @Override
-    public List<Long> filterReadableIds(List<Long> candidateIds, Long viewerId, boolean isAdmin) {
-        if (candidateIds == null) {
-            return List.of();
-        }
-        Set<Long> readable = BatchedQuery
-                .queryInBatches(candidateIds, articleMapper::findVisibilityRowsByIds).stream()
-                .filter(row -> ArticleVisibility.isReadableBy(
-                        row.status(), row.authorId(), viewerId, isAdmin))
-                .map(ArticleMapper.ArticleVisibilityRow::id)
-                .collect(Collectors.toSet());
-        return candidateIds.stream().filter(readable::contains).toList();
     }
 
     /**

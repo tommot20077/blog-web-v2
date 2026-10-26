@@ -76,7 +76,7 @@ class CommentBatchingTest {
         UUID viewerUuid = UUID.randomUUID();
 
         when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                new ArticleData(1L, articleUuid, 9L, "PUBLISHED", null, null, UUID.randomUUID(), null)));
+                new ArticleData(1L, articleUuid, "PUBLISHED", null, null, UUID.randomUUID(), null)));
         when(commentMapper.findTopLevelByArticle(eq(articleUuid), anyString(), anyInt(), anyInt()))
                 .thenReturn(IntStream.rangeClosed(1, total).mapToObj(i -> topLevel(i)).toList());
         when(commentMapper.findRepliesByParentIds(anyList())).thenAnswer(invocation -> {

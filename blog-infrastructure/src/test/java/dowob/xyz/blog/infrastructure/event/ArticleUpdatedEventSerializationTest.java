@@ -13,7 +13,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link ArticleUpdatedEvent} 序列化測試：只增不減——原有欄位名稱與型別不變，另含 eventId 與 authorUuid。
+ * {@link ArticleUpdatedEvent} 序列化測試：保留欄位名稱與型別不變，含 eventId 與 authorUuid，且不含已移除的 authorId／authorUsername（M6-a）。
  *
  * @author Yuan
  * @version 1.0
@@ -23,30 +23,29 @@ class ArticleUpdatedEventSerializationTest {
 
     private static ArticleUpdatedEvent sample() {
         return new ArticleUpdatedEvent(
-                UUID.randomUUID(), UUID.randomUUID(), 1L, UUID.randomUUID(), "標題",
+                UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "標題",
                 LocalDateTime.of(2026, 10, 24, 12, 0), "slug", "摘要", "純文字",
-                "alice", "愛麗絲", List.of(new TagInfo(UUID.randomUUID(), "Java", "java")));
+                "愛麗絲", List.of(new TagInfo(UUID.randomUUID(), "Java", "java")));
     }
 
     @Test
-    @DisplayName("JSON 含原有全部欄位（名稱型別不變）＋ eventId ＋ authorUuid")
+    @DisplayName("JSON 含 eventId、authorUuid 與其餘保留欄位（名稱型別不變），不含 authorId／authorUsername")
     void serialize_shouldKeepOriginalFieldsAndAddNewOnes() {
         ArticleUpdatedEvent event = sample();
 
         JsonNode json = EventJsonSupport.toJson(event);
 
         assertThat(EventJsonSupport.fieldNames(json)).containsExactlyInAnyOrderElementsOf(Set.of(
-                "eventId", "articleUuid", "authorId", "authorUuid", "title", "publishedAt", "slug", "summary",
-                "contentText", "authorUsername", "authorNickname", "tags"));
+                "eventId", "articleUuid", "authorUuid", "title", "publishedAt", "slug", "summary",
+                "contentText", "authorNickname", "tags"));
         assertThat(json.get("articleUuid").asText()).isEqualTo(event.articleUuid().toString());
-        assertThat(json.get("authorId").isIntegralNumber()).isTrue();
-        assertThat(json.get("authorId").asLong()).isEqualTo(1L);
+        assertThat(json.has("authorId")).as("authorId 已移除（M6-a）").isFalse();
         assertThat(json.get("title").asText()).isEqualTo("標題");
         assertThat(json.get("publishedAt").isArray()).isTrue();
         assertThat(json.get("slug").asText()).isEqualTo("slug");
         assertThat(json.get("summary").asText()).isEqualTo("摘要");
         assertThat(json.get("contentText").asText()).isEqualTo("純文字");
-        assertThat(json.get("authorUsername").asText()).isEqualTo("alice");
+        assertThat(json.has("authorUsername")).as("登入識別符不外流（M6-a）").isFalse();
         assertThat(json.get("authorNickname").asText()).isEqualTo("愛麗絲");
         assertThat(json.get("tags").isArray()).isTrue();
         assertThat(EventJsonSupport.fieldNames(json.get("tags").get(0)))
@@ -56,7 +55,7 @@ class ArticleUpdatedEventSerializationTest {
     }
 
     @Test
-    @DisplayName("升級前（不含 eventId／authorUuid）的舊 JSON 仍可反序列化，新欄位為 null")
+    @DisplayName("升級前（不含 eventId／authorUuid、仍含 authorId／authorUsername）的舊 JSON 仍可反序列化，新欄位為 null")
     void deserialize_legacyJson_shouldSucceed() {
         UUID articleUuid = UUID.randomUUID();
         String legacy = "{\"articleUuid\":\"" + articleUuid + "\",\"authorId\":4,\"title\":\"t\","
@@ -68,7 +67,6 @@ class ArticleUpdatedEventSerializationTest {
 
         assertThat(restored).isInstanceOfSatisfying(ArticleUpdatedEvent.class, e -> {
             assertThat(e.articleUuid()).isEqualTo(articleUuid);
-            assertThat(e.authorId()).isEqualTo(4L);
             assertThat(e.eventId()).isNull();
             assertThat(e.authorUuid()).isNull();
         });

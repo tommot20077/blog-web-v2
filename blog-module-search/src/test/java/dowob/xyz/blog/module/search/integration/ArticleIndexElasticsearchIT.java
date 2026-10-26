@@ -173,8 +173,7 @@ class ArticleIndexElasticsearchIT {
         assertThat(rawAuthorSource(articleUuid)).containsKeys("id", "username");
 
         when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
-                articleUuid, "Elasticsearch guide", "es-guide", "about search", "full text content",
-                424242L, "login-name-sentinel", "愛麗絲",
+                articleUuid, "Elasticsearch guide", "es-guide", "about search", "full text content", "愛麗絲",
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));
@@ -193,8 +192,7 @@ class ArticleIndexElasticsearchIT {
         UUID articleUuid = UUID.randomUUID();
         UUID authorUuid = UUID.randomUUID();
         when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
-                articleUuid, "Elasticsearch guide", "es-guide", "about search", "full text content",
-                424242L, "login-name-sentinel", "愛麗絲",
+                articleUuid, "Elasticsearch guide", "es-guide", "about search", "full text content", "愛麗絲",
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));

@@ -182,8 +182,7 @@ class SearchServiceTest {
     private ArticleIndexData indexData(UUID uuid) {
         return new ArticleIndexData(
                 uuid, "仍公開的文章", "still-public",
-                "summary", "content",
-                1L, "yuan", "Yuan",
+                "summary", "content", "Yuan",
                 LocalDateTime.now(), 0L, 0L, List.of());
     }
 
@@ -643,8 +642,7 @@ class SearchServiceTest {
             String ghostId = UUID.randomUUID().toString();
             ArticleIndexData live = new ArticleIndexData(
                     liveUuid, "仍公開的文章", "still-public",
-                    "summary", "content",
-                    1L, "yuan", "Yuan",
+                    "summary", "content", "Yuan",
                     LocalDateTime.now(), 0L, 0L, List.of());
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(live));
             SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
@@ -667,8 +665,7 @@ class SearchServiceTest {
             UUID liveUuid = UUID.randomUUID();
             ArticleIndexData live = new ArticleIndexData(
                     liveUuid, "仍公開的文章", "still-public",
-                    "summary", "content",
-                    1L, "yuan", "Yuan",
+                    "summary", "content", "Yuan",
                     LocalDateTime.now(), 0L, 0L, List.of());
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(live));
             SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
@@ -832,8 +829,7 @@ class SearchServiceTest {
         void reindexAll_fetchesFromFacadeAndSavesAll() {
             ArticleIndexData data = new ArticleIndexData(
                     UUID.randomUUID(), "Spring Boot 教學", "spring-boot-tutorial",
-                    "本文介紹 Spring Boot", "Spring Boot 是一個框架",
-                    1L, "yuan", "Yuan",
+                    "本文介紹 Spring Boot", "Spring Boot 是一個框架", "Yuan",
                     LocalDateTime.now(), 0L, 0L, List.of());
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
 
@@ -861,8 +857,7 @@ class SearchServiceTest {
         void reindexAll_whenTagsNull_convertsToEmptyTagList() {
             ArticleIndexData data = new ArticleIndexData(
                     UUID.randomUUID(), "No Tags Article", "no-tags",
-                    "summary", "content",
-                    1L, "yuan", "Yuan",
+                    "summary", "content", "Yuan",
                     LocalDateTime.now(), 0L, 0L, null);
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
 
@@ -877,8 +872,7 @@ class SearchServiceTest {
             ArticleIndexData.TagData tagData = new ArticleIndexData.TagData(UUID.randomUUID(), "Java", "java");
             ArticleIndexData data = new ArticleIndexData(
                     UUID.randomUUID(), "Tagged Article", "tagged",
-                    "summary", "content",
-                    1L, "yuan", "Yuan",
+                    "summary", "content", "Yuan",
                     LocalDateTime.now(), 10L, 5L, List.of(tagData));
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
 
@@ -898,8 +892,7 @@ class SearchServiceTest {
         void reindexAll_buildsAuthorFromUuidAndNicknameOnly() {
             UUID authorUuid = UUID.fromString("bbbbbbbb-1111-2222-3333-444444444444");
             ArticleIndexData data = new ArticleIndexData(
-                    UUID.randomUUID(), "標題", "slug", "summary", "content",
-                    987654L, "login-name-sentinel", "暱稱",
+                    UUID.randomUUID(), "標題", "slug", "summary", "content", "暱稱",
                     LocalDateTime.now(), 0L, 0L, List.of(), authorUuid);
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
 

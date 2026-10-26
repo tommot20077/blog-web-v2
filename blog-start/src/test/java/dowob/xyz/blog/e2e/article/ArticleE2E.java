@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.LinkedHashMap;
@@ -40,6 +41,9 @@ class ArticleE2E extends AbstractE2ETest {
 
     @Autowired
     private DatabaseCleaner databaseCleaner;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @AfterEach
     void tearDown() {
@@ -84,6 +88,29 @@ class ArticleE2E extends AbstractE2ETest {
                 .andExpect(jsonPath("$.data.uuid").exists())
                 .andExpect(jsonPath("$.data.title").value("E2E 測試文章"))
                 .andExpect(jsonPath("$.data.status").value("DRAFT"));
+    }
+
+    @Test
+    @DisplayName("文章回應的 authorUuid 等於註冊時 users.uuid（作者以 uuid 儲存，M6-a）")
+    void getArticle_authorUuidMatchesRegisteredUserUuid() throws Exception {
+        String token = authHelper.createUserWithRole(
+                "author-uuid@test.com", "Password1!", "authoruuid", "AuthorUuid", Role.AUTHOR);
+        String expectedAuthorUuid = jdbcTemplate.queryForObject(
+                "SELECT uuid::text FROM users WHERE email = ?", String.class, "author-uuid@test.com");
+
+        String uuid = createArticleAndGetUuid(token, DataBuilder.article("作者 uuid 驗證", "內容"));
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                        .with(bearerToken(token)))
+                .andExpect(status().isOk())
+                .andExpect(apiSuccess());
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.authorUuid").value(expectedAuthorUuid))
+                .andExpect(jsonPath("$.data.authorNickname").value("AuthorUuid"));
+        String storedAuthorUuid = jdbcTemplate.queryForObject(
+                "SELECT author_uuid::text FROM articles WHERE uuid = ?::uuid", String.class, uuid);
+        org.assertj.core.api.Assertions.assertThat(storedAuthorUuid).isEqualTo(expectedAuthorUuid);
     }
 
     @Test

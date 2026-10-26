@@ -71,9 +71,8 @@ class ArticlePublishedConsumerTest {
 
     private ArticlePublishedEvent event() {
         return new ArticlePublishedEvent(
-                UUID.randomUUID(), ARTICLE_UUID, 1L, UUID.randomUUID(), "Test Article", LocalDateTime.now(),
-                "test-slug", "Test summary", "content text",
-                "testuser", "Test User", List.of());
+                UUID.randomUUID(), ARTICLE_UUID, UUID.randomUUID(), "Test Article", LocalDateTime.now(),
+                "test-slug", "Test summary", "content text", "Test User", List.of());
     }
 
     @Test

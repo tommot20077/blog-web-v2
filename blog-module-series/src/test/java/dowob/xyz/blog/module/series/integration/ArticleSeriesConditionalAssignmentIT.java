@@ -110,7 +110,7 @@ class ArticleSeriesConditionalAssignmentIT {
     private Article insertArticle() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(SeededUsers.USER1_ID);
+        article.setAuthorUuid(SeededUsers.USER1_UUID);
         article.setTitle("Cond Article " + UUID.randomUUID());
         article.setSlug("cond-article-" + UUID.randomUUID());
         article.setContent("content");

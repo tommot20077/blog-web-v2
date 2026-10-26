@@ -30,59 +30,59 @@ public interface ArticleService {
     /**
      * 建立文章
      *
-     * @param authorId 作者資料庫主鍵
+     * @param authorUuid 作者公開 UUID
      * @param request  建立文章請求
      * @return 建立後的 Editor 文章資訊
      */
-    EditorArticleResponse createArticle(Long authorId, CreateArticleRequest request);
+    EditorArticleResponse createArticle(UUID authorUuid, CreateArticleRequest request);
 
     /**
      * 更新文章（僅允許 DRAFT 或 REJECTED 狀態）
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @param request      更新請求
      * @return 更新後的 Editor 文章資訊
      * @throws org.springframework.web.server.ResponseStatusException HTTP 403 當文章狀態為 PENDING_REVIEW / PUBLISHED / ARCHIVED
      */
-    EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid, UpdateArticleRequest request);
+    EditorArticleResponse updateArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid, UpdateArticleRequest request);
 
     /**
      * 取得文章供 Editor 編輯（僅作者本人）
      *
      * @param articleUuid 文章公開 UUID
-     * @param requesterId 請求者資料庫主鍵
+     * @param requesterUuid 請求者公開 UUID
      * @return Editor 用文章資訊
      * @throws org.springframework.web.server.ResponseStatusException HTTP 403 當請求者非作者
      */
-    EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId);
+    EditorArticleResponse getArticleForEdit(UUID articleUuid, UUID requesterUuid);
 
     /**
      * 刪除文章
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      */
-    void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid);
+    void deleteArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
 
     /**
      * 根據 UUID 取得文章詳情
      *
      * <p>
      * 公開 API：已發布文章任何人可存取；其他狀態需作者本人或 ADMIN 權限。
-     * 匿名存取（viewerId/viewerRole 為 null）只能取得 PUBLISHED 文章。
+     * 匿名存取（viewerUuid/viewerRole 為 null）只能取得 PUBLISHED 文章。
      * clientIp 用於 Redis 防刷計數（同 IP 5 分鐘內只計算一次瀏覽）。
      * </p>
      *
      * @param articleUuid 文章公開 UUID
-     * @param viewerId    觀看者 ID（匿名為 null）
+     * @param viewerUuid    觀看者公開 UUID（匿名為 null）
      * @param viewerRole  觀看者角色（匿名為 null）
      * @param clientIp    客戶端 IP（用於防刷）
      * @return 文章完整資訊
      */
-    ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp);
+    ArticleResponse getArticleByUuid(UUID articleUuid, UUID viewerUuid, Role viewerRole, String clientIp);
 
     /**
      * 依篩選條件分頁取得已發布文章列表（公開）
@@ -97,34 +97,34 @@ public interface ArticleService {
     /**
      * 分頁取得當前登入用戶的文章列表
      *
-     * @param authorId 作者資料庫主鍵
+     * @param authorUuid 作者公開 UUID
      * @param page     頁碼（從 1 開始）
      * @param size     每頁筆數
      * @param status   文章狀態篩選（null 表示查詢全部）
      * @return 分頁文章摘要列表
      */
-    PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int page, int size, ArticleStatus status);
+    PageResult<ArticleSummaryResponse> getMyArticles(UUID authorUuid, int page, int size, ArticleStatus status);
 
     /**
      * 發布文章
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @return 發布後的文章完整資訊
      */
-    ArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid);
+    ArticleResponse publishArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
 
     /**
      * 駁回文章（僅 ADMIN）
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @param reason       駁回原因
      * @return 駁回後的文章完整資訊
      */
-    ArticleResponse rejectArticle(Long operatorId, Role operatorRole, UUID articleUuid, String reason);
+    ArticleResponse rejectArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid, String reason);
 
     /**
      * 分頁取得待審文章列表（僅 ADMIN）
@@ -150,12 +150,12 @@ public interface ArticleService {
     /**
      * 提交文章審核（DRAFT → PENDING_REVIEW）
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色
      * @param articleUuid  文章公開 UUID
      * @return 提交審核後的文章完整資訊
      */
-    ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid);
+    ArticleResponse submitForReview(UUID operatorUuid, Role operatorRole, UUID articleUuid);
 
     /**
      * 抽回送審文章（PENDING_REVIEW → DRAFT）
@@ -166,12 +166,12 @@ public interface ArticleService {
      * （抽回與駁回職責分離：ADMIN 處理他人送審文章應走 {@link #rejectArticle}）。
      * </p>
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色（保留以與其他狀態轉換方法簽章一致，不影響授權判斷）
      * @param articleUuid  文章公開 UUID
      * @return 抽回後的文章完整資訊
      */
-    ArticleResponse withdrawArticle(Long operatorId, Role operatorRole, UUID articleUuid);
+    ArticleResponse withdrawArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
 
     /**
      * 下架文章（PUBLISHED → ARCHIVED，僅 ADMIN）
@@ -183,12 +183,12 @@ public interface ArticleService {
      * 來源狀態非 PUBLISHED 一律回 A0204。
      * </p>
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
      * @param articleUuid  文章公開 UUID
      * @return 下架後的文章完整資訊
      */
-    ArticleResponse archiveArticle(Long operatorId, Role operatorRole, UUID articleUuid);
+    ArticleResponse archiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
 
     /**
      * 復原已下架文章（ARCHIVED → DRAFT，僅 ADMIN）
@@ -199,23 +199,23 @@ public interface ArticleService {
      * <b>權限僅限 ADMIN</b>；來源狀態非 ARCHIVED 一律回 A0204。
      * </p>
      *
-     * @param operatorId   操作者資料庫主鍵
+     * @param operatorUuid   操作者公開 UUID
      * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
      * @param articleUuid  文章公開 UUID
      * @return 復原後的文章完整資訊
      */
-    ArticleResponse unarchiveArticle(Long operatorId, Role operatorRole, UUID articleUuid);
+    ArticleResponse unarchiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
 
     /**
      * 根據 slug 取得文章詳情
      *
      * @param slug       文章 URL slug
-     * @param viewerId   觀看者 ID（匿名為 null）
+     * @param viewerUuid   觀看者公開 UUID（匿名為 null）
      * @param viewerRole 觀看者角色（匿名為 null）
      * @param clientIp   客戶端 IP（用於防刷）
      * @return 文章完整資訊
      */
-    ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole, String clientIp);
+    ArticleResponse getArticleBySlug(String slug, UUID viewerUuid, Role viewerRole, String clientIp);
 
     /**
      * 原子性遞增文章留言計數

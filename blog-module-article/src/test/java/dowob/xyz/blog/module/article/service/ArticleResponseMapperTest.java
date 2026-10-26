@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.service;
 
+import dowob.xyz.blog.module.article.support.TestUsers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
@@ -7,6 +8,7 @@ import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.CategoryMapper;
@@ -42,8 +44,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -83,12 +86,12 @@ class ArticleResponseMapperTest {
             UUID tagId = UUID.randomUUID();
             UUID categoryUuid = UUID.randomUUID();
             SeriesNavigation seriesNav = new SeriesNavigation();
-            Article article = article(uuid, 5L);
+            Article article = article(uuid, authorUuid);
             article.setContent("# md");
             article.setContentHtml("<h1>md</h1>");
 
-            when(userFacade.getUserUuidById(5L)).thenReturn(Optional.of(authorUuid));
-            when(userFacade.getUserNicknameById(5L)).thenReturn(Optional.of("Yuan"));
+            when(userFacade.getDisplayInfoByUuids(List.of(authorUuid)))
+                    .thenReturn(Map.of(authorUuid, new UserDisplayInfo(authorUuid, "Yuan", null)));
             when(viewCountService.getViewCount(uuid)).thenReturn(1234L);
 
             ArticleResponse resp = mapper.toResponse(
@@ -123,7 +126,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("toc正常反序列化：合法 JSON 陣列字串轉為對應 List<TocEntry>")
         void toResponse_deserializesTocJson() {
-            Article article = article(UUID.randomUUID(), 5L);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(5L));
             article.setToc("[{\"id\":\"heading-a\",\"text\":\"A\",\"level\":2},"
                     + "{\"id\":\"heading-b\",\"text\":\"B\",\"level\":3}]");
             when(viewCountService.getViewCount(article.getUuid())).thenReturn(0L);
@@ -138,7 +141,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("toc為null回空陣列")
         void toResponse_nullTocReturnsEmptyList() {
-            Article article = article(UUID.randomUUID(), 5L);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(5L));
             article.setToc(null);
             when(viewCountService.getViewCount(article.getUuid())).thenReturn(0L);
 
@@ -150,7 +153,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("toc為空字串回空陣列")
         void toResponse_blankTocReturnsEmptyList() {
-            Article article = article(UUID.randomUUID(), 5L);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(5L));
             article.setToc("");
             when(viewCountService.getViewCount(article.getUuid())).thenReturn(0L);
 
@@ -162,7 +165,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("toc解析失敗回空陣列（不拋例外）")
         void toResponse_malformedTocReturnsEmptyListWithoutThrowing() {
-            Article article = article(UUID.randomUUID(), 5L);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(5L));
             article.setToc("{not-valid-json");
             when(viewCountService.getViewCount(article.getUuid())).thenReturn(0L);
 
@@ -179,7 +182,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("maps raw editor fields with provided tags and categories")
         void toEditorResponse_includesRawFields() {
-            Article article = article(UUID.randomUUID(), 5L);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(5L));
             article.setTitle("Edit");
             article.setContent("raw md");
             article.setStatus(ArticleStatus.DRAFT);
@@ -199,7 +202,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("toc正常反序列化：合法 JSON 陣列字串轉為對應 List<TocEntry>")
         void toEditorResponse_deserializesTocJson() {
-            Article article = article(UUID.randomUUID(), 5L);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(5L));
             article.setToc("[{\"id\":\"heading-a\",\"text\":\"A\",\"level\":2}]");
 
             EditorArticleResponse resp = mapper.toEditorResponse(article);
@@ -210,7 +213,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("toc為null回空陣列")
         void toEditorResponse_nullTocReturnsEmptyList() {
-            Article article = article(UUID.randomUUID(), 5L);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(5L));
             article.setToc(null);
 
             EditorArticleResponse resp = mapper.toEditorResponse(article);
@@ -221,7 +224,7 @@ class ArticleResponseMapperTest {
         @Test
         @DisplayName("toc解析失敗回空陣列（不拋例外）")
         void toEditorResponse_malformedTocReturnsEmptyListWithoutThrowing() {
-            Article article = article(UUID.randomUUID(), 5L);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(5L));
             article.setToc("not-json-at-all");
 
             EditorArticleResponse resp = assertDoesNotThrow(() -> mapper.toEditorResponse(article));
@@ -239,13 +242,13 @@ class ArticleResponseMapperTest {
         void toSummaryResponse_usesArticleViewCount() {
             UUID uuid = UUID.randomUUID();
             UUID authorUuid = UUID.randomUUID();
-            Article article = article(uuid, 3L);
+            Article article = article(uuid, authorUuid);
             article.setViewCount(50L);
 
             ArticleSummaryResponse resp = mapper.toSummaryResponse(
                     article,
                     Map.of(uuid, List.of(TagSummaryResponse.builder().name("Java").build())),
-                    Map.of(3L, new AuthorInfo(authorUuid, "Author")));
+                    Map.of(authorUuid, new AuthorInfo(authorUuid, "Author")));
 
             assertThat(resp.getTitle()).isEqualTo("Title");
             assertThat(resp.getSummary()).isEqualTo("summary");
@@ -260,7 +263,7 @@ class ArticleResponseMapperTest {
         @DisplayName("summary不含toc：ArticleSummaryResponse 不應暴露 toc 欄位（列表頁不需要，避免無謂 payload）")
         void toSummaryResponse_hasNoTocField() {
             UUID uuid = UUID.randomUUID();
-            Article article = article(uuid, 3L);
+            Article article = article(uuid, TestUsers.uuidOf(3L));
             article.setToc("[{\"id\":\"heading-a\",\"text\":\"A\",\"level\":2}]");
 
             assertThat(ArticleSummaryResponse.class.getDeclaredFields())
@@ -276,22 +279,21 @@ class ArticleResponseMapperTest {
         void toSummaryResponse_withAuthorMap_doesNotLookUpAuthorPerRow() {
             UUID uuid = UUID.randomUUID();
             UUID authorUuid = UUID.randomUUID();
-            Article article = article(uuid, 3L);
+            Article article = article(uuid, authorUuid);
 
             ArticleSummaryResponse resp = mapper.toSummaryResponse(
-                    article, Map.of(), Map.of(3L, new AuthorInfo(authorUuid, "Author")));
+                    article, Map.of(), Map.of(authorUuid, new AuthorInfo(authorUuid, "Author")));
 
             assertThat(resp.getAuthorUuid()).isEqualTo(authorUuid);
             assertThat(resp.getAuthorNickname()).isEqualTo("Author");
-            verify(userFacade, never()).getUserUuidById(anyLong());
-            verify(userFacade, never()).getUserNicknameById(anyLong());
+            verify(userFacade, never()).getDisplayInfoByUuids(any());
         }
 
         @Test
         @DisplayName("批次結果查無作者時，authorUuid / authorNickname 為 null（與原本 Optional.empty 的呈現一致）")
         void toSummaryResponse_authorMissingFromMap_leavesAuthorFieldsNull() {
             UUID uuid = UUID.randomUUID();
-            Article article = article(uuid, 3L);
+            Article article = article(uuid, TestUsers.uuidOf(3L));
 
             ArticleSummaryResponse resp = mapper.toSummaryResponse(article, Map.of(), Map.of());
 
@@ -300,16 +302,27 @@ class ArticleResponseMapperTest {
         }
 
         @Test
-        @DisplayName("batchToAuthorInfoMap 以單次 facade 呼叫解析整批作者")
+        @DisplayName("batchToAuthorInfoMap 以單次 UUID 版 facade 呼叫解析整批作者，查無者不在結果中")
         void batchToAuthorInfoMap_delegatesToFacadeInSingleCall() {
-            Map<Long, AuthorInfo> expected = Map.of(3L, new AuthorInfo(UUID.randomUUID(), "Author"));
-            when(userFacade.getAuthorInfoByIds(List.of(3L, 4L))).thenReturn(expected);
+            UUID found = UUID.randomUUID();
+            UUID missing = UUID.randomUUID();
+            when(userFacade.getDisplayInfoByUuids(List.of(found, missing)))
+                    .thenReturn(Map.of(found, new UserDisplayInfo(found, "Author", "https://img/a.png")));
 
-            Map<Long, AuthorInfo> result = mapper.batchToAuthorInfoMap(List.of(3L, 4L));
+            Map<UUID, AuthorInfo> result = mapper.batchToAuthorInfoMap(List.of(found, missing));
 
-            assertThat(result).isSameAs(expected);
-            verify(userFacade, never()).getUserUuidById(anyLong());
-            verify(userFacade, never()).getUserNicknameById(anyLong());
+            assertThat(result).containsOnlyKeys(found);
+            assertThat(result.get(found)).isEqualTo(new AuthorInfo(found, "Author"));
+            verify(userFacade, times(1)).getDisplayInfoByUuids(any());
+        }
+
+        @Test
+        @DisplayName("batchToAuthorInfoMap：null 或空集合不呼叫 UserFacade（空頁不浪費一次查詢）")
+        void batchToAuthorInfoMap_nullOrEmpty_doesNotCallFacade() {
+            assertThat(mapper.batchToAuthorInfoMap(null)).isEmpty();
+            assertThat(mapper.batchToAuthorInfoMap(List.of())).isEmpty();
+
+            verify(userFacade, never()).getDisplayInfoByUuids(any());
         }
     }
 
@@ -381,13 +394,17 @@ class ArticleResponseMapperTest {
     class AuthorResolver {
 
         @Test
-        @DisplayName("returns null when user facade returns empty")
+        @DisplayName("user facade 查無作者時，單篇回應的 authorUuid / authorNickname 皆為 null；整個回應只呼叫一次 facade")
         void resolveAuthor_returnsNullWhenMissing() {
-            when(userFacade.getUserUuidById(7L)).thenReturn(Optional.empty());
-            when(userFacade.getUserNicknameById(7L)).thenReturn(Optional.empty());
+            UUID authorUuid = UUID.randomUUID();
+            Article article = article(UUID.randomUUID(), authorUuid);
+            when(userFacade.getDisplayInfoByUuids(List.of(authorUuid))).thenReturn(Map.of());
 
-            assertThat(mapper.resolveAuthorUuid(7L)).isNull();
-            assertThat(mapper.resolveAuthorNickname(7L)).isNull();
+            ArticleResponse resp = mapper.toResponse(article);
+
+            assertThat(resp.getAuthorUuid()).isNull();
+            assertThat(resp.getAuthorNickname()).isNull();
+            verify(userFacade, times(1)).getDisplayInfoByUuids(any());
         }
     }
 
@@ -414,7 +431,7 @@ class ArticleResponseMapperTest {
         private void authenticateAs(Long userId, String springSecurityRole) {
             Role role = Role.valueOf(springSecurityRole.substring("ROLE_".length()));
             Authentication auth = new UsernamePasswordAuthenticationToken(
-                    new AuthUser(userId, new UUID(0L, userId), role), null,
+                    new AuthUser(userId, TestUsers.uuidOf(userId), role), null,
                     List.of(new SimpleGrantedAuthority(springSecurityRole)));
             SecurityContextHolder.getContext().setAuthentication(auth);
         }
@@ -429,7 +446,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toResponse：無 SecurityContext（匿名）→ rejectReason 遮蔽為 null")
         void toResponse_anonymousViewer_masksRejectReason() {
             SecurityContextHolder.clearContext();
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toResponse(article).getRejectReason()).isNull();
         }
@@ -438,7 +455,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toResponse：AnonymousAuthenticationToken → rejectReason 遮蔽為 null")
         void toResponse_anonymousAuthenticationToken_masksRejectReason() {
             authenticateAsAnonymousToken();
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toResponse(article).getRejectReason()).isNull();
         }
@@ -447,7 +464,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toResponse：其他已登入的一般使用者 → rejectReason 遮蔽為 null")
         void toResponse_otherAuthenticatedViewer_masksRejectReason() {
             authenticateAs(OTHER_USER_ID, "ROLE_USER");
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toResponse(article).getRejectReason()).isNull();
         }
@@ -456,7 +473,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toResponse：作者本人 → 看得到 rejectReason")
         void toResponse_authorViewer_exposesRejectReason() {
             authenticateAs(ARTICLE_AUTHOR_ID, "ROLE_AUTHOR");
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toResponse(article).getRejectReason()).isEqualTo("reason");
         }
@@ -465,7 +482,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toResponse：ADMIN（非作者）→ 看得到 rejectReason")
         void toResponse_adminViewer_exposesRejectReason() {
             authenticateAs(OTHER_USER_ID, "ROLE_ADMIN");
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toResponse(article).getRejectReason()).isEqualTo("reason");
         }
@@ -474,7 +491,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toSummaryResponse：匿名 → rejectReason 遮蔽為 null")
         void toSummaryResponse_anonymousViewer_masksRejectReason() {
             SecurityContextHolder.clearContext();
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toSummaryResponse(article, List.of(), null).getRejectReason()).isNull();
         }
@@ -483,7 +500,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toSummaryResponse：作者本人 → 看得到 rejectReason（我的文章列表需要）")
         void toSummaryResponse_authorViewer_exposesRejectReason() {
             authenticateAs(ARTICLE_AUTHOR_ID, "ROLE_AUTHOR");
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toSummaryResponse(article, List.of(), null).getRejectReason()).isEqualTo("reason");
         }
@@ -492,7 +509,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toSummaryResponse：ADMIN → 看得到 rejectReason（待審列表需要）")
         void toSummaryResponse_adminViewer_exposesRejectReason() {
             authenticateAs(OTHER_USER_ID, "ROLE_ADMIN");
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toSummaryResponse(article, List.of(), null).getRejectReason()).isEqualTo("reason");
         }
@@ -501,7 +518,7 @@ class ArticleResponseMapperTest {
         @DisplayName("toEditorResponse：匿名 → rejectReason 遮蔽為 null（縱深防禦，不倚賴上游守衛）")
         void toEditorResponse_anonymousViewer_masksRejectReason() {
             SecurityContextHolder.clearContext();
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toEditorResponse(article).getRejectReason()).isNull();
         }
@@ -510,18 +527,18 @@ class ArticleResponseMapperTest {
         @DisplayName("toEditorResponse：作者本人 → 看得到 rejectReason（編輯器需顯示駁回理由）")
         void toEditorResponse_authorViewer_exposesRejectReason() {
             authenticateAs(ARTICLE_AUTHOR_ID, "ROLE_AUTHOR");
-            Article article = article(UUID.randomUUID(), ARTICLE_AUTHOR_ID);
+            Article article = article(UUID.randomUUID(), TestUsers.uuidOf(ARTICLE_AUTHOR_ID));
 
             assertThat(mapper.toEditorResponse(article).getRejectReason()).isEqualTo("reason");
         }
     }
 
-    private Article article(UUID uuid, Long authorId) {
+    private Article article(UUID uuid, UUID authorUuid) {
         LocalDateTime now = LocalDateTime.now();
         Article article = new Article();
         article.setId(100L);
         article.setUuid(uuid);
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(authorUuid);
         article.setTitle("Title");
         article.setSummary("summary");
         article.setCoverImageUrl("https://example.test/cover.png");

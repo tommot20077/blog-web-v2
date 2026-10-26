@@ -166,7 +166,7 @@ class CrossModuleSeriesIT {
                                             Long authorId, UUID seriesUuid) {
         try {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
-                eventId, articleUuid, authorId, List.of(), List.of(), Instant.now(), null, seriesUuid);
+                eventId, articleUuid, List.of(), List.of(), Instant.now(), null, seriesUuid);
             Channel mockChannel = Mockito.mock(Channel.class);
             seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
         } catch (Exception e) {
@@ -183,7 +183,7 @@ class CrossModuleSeriesIT {
     private Article createArticle(Long authorId, ArticleStatus status) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededUsers.uuidOf(authorId));
         article.setTitle("Series IT Article " + UUID.randomUUID());
         article.setSlug("series-it-" + UUID.randomUUID());
         article.setContent("test content");
@@ -323,7 +323,7 @@ class CrossModuleSeriesIT {
         // 2. 構造一個固定 eventId 的事件（重送 2 次）
         UUID eventId = UUID.randomUUID();
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-            eventId, article.getUuid(), AUTHOR_ID, List.of(), List.of(), Instant.now(), null, series.getUuid());
+            eventId, article.getUuid(), List.of(), List.of(), Instant.now(), null, series.getUuid());
 
         // 3. 第一次處理 → article_count 從 1 變 0
         Channel mockChannel = Mockito.mock(Channel.class);
@@ -353,7 +353,7 @@ class CrossModuleSeriesIT {
     void deleteArticle_notInSeries_noOp() {
         // 1. 構造 seriesUuid == null 的事件
         ArticleDeletedEvent event = new ArticleDeletedEvent(
-            UUID.randomUUID(), UUID.randomUUID(), AUTHOR_ID, List.of(), List.of(), Instant.now(), null, null);
+            UUID.randomUUID(), UUID.randomUUID(), List.of(), List.of(), Instant.now(), null, null);
         Channel mockChannel = Mockito.mock(Channel.class);
         seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
 

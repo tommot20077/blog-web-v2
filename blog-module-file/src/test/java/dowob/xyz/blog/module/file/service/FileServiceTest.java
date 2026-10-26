@@ -939,7 +939,7 @@ class FileServiceTest {
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "PUBLISHED", null, null)));
+                    new ArticleData(1L, articleUuid, "PUBLISHED", null, null)));
 
             assertThat(fileService.canRead(fileId, null, false)).isTrue();
         }
@@ -954,7 +954,7 @@ class FileServiceTest {
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, "DRAFT", null, null)));
 
             assertThat(fileService.canRead(fileId, null, false)).isFalse();
         }
@@ -970,7 +970,7 @@ class FileServiceTest {
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, "DRAFT", null, null)));
 
             assertThat(fileService.canRead(fileId, otherUserId, false)).isFalse();
         }
@@ -985,7 +985,7 @@ class FileServiceTest {
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, "DRAFT", null, null)));
 
             assertThat(fileService.canRead(fileId, uploaderId, false)).isTrue();
         }
@@ -1001,7 +1001,7 @@ class FileServiceTest {
             FileMetadata metadata = metadataWith(fileId, uploaderId, UsageType.ARTICLE_CONTENT, articleUuid);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 99L, "DRAFT", null, null)));
+                    new ArticleData(1L, articleUuid, "DRAFT", null, null)));
 
             assertThat(fileService.canRead(fileId, adminId, true)).isTrue();
         }
@@ -1074,7 +1074,7 @@ class FileServiceTest {
         /** 建立「文章 articleUuid 的作者為 authorUuid」的 articleLookupFacade mock */
         private void stubArticleAuthor(UUID articleUuid, UUID authorUuid) {
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null, authorUuid, null)));
+                    new ArticleData(1L, articleUuid, "DRAFT", null, null, authorUuid, null)));
         }
 
         /** 新綁定：清單內檔案皆設定 articleUuid（合法情境：檔案 uploader == 文章作者） */
@@ -1292,7 +1292,7 @@ class FileServiceTest {
             metadataA.setUploaderId(UUID.randomUUID());
 
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "DRAFT", null, null, null, null)));
+                    new ArticleData(1L, articleUuid, "DRAFT", null, null, null, null)));
             when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of());
             when(fileMetadataRepository.findById(fileA)).thenReturn(Optional.of(metadataA));
 
@@ -1344,7 +1344,7 @@ class FileServiceTest {
             alreadyBound.setArticleUuid(articleUuid);
 
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, AUTHOR_INTERNAL_ID, "PUBLISHED", null, null, null, null)));
+                    new ArticleData(1L, articleUuid, "PUBLISHED", null, null, null, null)));
             when(fileMetadataRepository.findByArticleUuid(articleUuid)).thenReturn(List.of(alreadyBound));
 
             assertThatCode(() -> fileService.bindToArticle(articleUuid, List.of(UUID.randomUUID())))
@@ -1425,7 +1425,7 @@ class FileServiceTest {
             UUID uploaderId = UUID.randomUUID();
             Long authorInternalId = 200L;
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, authorInternalId, "DRAFT", null, null, uploaderId, null)));
+                    new ArticleData(1L, articleUuid, "DRAFT", null, null, uploaderId, null)));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -1457,7 +1457,7 @@ class FileServiceTest {
             UUID actualAuthorUuid = UUID.randomUUID();
             Long authorInternalId = 201L;
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, authorInternalId, "PUBLISHED", null, null, actualAuthorUuid, null)));
+                    new ArticleData(1L, articleUuid, "PUBLISHED", null, null, actualAuthorUuid, null)));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -1480,7 +1480,7 @@ class FileServiceTest {
             UUID articleUuid = UUID.randomUUID();
             UUID uploaderId = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, 202L, "DRAFT", null, null, null, null)));
+                    new ArticleData(1L, articleUuid, "DRAFT", null, null, null, null)));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 

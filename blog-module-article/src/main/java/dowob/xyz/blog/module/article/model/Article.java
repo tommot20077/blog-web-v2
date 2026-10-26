@@ -38,10 +38,10 @@ public class Article {
     private UUID uuid;
 
     /**
-     * 作者的資料庫 ID（FK → users.id）
+     * 作者的公開 UUID（對應 users.uuid；跨模組識別一律為 UUID，故<b>沒有</b>資料庫 FK；V31 起取代舊的 Long 作者主鍵欄位）
      */
-    @Column("author_id")
-    private Long authorId;
+    @Column("author_uuid")
+    private UUID authorUuid;
 
     /**
      * 文章標題

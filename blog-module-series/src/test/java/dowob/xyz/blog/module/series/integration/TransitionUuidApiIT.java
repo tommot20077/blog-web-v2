@@ -119,7 +119,7 @@ class TransitionUuidApiIT {
     private Article createArticle(Long authorId, Long seriesId, Integer position) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(userUuid(authorId));
         article.setTitle("Transition IT " + UUID.randomUUID());
         article.setSlug("transition-it-" + UUID.randomUUID());
         article.setContent("content");

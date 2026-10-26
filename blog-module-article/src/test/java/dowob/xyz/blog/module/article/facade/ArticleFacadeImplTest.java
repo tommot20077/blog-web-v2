@@ -19,6 +19,7 @@ import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
@@ -108,6 +109,9 @@ class ArticleFacadeImplTest {
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
     private static final Long ARTICLE_ID = 1L;
 
+    /** 測試用作者公開 UUID（M6-a：文章直接存 author_uuid） */
+    private static final UUID AUTHOR_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+
     @BeforeEach
     void setUp() {
         /**
@@ -121,13 +125,17 @@ class ArticleFacadeImplTest {
             articleMapper, userFacade, recommendMapper, articleService,
             articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
             articleFileBinder,
-            new ArticleDataAssembler(new ArticleIdentityResolver(articleMapper, seriesFacadeProvider)),
+            new ArticleDataAssembler(new ArticleIdentityResolver(seriesFacadeProvider)),
             null, null, null
         );
 
         /** 過渡期 UUID 欄位的依賴：本測試類不驗證 UUID 值（見 ArticleFacadeUuidFieldsTest），回傳空即可 */
         when(seriesFacadeProvider.getObject()).thenReturn(seriesFacade);
         when(seriesFacade.findUuidsByIds(any())).thenReturn(java.util.Map.of());
+
+        /** 推薦與索引查詢的作者暱稱一律經 UserFacade UUID 版批次解析（M6-a 起不再 JOIN users） */
+        when(userFacade.getDisplayInfoByUuids(any())).thenReturn(
+                java.util.Map.of(AUTHOR_UUID, new UserDisplayInfo(AUTHOR_UUID, "Author", null)));
 
         /** 讓 mock 的 TransactionTemplate 直接執行 callback，使受測方法主體照常運行 */
         when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
@@ -141,7 +149,7 @@ class ArticleFacadeImplTest {
         Article a = new Article();
         a.setId(id);
         a.setUuid(uuid);
-        a.setAuthorId(99L);
+        a.setAuthorUuid(AUTHOR_UUID);
         a.setStatus(status);
         a.setSeriesId(seriesId);
         a.setSeriesPosition(pos);
@@ -155,7 +163,7 @@ class ArticleFacadeImplTest {
         row.setTitle(title);
         row.setSlug("slug");
         row.setSummary("summary");
-        row.setAuthorNickname("Author");
+        row.setAuthorUuid(AUTHOR_UUID);
         row.setViewCount(100L);
         row.setLikeCount(10L);
         row.setPublishedAt(LocalDateTime.now());
@@ -356,14 +364,12 @@ class ArticleFacadeImplTest {
             article.setSlug("test-article");
             article.setSummary("summary");
             article.setContent("content");
-            article.setAuthorId(10L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             TagInfo tagInfo = new TagInfo(UUID.randomUUID(), "Java", "java");
 
             when(articleMapper.findAllPublished()).thenReturn(List.of(article));
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of(tagInfo));
-            when(userFacade.getUserUsernameById(10L)).thenReturn(Optional.of("user1"));
-            when(userFacade.getUserNicknameById(10L)).thenReturn(Optional.of("User One"));
 
             List<ArticleIndexData> result = facade.findAllPublishedForIndex();
 
@@ -391,12 +397,10 @@ class ArticleFacadeImplTest {
             article.setSlug("null-content");
             article.setSummary("summary");
             article.setContent(null);
-            article.setAuthorId(10L);
+            article.setAuthorUuid(AUTHOR_UUID);
 
             when(articleMapper.findAllPublished()).thenReturn(List.of(article));
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
-            when(userFacade.getUserUsernameById(10L)).thenReturn(Optional.of("user1"));
-            when(userFacade.getUserNicknameById(10L)).thenReturn(Optional.of("User One"));
 
             List<ArticleIndexData> result = facade.findAllPublishedForIndex();
 
@@ -414,18 +418,18 @@ class ArticleFacadeImplTest {
             article.setSlug("unknown-author");
             article.setSummary("summary");
             article.setContent("content");
-            article.setAuthorId(999L);
+            UUID unknownAuthor = UUID.randomUUID();
+            article.setAuthorUuid(unknownAuthor);
 
             when(articleMapper.findAllPublished()).thenReturn(List.of(article));
             when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
-            when(userFacade.getUserUsernameById(999L)).thenReturn(Optional.empty());
-            when(userFacade.getUserNicknameById(999L)).thenReturn(Optional.empty());
+            when(userFacade.getDisplayInfoByUuids(any())).thenReturn(java.util.Map.of());
 
             List<ArticleIndexData> result = facade.findAllPublishedForIndex();
 
             assertThat(result).hasSize(1);
-            assertThat(result.get(0).authorUsername()).isNull();
             assertThat(result.get(0).authorNickname()).isNull();
+            assertThat(result.get(0).authorUuid()).isEqualTo(unknownAuthor);
         }
     }
 
@@ -537,7 +541,6 @@ class ArticleFacadeImplTest {
             ArticleData data = result.get();
             assertThat(data.id()).isEqualTo(100L);
             assertThat(data.uuid()).isEqualTo(uuid);
-            assertThat(data.authorId()).isEqualTo(99L);
             assertThat(data.status()).isEqualTo("PUBLISHED");
             assertThat(data.seriesId()).isEqualTo(50L);
             assertThat(data.seriesPosition()).isEqualTo(3);
@@ -671,7 +674,7 @@ class ArticleFacadeImplTest {
             Article article = new Article();
             article.setId(articleId);
             article.setUuid(articleUuid);
-            article.setAuthorId(5L);
+            article.setAuthorUuid(AUTHOR_UUID);
             article.setTitle("Test Title");
             article.setSlug("test-slug");
             article.setContent("# Hello");
@@ -688,13 +691,13 @@ class ArticleFacadeImplTest {
             ArticleContentData data = result.get();
             assertThat(data.id()).isEqualTo(articleId);
             assertThat(data.uuid()).isEqualTo(articleUuid);
-            assertThat(data.authorId()).isEqualTo(5L);
             assertThat(data.title()).isEqualTo("Test Title");
             assertThat(data.slug()).isEqualTo("test-slug");
             assertThat(data.content()).isEqualTo("# Hello");
             assertThat(data.summary()).isEqualTo("summary");
             assertThat(data.coverImageUrl()).isEqualTo("https://cdn.example/cover.jpg");
             assertThat(data.status()).isEqualTo("PUBLISHED");
+            assertThat(data.authorUuid()).isEqualTo(AUTHOR_UUID);
         }
 
         @Test
@@ -713,7 +716,7 @@ class ArticleFacadeImplTest {
             Article article = new Article();
             article.setId(100L);
             article.setUuid(UUID.randomUUID());
-            article.setAuthorId(5L);
+            article.setAuthorUuid(AUTHOR_UUID);
             article.setStatus(null);
             when(articleService.findById(100L)).thenReturn(Optional.of(article));
 
@@ -1126,6 +1129,121 @@ class ArticleFacadeImplTest {
                 verify(articleEventPublisher).publishContentChanged(existing,
                         ArticleContentChangedEvent.Action.RESTORED);
             }
+        }
+    }
+
+    // ─── M6-a：推薦查詢的作者暱稱改由 UserFacade UUID 版批次解析（取代 INNER JOIN users）───
+
+    /**
+     * 推薦查詢原為 {@code INNER JOIN users}：查無作者的文章整列被排除。改為「文章列帶 authorUuid ＋
+     * 整頁只呼叫一次 {@code UserFacade.getDisplayInfoByUuids}」後，必須維持同樣的語意。
+     */
+    @Nested
+    @DisplayName("推薦查詢作者解析（維持 INNER JOIN 語意）")
+    class RecommendAuthorResolution {
+
+        private final UUID otherAuthor = UUID.fromString("00000000-0000-0000-0000-0000000000b2");
+        private final UUID missingAuthor = UUID.fromString("00000000-0000-0000-0000-0000000000c3");
+
+        private ArticleSummaryRow rowBy(UUID articleUuid, UUID authorUuid, String title) {
+            ArticleSummaryRow r = row(ARTICLE_ID, articleUuid, title);
+            r.setAuthorUuid(authorUuid);
+            return r;
+        }
+
+        private void stubAuthors() {
+            when(userFacade.getDisplayInfoByUuids(any())).thenReturn(java.util.Map.of(
+                    AUTHOR_UUID, new UserDisplayInfo(AUTHOR_UUID, "Author", null),
+                    otherAuthor, new UserDisplayInfo(otherAuthor, "Other", "https://img/o.png")));
+        }
+
+        @Test
+        @DisplayName("getRecentPublishedArticles：查無作者的文章被排除，其餘照常且暱稱取自 UserFacade")
+        void getRecentPublishedArticles_excludesRowsWhoseAuthorIsMissing() {
+            UUID kept = UUID.randomUUID();
+            UUID dropped = UUID.randomUUID();
+            stubAuthors();
+            when(recommendMapper.findRecentPublished(ARTICLE_UUID, 5)).thenReturn(List.of(
+                    rowBy(kept, otherAuthor, "Kept"), rowBy(dropped, missingAuthor, "Dropped")));
+            when(recommendMapper.findTagsByArticleUuids(any())).thenReturn(List.of());
+
+            List<ArticleSummaryInfo> result = facade.getRecentPublishedArticles(ARTICLE_UUID, 5);
+
+            assertThat(result).extracting(ArticleSummaryInfo::title).containsExactly("Kept");
+            assertThat(result.get(0).authorNickname()).isEqualTo("Other");
+        }
+
+        @Test
+        @DisplayName("getArticlesByTagIds：查無作者的文章被排除，且只為留下的文章查標籤")
+        void getArticlesByTagIds_excludesRowsWhoseAuthorIsMissing_andOnlyQueriesTagsForKept() {
+            UUID tagUuid = UUID.randomUUID();
+            UUID kept = UUID.randomUUID();
+            UUID dropped = UUID.randomUUID();
+            stubAuthors();
+            when(recommendMapper.findByTagIds(List.of(tagUuid.toString()), ARTICLE_UUID, 5)).thenReturn(List.of(
+                    rowBy(dropped, missingAuthor, "Dropped"), rowBy(kept, AUTHOR_UUID, "Kept")));
+            when(recommendMapper.findTagsByArticleUuids(any())).thenReturn(List.of());
+
+            List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(tagUuid), ARTICLE_UUID, 5);
+
+            assertThat(result).extracting(ArticleSummaryInfo::title).containsExactly("Kept");
+            verify(recommendMapper).findTagsByArticleUuids(List.of(kept.toString()));
+        }
+
+        @Test
+        @DisplayName("getPublishedArticlesByUuids：查無作者的文章被排除")
+        void getPublishedArticlesByUuids_excludesRowsWhoseAuthorIsMissing() {
+            UUID kept = UUID.randomUUID();
+            UUID dropped = UUID.randomUUID();
+            stubAuthors();
+            when(recommendMapper.findByUuids(any())).thenReturn(List.of(
+                    rowBy(kept, AUTHOR_UUID, "Kept"), rowBy(dropped, missingAuthor, "Dropped")));
+            when(recommendMapper.findTagsByArticleUuids(any())).thenReturn(List.of());
+
+            List<ArticleSummaryInfo> result = facade.getPublishedArticlesByUuids(List.of(kept, dropped));
+
+            assertThat(result).extracting(ArticleSummaryInfo::title).containsExactly("Kept");
+        }
+
+        @Test
+        @DisplayName("所有作者都查無 → 回傳空列表，且不再查標籤")
+        void allAuthorsMissing_returnsEmptyAndSkipsTagQuery() {
+            when(userFacade.getDisplayInfoByUuids(any())).thenReturn(java.util.Map.of());
+            when(recommendMapper.findRecentPublished(ARTICLE_UUID, 5)).thenReturn(List.of(
+                    rowBy(UUID.randomUUID(), missingAuthor, "A"), rowBy(UUID.randomUUID(), missingAuthor, "B")));
+
+            List<ArticleSummaryInfo> result = facade.getRecentPublishedArticles(ARTICLE_UUID, 5);
+
+            assertThat(result).isEmpty();
+            verify(recommendMapper, never()).findTagsByArticleUuids(any());
+        }
+
+        @Test
+        @DisplayName("整頁作者只呼叫 UserFacade 一次（不逐筆 N+1），同一作者去重")
+        void resolvesAuthorsWithSingleFacadeCall_distinct() {
+            stubAuthors();
+            when(recommendMapper.findRecentPublished(ARTICLE_UUID, 5)).thenReturn(List.of(
+                    rowBy(UUID.randomUUID(), AUTHOR_UUID, "A"),
+                    rowBy(UUID.randomUUID(), AUTHOR_UUID, "B"),
+                    rowBy(UUID.randomUUID(), otherAuthor, "C")));
+            when(recommendMapper.findTagsByArticleUuids(any())).thenReturn(List.of());
+
+            facade.getRecentPublishedArticles(ARTICLE_UUID, 5);
+
+            org.mockito.ArgumentCaptor<java.util.Collection<UUID>> captor =
+                    org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+            verify(userFacade, times(1)).getDisplayInfoByUuids(captor.capture());
+            assertThat(captor.getValue()).containsExactlyInAnyOrder(AUTHOR_UUID, otherAuthor);
+        }
+
+        @Test
+        @DisplayName("查詢結果為空 → 不呼叫 UserFacade")
+        void emptyRows_doesNotCallUserFacade() {
+            when(recommendMapper.findRecentPublished(ARTICLE_UUID, 5)).thenReturn(List.of());
+
+            assertThat(facade.getRecentPublishedArticles(ARTICLE_UUID, 5)).isEmpty();
+
+            verify(userFacade, never()).getDisplayInfoByUuids(any());
         }
     }
 }

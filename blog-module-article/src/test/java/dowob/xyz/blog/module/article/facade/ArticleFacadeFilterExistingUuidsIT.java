@@ -66,8 +66,8 @@ class ArticleFacadeFilterExistingUuidsIT {
         registry.add("spring.data.redis.url", redis::getRedisURI);
     }
 
-    /** testdata seed（R__article_test_seed.sql）建立的作者 */
-    private static final long SEEDED_AUTHOR_ID = 1L;
+    /** 測試用作者公開 UUID（articles.author_uuid 無 FK，直接寫入固定值） */
+    private static final UUID SEEDED_AUTHOR_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
 
     @Autowired private ArticleFacade articleFacade;
     @Autowired private JdbcTemplate jdbcTemplate;
@@ -93,8 +93,8 @@ class ArticleFacadeFilterExistingUuidsIT {
     private UUID insertArticle(String status) {
         UUID uuid = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO articles (uuid, author_id, title, slug, content_md, status) VALUES (?, ?, ?, ?, ?, ?)",
-                uuid, SEEDED_AUTHOR_ID, "t-" + uuid, "slug-" + uuid, "內容", status);
+                "INSERT INTO articles (uuid, author_uuid, title, slug, content_md, status) VALUES (?, ?, ?, ?, ?, ?)",
+                uuid, SEEDED_AUTHOR_UUID, "t-" + uuid, "slug-" + uuid, "內容", status);
         inserted.add(uuid);
         return uuid;
     }

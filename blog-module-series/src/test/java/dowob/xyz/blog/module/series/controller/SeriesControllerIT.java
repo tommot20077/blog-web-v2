@@ -149,7 +149,7 @@ class SeriesControllerIT {
     private Article createPublishedArticle(Long authorId) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededUsers.uuidOf(authorId));
         article.setTitle("Test Article " + UUID.randomUUID());
         article.setSlug("test-article-" + UUID.randomUUID());
         article.setContent("content");
@@ -167,7 +167,7 @@ class SeriesControllerIT {
     private Article createArticleInSeries(Long authorId, ArticleStatus status, Long seriesId, int position) {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(authorId);
+        article.setAuthorUuid(SeededUsers.uuidOf(authorId));
         article.setTitle("Test Article " + UUID.randomUUID());
         article.setSlug("test-article-" + UUID.randomUUID());
         article.setContent("content");
@@ -619,7 +619,7 @@ class SeriesControllerIT {
         // 直接屬於同一 series 的 DRAFT（模擬 PUBLISHED 加入後被改回草稿，series_id 未清空）
         Article draft = new Article();
         draft.setUuid(UUID.randomUUID());
-        draft.setAuthorId(USER1_ID);
+        draft.setAuthorUuid(SeededUsers.USER1_UUID);
         draft.setTitle("SECRET DRAFT TITLE");
         draft.setSlug("secret-draft-" + UUID.randomUUID());
         draft.setContent("secret content");
@@ -703,9 +703,13 @@ class SeriesControllerIT {
     @Test
     @DisplayName("GET /series/{slug} - 作者資訊來自 UserFacade（uuid、nickname、avatarUrl）")
     void getSlug_authorComesFromUserFacade() throws Exception {
-        createVisibleSeries("author-detail", SeededUsers.USER1_UUID, USER1_ID);
+        Series series = createVisibleSeries("author-detail", SeededUsers.USER1_UUID, USER1_ID);
+        /* 成員文章共 3 篇、兩位不同作者：證明成員作者是整頁一次批次解析，而不是逐篇（N+1） */
+        createArticleInSeries(USER2_ID, ArticleStatus.PUBLISHED, series.getId(), 2);
+        createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, series.getId(), 3);
         when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
-                SeededUsers.USER1_UUID, new UserDisplayInfo(SeededUsers.USER1_UUID, "Alice", "https://img/alice.png")));
+                SeededUsers.USER1_UUID, new UserDisplayInfo(SeededUsers.USER1_UUID, "Alice", "https://img/alice.png"),
+                SeededUsers.USER2_UUID, new UserDisplayInfo(SeededUsers.USER2_UUID, "Bob", null)));
 
         String body = mockMvc.perform(get("/api/v1/series/{slug}", "author-detail"))
                 .andExpect(status().isOk())
@@ -714,7 +718,12 @@ class SeriesControllerIT {
         assertThat(json(body).at("/data/author/uuid").asText()).isEqualTo(SeededUsers.USER1_UUID.toString());
         assertThat(json(body).at("/data/author/nickname").asText()).isEqualTo("Alice");
         assertThat(json(body).at("/data/author/avatarUrl").asText()).isEqualTo("https://img/alice.png");
-        verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
+        assertThat(json(body).at("/data/articles")).as("成員文章為 3 篇").hasSize(3);
+        /*
+         * 詳情頁有兩個各自批次的作者解析：series 作者一次，成員文章摘要的作者一次（M6-a 起 article 也改走
+         * getDisplayInfoByUuids，先前走已移除的 Long 版 getAuthorInfoByIds，總數同為 2），兩者都不隨筆數 N+1。
+         */
+        verify(userFacade, times(2)).getDisplayInfoByUuids(anyCollection());
     }
 
     @Test

@@ -108,7 +108,7 @@ class BookmarkControllerIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(USER_ID);
+        article.setAuthorUuid(SeededReadingUsers.uuidOf(USER_ID));
         article.setTitle("Bookmark IT");
         article.setSlug("bookmark-it-" + UUID.randomUUID());
         article.setContent("test");
@@ -223,7 +223,7 @@ class BookmarkControllerIT {
     /**
      * 建立指定作者與狀態的文章。
      *
-     * @param authorId 作者資料庫主鍵
+     * @param authorId 作者種子使用者主鍵（寫入時轉為其固定 uuid）
      * @param status   文章狀態
      * @return 已存檔的 Article
      */
@@ -234,7 +234,7 @@ class BookmarkControllerIT {
     /**
      * 建立指定作者、狀態與標題的文章。
      *
-     * @param authorId 作者資料庫主鍵
+     * @param authorId 作者種子使用者主鍵（寫入時轉為其固定 uuid）
      * @param status   文章狀態
      * @param title    標題
      * @return 已存檔的 Article
@@ -242,7 +242,7 @@ class BookmarkControllerIT {
     private Article createArticle(Long authorId, ArticleStatus status, String title) {
         Article a = new Article();
         a.setUuid(UUID.randomUUID());
-        a.setAuthorId(authorId);
+        a.setAuthorUuid(SeededReadingUsers.uuidOf(authorId));
         a.setTitle(title);
         a.setSlug("bookmark-it-" + UUID.randomUUID());
         a.setContent("test");

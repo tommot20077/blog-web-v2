@@ -28,19 +28,19 @@ public class ArticleServiceImpl implements ArticleService {
     private final ArticleQuerySubService querySubService;
 
     @Override
-    public EditorArticleResponse createArticle(Long authorId, CreateArticleRequest request) {
-        return commandSubService.createArticle(authorId, request);
+    public EditorArticleResponse createArticle(UUID authorUuid, CreateArticleRequest request) {
+        return commandSubService.createArticle(authorUuid, request);
     }
 
     @Override
-    public EditorArticleResponse updateArticle(Long operatorId, Role operatorRole, UUID articleUuid,
+    public EditorArticleResponse updateArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid,
             UpdateArticleRequest request) {
-        return commandSubService.updateArticle(operatorId, operatorRole, articleUuid, request);
+        return commandSubService.updateArticle(operatorUuid, operatorRole, articleUuid, request);
     }
 
     @Override
-    public void deleteArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        commandSubService.deleteArticle(operatorId, operatorRole, articleUuid);
+    public void deleteArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        commandSubService.deleteArticle(operatorUuid, operatorRole, articleUuid);
     }
 
     /**
@@ -51,15 +51,15 @@ public class ArticleServiceImpl implements ArticleService {
      * 且會在 MQ I/O 期間持有 DB 連線。</p>
      */
     @Override
-    public ArticleResponse getArticleByUuid(UUID articleUuid, Long viewerId, Role viewerRole, String clientIp) {
-        ArticleResponse response = querySubService.getArticleByUuid(articleUuid, viewerId, viewerRole);
+    public ArticleResponse getArticleByUuid(UUID articleUuid, UUID viewerUuid, Role viewerRole, String clientIp) {
+        ArticleResponse response = querySubService.getArticleByUuid(articleUuid, viewerUuid, viewerRole);
         articleViewSubService.recordView(articleUuid, response.getStatus(), clientIp);
         return response;
     }
 
     @Override
-    public EditorArticleResponse getArticleForEdit(UUID articleUuid, Long requesterId) {
-        return querySubService.getArticleForEdit(articleUuid, requesterId);
+    public EditorArticleResponse getArticleForEdit(UUID articleUuid, UUID requesterUuid) {
+        return querySubService.getArticleForEdit(articleUuid, requesterUuid);
     }
 
     /**
@@ -68,8 +68,8 @@ public class ArticleServiceImpl implements ArticleService {
      * <p>刻意不標註 @Transactional：理由同 {@link #getArticleByUuid}。</p>
      */
     @Override
-    public ArticleResponse getArticleBySlug(String slug, Long viewerId, Role viewerRole, String clientIp) {
-        ArticleResponse response = querySubService.getArticleBySlug(slug, viewerId, viewerRole);
+    public ArticleResponse getArticleBySlug(String slug, UUID viewerUuid, Role viewerRole, String clientIp) {
+        ArticleResponse response = querySubService.getArticleBySlug(slug, viewerUuid, viewerRole);
         articleViewSubService.recordView(response.getUuid(), response.getStatus(), clientIp);
         return response;
     }
@@ -80,19 +80,19 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     @Override
-    public PageResult<ArticleSummaryResponse> getMyArticles(Long authorId, int page, int size, ArticleStatus status) {
-        return querySubService.getMyArticles(authorId, page, size, status);
+    public PageResult<ArticleSummaryResponse> getMyArticles(UUID authorUuid, int page, int size, ArticleStatus status) {
+        return querySubService.getMyArticles(authorUuid, page, size, status);
     }
 
     @Override
-    public ArticleResponse publishArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        return commandSubService.publishArticle(operatorId, operatorRole, articleUuid);
+    public ArticleResponse publishArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        return commandSubService.publishArticle(operatorUuid, operatorRole, articleUuid);
     }
 
     @Override
     @Transactional
-    public ArticleResponse rejectArticle(Long operatorId, Role operatorRole, UUID articleUuid, String reason) {
-        return commandSubService.rejectArticle(operatorId, operatorRole, articleUuid, reason);
+    public ArticleResponse rejectArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid, String reason) {
+        return commandSubService.rejectArticle(operatorUuid, operatorRole, articleUuid, reason);
     }
 
     /**
@@ -104,14 +104,14 @@ public class ArticleServiceImpl implements ArticleService {
      * {@code ArticleCommandSubService} 內的 TransactionTemplate 自行收斂。</p>
      */
     @Override
-    public ArticleResponse archiveArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        return commandSubService.archiveArticle(operatorId, operatorRole, articleUuid);
+    public ArticleResponse archiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        return commandSubService.archiveArticle(operatorUuid, operatorRole, articleUuid);
     }
 
     @Override
     @Transactional
-    public ArticleResponse unarchiveArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        return commandSubService.unarchiveArticle(operatorId, operatorRole, articleUuid);
+    public ArticleResponse unarchiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        return commandSubService.unarchiveArticle(operatorUuid, operatorRole, articleUuid);
     }
 
     @Override
@@ -127,14 +127,14 @@ public class ArticleServiceImpl implements ArticleService {
 
     @Override
     @Transactional
-    public ArticleResponse submitForReview(Long operatorId, Role operatorRole, UUID articleUuid) {
-        return commandSubService.submitForReview(operatorId, operatorRole, articleUuid);
+    public ArticleResponse submitForReview(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        return commandSubService.submitForReview(operatorUuid, operatorRole, articleUuid);
     }
 
     @Override
     @Transactional
-    public ArticleResponse withdrawArticle(Long operatorId, Role operatorRole, UUID articleUuid) {
-        return commandSubService.withdrawArticle(operatorId, operatorRole, articleUuid);
+    public ArticleResponse withdrawArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        return commandSubService.withdrawArticle(operatorUuid, operatorRole, articleUuid);
     }
 
     @Override

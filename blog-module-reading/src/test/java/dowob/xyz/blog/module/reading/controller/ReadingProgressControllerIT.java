@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.module.reading.support.SeededReadingUsers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
@@ -108,7 +109,7 @@ class ReadingProgressControllerIT {
     void setup() {
         Article article = new Article();
         article.setUuid(UUID.randomUUID());
-        article.setAuthorId(USER_ID);
+        article.setAuthorUuid(SeededReadingUsers.uuidOf(USER_ID));
         article.setTitle("Progress IT");
         article.setSlug("progress-it-" + UUID.randomUUID());
         article.setContent("test");

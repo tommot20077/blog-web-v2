@@ -128,7 +128,7 @@ class ArticleVersionConsumerIT {
         // 建立測試文章
         testArticle = new Article();
         testArticle.setUuid(UUID.randomUUID());
-        testArticle.setAuthorId(AUTHOR_ID);
+        testArticle.setAuthorUuid(SeededVersionUsers.uuidOf(AUTHOR_ID));
         testArticle.setTitle("Version Test Article");
         testArticle.setSlug("version-test-article-" + UUID.randomUUID());
         testArticle.setContent("This is a test content for versioning");
