@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ModulePomDependencyTest 的反向驗證 fixture：模擬 repo 根 pom；blog-common／blog-start 不是業務模組，不應被掃描。 -->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>fixture</groupId>
+    <artifactId>fixture-root</artifactId>
+    <version>1.0</version>
+    <packaging>pom</packaging>
+    <modules>
+        <module>blog-common</module>
+        <module>blog-module-alpha</module>
+        <module>blog-module-beta</module>
+        <module>blog-module-gamma</module>
+        <module>blog-module-delta</module>
+        <module>blog-module-epsilon</module>
+        <module>blog-start</module>
+    </modules>
+</project>

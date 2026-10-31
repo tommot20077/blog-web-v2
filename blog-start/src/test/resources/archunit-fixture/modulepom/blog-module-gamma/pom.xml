@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ModulePomDependencyTest 的合規 fixture：不依賴任何業務模組。 -->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>fixture</groupId>
+    <artifactId>blog-module-gamma</artifactId>
+    <version>1.0</version>
+</project>
