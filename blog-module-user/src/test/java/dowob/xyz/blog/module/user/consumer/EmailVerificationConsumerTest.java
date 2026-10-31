@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.user.consumer;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
@@ -14,6 +15,7 @@ import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.Logger;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,18 +27,27 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
  * {@link EmailVerificationConsumer} 單元測試
  *
+ * <p>M8 起事件帶 {@code userUuid} 與 {@code eventId}，consumer 以 {@link IdempotencyService}（依 eventId）
+ * 去重，避免同一事件重送時重寄驗證信；舊格式 in-flight 訊息（{@code eventId} 為 null）照常寄送。</p>
+ *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("EmailVerificationConsumer 單元測試")
@@ -58,6 +69,33 @@ class EmailVerificationConsumerTest {
     @Mock
     private UserMailService userMailService;
 
+    /** Mock 冪等服務（預設視為第一次處理） */
+    @Mock
+    private IdempotencyService idempotencyService;
+
+    /** 測試用事件 dedup key */
+    private static final UUID EVENT_ID = UUID.fromString("aaaaaaaa-0000-4000-8000-000000000001");
+
+    /** 測試用使用者 uuid（與任何 Long 主鍵無數值關聯） */
+    private static final UUID USER_UUID = UUID.fromString("bbbbbbbb-0000-4000-8000-000000000002");
+
+    /**
+     * 預設第一次處理（markProcessed 回 true）。
+     */
+    @BeforeEach
+    void setUp() {
+        lenient().when(idempotencyService.markProcessed(any(), anyString())).thenReturn(true);
+    }
+
+    /**
+     * 建立帶 eventId 與 userUuid 的測試事件。
+     *
+     * @return 新格式的用戶註冊事件
+     */
+    private static UserRegisteredEvent event() {
+        return new UserRegisteredEvent(EVENT_ID, USER_UUID, "test@example.com", "TestUser", "token-abc", "123456");
+    }
+
     /**
      * 驗證成功處理事件後，basicAck 被正確呼叫
      *
@@ -66,7 +104,7 @@ class EmailVerificationConsumerTest {
     @Test
     @DisplayName("處理用戶註冊事件後應呼叫 basicAck")
     void handleUserRegistered_success_acksMessage() throws IOException {
-        UserRegisteredEvent event = new UserRegisteredEvent(1L, "test@example.com", "TestUser", "token-abc", "123456");
+        UserRegisteredEvent event = event();
         long deliveryTag = 42L;
 
         consumer.handleUserRegistered(event, channel, deliveryTag);
@@ -83,7 +121,7 @@ class EmailVerificationConsumerTest {
     @Test
     @DisplayName("寄送驗證信失敗時呼叫 basicNack")
     void handleUserRegistered_onMailFailure_callsBasicNack() throws IOException {
-        UserRegisteredEvent event = new UserRegisteredEvent(1L, "test@example.com", "TestUser", "token-abc", "123456");
+        UserRegisteredEvent event = event();
         long deliveryTag = 88L;
 
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendVerificationEmail(event);
@@ -102,7 +140,7 @@ class EmailVerificationConsumerTest {
     @Test
     @DisplayName("basicAck 失敗時呼叫 basicNack")
     void handleUserRegistered_onAckFailure_callsBasicNack() throws IOException {
-        UserRegisteredEvent event = new UserRegisteredEvent(1L, "test@example.com", "TestUser", "token-abc", "123456");
+        UserRegisteredEvent event = event();
         long deliveryTag = 99L;
 
         doThrow(new IOException("ACK failed")).when(channel).basicAck(deliveryTag, false);
@@ -120,7 +158,7 @@ class EmailVerificationConsumerTest {
     @Test
     @DisplayName("handleUserRegistered：成功時 ConsumerExecutor 計入 processed 指標")
     void handleUserRegistered_success_recordsProcessedMetric() throws Exception {
-        UserRegisteredEvent event = new UserRegisteredEvent(1L, "test@example.com", "TestUser", "token-abc", "123456");
+        UserRegisteredEvent event = event();
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -142,7 +180,7 @@ class EmailVerificationConsumerTest {
     @Test
     @DisplayName("handleUserRegistered：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
     void handleUserRegistered_onFailure_recordsMetricsAndLogsContext() throws Exception {
-        UserRegisteredEvent event = new UserRegisteredEvent(1L, "test@example.com", "TestUser", "token-abc", "123456");
+        UserRegisteredEvent event = event();
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendVerificationEmail(event);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
@@ -154,12 +192,63 @@ class EmailVerificationConsumerTest {
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
-                        .contains("userId=1");
+                        .contains("userUuid=" + USER_UUID)
+                        .contains("eventId=" + EVENT_ID);
             });
         } finally {
             Metrics.removeRegistry(registry);
             registry.close();
         }
+    }
+
+    /**
+     * 情境：同一事件重送（markProcessed 回 false）→ 不重寄驗證信，但仍 ack（不進 DLQ）
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleUserRegistered：eventId 已處理過（重送）→ 不重寄驗證信，仍 ack")
+    void handleUserRegistered_duplicateEventId_skipsMailButAcks() throws IOException {
+        when(idempotencyService.markProcessed(EVENT_ID, EmailVerificationConsumer.CONSUMER_NAME)).thenReturn(false);
+
+        consumer.handleUserRegistered(event(), channel, 11L);
+
+        verify(userMailService, never()).sendVerificationEmail(any());
+        verify(channel).basicAck(11L, false);
+        verify(channel, never()).basicNack(eq(11L), eq(false), eq(false));
+    }
+
+    /**
+     * 情境：第一次處理 → 以 eventId 與 CONSUMER_NAME 標記並寄信
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleUserRegistered：第一次處理 → 以 (eventId, CONSUMER_NAME) 標記後寄信")
+    void handleUserRegistered_firstDelivery_marksEventIdThenSends() throws IOException {
+        consumer.handleUserRegistered(event(), channel, 12L);
+
+        verify(idempotencyService).markProcessed(EVENT_ID, EmailVerificationConsumer.CONSUMER_NAME);
+        verify(userMailService).sendVerificationEmail(event());
+        verify(channel).basicAck(12L, false);
+    }
+
+    /**
+     * 情境：舊格式 in-flight 訊息（eventId、userUuid 皆為 null）→ 不去重，照常寄信並 ack
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleUserRegistered：舊格式訊息（eventId 為 null）→ 不呼叫冪等服務，照常寄信並 ack")
+    void handleUserRegistered_legacyMessageWithoutEventId_sendsWithoutDedup() throws IOException {
+        UserRegisteredEvent legacy =
+                new UserRegisteredEvent(null, null, "test@example.com", "TestUser", "token-abc", "123456");
+
+        consumer.handleUserRegistered(legacy, channel, 13L);
+
+        verifyNoInteractions(idempotencyService);
+        verify(userMailService).sendVerificationEmail(legacy);
+        verify(channel).basicAck(13L, false);
     }
 
     /**

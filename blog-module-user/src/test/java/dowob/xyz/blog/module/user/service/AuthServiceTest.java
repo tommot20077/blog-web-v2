@@ -9,6 +9,7 @@ import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
+import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
@@ -30,6 +31,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -228,6 +230,26 @@ class AuthServiceTest {
                 eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
                 eq(TimeUnit.MINUTES)
         );
+    }
+
+    /**
+     * 驗證：註冊事件帶儲存後使用者的 uuid 與發送端產生的 eventId（不再帶 Long 主鍵）。
+     */
+    @Test
+    @DisplayName("register → 事件帶 userUuid（取自儲存後的使用者）與非 null 的 eventId")
+    void register_event_carriesUserUuidAndEventId() {
+        when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(false);
+        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        when(userRepository.save(any(User.class))).thenReturn(buildActiveUser());
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().userUuid()).isEqualTo(USER_UUID);
+        assertThat(eventCaptor.getValue().eventId()).isNotNull();
     }
 
     /**
@@ -659,6 +681,27 @@ class AuthServiceTest {
     }
 
     /**
+     * 驗證：密碼重設申請事件帶使用者 uuid 與發送端產生的 eventId（不再帶 Long 主鍵）。
+     */
+    @Test
+    @DisplayName("forgotPassword → 事件帶 userUuid 與非 null 的 eventId")
+    void forgotPassword_event_carriesUserUuidAndEventId() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(buildActiveUser()));
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.forgotPassword(TEST_EMAIL);
+
+        ArgumentCaptor<UserPasswordResetRequestedEvent> eventCaptor =
+                ArgumentCaptor.forClass(UserPasswordResetRequestedEvent.class);
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().userUuid()).isEqualTo(USER_UUID);
+        assertThat(eventCaptor.getValue().eventId()).isNotNull();
+        assertThat(eventCaptor.getValue().email()).isEqualTo(TEST_EMAIL);
+    }
+
+    /**
      * 驗證：forgotPassword 對不存在的信箱應靜默忽略，不拋出例外。
      */
     @Test
@@ -945,6 +988,33 @@ class AuthServiceTest {
                 eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
                 eq(TimeUnit.MINUTES)
         );
+    }
+
+    /**
+     * 驗證：重發驗證信的事件帶 userUuid 與 eventId，且每次重發都是新的 eventId
+     * （否則 consumer 依 eventId 去重會把使用者主動要求的重發誤判為重送而不寄）。
+     */
+    @Test
+    @DisplayName("resendVerification → 事件帶 userUuid；連續兩次重發的 eventId 不同（不被 consumer 去重吃掉）")
+    void resendVerification_event_carriesUserUuidAndFreshEventIdEachTime() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        mockUser.setStatus(UserStatus.PENDING_VERIFICATION);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.resendVerification(TEST_EMAIL);
+        authService.resendVerification(TEST_EMAIL);
+
+        ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+        verify(rabbitTemplate, times(2)).convertAndSend(anyString(), anyString(), eventCaptor.capture());
+        List<UserRegisteredEvent> events = eventCaptor.getAllValues();
+        assertThat(events).allSatisfy(e -> {
+            assertThat(e.userUuid()).isEqualTo(USER_UUID);
+            assertThat(e.eventId()).isNotNull();
+        });
+        assertThat(events.get(0).eventId()).isNotEqualTo(events.get(1).eventId());
     }
 
     /**
