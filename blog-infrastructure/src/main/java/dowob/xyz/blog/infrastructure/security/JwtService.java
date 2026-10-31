@@ -4,8 +4,12 @@ import dowob.xyz.blog.common.api.enums.Role;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import jakarta.annotation.PostConstruct;
-import org.apache.commons.lang3.ObjectUtils;
+import dowob.xyz.blog.infrastructure.config.RuntimeProfiles;
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.math.BigInteger;
@@ -24,17 +28,34 @@ import java.util.function.Function;
 /**
  * JWT 工具類 (使用 ECDSA 非對稱加密)
  *
- * <p>支援兩種金鑰初始化模式：</p>
+ * <p>金鑰初始化規則（SEC-13，fail-fast）：</p>
  * <ul>
- *   <li>生產模式：透過 {@code jwt.private-key} 注入 PKCS8 PEM 格式的 EC 私鑰，公鑰由私鑰推導。</li>
- *   <li>開發模式：未設定 {@code jwt.private-key} 時，每次啟動動態生成新的金鑰對。</li>
+ *   <li>設定了 {@code jwt.private-key}（環境變數 {@code JWT_PRIVATE_KEY}）：載入 PKCS8 PEM 格式的 EC 私鑰，
+ *       公鑰由私鑰推導；不受 profile 影響。</li>
+ *   <li>未設定（或僅空白）且為明確的非正式 profile（見 {@link RuntimeProfiles}）：每次啟動動態生成新的金鑰對並記 WARN。</li>
+ *   <li>未設定且不是非正式 profile（含沒有啟用任何 profile）：<b>啟動失敗</b>，避免多副本各生一把金鑰造成
+ *       間歇 401、重啟即全站登出等難診斷的靜默降級。</li>
  * </ul>
  *
  * @author Yuan
- * @version 1.1
+ * @version 2.0
  */
 @Component
 public class JwtService {
+
+    private static final Logger log = LoggerFactory.getLogger(JwtService.class);
+
+    /** 用於判斷是否為明確的非正式環境（決定缺私鑰時是否允許自動產生） */
+    private final Environment environment;
+
+    /**
+     * 建構子。
+     *
+     * @param environment Spring Environment，用於判斷是否為明確的非正式環境
+     */
+    public JwtService(Environment environment) {
+        this.environment = environment;
+    }
 
     /** EC 私鑰，用於 JWT 簽署 */
     private PrivateKey privateKey;
@@ -44,8 +65,8 @@ public class JwtService {
 
     /**
      * PKCS8 PEM 格式的 EC 私鑰。
-     * 生產環境透過環境變數 {@code JWT_PRIVATE_KEY} 注入；
-     * 本地/開發環境不設定此值（空字串），則走動態生成路徑。
+     * 生產環境透過環境變數 {@code JWT_PRIVATE_KEY} 注入（必填）；
+     * 僅明確的非正式 profile（dev／demo／e2e／test）可不設，走動態生成路徑。
      */
     @Value("${jwt.private-key:}")
     private String privateKeyPem;
@@ -66,14 +87,24 @@ public class JwtService {
      * 初始化 EC 金鑰對。
      *
      * <p>
-     * 若 {@code jwt.private-key} 已設定（非空），則從 PKCS8 PEM 載入私鑰並推導公鑰；
-     * 否則每次啟動動態生成新的 256-bit EC 金鑰對。
+     * 若 {@code jwt.private-key} 已設定（非空白），則從 PKCS8 PEM 載入私鑰並推導公鑰；
+     * 否則僅在明確的非正式 profile 下動態生成新的 256-bit EC 金鑰對並記 WARN，其餘情況啟動失敗。
      * </p>
+     *
+     * @throws IllegalStateException 未設定私鑰且不是非正式 profile 時，訊息說明需設定 {@code JWT_PRIVATE_KEY}
      */
     @PostConstruct
     public void init() {
+        if (StringUtils.isBlank(privateKeyPem) && !RuntimeProfiles.isNonProduction(environment)) {
+            throw new IllegalStateException(
+                    "未設定 JWT 私鑰：請設定環境變數 JWT_PRIVATE_KEY（對應屬性 jwt.private-key，PKCS8 PEM 格式的 EC P-256 私鑰）。"
+                            + "只有 dev／demo／e2e／test profile 才允許自動產生臨時金鑰；"
+                            + "目前啟用的 profile：" + Arrays.toString(environment.getActiveProfiles()));
+        }
         try {
-            if (ObjectUtils.isEmpty(privateKeyPem)) {
+            if (StringUtils.isBlank(privateKeyPem)) {
+                log.warn("jwt.private-key（環境變數 JWT_PRIVATE_KEY）未設定，於非正式 profile {} 自動產生臨時 EC 金鑰：重啟或多副本間 token 互不認，嚴禁用於正式環境",
+                        Arrays.toString(environment.getActiveProfiles()));
                 KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("EC");
                 keyPairGenerator.initialize(256);
                 KeyPair keyPair = keyPairGenerator.generateKeyPair();

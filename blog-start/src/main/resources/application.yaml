@@ -15,11 +15,14 @@ spring:
       pool:
         size: 4
 
+  # 憑證類屬性（帳號／密碼／金鑰）一律不給預設值（SEC-12）：未設環境變數時解析為空，
+  # 正式環境由 RequiredSecretsEnvironmentPostProcessor 在啟動時 fail-fast；
+  # 開發用值只放在 application-dev／demo／e2e（或測試資源）。host／port 等非憑證可保留預設。
   # Database
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/blogv2}
-    username: ${DATABASE_USERNAME:postgres}
-    password: ${DATABASE_PASSWORD:password}
+    username: ${DATABASE_USERNAME:}
+    password: ${DATABASE_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     hikari:
       # 連線池預算（Z3-b，與下方 spring.rabbitmq.listener.simple 綁定）：
@@ -37,8 +40,8 @@ spring:
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:guest}
-    password: ${RABBITMQ_PASSWORD:guest}
+    username: ${RABBITMQ_USERNAME:}
+    password: ${RABBITMQ_PASSWORD:}
     virtual-host: ${RABBITMQ_VHOST:blog}
     publisher-confirm-type: correlated
     publisher-returns: true
@@ -99,8 +102,8 @@ mybatis:
 # MinIO Config
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
-  access-key: ${MINIO_ACCESS_KEY:minioadmin}
-  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  access-key: ${MINIO_ACCESS_KEY:}
+  secret-key: ${MINIO_SECRET_KEY:}
   bucket-name: ${MINIO_BUCKET:blog-files}
 
 # 檔案模組設定
