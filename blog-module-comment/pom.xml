@@ -36,6 +36,7 @@
         <dependency>
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-article</artifactId>
+            <scope>test</scope>
         </dependency>
         <!-- Markdown -->
         <dependency>
