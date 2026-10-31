@@ -17,7 +17,14 @@ import org.springframework.amqp.rabbit.support.ListenerExecutionFailedException;
  *   <li>不可重試的致命例外（訊息轉換失敗等）——父類拋出 {@link AmqpRejectAndDontRequeueException}</li>
  *   <li>沒有 messageId 的訊息失敗一次——{@link MessageIdAwareRetryInterceptor} 拋出同型例外</li>
  * </ol>
- * <p>尚可重試的一般失敗不計；被 Spring 判定為「已有 x-death 的致命訊息」而直接丟棄（ack）者也不計（沒有進 DLQ）。</p>
+ * <p>尚可重試的一般失敗不計。</p>
+ *
+ * <p><b>與 Spring 預設的唯一差異：不丟棄帶 x-death 的致命訊息</b>。Spring 預設
+ * （{@code discardFatalsWithXDeath = true}）會把「帶 x-death header 且遇到致命例外」的訊息靜默 ack 丟棄，
+ * 目的是避免死信重投迴圈。但本專案的 DLQ 沒有自動重投，只有維運手動把 DLQ 訊息 shovel／move 回原 queue；
+ * 若重投後仍遇到轉換失敗或 {@link ClassCastException}，丟棄會讓訊息永久消失且無任何告警。
+ * 故 DLQ 重投後仍致命 → <b>回到 DLQ</b>（並計一次 dead_lettered），不丟棄；DLQ 不會自動重投，所以不會迴圈。
+ * 這也讓「有 messageId」與「無 messageId」兩條路徑的行為一致。</p>
  *
  * <p>tag 用 {@code queue} 而不是 {@code consumer}：本 handler 位於容器層，只知道訊息來自哪條 queue，
  * 不知道業務 consumer 名稱；同一指標名稱必須使用一致的 tag 鍵，故一律以 queue 區分。</p>
@@ -32,6 +39,14 @@ public class DeadLetterCountingErrorHandler extends ConditionalRejectingErrorHan
 
     /** 無法判斷來源 queue 時的 tag 值 */
     private static final String UNKNOWN_QUEUE = "unknown";
+
+    /**
+     * 建立 error handler：關閉「帶 x-death 的致命訊息直接丟棄」，使其回到 DLQ。
+     */
+    public DeadLetterCountingErrorHandler() {
+        super();
+        setDiscardFatalsWithXDeath(false);
+    }
 
     @Override
     public void handleError(Throwable t) {

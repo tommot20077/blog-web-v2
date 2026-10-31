@@ -29,6 +29,9 @@ spring:
       #   調高 MQ_LISTENER_MAX_CONCURRENCY 時，務必同步調高本值：maximum-pool-size ≥ 12 × max-concurrency + HTTP 預留（≥ 6）。
       #   多副本部署時 DB 總連線 = 副本數 × 本值，需不超過 Postgres max_connections。
       maximum-pool-size: ${DB_POOL_MAX_SIZE:30}
+      # minimum-idle 未設時等於 maximum-pool-size，會讓每個副本常駐 30 條連線（原本預設 10）；
+      # 改為平時只保留 10 條，尖峰（MQ consumer 吃滿）才長到 maximum-pool-size，閒置後由 Hikari 收回。
+      minimum-idle: ${DB_POOL_MIN_IDLE:10}
 
   # RabbitMQ
   rabbitmq:

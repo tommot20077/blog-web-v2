@@ -192,6 +192,9 @@ class RetryPipelineIntegrationTest {
                     jdbc.update("INSERT INTO it_retry_child (event_id, parent_id) VALUES (?, ?)", event.eventId(), parent);
                     return;
                 }
+                if ("CLASS_CAST".equals(event.mode())) {
+                    throw new ClassCastException("模擬致命（不可重試）例外，eventId=" + event.eventId());
+                }
                 if (attempt <= event.failTimes()) {
                     throw new IllegalStateException("模擬業務失敗，第 " + attempt + " 次，eventId=" + event.eventId());
                 }
@@ -416,6 +419,40 @@ class RetryPipelineIntegrationTest {
 
         await().atMost(WAIT_LIMIT).untilAsserted(() -> assertThat(listener.messageIds).containsKey(event.eventId()));
         assertThat(listener.messageIds.get(event.eventId())).isEqualTo(event.eventId().toString());
+    }
+
+    @Test
+    @DisplayName("DLQ 重投（broker 加了 x-death）的訊息再次轉換失敗：仍回到 DLQ、不被靜默丟棄；dead_lettered 累計 2")
+    void redrivenMessageWithXDeath_conversionFailure_returnsToDeadLetterQueue() {
+        UUID messageId = UUID.randomUUID();
+        Message garbage = MessageBuilder.withBody("{ this is not json".getBytes(StandardCharsets.UTF_8))
+                .setContentType("application/json")
+                .setMessageId(messageId.toString())
+                .build();
+        rabbitTemplate.send("", WORK_QUEUE, garbage);
+        Message firstDeadLetter = awaitDeadLetter(messageId);
+        assertThat(firstDeadLetter.getMessageProperties().getXDeathHeader())
+                .as("broker 死信時加上的 x-death（維運 shovel／move 回原 queue 時會帶著）").isNotEmpty();
+
+        rabbitTemplate.send("", WORK_QUEUE, firstDeadLetter);
+
+        awaitDeadLetter(messageId);
+        assertThat(queueCount(ConsumerExecutor.DEAD_LETTERED_METRIC)).isEqualTo(2.0);
+    }
+
+    @Test
+    @DisplayName("DLQ 重投（broker 加了 x-death）的訊息業務拋 ClassCastException（致命）：仍回到 DLQ；每次投遞各嘗試 1 次")
+    void redrivenMessageWithXDeath_fatalBusinessException_returnsToDeadLetterQueue() {
+        TestEvent event = new TestEvent(UUID.randomUUID(), 0, "CLASS_CAST");
+        rabbitTemplate.convertAndSend("", WORK_QUEUE, event);
+        Message firstDeadLetter = awaitDeadLetter(event.eventId());
+        assertThat(firstDeadLetter.getMessageProperties().getXDeathHeader()).isNotEmpty();
+
+        rabbitTemplate.send("", WORK_QUEUE, firstDeadLetter);
+
+        awaitDeadLetter(event.eventId());
+        assertThat(attemptsOf(event.eventId())).as("致命例外不重試：兩次投遞各 1 次").isEqualTo(2);
+        assertThat(queueCount(ConsumerExecutor.DEAD_LETTERED_METRIC)).isEqualTo(2.0);
     }
 
     /**

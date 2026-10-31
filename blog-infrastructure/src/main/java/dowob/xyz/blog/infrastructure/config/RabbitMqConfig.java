@@ -51,7 +51,8 @@ import java.util.Map;
  * <li>重試：有狀態重試（以 messageId＋queue 追蹤），最多 3 次（含首次），指數退避 1s→5s（乘數 5，上限 25s；
  *     3 次嘗試實際只會等待 1s 與 5s）。退避睡眠發生在 consumer 執行緒上，故必須搭配 concurrency ≥ 2 與
  *     prefetch = 1（見 application.yaml），單一毒訊息才不會阻塞同 queue 的其他訊息</li>
- * <li>不可重試的例外（訊息轉換失敗等「重試也不會好」者）不重試，直接進 DLQ</li>
+ * <li>不可重試的例外（訊息轉換失敗等「重試也不會好」者）不重試，直接進 DLQ；維運把 DLQ 訊息重投回原 queue 後
+ *     若仍致命 → 回到 DLQ，不丟棄（不採用 Spring 預設的「帶 x-death 的致命訊息直接 ack 丟棄」）</li>
  * <li>沒有 messageId 的訊息（部署前殘留）無法計次：只嘗試一次，失敗即進 DLQ</li>
  * <li>DLQ：重試耗盡的訊息以 requeue=false 拒絕，經 DLX 路由至 {@code queue.dead-letter}，
  *     並計 {@code mq.consumer.dead_lettered}</li>
