@@ -93,15 +93,36 @@
 | 7 | UUID 全面改造的設計討論（ARCH-30 擴大） | 兩 repo | 無；**須在 #8 實作前完成**，以決定新端點寫法 |
 | 8 | 公開作者功能 後端 PR → 重抓快照 → 前端 PR（含 SEC-04 第 2 段） | 兩 repo | #7 |
 | 9 | SEC-04 第 3 段：`MAX_SIZE` 1000 → 100 | 後端 | #8 前端上線後 |
-| 10 | UUID 改造：各模組一個 PR（含該模組 T2 修復） | 後端（＋事件） | #7 |
-| 11 | SEC-16 互動路徑「可讀才可互動」 | 後端 | #10 的 comment、reading 完成後 |
-| 12 | ES 重建：存 `authorUuid`、移除 `username`，拿掉搜尋的批次作者查詢 | 後端 | #10 |
+| 10 | UUID 改造：各模組一個 PR（含該模組 T2 修復） | 後端（＋事件） | #7；**M1～M8、Z1、Z2、Z3-a 已完成（2026-10-31），Z3-b 進行中**，見下方進度表 |
+| 11 | SEC-16 互動路徑「可讀才可互動」 | 後端 | #10 的 comment、reading 完成後（**依賴已滿足**：M1 PR #83、M2 PR #84 已合併；本項尚未開工） |
+| 12 | ES 重建：存 `authorUuid`、移除 `username`，拿掉搜尋的批次作者查詢 | 後端 | #10；**程式已完成**（M7-search，PR #89），部署後仍須執行 admin reindex |
 | 13 | CSP Report-Only | 前端 nginx／infrastructure | 無 |
-| 14 | 第 3 段：拆 CASCADE、事件驅動刪除 | 後端 | ARCH-16 可觀測性 |
+| 14 | 第 3 段：拆 CASCADE、事件驅動刪除 | 後端 | ARCH-16 可觀測性；**已併入 #10 完成**（範圍擴大為 (c)，M1～M8 逐模組拆 FK、改事件連動＋每日孤兒校正，Z2 以 `NoCrossModuleForeignKeyIT` 守衛；PR #83～#92）；ARCH-16 仍 OPEN |
 | 15 | 查證 ArticleList 左欄 Tags 連結以名稱代 slug | 前端 | 無 |
 | — | 對帳後仍 OPEN 的其他 findings（FE-01 全域錯誤處理、FE-02 未存檔守衛等）重新排序 | 兩 repo | #1 |
 
 **#7 已完成**（2026-10-24）：設計 `docs/plans/2026-10-24-cross-module-uuid-design.md`、實作計畫 `docs/plans/2026-10-24-cross-module-uuid-implementation-plan.md`。範圍擴大為 (c)：含拆跨模組 FK 與事件驅動刪除；JWT 直接切換（全體重新登入，無正式環境）；Q9 併入 0b；Q11 以「例外清單逐步清空」解決；`user_preferences.user_id` 追加為第 18 個欄位；`files` 表 DROP。#10～#12 併入該計畫的 M／Z 階段。
+
+**#10 跨模組 UUID 重構進度（2026-10-31 對帳，develop 上的合併提交）**：
+
+| 階段 | PR | 內容 | 狀態 |
+|---|---|---|---|
+| T0a | #81 | 安全網、孤兒校正排程框架、事件契約搬遷、過渡 API、守衛起步 | 完成 |
+| T0b | #82 | 認證鏈改用 uuid（JWT subject、`AuthStateLoader`）、全模組 principal 改 `AuthUser`（含 Q9／SEC-26） | 完成 |
+| M1（comment） | #83 | V25；修 RACE-01、RACE-09 | 完成 |
+| M2（reading） | #84 | V26、V27；修 RACE-01、RACE-04、RACE-13；PERF-31 部分 | 完成 |
+| RP-1（閱讀進度） | #85 | 帶版本時間的單調寫入（修 DATA-08 殘留的回退） | 完成 |
+| M3（version） | #86 | V28 | 完成 |
+| M4（series） | #87 | V29；修 RACE-14、RACE-15 | 完成 |
+| M5（file） | #88 | V30（DROP 舊 `files` 表）；`ImageUploadedEvent` 補 `eventId` | 完成 |
+| M7-search | #89 | ES 作者改存 uuid、移除 `username` | 完成 |
+| M6（article） | #90 | V31、V32 | 完成 |
+| M7-tag ＋ M8（user） | #91 | V33（含 PERF-07 索引）、V34；修 RACE-08、RACE-02、RACE-03 | 完成 |
+| Z1 ＋ Z2 | #92 | 移除過渡 Long API；全域守衛（`FacadeIdentifierTypeTest`、`NoCrossModuleForeignKeyIT`、`CrossModuleBoundaryTest` 全表對照、`ModulePomDependencyTest`、`EventContractTest` 刪例外清單） | 完成 |
+| Z3-a | 尚無 PR 編號（merge `88a77e3`，在分支上） | 冪等標記與業務同交易，為打開 MQ 重試鋪路 | 完成 |
+| Z3-b | — | 打開 MQ 重試（ARCH-02／PERF-15／PERF-30） | **進行中** |
+
+`findings.md` 已據此對帳：ARCH-30、ARCH-07、ARCH-09、ARCH-13、PERF-07、PERF-31（部分）、RACE-01/02/03/04/08/09/13/14/15、DATA-08、TEST-04/05 的狀態更新見 `findings.md`「稽核輪次」2026-10-31 列；ARCH-02、PERF-15、PERF-30 待 Z3-b 完成後再改。M7-recommend 在 git log 無獨立 merge 提交（未逐項確認其範圍是否已併入 M6）。
 
 ---
 
