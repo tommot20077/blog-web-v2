@@ -137,6 +137,17 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- ConsumerExecutorIdempotencyIntegrationTest 以真實 Postgres＋正式 Flyway migration 驗證冪等交易 -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-db-migration</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>

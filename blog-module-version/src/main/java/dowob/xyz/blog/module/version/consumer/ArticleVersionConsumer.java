@@ -13,11 +13,16 @@ import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
+import java.util.function.Supplier;
+
 /**
  * Article content changed 事件消費者 — 觸發 version 模組寫快照。
  *
  * <p>共用 {@code rabbitListenerContainerFactory} 為 MANUAL ACK，ack／nack 統一交由
  * {@link ConsumerExecutor} 處理；失敗一律 nack（requeue=false）送 DLQ，避免重試風暴。</p>
+ *
+ * <p>冪等：SAVED／PUBLISHED 會新增快照（非冪等），由 {@link ConsumerExecutor#executeIdempotent}
+ * 以 {@code eventId} 去重，標記與快照寫入在同一個資料庫交易；快照失敗 → 標記一起 rollback。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -48,24 +53,30 @@ public class ArticleVersionConsumer {
             ArticleContentChangedEvent event,
             Channel channel,
             @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        consumerExecutor.execute(CONSUMER_NAME,
-                () -> "articleUuid=" + event.articleUuid() + ", action=" + event.action(),
-                channel, deliveryTag, () -> {
-                    if (event.articleUuid() == null) {
-                        log.warn("文章內容變更事件缺少 articleUuid，略過快照流程 eventId={}", event.eventId());
-                        return;
+        Supplier<String> logContext = () -> "articleUuid=" + event.articleUuid()
+                + ", action=" + event.action() + ", eventId=" + event.eventId();
+        if (event.articleUuid() == null) {
+            consumerExecutor.execute(CONSUMER_NAME, logContext, channel, deliveryTag,
+                    () -> log.warn("文章內容變更事件缺少 articleUuid，略過快照流程 eventId={}", event.eventId()));
+            return;
+        }
+        if (event.action() == ArticleContentChangedEvent.Action.RESTORED) {
+            /* no-op：restore 已在 VersioningService 內部寫過 stash；沒有業務可去重，不寫 processed_events */
+            consumerExecutor.execute(CONSUMER_NAME, logContext, channel, deliveryTag, () -> { });
+            return;
+        }
+        /* 快照是非冪等寫入（重複處理會多一份快照），標記與快照在同一個資料庫交易內；
+         * VersioningService 的 @Transactional 為 REQUIRED，會加入這個交易，快照失敗時標記一起 rollback */
+        consumerExecutor.executeIdempotent(CONSUMER_NAME, logContext, channel, deliveryTag, event.eventId(), () -> {
+            switch (event.action()) {
+                case SAVED -> {
+                    if (autoSnapshotPolicy.shouldSnapshot(event.articleUuid())) {
+                        versioningService.recordAutoSnapshot(event.articleUuid());
                     }
-                    switch (event.action()) {
-                        case SAVED -> {
-                            if (autoSnapshotPolicy.shouldSnapshot(event.articleUuid())) {
-                                versioningService.recordAutoSnapshot(event.articleUuid());
-                            }
-                        }
-                        case PUBLISHED -> versioningService.freezePublished(event.articleUuid());
-                        case RESTORED -> {
-                            /* no-op：restore 已在 VersioningService 內部寫過 stash */
-                        }
-                    }
-                });
+                }
+                case PUBLISHED -> versioningService.freezePublished(event.articleUuid());
+                default -> { }
+            }
+        });
     }
 }

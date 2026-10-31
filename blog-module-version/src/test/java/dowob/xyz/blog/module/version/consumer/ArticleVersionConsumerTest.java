@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.version.consumer;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent.Action;
@@ -22,6 +23,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -30,10 +34,14 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -63,6 +71,13 @@ class ArticleVersionConsumerTest {
     @Mock
     private Channel channel;
 
+    /** 冪等標記服務（Mock，預設視為首次處理） */
+    @Mock
+    private IdempotencyService idempotencyService;
+
+    /** 交易管理員替身：用來觀察 commit／rollback */
+    private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+
     private ArticleVersionConsumer consumer;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
@@ -70,7 +85,10 @@ class ArticleVersionConsumerTest {
 
     @BeforeEach
     void setUp() {
-        consumer = new ArticleVersionConsumer(versioningService, autoSnapshotPolicy, new ConsumerExecutor());
+        lenient().when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        lenient().when(idempotencyService.tryMark(any(), anyString())).thenReturn(true);
+        consumer = new ArticleVersionConsumer(versioningService, autoSnapshotPolicy,
+                new ConsumerExecutor(new TransactionTemplate(txManager), idempotencyService));
     }
 
     private ArticleContentChangedEvent event(Action action) {
@@ -154,6 +172,42 @@ class ArticleVersionConsumerTest {
         consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
 
         verify(channel).basicNack(eq(DELIVERY_TAG), eq(false), eq(false));
+    }
+
+    @Test
+    @DisplayName("SAVED/PUBLISHED 帶 eventId: 以 (eventId, CONSUMER_NAME) 標記，業務失敗時標記所在交易 rollback")
+    void onContentChanged_serviceThrows_rollsBackMarkTransaction() throws IOException {
+        ArticleContentChangedEvent ev = event(Action.PUBLISHED);
+        doThrow(new RuntimeException("DB error")).when(versioningService).freezePublished(ARTICLE_UUID);
+
+        consumer.onContentChanged(ev, channel, DELIVERY_TAG);
+
+        verify(idempotencyService).tryMark(ev.eventId(), ArticleVersionConsumer.CONSUMER_NAME);
+        verify(txManager).rollback(any());
+        verify(txManager, never()).commit(any());
+        verify(channel).basicNack(DELIVERY_TAG, false, false);
+    }
+
+    @Test
+    @DisplayName("同一事件重送（tryMark=false）: 不再寫快照，仍 basicAck")
+    void onContentChanged_duplicateEvent_skipsSnapshotButAcks() throws IOException {
+        ArticleContentChangedEvent ev = event(Action.PUBLISHED);
+        when(idempotencyService.tryMark(ev.eventId(), ArticleVersionConsumer.CONSUMER_NAME)).thenReturn(false);
+
+        consumer.onContentChanged(ev, channel, DELIVERY_TAG);
+
+        verify(versioningService, never()).freezePublished(ARTICLE_UUID);
+        verify(channel).basicAck(DELIVERY_TAG, false);
+    }
+
+    @Test
+    @DisplayName("RESTORED 與缺 articleUuid 是 no-op: 不寫 processed_events（沒有業務可去重）")
+    void onContentChanged_noOpEvents_doNotTouchIdempotency() throws IOException {
+        consumer.onContentChanged(event(Action.RESTORED), channel, DELIVERY_TAG);
+        consumer.onContentChanged(event(Action.SAVED, null), channel, DELIVERY_TAG);
+
+        verifyNoInteractions(idempotencyService);
+        verify(channel, times(2)).basicAck(DELIVERY_TAG, false);
     }
 
     /**

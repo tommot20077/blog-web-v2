@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.article.consumer;
 
 import com.rabbitmq.client.Channel;
-import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.event.ArticleViewedEvent;
@@ -19,7 +18,9 @@ import org.springframework.stereotype.Component;
  * <p>
  * 監聽 {@link ArticleRabbitMqConfig#QUEUE_VIEW_COUNT} 隊列，
  * 收到 {@link ArticleViewedEvent} 後呼叫 {@link ViewCountService} 增加 Redis 暫存計數，
- * ack／nack 與失敗計數統一交由 {@link ConsumerExecutor} 處理。
+ * ack／nack、失敗計數與 {@code eventId} 冪等去重統一交由
+ * {@link ConsumerExecutor#executeIdempotent} 處理（業務只寫 Redis，標記在計數成功後才 commit；
+ * 計數成功但 commit 失敗時重送會多計一次，屬 at-least-once 的可接受誤差）。
  * </p>
  *
  * @author Yuan
@@ -36,9 +37,6 @@ public class ViewCountConsumer {
     /** 瀏覽計數服務 */
     private final ViewCountService viewCountService;
 
-    /** MQ event 冪等處理服務 */
-    private final IdempotencyService idempotencyService;
-
     /** MQ consumer 共用 ack/nack 包裝與計數 */
     private final ConsumerExecutor consumerExecutor;
 
@@ -53,15 +51,9 @@ public class ViewCountConsumer {
     public void handleArticleViewed(ArticleViewedEvent event,
                                     Channel channel,
                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        consumerExecutor.execute(CONSUMER_NAME,
+        consumerExecutor.executeIdempotent(CONSUMER_NAME,
                 () -> "articleUuid=" + event.articleUuid() + ", eventId=" + event.eventId(),
-                channel, deliveryTag, () -> {
-                    /* 冪等 check：舊訊息 eventId 為 null 則跳過去重照舊處理；重送（markProcessed=false）則 skip（仍會 ack） */
-                    if (event.eventId() != null
-                            && !idempotencyService.markProcessed(event.eventId(), CONSUMER_NAME)) {
-                        log.debug("瀏覽事件 {} 已處理過，skip", event.eventId());
-                        return;
-                    }
+                channel, deliveryTag, event.eventId(), () -> {
                     viewCountService.incrementRedisViewCount(event.articleUuid());
                     log.debug("文章 {} 瀏覽計數已增加", event.articleUuid());
                 });

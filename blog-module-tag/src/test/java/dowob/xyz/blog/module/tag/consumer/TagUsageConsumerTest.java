@@ -18,12 +18,13 @@ import org.apache.logging.log4j.core.Logger;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
@@ -37,6 +38,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -71,17 +73,28 @@ class TagUsageConsumerTest {
     @Mock
     private Channel channel;
 
-    /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
-    @Spy
-    private ConsumerExecutor consumerExecutor = new ConsumerExecutor();
+    /** 交易管理員替身：用來觀察 commit／rollback（getTransaction 回傳簡易 status） */
+    private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
 
-    @InjectMocks
+    /** 真實的 ack/nack/冪等共用包裝（非 Mock），搭配 Mock 的 IdempotencyService 與交易管理員 */
+    private ConsumerExecutor consumerExecutor;
+
     private TagUsageConsumer tagUsageConsumer;
 
-    /** 預設：首次處理（markProcessed=true）；需要模擬重送的測試自行 override */
+    /**
+     * 建立被測物件：ConsumerExecutor 使用真實實例，冪等服務為 Mock、交易由 Mock 交易管理員模擬。
+     */
+    @BeforeEach
+    void buildSubjectUnderTest() {
+        when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        consumerExecutor = new ConsumerExecutor(new TransactionTemplate(txManager), idempotencyService);
+        tagUsageConsumer = new TagUsageConsumer(tagRepository, stringRedisTemplate, consumerExecutor);
+    }
+
+    /** 預設：首次處理（tryMark=true）；需要模擬重送的測試自行 override */
     @BeforeEach
     void setUpIdempotency() {
-        when(idempotencyService.markProcessed(any(), eq(TagUsageConsumer.CONSUMER_NAME))).thenReturn(true);
+        when(idempotencyService.tryMark(any(), eq(TagUsageConsumer.CONSUMER_NAME))).thenReturn(true);
     }
 
     @Test
@@ -147,7 +160,7 @@ class TagUsageConsumerTest {
         when(tagRepository.save(any(Tag.class))).thenAnswer(inv -> inv.getArgument(0));
         when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
         // 首次 true、重送 false
-        when(idempotencyService.markProcessed(eq(eventId), eq(TagUsageConsumer.CONSUMER_NAME)))
+        when(idempotencyService.tryMark(eq(eventId), eq(TagUsageConsumer.CONSUMER_NAME)))
                 .thenReturn(true, false);
 
         ArticleTagEvent event = new ArticleTagEvent(eventId, UUID.randomUUID(), List.of(tagId));
@@ -180,7 +193,7 @@ class TagUsageConsumerTest {
 
         assertThat(tag.getUsageCount()).isEqualTo(1);
         verify(channel).basicAck(7L, false);
-        verify(idempotencyService, never()).markProcessed(any(), any());
+        verify(idempotencyService, never()).tryMark(any(), any());
     }
 
     /**
@@ -299,6 +312,87 @@ class TagUsageConsumerTest {
             Metrics.removeRegistry(registry);
             registry.close();
         }
+    }
+
+    /**
+     * 情境：業務（寫 DB）失敗 → 標記所在的交易 rollback、不 commit，訊息 nack。
+     *
+     * @throws IOException basicNack 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleArticleTagged: 業務失敗 → 冪等標記所在交易 rollback（不 commit）並 nack")
+    void handleArticleTagged_onBodyFailure_rollsBackMarkTransaction() throws IOException {
+        UUID tagId = UUID.randomUUID();
+        when(tagRepository.findById(tagId)).thenThrow(new RuntimeException("DB error"));
+        ArticleTagEvent event = new ArticleTagEvent(UUID.randomUUID(), UUID.randomUUID(), List.of(tagId));
+
+        tagUsageConsumer.handleArticleTagged(event, channel, 31L);
+
+        verify(idempotencyService).tryMark(event.eventId(), TagUsageConsumer.CONSUMER_NAME);
+        verify(txManager).rollback(any());
+        verify(txManager, never()).commit(any());
+        verify(channel).basicNack(31L, false, false);
+    }
+
+    /**
+     * 情境：事件有兩個標籤，第 2 個標籤的 DB 寫入失敗 → 第 1 個標籤的 Redis 熱門分數也不得被加
+     * （DB 會 rollback，Redis 無法 rollback；重試時才不會重複加分）。
+     *
+     * @throws IOException basicNack 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleArticleTagged: 第 2 個標籤 DB 寫入失敗 → Redis ZSet 完全不被呼叫")
+    void handleArticleTagged_secondTagDbWriteFails_neverTouchesRedis() throws IOException {
+        UUID firstId = UUID.randomUUID();
+        UUID secondId = UUID.randomUUID();
+        Tag first = new Tag();
+        first.setId(firstId);
+        first.setUsageCount(0);
+        Tag second = new Tag();
+        second.setId(secondId);
+        second.setUsageCount(0);
+        when(tagRepository.findById(firstId)).thenReturn(Optional.of(first));
+        when(tagRepository.findById(secondId)).thenReturn(Optional.of(second));
+        when(tagRepository.save(first)).thenReturn(first);
+        when(tagRepository.save(second)).thenThrow(new RuntimeException("DB write error"));
+        when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
+        ArticleTagEvent event = new ArticleTagEvent(UUID.randomUUID(), UUID.randomUUID(), List.of(firstId, secondId));
+
+        tagUsageConsumer.handleArticleTagged(event, channel, 41L);
+
+        verify(stringRedisTemplate, never()).opsForZSet();
+        verify(zSetOps, never()).incrementScore(any(), any(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(txManager).rollback(any());
+        verify(channel).basicNack(41L, false, false);
+    }
+
+    /**
+     * 情境：兩個標籤都成功 → 兩個標籤的 Redis 分數都加一。
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleArticleTagged: 所有 DB 寫入成功後才更新 Redis，兩個標籤都加分")
+    void handleArticleTagged_allDbWritesSucceed_incrementsRedisForEveryTag() throws IOException {
+        UUID firstId = UUID.randomUUID();
+        UUID secondId = UUID.randomUUID();
+        Tag first = new Tag();
+        first.setId(firstId);
+        Tag second = new Tag();
+        second.setId(secondId);
+        when(tagRepository.findById(firstId)).thenReturn(Optional.of(first));
+        when(tagRepository.findById(secondId)).thenReturn(Optional.of(second));
+        when(tagRepository.save(any(Tag.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
+        ArticleTagEvent event = new ArticleTagEvent(UUID.randomUUID(), UUID.randomUUID(), List.of(firstId, secondId));
+
+        tagUsageConsumer.handleArticleTagged(event, channel, 42L);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(tagRepository, zSetOps);
+        order.verify(tagRepository).save(second);
+        order.verify(zSetOps).incrementScore(RedisKeyConstant.TAG_HOT_KEY, firstId.toString(), 1.0);
+        order.verify(zSetOps).incrementScore(RedisKeyConstant.TAG_HOT_KEY, secondId.toString(), 1.0);
+        verify(channel).basicAck(42L, false);
     }
 
     /**
