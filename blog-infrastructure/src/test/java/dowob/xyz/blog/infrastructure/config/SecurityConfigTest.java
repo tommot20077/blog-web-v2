@@ -710,7 +710,7 @@ class SecurityConfigTest {
         Role.ADMIN.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         return authentication(
-                new UsernamePasswordAuthenticationToken(new AuthUser(1L, new UUID(0L, 1L), Role.ADMIN), null, authorities));
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 1L), Role.ADMIN), null, authorities));
     }
 
     private static RequestPostProcessor asUser() {
@@ -719,7 +719,7 @@ class SecurityConfigTest {
         Role.USER.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         return authentication(
-                new UsernamePasswordAuthenticationToken(new AuthUser(2L, new UUID(0L, 2L), Role.USER), null, authorities));
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 2L), Role.USER), null, authorities));
     }
 
     private static RequestPostProcessor asAuthor() {
@@ -728,6 +728,6 @@ class SecurityConfigTest {
         Role.AUTHOR.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         return authentication(
-                new UsernamePasswordAuthenticationToken(new AuthUser(3L, new UUID(0L, 3L), Role.AUTHOR), null, authorities));
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 3L), Role.AUTHOR), null, authorities));
     }
 }

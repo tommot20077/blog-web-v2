@@ -35,7 +35,6 @@ public class ArticleDataAssembler {
      */
     public ArticleData toArticleData(Article article) {
         return new ArticleData(
-                article.getId(),
                 article.getUuid(),
                 article.getStatus() != null ? article.getStatus().name() : null,
                 article.getSeriesPosition(),

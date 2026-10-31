@@ -396,11 +396,6 @@ public class RedisKeyConstant {
      */
     public static final String FIELD_ROLE = "role";
 
-    /**
-     * Auth Hash 使用者主鍵欄位（過渡欄位，供 {@code AuthUser.id()} 使用；收尾階段移除）
-     */
-    public static final String FIELD_ID = "id";
-
     /** ===================== Reading Progress（批 2 / V14）===================== */
 
     /**

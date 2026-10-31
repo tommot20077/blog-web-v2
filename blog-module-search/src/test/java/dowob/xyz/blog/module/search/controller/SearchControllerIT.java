@@ -105,7 +105,7 @@ class SearchControllerIT {
     private RequestPostProcessor userAuth(Long userId) {
         return SecurityMockMvcRequestPostProcessors.authentication(
                 new UsernamePasswordAuthenticationToken(
-                        new AuthUser(userId, USER_UUID, Role.USER), null,
+                        new AuthUser(USER_UUID, Role.USER), null,
                         List.of(new SimpleGrantedAuthority("ROLE_USER"))));
     }
 
@@ -120,7 +120,7 @@ class SearchControllerIT {
         authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
         Role.ADMIN.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         return SecurityMockMvcRequestPostProcessors.authentication(
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), Role.ADMIN), null, authorities));
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, userId), Role.ADMIN), null, authorities));
     }
 
     /**

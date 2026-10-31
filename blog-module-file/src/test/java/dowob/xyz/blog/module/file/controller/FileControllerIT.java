@@ -226,7 +226,7 @@ class FileControllerIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, userId), role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -675,7 +675,7 @@ class FileControllerIT {
         void getFileContent_boundToPublishedArticle_anonymous_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, "PUBLISHED", null, USER_A_UUID, null)));
+                    new ArticleData(articleUuid, "PUBLISHED", null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
@@ -688,7 +688,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_anonymous_returns403() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, "DRAFT", null, USER_A_UUID, null)));
+                    new ArticleData(articleUuid, "DRAFT", null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
@@ -700,7 +700,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_nonUploader_returns403() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, "DRAFT", null, USER_A_UUID, null)));
+                    new ArticleData(articleUuid, "DRAFT", null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
@@ -713,7 +713,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_uploader_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, "DRAFT", null, USER_A_UUID, null)));
+                    new ArticleData(articleUuid, "DRAFT", null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
@@ -727,7 +727,7 @@ class FileControllerIT {
         void getFileContent_boundToDraftArticle_admin_returns302() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
-                    new ArticleData(1L, articleUuid, "DRAFT", null, USER_A_UUID, null)));
+                    new ArticleData(articleUuid, "DRAFT", null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")

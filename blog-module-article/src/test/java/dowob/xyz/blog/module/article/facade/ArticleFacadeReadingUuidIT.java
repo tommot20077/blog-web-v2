@@ -176,7 +176,7 @@ class ArticleFacadeReadingUuidIT {
     }
 
     private void loginAs(long id, UUID uuid, Role role) {
-        AuthUser principal = new AuthUser(id, uuid, role);
+        AuthUser principal = new AuthUser(uuid, role);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(principal, null, List.of()));
     }
@@ -292,20 +292,6 @@ class ArticleFacadeReadingUuidIT {
         articleFacade.decrementLikeCount(target);
 
         assertThat(likeCountOf(target)).isZero();
-    }
-
-    @Test
-    @DisplayName("like count 的 UUID 版與 Long 版結果一致")
-    void likeCount_uuidVersionMatchesLongVersion() {
-        UUID viaUuid = insertArticle(author1Uuid, "PUBLISHED", 1);
-        UUID viaId = insertArticle(author1Uuid, "PUBLISHED", 1);
-
-        articleFacade.incrementLikeCount(viaUuid);
-        articleFacade.incrementLikeCount(idOf(viaId));
-        articleFacade.decrementLikeCount(viaUuid);
-        articleFacade.decrementLikeCount(idOf(viaId));
-
-        assertThat(likeCountOf(viaUuid)).isEqualTo(likeCountOf(viaId)).isEqualTo(1);
     }
 
     @Test

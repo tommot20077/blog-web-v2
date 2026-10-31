@@ -431,7 +431,7 @@ class ArticleResponseMapperTest {
         private void authenticateAs(Long userId, String springSecurityRole) {
             Role role = Role.valueOf(springSecurityRole.substring("ROLE_".length()));
             Authentication auth = new UsernamePasswordAuthenticationToken(
-                    new AuthUser(userId, TestUsers.uuidOf(userId), role), null,
+                    new AuthUser(TestUsers.uuidOf(userId), role), null,
                     List.of(new SimpleGrantedAuthority(springSecurityRole)));
             SecurityContextHolder.getContext().setAuthentication(auth);
         }

@@ -30,8 +30,7 @@ class AutoSnapshotPolicyTest {
     private final UUID authorUuid = UUID.randomUUID();
 
     private ArticleContentData buildContentData(UUID articleUuid, UUID authorUuid, String content) {
-        return new ArticleContentData(
-            100L, articleUuid,
+        return new ArticleContentData(articleUuid,
             "T", "s", content, "sum", null, "PUBLISHED", authorUuid
         );
     }

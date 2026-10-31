@@ -163,7 +163,7 @@ class CrossModuleCommentIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(userId, userUuid, role), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(userUuid, role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 

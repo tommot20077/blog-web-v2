@@ -165,7 +165,7 @@ class ArticleQueryServiceTest {
             // 設定登入狀態
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
@@ -184,7 +184,7 @@ class ArticleQueryServiceTest {
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
@@ -232,7 +232,7 @@ class ArticleQueryServiceTest {
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1");
 
@@ -249,7 +249,7 @@ class ArticleQueryServiceTest {
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1");
 
@@ -285,7 +285,7 @@ class ArticleQueryServiceTest {
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleBySlug("test-slug", AUTHOR_UUID, Role.AUTHOR, "127.0.0.1");
 
@@ -310,7 +310,7 @@ class ArticleQueryServiceTest {
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getMyArticles(AUTHOR_UUID, 1, 10, null);
 
@@ -360,7 +360,7 @@ class ArticleQueryServiceTest {
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
@@ -384,7 +384,7 @@ class ArticleQueryServiceTest {
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             PageResult<ArticleSummaryResponse> result = articleQueryService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
 
@@ -499,7 +499,7 @@ class ArticleQueryServiceTest {
 
             SecurityContextHolder.getContext().setAuthentication(
                     new UsernamePasswordAuthenticationToken(
-                            new AuthUser(AUTHOR_ID, TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
+                            new AuthUser(TestUsers.uuidOf(AUTHOR_ID), Role.AUTHOR), null, List.of()));
 
             ArticleResponse result = articleQueryService.getArticleByUuid(
                     ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR, "127.0.0.1");

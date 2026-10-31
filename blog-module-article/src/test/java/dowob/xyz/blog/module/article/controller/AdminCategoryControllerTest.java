@@ -90,7 +90,7 @@ class AdminCategoryControllerTest {
         Role.ADMIN.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(1L, TestUsers.uuidOf(1L), Role.ADMIN), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(1L), Role.ADMIN), null, authorities);
         return authentication(auth);
     }
 
@@ -100,7 +100,7 @@ class AdminCategoryControllerTest {
         Role.USER.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(2L, TestUsers.uuidOf(2L), Role.USER), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(2L), Role.USER), null, authorities);
         return authentication(auth);
     }
 

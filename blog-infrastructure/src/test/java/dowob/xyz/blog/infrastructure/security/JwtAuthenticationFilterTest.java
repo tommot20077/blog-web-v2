@@ -101,7 +101,7 @@ class JwtAuthenticationFilterTest {
      * @return 認證狀態
      */
     private AuthState state(UserStatus status, Role role, String version) {
-        return new AuthState(USER_ID, USER_UUID, status, role, version);
+        return new AuthState(USER_UUID, status, role, version);
     }
 
     /**
@@ -199,14 +199,14 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    @DisplayName("通過驗證時 principal 為 AuthUser(id, uuid, role)，role 取自 token 的 role claim")
+    @DisplayName("通過驗證時 principal 為 AuthUser(uuid, role)，role 取自 token 的 role claim")
     void authenticated_principalShouldBeAuthUserWithTokenRole() throws Exception {
         performFilterWithRole(Role.AUTHOR);
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         assertThat(auth).isNotNull();
         assertThat(SecurityUtils.currentAuthUser(auth))
-                .contains(new AuthUser(USER_ID, USER_UUID, Role.AUTHOR));
+                .contains(new AuthUser(USER_UUID, Role.AUTHOR));
     }
 
     @Test

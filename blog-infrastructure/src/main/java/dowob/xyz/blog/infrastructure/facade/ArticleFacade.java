@@ -4,7 +4,6 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
@@ -24,35 +23,26 @@ import java.util.UUID;
  * <p>定義跨模組存取文章資料的合約（含 read + simple write）。
  * 實作由 blog-module-article 提供，透過 Spring DI 注入。</p>
  *
- * <p>方法分類：</p>
+ * <p>跨模組識別一律是公開 UUID（文章、系列、使用者）；facade 介面不暴露任何資料庫 Long 主鍵。
+ * 方法分類：</p>
  * <ul>
  *   <li><b>recommend / search read</b>（findAllPublishedForIndex / getPublishedArticleBasicInfo /
  *       getArticlesByTagIds / getRecentPublishedArticles / getPublishedArticlesByUuids /
  *       getArticlesPublishedAfter）：僅查 PUBLISHED 文章。</li>
- *   <li><b>SP-B 新增 read</b>（findIdByUuid / findByUuid / findById / findByIds /
- *       findBySeriesUuidOrderByPosition）：不限狀態，回傳含 status 的 ArticleData，
- *       caller 自行依 status 判斷（如 SeriesService 過濾 DRAFT）。</li>
- *   <li><b>SP-B 新增 simple write</b>（incrementCommentCount / decrementCommentCount /
- *       incrementLikeCount / decrementLikeCount）：counter /
- *       欄位 set 類型，直接更新 article 欄位，無業務邏輯觸發。</li>
- *   <li><b>SP-D 新增 read</b>（findContentById）：完整 content 內容 DTO，給 version 模組 snapshot / restore stash 流程用。</li>
- *   <li><b>M2-a 新增（reading 模組 UUID 化用，只增不減）</b>（getSummariesByUuids / filterReadableUuids /
- *       incrementLikeCount(UUID) / decrementLikeCount(UUID)）：語意與對應的 Long 版相同。</li>
- *   <li><b>M3-a 新增（version 模組 UUID 化用，只增不減）</b>（findContentByUuid /
- *       applyRestoreContent(UUID, ArticleRestoreSource)）：語意與對應的 Long 版相同；
- *       UUID 版的 restore 由 article 自行渲染 Markdown，caller 不再需要 import 渲染器。</li>
- *   <li><b>M4-b 新增（series 模組 RACE-14 用，只增不減）</b>（assignToSeriesIfUnassigned /
- *       removeFromSeriesIfAssigned / updateSeriesPositionIfAssigned）：條件式寫入，由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
- *       讓 series 的 article_count 不必先讀再寫。</li>
- *   <li><b>M6-b</b>：series 維度全面改為 {@code series_uuid}，移除 Long 版 series 方法
- *       （findBySeriesIdOrderByPosition / updateSeriesAssignment（Long 與 UUID 版）/
- *       countPublishedBySeriesIds / findPrev·NextPublishedInSeries(Long, Integer)）；
- *       UUID 版直接查詢 {@code articles.series_uuid}，不再經 SeriesFacade 轉換。</li>
- *   <li><b>SP-D 新增 atomic write</b>（applyRestoreContent）：version 模組 restore 用，內部接管 mutate / save / syncArticleTags / publish events 順序。</li>
+ *   <li><b>不限狀態的 read</b>（findByUuid / findBySeriesUuidOrderByPosition / findContentByUuid / existsByUuid）：
+ *       回傳含 status 的 DTO，caller 自行依 status 判斷（如 SeriesService 過濾 DRAFT）。</li>
+ *   <li><b>reading 用</b>（getSummariesByUuids / filterReadableUuids / incrementLikeCount / decrementLikeCount）。</li>
+ *   <li><b>comment 用 simple write</b>（incrementCommentCount / decrementCommentCount）：counter 原子增減，
+ *       無業務邏輯觸發。</li>
+ *   <li><b>series 用條件式寫入</b>（assignToSeriesIfUnassigned / removeFromSeriesIfAssigned /
+ *       updateSeriesPositionIfAssigned）：由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
+ *       讓 series 的 article_count 不必先讀再寫（RACE-14）；直接查寫 {@code articles.series_uuid}。</li>
+ *   <li><b>version 用 atomic write</b>（applyRestoreContent）：內部接管渲染 / mutate / save /
+ *       syncArticleTags / publish events 順序，caller 只交出 Markdown 原文。</li>
  * </ul>
  *
  * @author Yuan
- * @version 1.1
+ * @version 2.0（移除所有 Long 主鍵版方法）
  */
 public interface ArticleFacade {
 
@@ -139,15 +129,7 @@ public interface ArticleFacade {
      */
     List<ArticleTrendingData> getArticlesPublishedAfter(LocalDateTime since);
 
-    // ─── SP-B 新增 5 read method ───
-
-    /**
-     * UUID → DB id（最高頻跨模組查詢）。
-     *
-     * @param articleUuid 文章公開 UUID
-     * @return 文章資料庫主鍵；查無時 null
-     */
-    Long findIdByUuid(UUID articleUuid);
+    // ─── 不限狀態的 read ───
 
     /**
      * UUID → ArticleData（跨模組查 article 元資料）。
@@ -158,43 +140,16 @@ public interface ArticleFacade {
     Optional<ArticleData> findByUuid(UUID articleUuid);
 
     /**
-     * DB id → ArticleData（給 SeriesFacade.getSeriesNavigation 用 — 解 @Lazy）。
-     *
-     * @param articleId 文章資料庫主鍵
-     * @return ArticleData Optional
-     */
-    Optional<ArticleData> findById(Long articleId);
-
-    /**
-     * 批次 id 查 article（給 ReadingProgressService 用）。
-     *
-     * @param articleIds 文章主鍵列表
-     * @return ArticleData 列表
-     */
-    List<ArticleData> findByIds(List<Long> articleIds);
-
-    /**
      * 撈 series 內 article 排序好（給 SeriesService.getSeriesDetail 用）。
      *
-     * <p>M6-b 起直接以 {@code articles.series_uuid} 查詢（原 Long 版 {@code findBySeriesIdOrderByPosition}
-     * 隨 {@code articles.series_id} 一併移除）。不限文章狀態；系列沒有任何成員（含系列不存在）時回傳空清單。</p>
+     * <p>直接以 {@code articles.series_uuid} 查詢。不限文章狀態；系列沒有任何成員（含系列不存在）時回傳空清單。</p>
      *
      * @param seriesUuid 系列公開 UUID；null 視為查無，回傳空清單
      * @return 該 series 內 article 按 series_position 排序；查無成員時為空清單
      */
     List<ArticleData> findBySeriesUuidOrderByPosition(UUID seriesUuid);
 
-    // ─── SP-B 新增 5 write method（counter / 欄位 set，simple write）───
-
-    /**
-     * comment 模組創建 comment 時連動 article.comment_count + 1。
-     */
-    void incrementCommentCount(Long articleId);
-
-    /**
-     * comment 模組刪除 comment 時連動 article.comment_count - 1。
-     */
-    void decrementCommentCount(Long articleId);
+    // ─── comment / reading 用的 counter write（simple write）───
 
     /**
      * 文章是否存在，<b>不分狀態</b>（UUID 版）。
@@ -209,7 +164,7 @@ public interface ArticleFacade {
     boolean existsByUuid(UUID articleUuid);
 
     /**
-     * comment 模組創建 comment 時連動 article.comment_count + 1（UUID 版，語意與 {@link #incrementCommentCount(Long)} 相同）。
+     * comment 模組創建 comment 時連動 article.comment_count + 1。
      *
      * <p>原子 +1；文章不存在時不影響任何列（no-op）。</p>
      *
@@ -218,7 +173,7 @@ public interface ArticleFacade {
     void incrementCommentCount(UUID articleUuid);
 
     /**
-     * comment 模組刪除 comment 時連動 article.comment_count - 1（UUID 版，語意與 {@link #decrementCommentCount(Long)} 相同）。
+     * comment 模組刪除 comment 時連動 article.comment_count - 1。
      *
      * <p>原子 -1，守衛 {@code comment_count > 0}（防 underflow）；文章不存在時不影響任何列（no-op）。</p>
      *
@@ -228,16 +183,6 @@ public interface ArticleFacade {
 
     /**
      * reading 模組 like article 時連動 article.like_count + 1。
-     */
-    void incrementLikeCount(Long articleId);
-
-    /**
-     * reading 模組 unlike article 時連動 article.like_count - 1。
-     */
-    void decrementLikeCount(Long articleId);
-
-    /**
-     * reading 模組 like article 時連動 article.like_count + 1（UUID 版，語意與 {@link #incrementLikeCount(Long)} 相同）。
      *
      * <p>原子 +1；文章不存在時不影響任何列（no-op），不拋例外。</p>
      *
@@ -246,7 +191,7 @@ public interface ArticleFacade {
     void incrementLikeCount(UUID articleUuid);
 
     /**
-     * reading 模組 unlike article 時連動 article.like_count - 1（UUID 版，語意與 {@link #decrementLikeCount(Long)} 相同）。
+     * reading 模組 unlike article 時連動 article.like_count - 1。
      *
      * <p>原子 -1，守衛 {@code like_count > 0}（防 underflow）；文章不存在時不影響任何列（no-op），不拋例外。</p>
      *
@@ -267,7 +212,7 @@ public interface ArticleFacade {
          * 只更新位置）。寫入時一併遞增樂觀鎖 {@code version} 並更新 {@code updated_at}，與實體 save 的效果一致，
      * 使並行中的文章編輯（讀到舊 series 歸屬）會因版本不符而失敗，不會把舊歸屬寫回去。</p>
      *
-     * <p>M6-b 起直接寫入 {@code articles.series_uuid}；article 不檢查系列是否存在
+     * <p>直接寫入 {@code articles.series_uuid}；article 不檢查系列是否存在
      * （系列存在性由呼叫端 series 模組負責，V32 起沒有 FK 把關）。呼叫端若在寫入後發現系列已被併發刪除
      * （例如 {@code article_count + 1} 影響 0 列），須回滾交易，避免留下指向已不存在系列的歸屬。</p>
      *
@@ -311,80 +256,36 @@ public interface ArticleFacade {
      */
     boolean updateSeriesPositionIfAssigned(UUID articleUuid, UUID seriesUuid, Integer seriesPosition);
 
-    // ─── SP-D 新增 1 read ───
-
     /**
-     * DB id → ArticleContentData（給 VersioningService stash 流程 + AutoSnapshotPolicy 用）。
+     * 公開 UUID → ArticleContentData（含 title / slug / content / summary / coverImageUrl 等完整內容，
+     * 給 version 模組 snapshot / restore stash 流程用）。
      *
-     * <p>比 findById（return ArticleData）多含 title / slug / content / summary / coverImageUrl 等欄位。</p>
-     *
-     * @param articleId 文章資料庫主鍵
-     * @return ArticleContentData Optional；查無時 empty
-     */
-    Optional<ArticleContentData> findContentById(Long articleId);
-
-    /**
-     * 公開 UUID → ArticleContentData（{@link #findContentById(Long)} 的 UUID 版，M3-a 新增）。
-     *
-     * <p>語意與 {@link #findContentById(Long)} 完全相同：<b>不分狀態</b>（DRAFT、PENDING_REVIEW、REJECTED、
-     * PUBLISHED、ARCHIVED 皆回傳），查無（含已硬刪）回傳 empty。回傳的 {@code authorUuid} 直接取自
-     * {@code articles.author_uuid}，必定有值（M6-a 起該欄位為 NOT NULL）。</p>
+     * <p><b>不分狀態</b>（DRAFT、PENDING_REVIEW、REJECTED、PUBLISHED、ARCHIVED 皆回傳），
+     * 查無（含已硬刪）回傳 empty。回傳的 {@code authorUuid} 直接取自
+     * {@code articles.author_uuid}，必定有值（該欄位為 NOT NULL）。</p>
      *
      * @param articleUuid 文章公開 UUID；{@code null} 回傳 empty
      * @return ArticleContentData Optional；查無時 empty
      */
     Optional<ArticleContentData> findContentByUuid(UUID articleUuid);
 
-    // ─── SP-D 新增 1 atomic write ───
+    // ─── version 用 atomic write ───
 
     /**
-     * 還原 article 內容到指定版本（atomic）。
+     * 還原 article 內容到指定快照（atomic）。
      *
-     * <p>內部完整流程：</p>
-     * <ol>
-     *   <li>撈 Article entity（不存在 throw ARTICLE_NOT_FOUND）</li>
-     *   <li>內容凍結守衛：PENDING_REVIEW / PUBLISHED / ARCHIVED 一律 throw ARTICLE_EDIT_NOT_ALLOWED</li>
-     *   <li>mutate 7 個內容欄位（title / slug / content / summary / coverImageUrl / contentHtml / toc）</li>
-     *   <li>save Article</li>
-     *   <li>syncArticleTags — 必須在 publish events 之前</li>
-     *   <li>publishContentChanged(article, RESTORED)</li>
-     *   <li>若 article.status == PUBLISHED：publishUpdated(article)
-     *       ——<strong>在目前的 {@code ArticleContentFreezePolicy} 下不可達</strong>：
-     *       能通過第 2 步守衛走到這裡的文章必為 DRAFT / REJECTED，必不為 PUBLISHED，
-     *       此判準因而永遠為 false。保留為防禦性分支，供日後政策放寬（若 PUBLISHED
-     *       重新允許還原）時直接復活，而不必重寫這段重新索引邏輯。</li>
-     * </ol>
-     *
-     * <p><strong>SEC-02：不會改動 article.status</strong>。還原只還原內容，狀態轉換的唯一真相是
-     * {@code ArticleCommandSubService.VALID_TRANSITIONS}；上述 {@code publishUpdated} 的判準是
-     * 「文章現在的狀態」，與快照當時的狀態無關。</p>
-     *
-     * <p><strong>F-H1：內容凍結對還原一體適用</strong>。只有 DRAFT / REJECTED 允許改寫內容；
-     * PENDING_REVIEW / PUBLISHED / ARCHIVED 一律拒絕（A0209），與 {@code PUT /api/v1/articles/{uuid}}
-     * 同一套判斷。守衛由 article 模組在本方法內執行，caller 不需要（也不應該）自行判斷文章狀態。</p>
-     *
-     * <p>caller 不需要再 inject ArticleEventPublisher / TagFacade write methods，
-     * 也不會看到 Article entity。</p>
-     *
-     * @param articleId 文章資料庫主鍵
-     * @param data      還原所需資料（含 tags）
-     * @throws dowob.xyz.blog.common.exception.BusinessException ARTICLE_NOT_FOUND 若 articleId 對應 article 不存在；
-     *                                                          ARTICLE_EDIT_NOT_ALLOWED 若文章目前狀態內容凍結
-     */
-    void applyRestoreContent(Long articleId, ArticleRestoreData data);
-
-    /**
-     * 還原 article 內容到指定快照（atomic，UUID 版，M3-a 新增）。
-     *
-     * <p>與 {@link #applyRestoreContent(Long, ArticleRestoreData)} 的差別只有兩點：
-     * 以公開 UUID 定位文章；且 caller 只交出 Markdown 原文（{@link ArticleRestoreSource}），
+     * <p>以公開 UUID 定位文章；caller 只交出 Markdown 原文（{@link ArticleRestoreSource}），
      * 由 article 模組在內部以 {@code ArticleMarkdownRenderer} 渲染，<b>HTML 與 TOC 出自同一次 render</b>
-     * （只回填 HTML 會讓 {@code articles.toc} 停在還原前那版，章節導覽指向不存在的錨點）。</p>
+     * （只回填 HTML 會讓 {@code articles.toc} 停在還原前那版，章節導覽指向不存在的錨點）。
+     * caller 不需要（也不應該）import 渲染器、ArticleEventPublisher 或 TagFacade 的寫入方法，也不會看到 Article entity。</p>
      *
-     * <p>渲染完成後走與 Long 版<b>完全相同</b>的還原流程（共用同一個內部方法）：單一交易內撈文章
-     * （不存在 throw ARTICLE_NOT_FOUND）→ 內容凍結守衛（F-H1）→ mutate 內容欄位 → save → syncArticleTags，
-     * commit 後才發 ContentChanged(RESTORED)（以及現況為 PUBLISHED 時的 Updated）事件，並重新綁定
-     * 「檔案 → 文章」。<b>SEC-02：不會改動 article.status</b>。</p>
+     * <p>流程：單一交易內撈文章（不存在 throw ARTICLE_NOT_FOUND）→ 內容凍結守衛（F-H1：
+     * PENDING_REVIEW / PUBLISHED / ARCHIVED 一律 throw ARTICLE_EDIT_NOT_ALLOWED，與
+     * {@code PUT /api/v1/articles/{uuid}} 同一套判斷，caller 不需自行判斷文章狀態）→ mutate 內容欄位
+     * → save → syncArticleTags（必須在發事件之前），commit 後才發 ContentChanged(RESTORED)
+     * （文章現況為 PUBLISHED 時另發 Updated；在目前的凍結政策下該分支不可達，保留為防禦性程式碼），
+     * 並重新綁定「檔案 → 文章」。<b>SEC-02：不會改動 article.status</b>——還原只還原內容，
+     * 狀態轉換的唯一真相是 {@code ArticleCommandSubService.VALID_TRANSITIONS}。</p>
      *
      * <p><b>null 契約</b>：{@code articleUuid}、{@code source}、{@code source.content()} 任一為 null
      * 拋帶訊息的 {@link NullPointerException}（呼叫端程式錯誤），不渲染、不寫入。
@@ -405,8 +306,7 @@ public interface ArticleFacade {
      *
      * <p>供 series 模組同時作為「哪些 series 有公開內容」的過濾條件與
      * {@code article_count} 的即時投影，取代原本直讀 articles 的
-     * EXISTS ＋ COUNT 子查詢（ARCH-13 / PERF-34）。M6-b 起直接以 {@code articles.series_uuid} 分組計數
-     * （原 Long 版 {@code countPublishedBySeriesIds} 隨 {@code series_id} 一併移除）。</p>
+     * EXISTS ＋ COUNT 子查詢（ARCH-13 / PERF-34）。直接以 {@code articles.series_uuid} 分組計數。</p>
      *
      * <p><b>傳輸量界限</b>：與 {@code seriesUuids} 大小成正比。series 為低基數實體
      * （部落格量級為數十），可接受。<b>重評門檻：series 總數 > 5,000。</b></p>
@@ -419,7 +319,7 @@ public interface ArticleFacade {
     /**
      * series 內 PUBLISHED 且位置小於 current 的最後一篇（prev 導覽）。
      *
-     * <p>M6-b 起直接以 {@code articles.series_uuid} 查詢（原 Long 版隨 {@code series_id} 一併移除）。</p>
+     * <p>直接以 {@code articles.series_uuid} 查詢。</p>
      *
      * @param seriesUuid      series 公開 UUID；null 回傳 {@code Optional.empty()}
      * @param currentPosition 當前文章在 series 內的位置
@@ -430,7 +330,7 @@ public interface ArticleFacade {
     /**
      * series 內 PUBLISHED 且位置大於 current 的第一篇（next 導覽）。
      *
-     * <p>M6-b 起直接以 {@code articles.series_uuid} 查詢（原 Long 版隨 {@code series_id} 一併移除）。</p>
+     * <p>直接以 {@code articles.series_uuid} 查詢。</p>
      *
      * @param seriesUuid      series 公開 UUID；null 回傳 {@code Optional.empty()}
      * @param currentPosition 當前文章在 series 內的位置
@@ -445,9 +345,6 @@ public interface ArticleFacade {
      * 非 PUBLISHED 僅作者本人與 ADMIN；查無此 uuid（已硬刪）者不會出現在結果中。
      * 作者以 UUID 比對（直接取自 {@code articles.author_uuid}）。</p>
      *
-     * <p>M6-a：原本以 Long 主鍵識別作者的 {@code filterReadableIds(List<Long>, Long, boolean)} 已移除——
-     * 作者不再有 Long 主鍵，且它沒有任何呼叫端。</p>
-     *
      * <p><b>傳輸量界限</b>：與 {@code candidates} 大小成正比，非與頁大小成正比；實作端經 {@code BatchedQuery} 切批。
      * <b>重評門檻：任一使用者 B &gt; 5,000。</b></p>
      *
@@ -461,7 +358,7 @@ public interface ArticleFacade {
     /**
      * 依文章公開 UUID 批次取得文章摘要，<b>輸出順序與輸入相同</b>。
      *
-     * <p>語意與 article 模組內部的 {@code ArticleQueryService.getArticleSummariesByIds(List<Long>)} 完全相同：
+     * <p>語意與 article 模組內部 {@code ArticleQueryService} 的批次摘要查詢完全相同：
      * 含目前登入者的 liked／bookmarked／lastReadProgress 補值（未登入時 liked／bookmarked 為 false、
      * lastReadProgress 為 null），以及 series 導覽（seriesUuid／seriesTitle）補值；全程批次查詢，不隨文章數 N+1。</p>
      *

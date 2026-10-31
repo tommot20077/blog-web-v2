@@ -86,7 +86,6 @@ class ArticleLookupFacadeImplTest {
         assertThat(result).isPresent();
         ArticleData data = result.get();
         assertThat(data.authorUuid()).isEqualTo(authorUuid);
-        assertThat(data.id()).isEqualTo(42L);
         assertThat(data.uuid()).isEqualTo(articleUuid);
         assertThat(data.status()).isEqualTo("PUBLISHED");
         assertThat(data.seriesUuid()).isEqualTo(seriesUuid);

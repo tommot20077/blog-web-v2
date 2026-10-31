@@ -156,7 +156,7 @@ class SecurityUtilsTest {
 
         private static final UUID USER_UUID = UUID.fromString("00000000-0000-0000-0000-00000000000a");
 
-        private final AuthUser authUser = new AuthUser(7L, USER_UUID, Role.AUTHOR);
+        private final AuthUser authUser = new AuthUser(USER_UUID, Role.AUTHOR);
 
         @Test
         @DisplayName("authentication 為 null → empty")
@@ -206,7 +206,6 @@ class SecurityUtilsTest {
             Optional<AuthUser> result = SecurityUtils.currentAuthUser(auth);
 
             assertThat(result).contains(authUser);
-            assertThat(result.orElseThrow().id()).isEqualTo(7L);
             assertThat(result.orElseThrow().uuid()).isEqualTo(USER_UUID);
             assertThat(result.orElseThrow().role()).isEqualTo(Role.AUTHOR);
         }

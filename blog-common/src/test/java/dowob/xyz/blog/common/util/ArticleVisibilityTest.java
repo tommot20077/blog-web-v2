@@ -14,45 +14,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * {@link ArticleVisibility} 單元測試。
  *
- * <p>Long 版為既有行為（特徵化測試）；UUID 版為設計 §3.1 的過渡 overload，
- * 語意必須與 Long 版完全相同。</p>
+ * <p>Z1 起只有 UUID 版（Long 版已移除）。政策：PUBLISHED 任何人可讀；其餘狀態僅作者本人與 ADMIN 可讀。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0（Z1：移除 Long 版）
  */
 @DisplayName("ArticleVisibility 可見性判斷")
 class ArticleVisibilityTest {
 
-    private static final Long AUTHOR_ID = 7L;
-    private static final Long OTHER_ID = 8L;
     private static final UUID AUTHOR_UUID = UUID.randomUUID();
     private static final UUID OTHER_UUID = UUID.randomUUID();
 
     @Nested
-    @DisplayName("Long 版（既有行為）")
-    class LongVersion {
-
-        @Test
-        @DisplayName("PUBLISHED → 匿名也可讀")
-        void published_anonymous_readable() {
-            assertThat(ArticleVisibility.isReadableBy("PUBLISHED", AUTHOR_ID, (Long) null, false)).isTrue();
-        }
-
-        @Test
-        @DisplayName("DRAFT → 作者本人可讀")
-        void draft_author_readable() {
-            assertThat(ArticleVisibility.isReadableBy("DRAFT", AUTHOR_ID, AUTHOR_ID, false)).isTrue();
-        }
-
-        @Test
-        @DisplayName("DRAFT → 他人不可讀")
-        void draft_other_notReadable() {
-            assertThat(ArticleVisibility.isReadableBy("DRAFT", AUTHOR_ID, OTHER_ID, false)).isFalse();
-        }
-    }
-
-    @Nested
-    @DisplayName("UUID 版（過渡 overload，語意同 Long 版）")
+    @DisplayName("UUID 版")
     class UuidVersion {
 
         @Test
@@ -105,15 +79,15 @@ class ArticleVisibilityTest {
             assertThat(ArticleVisibility.isReadableBy((ArticleStatus) null, AUTHOR_UUID, OTHER_UUID, false)).isFalse();
         }
 
-        @ParameterizedTest(name = "狀態 {0}：UUID 版與 Long 版結果一致")
+        @ParameterizedTest(name = "狀態 {0}")
         @EnumSource(ArticleStatus.class)
-        @DisplayName("所有狀態 × (作者/他人/匿名/ADMIN) → UUID 版與 Long 版結果完全一致")
-        void allStatuses_uuidVersionMatchesLongVersion(ArticleStatus status) {
-            Long[] viewerIds = {AUTHOR_ID, OTHER_ID, null};
+        @DisplayName("所有狀態 × (作者/他人/匿名) × (ADMIN 與否) → 完全符合政策矩陣")
+        void allStatuses_matchPolicyMatrix(ArticleStatus status) {
             UUID[] viewerUuids = {AUTHOR_UUID, OTHER_UUID, null};
-            for (int i = 0; i < viewerIds.length; i++) {
+            for (int i = 0; i < viewerUuids.length; i++) {
                 for (boolean admin : new boolean[]{false, true}) {
-                    boolean expected = ArticleVisibility.isReadableBy(status, AUTHOR_ID, viewerIds[i], admin);
+                    boolean isAuthor = viewerUuids[i] != null && viewerUuids[i].equals(AUTHOR_UUID);
+                    boolean expected = status == ArticleStatus.PUBLISHED || admin || isAuthor;
                     boolean actual = ArticleVisibility.isReadableBy(status, AUTHOR_UUID, viewerUuids[i], admin);
                     assertThat(actual).as("status=%s viewer#%d admin=%s", status, i, admin).isEqualTo(expected);
                 }

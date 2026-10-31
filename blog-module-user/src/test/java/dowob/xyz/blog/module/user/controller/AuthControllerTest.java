@@ -294,7 +294,7 @@ class AuthControllerTest {
     @DisplayName("POST /logout → 已登入用戶 → 應回傳 200 並清除 Cookie")
     void logout_authenticatedUser_shouldReturn200AndClearCookie() throws Exception {
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                new AuthUser(1L, USER_UUID, Role.USER), null,
+                new AuthUser(USER_UUID, Role.USER), null,
                 List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
 
         doNothing().when(authService).logout(any(UUID.class), any());
@@ -686,7 +686,7 @@ class AuthControllerTest {
     void refresh_accountSuspended_shouldReturnAccountSuspendedError() throws Exception {
         givenRefreshTokenInZSet();
         when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
-                new AuthState(1L, USER_UUID, UserStatus.BANNED, Role.USER, "v1")));
+                new AuthState(USER_UUID, UserStatus.BANNED, Role.USER, "v1")));
 
         mockMvc.perform(post("/api/v1/auth/refresh")
                         .cookie(new Cookie("refreshToken", "valid.refresh.token")))
@@ -707,7 +707,7 @@ class AuthControllerTest {
 
         for (UserStatus status : List.of(UserStatus.PENDING_VERIFICATION, UserStatus.DELETED)) {
             when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
-                    new AuthState(1L, USER_UUID, status, Role.USER, "v1")));
+                    new AuthState(USER_UUID, status, Role.USER, "v1")));
 
             mockMvc.perform(post("/api/v1/auth/refresh")
                             .cookie(new Cookie("refreshToken", "valid.refresh.token")))
@@ -725,7 +725,7 @@ class AuthControllerTest {
     void refresh_validToken_shouldReturnNewAccessToken() throws Exception {
         givenRefreshTokenInZSet();
         when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
-                new AuthState(1L, USER_UUID, UserStatus.ACTIVE, Role.USER, "v1")));
+                new AuthState(USER_UUID, UserStatus.ACTIVE, Role.USER, "v1")));
         when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString()))
                 .thenReturn("new.access.token");
 
@@ -751,7 +751,7 @@ class AuthControllerTest {
         when(redisTemplate.opsForHash()).thenReturn(hashOps);
         when(hashOps.multiGet(anyString(), any())).thenReturn(Arrays.asList(null, null, null));
         when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
-                new AuthState(1L, USER_UUID, UserStatus.ACTIVE, Role.AUTHOR, "v7")));
+                new AuthState(USER_UUID, UserStatus.ACTIVE, Role.AUTHOR, "v7")));
         when(jwtService.generateAccessToken(eq(USER_UUID), eq("AUTHOR"), eq("v7")))
                 .thenReturn("new.access.token.author");
 
@@ -787,7 +787,7 @@ class AuthControllerTest {
     void refresh_shouldUseTokenVersionFromLoader() throws Exception {
         givenRefreshTokenInZSet();
         when(authStateLoader.load(USER_UUID)).thenReturn(Optional.of(
-                new AuthState(1L, USER_UUID, UserStatus.ACTIVE, Role.USER, "v3")));
+                new AuthState(USER_UUID, UserStatus.ACTIVE, Role.USER, "v3")));
         when(jwtService.generateAccessToken(eq(USER_UUID), eq("USER"), eq("v3")))
                 .thenReturn("new.access.token.v3");
 

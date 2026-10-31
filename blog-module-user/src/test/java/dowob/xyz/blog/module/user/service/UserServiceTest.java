@@ -79,10 +79,10 @@ class UserServiceTest {
     @DisplayName("updateProfile → 應更新暱稱與個人簡介")
     void updateProfile_shouldUpdateNicknameAndBio() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(userRepository.existsByNickname("newNickname")).thenReturn(false);
 
-        userService.updateProfile(TEST_USER_ID, "newNickname", "新的個人簡介", null, null, null, null);
+        userService.updateProfile(TEST_USER_UUID, "newNickname", "新的個人簡介", null, null, null, null);
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
@@ -97,9 +97,9 @@ class UserServiceTest {
     @DisplayName("updateProfile → 含 website 與 socialLinks → 應正確儲存欄位")
     void updateProfile_withWebsiteAndSocialLinks_shouldPersist() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
 
-        userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, "簡介", "https://myblog.com",
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, "簡介", "https://myblog.com",
                 "{\"twitter\":\"@user\"}", "https://cdn.example.com/a.png", "Taipei");
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
@@ -115,9 +115,9 @@ class UserServiceTest {
     @DisplayName("updateProfile → 含 avatarUrl 與 location → 應正確儲存欄位")
     void updateProfile_withAvatarUrlAndLocation_shouldPersist() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
 
-        userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, "簡介", null, null,
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, "簡介", null, null,
                 "https://cdn.example.com/avatar.png", "Kaohsiung");
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
@@ -137,9 +137,9 @@ class UserServiceTest {
     @DisplayName("updateNotificationPreferences → 應更新 5 個通知偏好欄位")
     void updateNotificationPreferences_shouldUpdateAllFlags() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
 
-        userService.updateNotificationPreferences(TEST_USER_ID, false, true, false, true, false);
+        userService.updateNotificationPreferences(TEST_USER_UUID, false, true, false, true, false);
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
@@ -157,10 +157,10 @@ class UserServiceTest {
     @Test
     @DisplayName("updateNotificationPreferences → 用戶不存在 → 應拋出 BusinessException")
     void updateNotificationPreferences_userNotFound_shouldThrowBusinessException() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> userService.updateNotificationPreferences(
-                TEST_USER_ID, true, true, true, true, true))
+                TEST_USER_UUID, true, true, true, true, true))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
@@ -173,10 +173,10 @@ class UserServiceTest {
     @DisplayName("updateProfile → 重複暱稱 → 應拋出 BusinessException")
     void updateProfile_withDuplicateNickname_shouldThrowBusinessException() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(userRepository.existsByNickname("takenNickname")).thenReturn(true);
 
-        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "takenNickname", null, null, null, null, null))
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, "takenNickname", null, null, null, null, null))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
@@ -188,14 +188,14 @@ class UserServiceTest {
     @Test
     @DisplayName("updateProfile → 寫入撞 uq_users_nickname（併發落敗）→ 拋 NICKNAME_DUPLICATED")
     void updateProfile_nicknameUniqueViolationOnSave_throwsNicknameDuplicated() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(buildActiveUser()));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(buildActiveUser()));
         when(userRepository.existsByNickname("contested")).thenReturn(false);
         when(userRepository.save(any(User.class))).thenThrow(new org.springframework.dao.DuplicateKeyException(
                 "update users failed", new java.sql.SQLException(
                 "ERROR: duplicate key value violates unique constraint \"uq_users_nickname\"\n"
                         + "  Detail: Key (nickname)=(contested) already exists.", "23505")));
 
-        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "contested", null, null, null, null, null))
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, "contested", null, null, null, null, null))
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
     }
@@ -206,13 +206,13 @@ class UserServiceTest {
     @Test
     @DisplayName("updateProfile → 寫入撞到不認得的約束或其他錯誤 → 原例外照常拋出")
     void updateProfile_unknownFailureOnSave_rethrowsOriginal() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(buildActiveUser()));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(buildActiveUser()));
         org.springframework.dao.DuplicateKeyException unknown = new org.springframework.dao.DuplicateKeyException(
                 "update users failed", new java.sql.SQLException(
                 "ERROR: duplicate key value violates unique constraint \"users_email_key\"", "23505"));
         when(userRepository.save(any(User.class))).thenThrow(unknown);
 
-        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, null, null, null, null, null))
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null, null, null, null, null))
                 .isSameAs(unknown);
     }
 
@@ -222,9 +222,9 @@ class UserServiceTest {
     @Test
     @DisplayName("updateProfile → 用戶不存在 → 應拋出 BusinessException")
     void updateProfile_userNotFound_shouldThrowUserNotFound() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "newNickname", null, null, null, null, null))
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, "newNickname", null, null, null, null, null))
                 .isInstanceOf(BusinessException.class);
     }
 
@@ -239,11 +239,11 @@ class UserServiceTest {
     @DisplayName("changePassword → 正確舊密碼 → 應更新密碼雜湊")
     void changePassword_withCorrectOldPassword_shouldUpdatePasswordHash() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
         when(passwordEncoder.encode("newPassword")).thenReturn("newEncodedPassword");
 
-        userService.changePassword(TEST_USER_ID, TEST_PASSWORD, "newPassword");
+        userService.changePassword(TEST_USER_UUID, TEST_PASSWORD, "newPassword");
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
@@ -257,10 +257,10 @@ class UserServiceTest {
     @DisplayName("changePassword → 錯誤舊密碼 → 應拋出 BusinessException")
     void changePassword_withWrongOldPassword_shouldThrowBusinessException() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
 
-        assertThatThrownBy(() -> userService.changePassword(TEST_USER_ID, TEST_PASSWORD, "newPassword"))
+        assertThatThrownBy(() -> userService.changePassword(TEST_USER_UUID, TEST_PASSWORD, "newPassword"))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
@@ -273,11 +273,11 @@ class UserServiceTest {
     @DisplayName("changePassword → 應遞增 tokenVersion")
     void changePassword_shouldIncrementTokenVersion() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
         when(passwordEncoder.encode(anyString())).thenReturn("newEncodedPassword");
 
-        userService.changePassword(TEST_USER_ID, TEST_PASSWORD, "newPassword");
+        userService.changePassword(TEST_USER_UUID, TEST_PASSWORD, "newPassword");
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
@@ -290,9 +290,9 @@ class UserServiceTest {
     @Test
     @DisplayName("changePassword → 用戶不存在 → 應拋出 BusinessException")
     void changePassword_userNotFound_shouldThrowBusinessException() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> userService.changePassword(TEST_USER_ID, TEST_PASSWORD, "newPassword"))
+        assertThatThrownBy(() -> userService.changePassword(TEST_USER_UUID, TEST_PASSWORD, "newPassword"))
                 .isInstanceOf(BusinessException.class);
     }
 
@@ -303,11 +303,11 @@ class UserServiceTest {
     @DisplayName("changePassword → 應撤銷該用戶所有 session")
     void changePassword_shouldRevokeAllSessions() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
         when(passwordEncoder.encode(anyString())).thenReturn("newEncodedPassword");
 
-        userService.changePassword(TEST_USER_ID, TEST_PASSWORD, "newPassword");
+        userService.changePassword(TEST_USER_UUID, TEST_PASSWORD, "newPassword");
 
         verify(sessionRevoker).revokeAllSessions(TEST_USER_UUID);
     }
@@ -323,10 +323,10 @@ class UserServiceTest {
     @DisplayName("deleteAccount → 正確密碼 → 應將狀態設為 DELETED")
     void deleteAccount_withCorrectPassword_shouldSetStatusDeleted() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
 
-        userService.deleteAccount(TEST_USER_ID, TEST_PASSWORD);
+        userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
@@ -340,10 +340,10 @@ class UserServiceTest {
     @DisplayName("deleteAccount → 錯誤密碼 → 應拋出 BusinessException")
     void deleteAccount_withWrongPassword_shouldThrowBusinessException() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
 
-        assertThatThrownBy(() -> userService.deleteAccount(TEST_USER_ID, TEST_PASSWORD))
+        assertThatThrownBy(() -> userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
@@ -355,9 +355,9 @@ class UserServiceTest {
     @Test
     @DisplayName("deleteAccount → 用戶不存在 → 應拋出 BusinessException")
     void deleteAccount_userNotFound_shouldThrowBusinessException() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> userService.deleteAccount(TEST_USER_ID, TEST_PASSWORD))
+        assertThatThrownBy(() -> userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD))
                 .isInstanceOf(BusinessException.class);
     }
 
@@ -369,10 +369,10 @@ class UserServiceTest {
     @DisplayName("deleteAccount → 應撤銷該用戶所有 session")
     void deleteAccount_shouldRevokeAllSessions() {
         User mockUser = buildActiveUser();
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
 
-        userService.deleteAccount(TEST_USER_ID, TEST_PASSWORD);
+        userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
 
         verify(sessionRevoker).revokeAllSessions(TEST_USER_UUID);
     }
@@ -397,9 +397,9 @@ class UserServiceTest {
         mockUser.setNotificationNewsletter(false);
         mockUser.setEmailVerified(true);
         mockUser.setCreatedAt(createdAt);
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(mockUser));
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
 
-        UserProfileResponse result = userService.getUserProfile(TEST_USER_ID);
+        UserProfileResponse result = userService.getUserProfile(TEST_USER_UUID);
 
         assertThat(result.uuid()).isEqualTo(testUuid);
         assertThat(result.email()).isEqualTo("test@example.com");
@@ -422,9 +422,9 @@ class UserServiceTest {
     @Test
     @DisplayName("getUserProfile → 使用者不存在 → 應拋出 BusinessException")
     void getUserProfile_userNotFound_shouldThrowBusinessException() {
-        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.empty());
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> userService.getUserProfile(TEST_USER_ID))
+        assertThatThrownBy(() -> userService.getUserProfile(TEST_USER_UUID))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
                         .isEqualTo(UserErrorCode.USER_NOT_FOUND));

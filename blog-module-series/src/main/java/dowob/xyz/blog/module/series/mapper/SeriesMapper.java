@@ -127,29 +127,7 @@ public interface SeriesMapper {
     int decrementArticleCountByUuid(@Param("uuid") java.util.UUID uuid);
 
     /**
-     * 批次取得 series 基本資訊（給 ArticleQueryService.enrich 用，避免 N+1）。
-     *
-     * <p>原版本以 articleIds 為入參並跨表取 series_id（ARCH-13 第 7 處）。
-     * 但呼叫端在 article 模組內、手上已有 {@code ArticleData.seriesId}，
-     * 故改為直接收 seriesIds，本查詢不再碰 articles。</p>
-     *
-     * @param seriesIds series 主鍵集合
-     * @return series 基本資訊列
-     */
-    @Select({
-        "<script>",
-        "SELECT id AS seriesId, uuid AS seriesUuid, title AS seriesTitle",
-        "  FROM series",
-        " WHERE id IN",
-        "<foreach collection='seriesIds' item='id' open='(' separator=',' close=')'>",
-        "  #{id}",
-        "</foreach>",
-        "</script>"
-    })
-    List<SeriesBasicRow> findBasicInfoBySeriesIds(@Param("seriesIds") Collection<Long> seriesIds);
-
-    /**
-     * {@link #findBasicInfoBySeriesIds} 的投影列。
+     * {@link #findBasicInfoBySeriesUuids} 的投影列。
      *
      * @param seriesId    series 主鍵
      * @param seriesUuid  series 公開 UUID
@@ -158,7 +136,7 @@ public interface SeriesMapper {
     record SeriesBasicRow(Long seriesId, java.util.UUID seriesUuid, String seriesTitle) {}
 
     /**
-     * 以公開 UUID 批次取得 series 基本資訊（供 {@code SeriesFacade.batchGetSeriesBasicInfoByUuids}，M6-b）。
+     * 以公開 UUID 批次取得 series 基本資訊（供 {@code SeriesFacade.batchGetSeriesBasicInfoByUuids}）。
      *
      * <p>沿用 {@link SeriesBasicRow}（欄位順序 seriesId, seriesUuid, seriesTitle 不可調整，
      * MyBatis 對 record 建構子採位置對應）。</p>
@@ -191,56 +169,4 @@ public interface SeriesMapper {
             "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
             "</script>")
     List<String> findExistingUuidsIn(@Param("list") List<java.util.UUID> uuids);
-
-    /**
-     * 批次取得 series 主鍵對應的公開 UUID（供 {@code SeriesFacade.findUuidsByIds}，設計 §3.1 過渡 API）。
-     *
-     * <p>只投影 id 與 uuid 兩欄，不載入 title 等其他欄位。</p>
-     *
-     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應，
-     * SELECT 欄位順序（seriesId, seriesUuid）必須與 {@link SeriesUuidRow} 的元件順序一致，不可調整。</p>
-     *
-     * @param seriesIds series 主鍵集合（不得為空，由 caller 保證）
-     * @return 每個存在的 series 的主鍵與 UUID
-     */
-    @Select({
-        "<script>",
-        "SELECT id AS seriesId, uuid AS seriesUuid",
-        "  FROM series",
-        " WHERE id IN",
-        "<foreach collection='seriesIds' item='id' open='(' separator=',' close=')'>",
-        "  #{id}",
-        "</foreach>",
-        "</script>"
-    })
-    List<SeriesUuidRow> findUuidsByIds(@Param("seriesIds") Collection<Long> seriesIds);
-
-    /**
-     * {@link #findUuidsByIds} 的投影列。
-     *
-     * @param seriesId   series 主鍵
-     * @param seriesUuid series 公開 UUID
-     */
-    record SeriesUuidRow(Long seriesId, java.util.UUID seriesUuid) {}
-
-    /**
-     * 批次取得 series 公開 UUID 對應的主鍵（供 {@code SeriesFacade.findIdsByUuids}，M4-a 過渡 API）。
-     *
-     * <p>只投影 id 與 uuid 兩欄；沿用 {@link SeriesUuidRow}（欄位順序 seriesId, seriesUuid 不可調整，
-     * MyBatis 對 record 建構子採位置對應）。</p>
-     *
-     * @param uuids series 公開 UUID 清單（不得為空，由 caller 保證，避免 {@code IN ()} 語法錯誤）
-     * @return 每個存在的 series 的主鍵與 UUID
-     */
-    @Select({
-        "<script>",
-        "SELECT id AS seriesId, uuid AS seriesUuid",
-        "  FROM series",
-        " WHERE uuid IN",
-        "<foreach collection='uuids' item='u' open='(' separator=',' close=')'>",
-        "  #{u}::uuid",
-        "</foreach>",
-        "</script>"
-    })
-    List<SeriesUuidRow> findIdsByUuids(@Param("uuids") List<java.util.UUID> uuids);
 }
