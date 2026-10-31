@@ -1,10 +1,12 @@
 package dowob.xyz.blog.module.tag.repository;
 
 import dowob.xyz.blog.module.tag.model.Tag;
+import org.springframework.data.jdbc.repository.query.Modifying;
 import org.springframework.data.jdbc.repository.query.Query;
 import org.springframework.data.repository.CrudRepository;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -62,4 +64,22 @@ public interface TagRepository extends CrudRepository<Tag, UUID> {
      */
     @Query("SELECT * FROM tags WHERE name = ANY(:names)")
     List<Tag> findByNameIn(@Param("names") String[] names);
+
+    /**
+     * 新增標籤；name 或 slug 任一已存在時不動作（RACE-08）。
+     *
+     * <p>{@code ON CONFLICT DO NOTHING} 不指定衝突目標，涵蓋 {@code tags_name_key} 與 {@code tags_slug_key}
+     * 兩個 UNIQUE 約束：併發建立同名／同 slug 標籤時，後到者不會拋唯一鍵例外（也就不會讓外層交易進入失敗狀態），
+     * 而是新增 0 列，由呼叫端重讀既有標籤。其餘欄位使用資料庫預設值（{@code usage_count = 0}）。</p>
+     *
+     * @param id        標籤 UUID
+     * @param name      標籤名稱
+     * @param slug      標籤 Slug
+     * @param createdAt 建立時間
+     * @return 實際新增的筆數（0 表示 name 或 slug 已存在）
+     */
+    @Modifying
+    @Query("INSERT INTO tags (id, name, slug, created_at) VALUES (:id, :name, :slug, :createdAt) ON CONFLICT DO NOTHING")
+    int insertIfAbsent(@Param("id") UUID id, @Param("name") String name, @Param("slug") String slug,
+                       @Param("createdAt") LocalDateTime createdAt);
 }
