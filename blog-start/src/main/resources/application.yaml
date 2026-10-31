@@ -1,5 +1,7 @@
-server:
-  forward-headers-strategy: framework
+# 注意：刻意不設定 server.forward-headers-strategy（framework／native 皆會讓 X-Forwarded-For 無條件覆寫 remoteAddr，
+# 等於信任 client 偽造的 IP，SEC-01）。client IP 一律經 ClientIpResolver，由 app.http.trusted-proxy-count 控制信任層數。
+# 副作用評估：Cookie 的 Secure 旗標由 app.cookie.secure 控制、不看 request scheme；程式未依 request 組絕對 URL
+# （無 ServletUriComponentsBuilder／getRequestURL），故不需要 X-Forwarded-Proto／Host 處理。
 
 spring:
   application:
@@ -133,6 +135,12 @@ management:
 
 # CORS 配置（生產環境同域部署時不觸發，此為開發環境預設）
 app:
+  http:
+    # 受信任的反向代理層數（SEC-01）：ClientIpResolver 取 X-Forwarded-For 由右數第 N 節。
+    #   0 = 完全不信任 XFF、使用 remoteAddr（預設；本機 docker、CI、無 proxy 的部署）
+    #   1 = prod：Client → Cloudflare → nginx（realip 覆寫 XFF）→ Ingress → app，依 nginx 設定結果設 1
+    # 設太大 → 取到攻擊者可控節點（等於無防護）；設太小 → 全站共用一個限流桶（退化但不被繞過）。拿不準時寧可設小。
+    trusted-proxy-count: ${APP_HTTP_TRUSTED_PROXY_COUNT:0}
   frontend-base-url: ${APP_FRONTEND_BASE_URL:http://localhost:3000}
   mail:
     default-from:

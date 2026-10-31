@@ -127,6 +127,20 @@ public void changePassword(...) {
 }
 ```
 
+### 11. Client IP 只能經 `ClientIpResolver` 取得 (CRITICAL)
+
+> 來源:findings SEC-01、決策紀錄 §6.1「SEC-01 定案 (a)」。`X-Forwarded-For`(XFF)左側節點由 client 任意偽造,
+> 直接取第一節或讓 Spring 無條件用 XFF 覆寫 remoteAddr,會使登入/註冊 IP 限流、瀏覽數去重整層可繞過。
+
+*   正式拓撲:Client → Cloudflare → nginx → k3s Ingress → app。第 1 層(origin 只放行 Cloudflare)、第 2 層(nginx `realip` 並以 `$remote_addr` **覆寫** XFF)在 infrastructure repo;本 repo 負責第 3 層。
+*   **唯一入口**:`dowob.xyz.blog.infrastructure.web.ClientIpResolver#resolve(HttpServletRequest)`。controller 注入它,不得自行讀 `X-Forwarded-For`/`X-Real-IP`/`CF-Connecting-IP`/`True-Client-IP`,也不得呼叫 `getRemoteAddr()`/`getRemoteHost()`(守衛:`ClientIpAccessGuardTest`)。
+*   **信任層數** `app.http.trusted-proxy-count`(環境變數 `APP_HTTP_TRUSTED_PROXY_COUNT`,**預設 0**):取 XFF **由右數第 N 節**。
+    *   `0`:完全不信任 XFF,回傳 `getRemoteAddr()`(本機 docker、CI、任何無 proxy 的部署)。
+    *   `>= 1`:取右數第 N 節;XFF 缺漏/空白、項目數少於 N、被選中的節點不是合法 IPv4/IPv6 字面值時,**退回 `getRemoteAddr()`**(方向是「多人共用一個限流桶」而非「被繞過」)。IPv6 正規化為與 Tomcat 相同的完整展開小寫形式。
+    *   prod 依第 2 層(nginx 覆寫 XFF)的結果設 `1`;nginx 若仍是追加模式則需設更大值。**設太大 → 取到攻擊者可控節點(等於無防護);設太小 → 全站共用限流桶(退化但不被繞過)。拿不準時寧可設小。** 部署後以 `curl -H "X-Forwarded-For: 6.6.6.6" …` 實測:`6.6.6.6` 必須落在鏈頭,且算出的節點不得指到它。
+*   **禁止**設定 `server.forward-headers-strategy`(`framework`/`native`)與 `server.tomcat.remoteip.*`:它們讓 XFF 無條件改寫 `remoteAddr`,使 `ClientIpResolver` 的退路失效(守衛:`ClientIpTrustConfigTest`)。
+*   此設定只影響 client IP;Cookie 的 Secure 旗標由 `app.cookie.secure` 控制,程式不依 request scheme/host 組絕對 URL。
+
 ---
 
 ## Public Endpoints (No Authentication Required)
