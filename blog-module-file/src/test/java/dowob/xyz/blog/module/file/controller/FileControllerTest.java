@@ -51,7 +51,7 @@ class FileControllerTest {
 
     /** 建立已登入身分；刻意讓 {@code id} 與 {@code uuid} 毫無關聯，避免 controller 偷用 id 推導 */
     private static AuthUser authUser(Role role) {
-        return new AuthUser(12345L, UUID.randomUUID(), role);
+        return new AuthUser(UUID.randomUUID(), role);
     }
 
     /** 建立與 {@link AuthUser} 對應的 Authentication（角色 authority 與 principal 同源） */

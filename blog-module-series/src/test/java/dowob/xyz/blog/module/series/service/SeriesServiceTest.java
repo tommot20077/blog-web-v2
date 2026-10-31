@@ -113,7 +113,7 @@ class SeriesServiceTest {
     }
 
     private ArticleData article(UUID uuid, UUID authorUuid, ArticleStatus status, UUID inSeriesUuid, Integer position) {
-        return new ArticleData(articleId, uuid, status.name(), position, authorUuid, inSeriesUuid);
+        return new ArticleData(uuid, status.name(), position, authorUuid, inSeriesUuid);
     }
 
     /** 讓 series 自己的 mapper 回答「這個 series 仍存在」（供判斷文章的舊歸屬是不是殘留的 ghost）。 */

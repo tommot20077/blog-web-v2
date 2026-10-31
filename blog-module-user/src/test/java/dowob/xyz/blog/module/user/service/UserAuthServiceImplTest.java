@@ -64,7 +64,7 @@ class UserAuthServiceImplTest {
 
         Optional<AuthState> state = userAuthServiceImpl.findAuthStateByUuid(TEST_USER_UUID);
 
-        assertThat(state).contains(new AuthState(TEST_USER_ID, TEST_USER_UUID, UserStatus.ACTIVE, Role.AUTHOR, "v3"));
+        assertThat(state).contains(new AuthState(TEST_USER_UUID, UserStatus.ACTIVE, Role.AUTHOR, "v3"));
     }
 
     /**

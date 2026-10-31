@@ -21,28 +21,27 @@ class AuthUserTest {
     private static final UUID USER_UUID = UUID.fromString("00000000-0000-0000-0000-00000000000a");
 
     @Test
-    @DisplayName("三個欄位皆非 null → 建立成功並可讀回")
+    @DisplayName("兩個欄位皆非 null → 建立成功並可讀回")
     void constructor_allFieldsPresent_succeeds() {
-        AuthUser user = new AuthUser(7L, USER_UUID, Role.AUTHOR);
+        AuthUser user = new AuthUser(USER_UUID, Role.AUTHOR);
 
-        assertThat(user.id()).isEqualTo(7L);
         assertThat(user.uuid()).isEqualTo(USER_UUID);
         assertThat(user.role()).isEqualTo(Role.AUTHOR);
     }
 
     @Test
-    @DisplayName("id 為 null → NullPointerException（過渡期各模組仍依賴 id）")
-    void constructor_nullId_throwsNullPointerException() {
-        assertThatNullPointerException()
-                .isThrownBy(() -> new AuthUser(null, USER_UUID, Role.USER))
-                .withMessageContaining("id");
+    @DisplayName("Z1：登入身分只有 uuid 與 role 兩個元件，不再攜帶任何資料庫主鍵")
+    void recordComponents_areOnlyUuidAndRole() {
+        assertThat(AuthUser.class.getRecordComponents())
+                .extracting(java.lang.reflect.RecordComponent::getName)
+                .containsExactly("uuid", "role");
     }
 
     @Test
     @DisplayName("uuid 為 null → NullPointerException")
     void constructor_nullUuid_throwsNullPointerException() {
         assertThatNullPointerException()
-                .isThrownBy(() -> new AuthUser(1L, null, Role.USER))
+                .isThrownBy(() -> new AuthUser(null, Role.USER))
                 .withMessageContaining("uuid");
     }
 
@@ -50,7 +49,7 @@ class AuthUserTest {
     @DisplayName("role 為 null → NullPointerException")
     void constructor_nullRole_throwsNullPointerException() {
         assertThatNullPointerException()
-                .isThrownBy(() -> new AuthUser(1L, USER_UUID, null))
+                .isThrownBy(() -> new AuthUser(USER_UUID, null))
                 .withMessageContaining("role");
     }
 }

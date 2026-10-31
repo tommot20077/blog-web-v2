@@ -64,7 +64,7 @@ class CommentRaceConditionIT extends CommentCleanupITSupport {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                new AuthUser(userUuid.getLeastSignificantBits(), userUuid, role), null, authorities);
+                new AuthUser(userUuid, role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 

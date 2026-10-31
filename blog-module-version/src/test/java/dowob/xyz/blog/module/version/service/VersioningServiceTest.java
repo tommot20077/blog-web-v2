@@ -6,7 +6,6 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.module.version.exception.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
@@ -90,8 +89,7 @@ class VersioningServiceTest {
 
     /** 建立帶有固定 uuid 的 ArticleContentData stub（snapshot 流程用；Long 主鍵只是 article 的過渡欄位）。 */
     private ArticleContentData contentData(UUID aArticleUuid, UUID aAuthorUuid, String title, String content) {
-        return new ArticleContentData(
-            100L, aArticleUuid,
+        return new ArticleContentData(aArticleUuid,
             title, "test-slug", content, "summary", null, "DRAFT", aAuthorUuid
         );
     }
@@ -111,7 +109,7 @@ class VersioningServiceTest {
 
     /** 建立只帶 uuid 與作者 uuid 的 ArticleData（ownership 檢查用）。 */
     private ArticleData articleData(UUID aArticleUuid, UUID aAuthorUuid) {
-        return new ArticleData(100L, aArticleUuid, "DRAFT", null, aAuthorUuid, null);
+        return new ArticleData(aArticleUuid, "DRAFT", null, aAuthorUuid, null);
     }
 
     // ─── recordAutoSnapshot ─────────────
@@ -537,18 +535,15 @@ class VersioningServiceTest {
      * SEC-02（HIGH）契約層防線：還原資料不得攜帶文章狀態。
      *
      * <p>行為層的斷言（還原後文章狀態不變）在 {@code ArticleFacadeImplTest} 內；
-     * 這裡守的是<b>結構</b>——只要有人把 status 加回 {@link ArticleRestoreData}／{@link ArticleRestoreSource}，
+     * 這裡守的是<b>結構</b>——只要有人把 status 加回 {@link ArticleRestoreSource}，
      * 還原就重新具備改狀態的能力，本測試立刻紅，不必等到行為測試被一起改掉。</p>
      */
     @Test
-    @DisplayName("SEC-02：ArticleRestoreData／ArticleRestoreSource 都不含 status 欄位")
+    @DisplayName("SEC-02：ArticleRestoreSource 不含 status 欄位")
     void restoreDtos_haveNoStatusComponent() {
-        assertThat(ArticleRestoreData.class.getRecordComponents())
-            .extracting(java.lang.reflect.RecordComponent::getName)
-            .as("還原只還原內容：帶 status 會讓還原成為繞過 VALID_TRANSITIONS 的狀態轉換路徑（SEC-02）")
-            .doesNotContain("status");
         assertThat(ArticleRestoreSource.class.getRecordComponents())
             .extracting(java.lang.reflect.RecordComponent::getName)
+            .as("還原只還原內容：帶 status 會讓還原成為繞過 VALID_TRANSITIONS 的狀態轉換路徑（SEC-02）")
             .doesNotContain("status");
     }
 

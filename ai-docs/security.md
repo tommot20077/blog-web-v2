@@ -45,16 +45,16 @@ If the order is wrong, `anyRequest()` matches first and shadows the admin rule, 
 
 ### 5. Stateful JWT
 
-Every Access Token carries a `version` claim. The JWT `subject` is the user's uuid (tokens whose subject is not a UUID are invalid). Redis key `user:auth:{userUuid}` (Hash: `id`, `status`, `role`, `version`) stores the current valid state.
+Every Access Token carries a `version` claim. The JWT `subject` is the user's uuid (tokens whose subject is not a UUID are invalid). Redis key `user:auth:{userUuid}` (Hash: `status`, `role`, `version`; legacy hashes that still carry an `id` field remain readable — the extra field is ignored) stores the current valid state.
 
 **Filter validation flow:**
 1. Extract `Authorization: Bearer <jwt>` header.
 2. Verify JWT signature.
 3. Extract `userUuid`, `tokenVersion`, `role`.
-4. `AuthStateLoader` looks up Redis `user:auth:{userUuid}`; a missing/partial hash (any of `id`/`status`/`role`/`version` absent) is a cache miss → fall back to DB and backfill. `/auth/refresh` shares the same loader.
+4. `AuthStateLoader` looks up Redis `user:auth:{userUuid}`; a missing/partial hash (any of `status`/`role`/`version` absent) is a cache miss → fall back to DB and backfill. `/auth/refresh` shares the same loader.
 5. `tokenVersion` must **exactly match** the Redis version (`Objects.equals`).
 6. User status must be `ACTIVE` or `PENDING_VERIFICATION`.
-7. Build `Authentication` with principal = `AuthUser(id, uuid, role)`; `role` and the authorities both come from the token's `role` claim. (`/auth/refresh` accepts `ACTIVE` only.)
+7. Build `Authentication` with principal = `AuthUser(uuid, role)`; `role` and the authorities both come from the token's `role` claim. (`/auth/refresh` accepts `ACTIVE` only.)
 
 **Instant logout**: update the token version in Redis — existing tokens become invalid immediately without waiting for JWT expiry.
 

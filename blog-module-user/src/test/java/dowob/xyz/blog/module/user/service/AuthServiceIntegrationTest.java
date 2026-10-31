@@ -123,19 +123,20 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     }
 
     /**
-     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{uuid}} 應包含 {@code id} 欄位，
-     * 值為資料庫主鍵——缺 id 的 hash 會被 {@code AuthStateLoader} 視為 miss。
+     * 驗證（Z1）：呼叫 login() 後，Redis Hash {@code user:auth:{uuid}} 不再包含 {@code id} 欄位。
      */
     @Test
-    @DisplayName("login → 整合測試：auth hash 以 uuid 為鍵且包含 id 欄位")
-    void login_shouldWriteIdIntoAuthHashKeyedByUuid() {
+    @DisplayName("Z1 login → 整合測試：auth hash 不含 id 欄位")
+    void login_shouldNotWriteIdIntoAuthHash() {
         User user = buildAndSaveUser(UserStatus.ACTIVE);
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
         Map<Object, Object> entries = redisTemplate.opsForHash()
                 .entries(RedisKeyConstant.getUserAuthKey(user.getUuid()));
-        assertThat(entries.get(RedisKeyConstant.FIELD_ID)).isEqualTo(String.valueOf(user.getId()));
+        assertThat(entries).doesNotContainKey("id");
+        assertThat(entries).containsKeys(
+                RedisKeyConstant.FIELD_VERSION, RedisKeyConstant.FIELD_STATUS, RedisKeyConstant.FIELD_ROLE);
         assertThat(redisTemplate.hasKey("user:auth:" + user.getId())).isFalse();
     }
 
@@ -216,7 +217,7 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, UserStatus.ACTIVE.name());
         redisTemplate.opsForZSet().add(refreshKey, "stolen-refresh-token", System.currentTimeMillis());
 
-        userService.changePassword(user.getId(), TEST_PASSWORD, "newPassword456");
+        userService.changePassword(user.getUuid(), TEST_PASSWORD, "newPassword456");
 
         User updated = userRepository.findById(user.getId()).orElseThrow();
         assertThat(updated.getTokenVersion()).isEqualTo("v2");
@@ -237,7 +238,7 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
         redisTemplate.opsForValue().set(refreshKey, "some-refresh-token");
 
-        userService.deleteAccount(user.getId(), TEST_PASSWORD);
+        userService.deleteAccount(user.getUuid(), TEST_PASSWORD);
 
         assertThat(redisTemplate.hasKey(authKey)).isFalse();
         assertThat(redisTemplate.hasKey(refreshKey)).isFalse();
@@ -301,7 +302,7 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     void updateProfile_shouldPersistAvatarUrlAndLocation() {
         User user = buildAndSaveUser(UserStatus.ACTIVE);
 
-        userService.updateProfile(user.getId(), TEST_NICKNAME, "簡介", null, null,
+        userService.updateProfile(user.getUuid(), TEST_NICKNAME, "簡介", null, null,
                 "https://cdn.example.com/avatar.png", "Taipei");
 
         User updated = userRepository.findById(user.getId()).orElseThrow();
@@ -317,7 +318,7 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
     void updateNotificationPreferences_shouldPersistFlags() {
         User user = buildAndSaveUser(UserStatus.ACTIVE);
 
-        userService.updateNotificationPreferences(user.getId(), false, true, false, true, false);
+        userService.updateNotificationPreferences(user.getUuid(), false, true, false, true, false);
 
         User updated = userRepository.findById(user.getId()).orElseThrow();
         assertThat(updated.isNotificationComment()).isFalse();

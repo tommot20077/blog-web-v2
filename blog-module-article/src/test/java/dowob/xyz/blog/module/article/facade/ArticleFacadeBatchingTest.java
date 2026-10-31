@@ -106,15 +106,16 @@ class ArticleFacadeBatchingTest {
     }
 
     @Test
-    @DisplayName("facade 內的 ArticleDataAssembler 為真實物件：findByIds 不得因 assembler 為 null 而 NPE")
-    void findByIds_withRealAssembler_returnsArticleData() {
+    @DisplayName("facade 內的 ArticleDataAssembler 為真實物件：findBySeriesUuidOrderByPosition 不得因 assembler 為 null 而 NPE")
+    void findBySeriesUuidOrderByPosition_withRealAssembler_returnsArticleData() {
         Article article = new Article();
         article.setId(1L);
         article.setUuid(UUID.randomUUID());
         article.setAuthorUuid(UUID.randomUUID());
-        when(articleService.findByIds(List.of(1L))).thenReturn(List.of(article));
+        UUID seriesUuid = UUID.randomUUID();
+        when(articleService.findBySeriesUuidOrderByPosition(seriesUuid)).thenReturn(List.of(article));
 
-        List<ArticleData> result = facade.findByIds(List.of(1L));
+        List<ArticleData> result = facade.findBySeriesUuidOrderByPosition(seriesUuid);
 
         assertThat(result).hasSize(1);
     }

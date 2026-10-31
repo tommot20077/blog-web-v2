@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- ModulePomDependencyTest 的合規 fixture：只在 test scope 依賴其他業務模組。被判違規即為假陽性。 -->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>fixture</groupId>
+    <artifactId>blog-module-beta</artifactId>
+    <version>1.0</version>
+    <dependencies>
+        <dependency>
+            <groupId>fixture</groupId>
+            <artifactId>blog-module-alpha</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>fixture</groupId>
+            <artifactId>blog-common</artifactId>
+        </dependency>
+    </dependencies>
+</project>

@@ -6,8 +6,11 @@ import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.infrastructure.security.AuthState;
 import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
+import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.dto.response.AuthResponse;
@@ -20,6 +23,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.mock.web.MockFilterChain;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Map;
@@ -68,6 +76,9 @@ class AuthRefreshIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    /** 舊版 auth hash 曾帶的使用者主鍵欄位名稱（Z1 已不再讀寫；向下相容測試用字面值） */
+    private static final String LEGACY_ID_FIELD = "id";
+
     /** 測試用電子信箱 */
     private static final String TEST_EMAIL = "refresh-it@example.com";
 
@@ -87,7 +98,7 @@ class AuthRefreshIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    @DisplayName("SEC-26：登入後 Redis auth hash 被刪除 → refresh 仍成功，且 hash 由 DB 回填（含 id）")
+    @DisplayName("SEC-26：登入後 Redis auth hash 被刪除 → refresh 仍成功，且 hash 由 DB 回填（status／role／version，不含 id）")
     void refresh_afterAuthHashDeleted_shouldSucceedAndBackfill() {
         User user = saveUser(UserStatus.ACTIVE, Role.AUTHOR);
         LoginResult login = authService.login(TEST_EMAIL, TEST_PASSWORD);
@@ -102,7 +113,7 @@ class AuthRefreshIntegrationTest extends AbstractIntegrationTest {
         assertThat(jwtService.getVersionFromToken(newAccessToken)).isEqualTo("v1");
         Map<Object, Object> refilled = redisTemplate.opsForHash().entries(authKey);
         assertThat(refilled)
-                .containsEntry(RedisKeyConstant.FIELD_ID, String.valueOf(user.getId()))
+                .doesNotContainKey("id")
                 .containsEntry(RedisKeyConstant.FIELD_STATUS, "ACTIVE")
                 .containsEntry(RedisKeyConstant.FIELD_ROLE, "AUTHOR")
                 .containsEntry(RedisKeyConstant.FIELD_VERSION, "v1");
@@ -139,20 +150,63 @@ class AuthRefreshIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    @DisplayName("loader：舊格式 hash（缺 id）→ 視為 miss，由 DB 回填完整 hash")
-    void load_legacyHashWithoutId_shouldBackfillFromDb() {
+    @DisplayName("Z1 loader：hash 只有 status／role／version（不含 id）→ 命中，採用 hash 內容，不回填 id")
+    void load_hashWithoutId_shouldBeCacheHitAndNotAddId() {
         User user = saveUser(UserStatus.ACTIVE, Role.USER);
         String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
-        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "hash-v9");
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, "ACTIVE");
         redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ROLE, "USER");
 
         Optional<AuthState> state = authStateLoader.load(user.getUuid());
 
-        assertThat(state).contains(
-                new AuthState(user.getId(), user.getUuid(), UserStatus.ACTIVE, Role.USER, "v1"));
-        assertThat(redisTemplate.opsForHash().get(authKey, RedisKeyConstant.FIELD_ID))
-                .isEqualTo(String.valueOf(user.getId()));
+        assertThat(state).isPresent();
+        assertThat(state.get().tokenVersion()).isEqualTo("hash-v9");
+        assertThat(redisTemplate.opsForHash().hasKey(authKey, LEGACY_ID_FIELD)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Z1 向下相容：舊格式 hash（仍帶 id 欄位）→ 命中且忽略 id，不判停權、不被覆寫")
+    void load_legacyHashWithIdField_shouldStillBeCacheHit() {
+        User user = saveUser(UserStatus.ACTIVE, Role.USER);
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        redisTemplate.opsForHash().put(authKey, LEGACY_ID_FIELD, "999999");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "legacy-v2");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, "ACTIVE");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ROLE, "USER");
+
+        Optional<AuthState> state = authStateLoader.load(user.getUuid());
+
+        assertThat(state).isPresent();
+        assertThat(state.get().status()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(state.get().tokenVersion()).isEqualTo("legacy-v2");
+        assertThat(redisTemplate.opsForHash().get(authKey, RedisKeyConstant.FIELD_VERSION)).isEqualTo("legacy-v2");
+    }
+
+    @Test
+    @DisplayName("Z1 向下相容：舊格式 hash（帶 id）+ 有效 JWT → JwtAuthenticationFilter 仍認證成功，principal 為該 uuid")
+    void filter_legacyHashWithIdField_shouldStillAuthenticate() throws Exception {
+        User user = saveUser(UserStatus.ACTIVE, Role.AUTHOR);
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        redisTemplate.opsForHash().put(authKey, LEGACY_ID_FIELD, String.valueOf(user.getId()));
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, "ACTIVE");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_ROLE, "AUTHOR");
+        String accessToken = jwtService.generateAccessToken(user.getUuid(), "AUTHOR", "v1");
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("Authorization", "Bearer " + accessToken);
+        SecurityContextHolder.clearContext();
+
+        try {
+            new JwtAuthenticationFilter(jwtService, authStateLoader)
+                    .doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+
+            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+            assertThat(authentication).isNotNull();
+            assertThat(SecurityUtils.currentAuthUser(authentication).map(AuthUser::uuid)).contains(user.getUuid());
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 
     @Test

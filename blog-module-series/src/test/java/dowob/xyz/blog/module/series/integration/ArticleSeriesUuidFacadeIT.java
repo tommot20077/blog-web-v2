@@ -48,7 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>M6-b 之前本測試把 UUID 版與 Long 版的結果對照（parity）；Long 版隨 {@code articles.series_id} 一併移除後，
  * 改以<b>明確的預期值</b>斷言（含 series_position 順序、count 只含 &gt; 0、prev／next 的邊界與位置落差、
  * 未知 series、寫入行為）。放在 series 模組，因為 {@link SeriesTestApplication} 同時載入 article 與 series 的
- * 真實實作（{@link SeriesFacade#findIdsByUuids} 的真 SQL 也在這裡驗證）。</p>
+ * 真實實作。</p>
  *
  * @author Yuan
  * @version 2.0
@@ -167,38 +167,6 @@ class ArticleSeriesUuidFacadeIT {
         return seriesRepo.save(series);
     }
 
-    // ─── SeriesFacade.findIdsByUuids（真 SQL）───
-
-    @Test
-    @DisplayName("SeriesFacade.findIdsByUuids → 回傳存在者的 uuid → id；未知 uuid 不出現；空輸入回空 Map")
-    void findIdsByUuids_returnsExistingOnly() {
-        Map<UUID, Long> result = seriesFacade.findIdsByUuids(
-                List.of(seriesA.getUuid(), seriesC.getUuid(), UUID.randomUUID()));
-
-        assertThat(result).containsOnlyKeys(seriesA.getUuid(), seriesC.getUuid());
-        assertThat(result.get(seriesA.getUuid())).isEqualTo(seriesA.getId());
-        assertThat(result.get(seriesC.getUuid())).isEqualTo(seriesC.getId());
-        assertThat(seriesFacade.findIdsByUuids(List.of())).isEmpty();
-        assertThat(seriesFacade.findIdsByUuids(null)).isEmpty();
-    }
-
-    @Test
-    @DisplayName("SeriesFacade.findIdsByUuids → 輸入超過批次大小時切批，存在者全數回傳")
-    void findIdsByUuids_overBatchSize_returnsAllExisting() {
-        List<UUID> input = new ArrayList<>();
-        for (int i = 0; i < BatchedQuery.BATCH_SIZE * 2 + 50; i++) {
-            input.add(UUID.randomUUID());
-        }
-        input.set(0, seriesA.getUuid());
-        input.set(BatchedQuery.BATCH_SIZE + 5, seriesB.getUuid());
-        input.set(input.size() - 1, seriesC.getUuid());
-
-        Map<UUID, Long> result = seriesFacade.findIdsByUuids(input);
-
-        assertThat(result).containsOnlyKeys(seriesA.getUuid(), seriesB.getUuid(), seriesC.getUuid());
-        assertThat(result.get(seriesB.getUuid())).isEqualTo(seriesB.getId());
-    }
-
     // ─── findBySeriesUuidOrderByPosition ───
 
     @Test
@@ -207,8 +175,8 @@ class ArticleSeriesUuidFacadeIT {
         List<ArticleData> byUuid = articleFacade.findBySeriesUuidOrderByPosition(seriesA.getUuid());
 
         assertThat(byUuid).extracting(ArticleData::seriesPosition).containsExactly(1, 2, 4, 9);
-        assertThat(byUuid).extracting(ArticleData::id)
-                .containsExactly(a1.getId(), a2Draft.getId(), a4.getId(), a9.getId());
+        assertThat(byUuid).extracting(ArticleData::uuid)
+                .containsExactly(a1.getUuid(), a2Draft.getUuid(), a4.getUuid(), a9.getUuid());
         assertThat(byUuid).extracting(ArticleData::seriesUuid).containsOnly(seriesA.getUuid());
         assertThat(byUuid).extracting(ArticleData::status)
                 .containsExactly("PUBLISHED", "DRAFT", "PUBLISHED", "PUBLISHED");

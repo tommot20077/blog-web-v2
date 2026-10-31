@@ -131,7 +131,7 @@ class SeriesDeletedEventIT {
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         return SecurityMockMvcRequestPostProcessors.authentication(new UsernamePasswordAuthenticationToken(
-                new AuthUser(userId, SeededUsers.uuidOf(userId), role), null, authorities));
+                new AuthUser(SeededUsers.uuidOf(userId), role), null, authorities));
     }
 
     private UUID createSeriesViaApi(String slug) throws Exception {

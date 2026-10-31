@@ -157,7 +157,7 @@ class CommentControllerIT {
         List<SimpleGrantedAuthority> authorities = new ArrayList<>();
         authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
         role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
-        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userUuid.getLeastSignificantBits(), userUuid, role), null, authorities);
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(userUuid, role), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 

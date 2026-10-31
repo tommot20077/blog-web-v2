@@ -227,7 +227,7 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
         assertThatThrownBy(() -> userService.updateProfile(
-                alive.getId(), "GhostNick", null, null, null, null, null))
+                alive.getUuid(), "GhostNick", null, null, null, null, null))
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
         assertThat(countWhere("nickname", "GhostNick")).isEqualTo(1L);
@@ -320,7 +320,7 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
             installSlowWriteTrigger();
 
             List<String> outcomes = runConcurrently(i -> () -> outcomeOf(() -> userService.updateProfile(
-                    users[i].getId(), target, null, null, null, null, null)));
+                    users[i].getUuid(), target, null, null, null, null, null)));
             jdbc.execute("DROP TRIGGER IF EXISTS race_test_slow_users ON users");
 
             assertThat(outcomes).as("第 %d 輪", round)

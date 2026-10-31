@@ -9,7 +9,7 @@ import java.util.UUID;
  * <p>故意設計輕量 payload — consumer 自己用 articleRepository 拉完整 article。
  * 對齊 ArticleViewedEvent 慣例。</p>
  *
- * <p><b>M3-b：Long 過渡欄位已移除</b>。原本保留的 {@code articleId}、{@code authorId} 兩個 Long 欄位，
+ * <p><b>M3-b：舊 Long 欄位已移除</b>。原本保留的 {@code articleId}、{@code authorId} 兩個 Long 欄位，
  * 唯一的讀取者是 version 模組的 consumer；該 consumer 於 M3-b 改讀 {@code articleUuid} 後即無人讀取，依實作計畫 §4.2
  * 步驟 7（最後一個讀取者改造時移除）一併自事件刪除，發送端（article）不再填入。</p>
  *
@@ -24,7 +24,7 @@ import java.util.UUID;
  * @param occurredAt  事件發生時間
  *
  * @author Yuan
- * @version 3.0（M3-b：移除 articleId、authorId 過渡欄位；2.0 由 article 模組搬到 blog-infrastructure，新增 eventId、authorUuid）
+ * @version 3.0（M3-b：移除 articleId、authorId 舊 Long 欄位；2.0 由 article 模組搬到 blog-infrastructure，新增 eventId、authorUuid）
  */
 public record ArticleContentChangedEvent(
     UUID eventId,

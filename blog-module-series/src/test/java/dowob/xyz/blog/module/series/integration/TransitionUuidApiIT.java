@@ -38,12 +38,14 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 過渡 API 整合測試（設計 §3.1）：在真實 DB 與<b>真實的</b> ArticleFacade / SeriesFacade bean 上，
- * 驗證 {@code ArticleData.authorUuid / seriesUuid} 與資料表一致、{@code SeriesFacade} 的 uuid ↔ id 轉換正確，
+ * 整合測試：在真實 DB 與<b>真實的</b> ArticleFacade / SeriesFacade bean 上，
+ * 驗證 {@code ArticleData.authorUuid / seriesUuid} 與資料表一致，
  * 並以 Spring context 能啟動證明 {@code SeriesFacadeImpl → ArticleFacade → … → SeriesFacade} 沒有 bean 循環。
  *
  * <p>本類別放在 series 模組，因為 {@link SeriesTestApplication} 同時掃描 article 與 series 模組，
@@ -55,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(classes = SeriesTestApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @ActiveProfiles("test")
-@DisplayName("過渡 API 整合測試 — ArticleData UUID 欄位與 SeriesFacade 轉換")
+@DisplayName("ArticleData UUID 欄位整合測試")
 class TransitionUuidApiIT {
 
     @Container
@@ -158,38 +160,36 @@ class TransitionUuidApiIT {
     }
 
     @Test
-    @DisplayName("ArticleFacade.findById / findByUuid → authorUuid 等於 users.uuid、seriesUuid 等於 series.uuid")
+    @DisplayName("ArticleFacade.findByUuid → authorUuid 等於 users.uuid、seriesUuid 等於 series.uuid")
     void articleFacadeSingle_uuidFieldsMatchTables() {
         Series series = createSeries("it-single", AUTHOR_1);
         Article article = createArticle(AUTHOR_1, series.getUuid(), 1);
 
-        ArticleData byId = articleFacade.findById(article.getId()).orElseThrow();
         ArticleData byUuid = articleFacade.findByUuid(article.getUuid()).orElseThrow();
 
-        assertThat(byId.authorUuid()).isEqualTo(userUuid(AUTHOR_1));
-        assertThat(byId.seriesUuid()).isEqualTo(series.getUuid());
-        assertThat(byUuid).isEqualTo(byId);
+        assertThat(byUuid.uuid()).isEqualTo(article.getUuid());
+        assertThat(byUuid.authorUuid()).isEqualTo(userUuid(AUTHOR_1));
+        assertThat(byUuid.seriesUuid()).isEqualTo(series.getUuid());
     }
 
     @Test
-    @DisplayName("ArticleFacade.findByIds → 多作者多系列的批次結果逐篇正確；無系列者 seriesUuid 為 null")
-    void articleFacadeBatch_uuidFieldsMatchTables() {
+    @DisplayName("ArticleFacade.findByUuid → 多作者多系列逐篇正確；無系列者 seriesUuid 為 null")
+    void articleFacadeMultiple_uuidFieldsMatchTables() {
         Series s1 = createSeries("it-batch-1", AUTHOR_1);
         Series s2 = createSeries("it-batch-2", AUTHOR_2);
         Article a1 = createArticle(AUTHOR_1, s1.getUuid(), 1);
         Article a2 = createArticle(AUTHOR_2, s2.getUuid(), 1);
         Article a3 = createArticle(AUTHOR_2, null, null);
 
-        List<ArticleData> result = articleFacade.findByIds(List.of(a1.getId(), a2.getId(), a3.getId()));
-
-        Map<Long, ArticleData> byId = result.stream()
-                .collect(java.util.stream.Collectors.toMap(ArticleData::id, d -> d));
-        assertThat(byId.get(a1.getId()).authorUuid()).isEqualTo(userUuid(AUTHOR_1));
-        assertThat(byId.get(a1.getId()).seriesUuid()).isEqualTo(s1.getUuid());
-        assertThat(byId.get(a2.getId()).authorUuid()).isEqualTo(userUuid(AUTHOR_2));
-        assertThat(byId.get(a2.getId()).seriesUuid()).isEqualTo(s2.getUuid());
-        assertThat(byId.get(a3.getId()).authorUuid()).isEqualTo(userUuid(AUTHOR_2));
-        assertThat(byId.get(a3.getId()).seriesUuid()).isNull();
+        Map<UUID, ArticleData> byUuid = Stream.of(a1, a2, a3)
+                .map(a -> articleFacade.findByUuid(a.getUuid()).orElseThrow())
+                .collect(Collectors.toMap(ArticleData::uuid, d -> d));
+        assertThat(byUuid.get(a1.getUuid()).authorUuid()).isEqualTo(userUuid(AUTHOR_1));
+        assertThat(byUuid.get(a1.getUuid()).seriesUuid()).isEqualTo(s1.getUuid());
+        assertThat(byUuid.get(a2.getUuid()).authorUuid()).isEqualTo(userUuid(AUTHOR_2));
+        assertThat(byUuid.get(a2.getUuid()).seriesUuid()).isEqualTo(s2.getUuid());
+        assertThat(byUuid.get(a3.getUuid()).authorUuid()).isEqualTo(userUuid(AUTHOR_2));
+        assertThat(byUuid.get(a3.getUuid()).seriesUuid()).isNull();
     }
 
     @Test
@@ -219,34 +219,12 @@ class TransitionUuidApiIT {
     }
 
     @Test
-    @DisplayName("ArticleFacade.findContentById → authorUuid 等於 users.uuid")
+    @DisplayName("ArticleFacade.findContentByUuid → authorUuid 等於 users.uuid")
     void articleFacadeContent_authorUuidMatches() {
         Article article = createArticle(AUTHOR_2, null, null);
 
-        ArticleContentData data = articleFacade.findContentById(article.getId()).orElseThrow();
+        ArticleContentData data = articleFacade.findContentByUuid(article.getUuid()).orElseThrow();
 
         assertThat(data.authorUuid()).isEqualTo(userUuid(AUTHOR_2));
-    }
-
-    @Test
-    @DisplayName("SeriesFacade.findIdByUuid → 存在回傳主鍵；不存在回傳 empty")
-    void seriesFacadeFindIdByUuid() {
-        Series series = createSeries("it-find-id", AUTHOR_1);
-
-        assertThat(seriesFacade.findIdByUuid(series.getUuid())).contains(series.getId());
-        assertThat(seriesFacade.findIdByUuid(UUID.randomUUID())).isEmpty();
-    }
-
-    @Test
-    @DisplayName("SeriesFacade.findUuidsByIds → 回傳存在者的 id → uuid；不存在者不出現")
-    void seriesFacadeFindUuidsByIds() {
-        Series s1 = createSeries("it-uuids-1", AUTHOR_1);
-        Series s2 = createSeries("it-uuids-2", AUTHOR_2);
-
-        Map<Long, UUID> result = seriesFacade.findUuidsByIds(List.of(s1.getId(), s2.getId(), Long.MAX_VALUE));
-
-        assertThat(result).containsOnlyKeys(s1.getId(), s2.getId());
-        assertThat(result.get(s1.getId())).isEqualTo(s1.getUuid());
-        assertThat(result.get(s2.getId())).isEqualTo(s2.getUuid());
     }
 }

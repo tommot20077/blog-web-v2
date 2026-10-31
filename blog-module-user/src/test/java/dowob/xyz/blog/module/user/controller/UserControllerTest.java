@@ -34,7 +34,6 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
@@ -87,10 +86,13 @@ class UserControllerTest {
     @MockitoBean
     private AuthStateLoader authStateLoader;
 
-    /** 測試用 Authentication（principal=AuthUser(id=1L)，角色=ROLE_USER） */
+    /** 測試用登入者 UUID（controller 應以此 uuid 進入 UserService） */
+    private static final UUID USER_UUID = new UUID(0L, 1L);
+
+    /** 測試用 Authentication（principal=AuthUser(uuid=USER_UUID)，角色=ROLE_USER） */
     private static final UsernamePasswordAuthenticationToken USER_AUTH =
             new UsernamePasswordAuthenticationToken(
-                    new AuthUser(1L, new UUID(0L, 1L), Role.USER), null,
+                    new AuthUser(USER_UUID, Role.USER), null,
                     List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
 
     // =========================================================================
@@ -107,7 +109,7 @@ class UserControllerTest {
         request.setNickname("newNickname");
         request.setBio("新的個人簡介");
 
-        doNothing().when(userService).updateProfile(anyLong(), anyString(), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
+        doNothing().when(userService).updateProfile(any(UUID.class), anyString(), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
 
         mockMvc.perform(patch("/api/v1/users/me/profile")
                         .with(authentication(USER_AUTH))
@@ -159,7 +161,7 @@ class UserControllerTest {
         request.setNickname("takenNickname");
 
         doThrow(new BusinessException(UserErrorCode.NICKNAME_DUPLICATED))
-                .when(userService).updateProfile(anyLong(), anyString(), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
+                .when(userService).updateProfile(any(UUID.class), anyString(), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
 
         mockMvc.perform(patch("/api/v1/users/me/profile")
                         .with(authentication(USER_AUTH))
@@ -180,7 +182,7 @@ class UserControllerTest {
         request.setAvatarUrl("https://cdn.example.com/avatar.png");
         request.setLocation("Taipei");
 
-        doNothing().when(userService).updateProfile(anyLong(), anyString(), nullable(String.class),
+        doNothing().when(userService).updateProfile(any(UUID.class), anyString(), nullable(String.class),
                 nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
 
         mockMvc.perform(patch("/api/v1/users/me/profile")
@@ -190,7 +192,7 @@ class UserControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
-        verify(userService).updateProfile(eq(1L), eq("newNickname"), nullable(String.class),
+        verify(userService).updateProfile(eq(USER_UUID), eq("newNickname"), nullable(String.class),
                 nullable(String.class), nullable(String.class),
                 eq("https://cdn.example.com/avatar.png"), eq("Taipei"));
     }
@@ -213,7 +215,7 @@ class UserControllerTest {
         request.setNewsletter(false);
 
         doNothing().when(userService).updateNotificationPreferences(
-                anyLong(), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean());
+                any(UUID.class), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean());
 
         mockMvc.perform(patch("/api/v1/users/me/notifications")
                         .with(authentication(USER_AUTH))
@@ -222,7 +224,7 @@ class UserControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
 
-        verify(userService).updateNotificationPreferences(1L, false, true, false, true, false);
+        verify(userService).updateNotificationPreferences(USER_UUID, false, true, false, true, false);
     }
 
     /**
@@ -258,7 +260,7 @@ class UserControllerTest {
         request.setOldPassword("oldPass123");
         request.setNewPassword("NewPass456!");
 
-        doNothing().when(userService).changePassword(anyLong(), anyString(), anyString());
+        doNothing().when(userService).changePassword(any(UUID.class), anyString(), anyString());
 
         mockMvc.perform(post("/api/v1/users/me/change-password")
                         .with(authentication(USER_AUTH))
@@ -295,7 +297,7 @@ class UserControllerTest {
         request.setNewPassword("NewPass456!");
 
         doThrow(new BusinessException(UserErrorCode.USER_PASSWORD_ERROR))
-                .when(userService).changePassword(anyLong(), anyString(), anyString());
+                .when(userService).changePassword(any(UUID.class), anyString(), anyString());
 
         mockMvc.perform(post("/api/v1/users/me/change-password")
                         .with(authentication(USER_AUTH))
@@ -315,7 +317,7 @@ class UserControllerTest {
     @Test
     @DisplayName("DELETE /users/me → 已登入，JSON body 正確密碼 → 應回傳 200 成功回應")
     void deleteAccount_authenticatedUser_shouldReturn200() throws Exception {
-        doNothing().when(userService).deleteAccount(anyLong(), anyString());
+        doNothing().when(userService).deleteAccount(any(UUID.class), anyString());
 
         DeleteAccountRequest request = new DeleteAccountRequest();
         request.setPassword("correctPassword");
@@ -350,7 +352,7 @@ class UserControllerTest {
     @DisplayName("DELETE /users/me → 密碼錯誤 → 應回傳 USER_PASSWORD_ERROR 錯誤碼")
     void deleteAccount_wrongPassword_shouldReturnUserPasswordError() throws Exception {
         doThrow(new BusinessException(UserErrorCode.USER_PASSWORD_ERROR))
-                .when(userService).deleteAccount(anyLong(), anyString());
+                .when(userService).deleteAccount(any(UUID.class), anyString());
 
         DeleteAccountRequest request = new DeleteAccountRequest();
         request.setPassword("wrongPassword");
@@ -389,7 +391,7 @@ class UserControllerTest {
         DeleteAccountRequest request = new DeleteAccountRequest();
         request.setPassword("abc123");
 
-        doNothing().when(userService).deleteAccount(anyLong(), anyString());
+        doNothing().when(userService).deleteAccount(any(UUID.class), anyString());
 
         mockMvc.perform(delete("/api/v1/users/me")
                         .with(authentication(USER_AUTH))
@@ -445,7 +447,7 @@ class UserControllerTest {
                 false,
                 true
         );
-        when(userService.getUserProfile(1L)).thenReturn(profile);
+        when(userService.getUserProfile(USER_UUID)).thenReturn(profile);
 
         mockMvc.perform(get("/api/v1/users/me")
                         .with(authentication(USER_AUTH)))
@@ -479,7 +481,7 @@ class UserControllerTest {
     @Test
     @DisplayName("GET /users/me → 使用者不存在 → 應回傳 USER_NOT_FOUND 錯誤碼")
     void getMe_userNotFound_shouldReturnUserNotFoundError() throws Exception {
-        when(userService.getUserProfile(1L))
+        when(userService.getUserProfile(USER_UUID))
                 .thenThrow(new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
         mockMvc.perform(get("/api/v1/users/me")

@@ -62,7 +62,7 @@ class ReadingRaceConditionIT extends ReadingCleanupITSupport {
         authorities.add(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole()));
         Role.USER.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                new AuthUser(SeededReadingUsers.USER_ID, USER_UUID, Role.USER), null, authorities);
+                new AuthUser(USER_UUID, Role.USER), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
@@ -238,7 +238,7 @@ class ReadingRaceConditionIT extends ReadingCleanupITSupport {
         authorities.add(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole()));
         Role.USER.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                new AuthUser(SeededReadingUsers.OTHER_USER_ID, other, Role.USER), null, authorities);
+                new AuthUser(other, Role.USER), null, authorities);
 
         int status = mockMvc.perform(post("/api/v1/articles/{uuid}/like", article.getUuid())
                 .with(SecurityMockMvcRequestPostProcessors.authentication(auth)))
