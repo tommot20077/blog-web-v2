@@ -136,7 +136,7 @@
 - **寫入與文章刪除的窗口（M1-b 起，設計接受）**：寫入端在 `existsByUuid` 與 INSERT 之間文章被刪，會留下孤兒列，直到每日 `OrphanReconciliationJob` 子類別清除；FK 拿掉後的固有代價。適用：留言（M1-b）、按讚與收藏（M2-b）、劃線（M2-c）。（M1-b、M2-b 回報）
 - **comment 列表作者欄位缺端到端測試**：comment 模組 IT 一律 mock `UserFacade`，`UserFacadeImpl` 端由 `UserFacadeIntegrationTest` 覆蓋，兩端以 `Map<UUID, UserDisplayInfo>` 契約銜接，但沒有測試走過「真實 UserFacade → listComments → JSON」。併入 TEST-10 E2E 進 CI gate 時補 author 斷言。（M1-b 審查 MEDIUM）
 - **刪除連動 queue 缺真 broker 的 binding 測試**：`comment.article-deleted`、`reading.article-deleted` 只有 config 單元測試與 ContextSmokeTest（context 能啟動），沒有測試以真 RabbitMQ 發布 `ArticleDeletedEvent` 後證明 consumer 收到。Z3（打開 MQ 重試）前補一個 blog-start 層的 Testcontainers RabbitMQ IT 涵蓋全部刪除連動 queue。（M2-b 審查）
-- **閱讀進度一致性（既有，M2-c 審查以 PoC 重現；建議合併為一個 Task）**：M2-c 已修 RACE-13（flush 改 Lua compare-and-remove，at-least-once），以下仍未處理，PoC 測試存於 `ai-docs/backlog/poc/2026-10-25-reading-progress-Review2PocIT.java.txt`：
+- **閱讀進度一致性（既有，M2-c 審查以 PoC 重現；建議合併為一個 Task）**：M2-c 已修 RACE-13（flush 改 Lua compare-and-remove，at-least-once）。**2026-10-31 對帳**：(a)(b)(c)(d) 已由 RP-1（PR #85）處理——Redis 寫入與快取回填改走單一 Lua `WRITE_IF_NEWER`（HSET＋EXPIRE＋SADD 原子、只接受不比現有舊的值），DB upsert 加 `updated_at <= EXCLUDED.updated_at` 守衛；(e)(f) 維持現況（目前無寫入路徑會產生缺欄位 hash、Redis 為單機）；RP-1 自身的殘留見下一條。以下為原始盤點，PoC 測試存於 `ai-docs/backlog/poc/2026-10-25-reading-progress-Review2PocIT.java.txt`：
   - (a) 兩個 flusher 交錯（多實例、無 ShedLock）：F1 讀舊值停頓、F2 寫新值並清標記、F1 再寫舊值 → DB 回退（poc2）
   - (b) 完成路徑（≥ 門檻直寫 DB 並 DEL hash）與 flush 交錯 → DB 被 flush 讀到的舊值覆寫（poc3）
   - (a)(b) 修法：upsert 加單調守衛 `WHERE user_reading_progress.updated_at <= EXCLUDED.updated_at`，`updated_at` 改傳 hash 的 `updatedAt`（動到時間欄位語意），或 flush 加 Redis 鎖
