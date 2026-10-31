@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -169,6 +170,49 @@ class TagNormalizationServiceTest {
         when(tagRepository.insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class))).thenReturn(0);
 
         assertThat(normalizationService.findOrCreate("Java")).isSameAs(byName);
+    }
+
+    @Test
+    @DisplayName("findOrCreate: 衝突後對方剛建立的標籤又被刪掉（重讀不到），重試整個流程一次並成功建立")
+    void findOrCreate_conflictThenWinnerDeleted_retriesWholeFlowOnce() {
+        when(tagRepository.findBySlug(anyString())).thenReturn(Optional.empty());
+        when(tagRepository.findByName(anyString())).thenReturn(Optional.empty());
+        when(tagRepository.insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class)))
+                .thenReturn(0, 1);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+
+        Tag result = normalizationService.findOrCreate("Java");
+
+        verify(tagRepository, times(2)).insertIfAbsent(any(UUID.class), eq("java"), eq("java"), any(LocalDateTime.class));
+        verify(zSetOps, times(1)).add(eq("tag:autocomplete"), eq("java"), anyDouble());
+        assertThat(result.getSlug()).isEqualTo("java");
+    }
+
+    @Test
+    @DisplayName("findOrCreate: 重試時第二輪的 slug 查詢已讀到別人建立的標籤，直接回傳、不再 INSERT")
+    void findOrCreate_retryFindsExistingTag_returnsItWithoutSecondInsert() {
+        Tag later = new Tag();
+        later.setId(UUID.randomUUID());
+        later.setSlug("java");
+        when(tagRepository.findBySlug("java")).thenReturn(Optional.empty(), Optional.empty(), Optional.of(later));
+        when(tagRepository.findByName(anyString())).thenReturn(Optional.empty());
+        when(tagRepository.insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class))).thenReturn(0);
+
+        assertThat(normalizationService.findOrCreate("Java")).isSameAs(later);
+
+        verify(tagRepository, times(1)).insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class));
+    }
+
+    @Test
+    @DisplayName("findOrCreate: 重試後仍然衝突又讀不到（兩次都失敗），才拋 IllegalStateException，且只嘗試兩次")
+    void findOrCreate_conflictTwiceAndNothingFound_throwsAfterTwoAttempts() {
+        when(tagRepository.findBySlug(anyString())).thenReturn(Optional.empty());
+        when(tagRepository.findByName(anyString())).thenReturn(Optional.empty());
+        when(tagRepository.insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class))).thenReturn(0);
+
+        assertThatThrownBy(() -> normalizationService.findOrCreate("Java")).isInstanceOf(IllegalStateException.class);
+
+        verify(tagRepository, times(2)).insertIfAbsent(any(UUID.class), anyString(), anyString(), any(LocalDateTime.class));
     }
 
     @Test

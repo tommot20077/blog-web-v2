@@ -40,6 +40,11 @@ import java.util.UUID;
 public class TagNormalizationServiceImpl implements TagNormalizationService {
 
     /**
+     * 建立標籤的最大嘗試次數：衝突後重讀不到既有標籤（對方剛建立的標籤又被刪除）時，整個流程重試一次
+     */
+    private static final int MAX_ATTEMPTS = 2;
+
+    /**
      * 標籤資料存取物件
      */
     private final TagRepository tagRepository;
@@ -66,29 +71,33 @@ public class TagNormalizationServiceImpl implements TagNormalizationService {
             throw new BusinessException(TagErrorCode.TAG_INVALID_NAME);
         }
 
-        Optional<Tag> existing = tagRepository.findBySlug(slug);
-        if (existing.isPresent()) {
-            return existing.get();
-        }
+        /* 衝突後重讀不到（對方剛建立的標籤又被刪掉）屬極罕見的競爭：重試整個流程一次，第二次仍失敗才拋例外 */
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            Optional<Tag> existing = tagRepository.findBySlug(slug);
+            if (existing.isPresent()) {
+                return existing.get();
+            }
 
-        UUID id = UUID.randomUUID();
-        LocalDateTime createdAt = LocalDateTime.now();
-        int inserted = tagRepository.insertIfAbsent(id, normalized, slug, createdAt);
-        if (inserted == 0) {
+            UUID id = UUID.randomUUID();
+            LocalDateTime createdAt = LocalDateTime.now();
+            int inserted = tagRepository.insertIfAbsent(id, normalized, slug, createdAt);
+            if (inserted > 0) {
+                Tag created = new Tag();
+                created.setId(id);
+                created.setName(normalized);
+                created.setSlug(slug);
+                created.setCreatedAt(createdAt);
+                redisTemplate.opsForZSet().add(RedisKeyConstant.TAG_AUTOCOMPLETE_KEY, slug, 0.0);
+                return created;
+            }
+
             /* 併發下別人先建立了同名／同 slug 的標籤（INSERT ... ON CONFLICT DO NOTHING 新增 0 列）：重讀既有標籤。
              * 衝突發生時對方交易必已提交（否則本次 INSERT 會等到對方結束），READ COMMITTED 下新的查詢讀得到。 */
-            return tagRepository.findBySlug(slug)
-                    .or(() -> tagRepository.findByName(normalized))
-                    .orElseThrow(() -> new IllegalStateException("標籤建立衝突後仍讀不到既有標籤 slug=" + slug));
+            Optional<Tag> winner = tagRepository.findBySlug(slug).or(() -> tagRepository.findByName(normalized));
+            if (winner.isPresent()) {
+                return winner.get();
+            }
         }
-
-        Tag created = new Tag();
-        created.setId(id);
-        created.setName(normalized);
-        created.setSlug(slug);
-        created.setCreatedAt(createdAt);
-        redisTemplate.opsForZSet().add(RedisKeyConstant.TAG_AUTOCOMPLETE_KEY, slug, 0.0);
-
-        return created;
+        throw new IllegalStateException("標籤建立衝突後仍讀不到既有標籤 slug=" + slug);
     }
 }

@@ -38,9 +38,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 進入失敗狀態，commit 時會拋例外，測試就會失敗。{@link CyclicBarrier} 讓兩個執行緒同時出發並重複多輪；
  * 正確實作在任何交錯下結果都相同，因此斷言不會是 flaky 的來源，舊實作則會在多輪中至少落敗一次。</p>
  *
- * <p>已知殘餘風險（不在本測試範圍，亦非本次引入）：兩個交易<b>以相反順序</b>同時建立同一組「全新」多個標籤，
- * 會互相等待對方尚未提交的 INSERT 而死結（PostgreSQL 40P01，其中一個交易被中止）；舊實作同樣有此情形。
- * 需要在 {@code TagFacade.findOrCreateTags} 以固定順序建立才能根治，另案處理。</p>
+ * <p>另一個與 RACE-08 同路徑的發文 500：兩個交易<b>以相反順序</b>同時建立同一組「全新」多個標籤，會互相等待對方
+ * 尚未提交的 INSERT 而死結（PostgreSQL 40P01，其中一個交易被中止）。{@code TagFacade.findOrCreateTags} 因此
+ * 依 slug 的固定順序建立標籤，見 {@link #findOrCreateTags_concurrentOppositeOrder_noDeadlock()}。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -49,7 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TagFindOrCreateRaceConditionIT extends TagCleanupITSupport {
 
     /** 併發案例重複的輪數 */
-    private static final int ROUNDS = 40;
+    private static final int ROUNDS = 60;
 
     @Autowired private TagNormalizationService normalizationService;
     @Autowired private TagFacade tagFacade;
@@ -133,6 +133,25 @@ class TagFindOrCreateRaceConditionIT extends TagCleanupITSupport {
             assertThat(results.get(0)).as("round %d", round).containsExactlyElementsOf(results.get(1));
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM tags WHERE name LIKE ?", Integer.class,
                     "race-f_-" + round)).as("round %d", round).isEqualTo(3);
+        }
+    }
+
+    @Test
+    @DisplayName("發文流程入口：兩個交易以相反順序帶著同一組全新標籤同時建立，不死結（40P01）、不失敗，回傳順序與各自請求一致")
+    void findOrCreateTags_concurrentOppositeOrder_noDeadlock() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            List<String> forward = List.of("race-oa-" + round, "race-ob-" + round, "race-oc-" + round);
+            List<String> backward = List.of(forward.get(2), forward.get(1), forward.get(0));
+
+            List<List<TagInfo>> results = runConcurrently(
+                    i -> () -> inTransaction(() -> tagFacade.findOrCreateTags(i == 0 ? forward : backward)));
+
+            assertThat(results.get(0)).as("round %d：順序同請求", round)
+                    .extracting(TagInfo::name).containsExactlyElementsOf(forward);
+            assertThat(results.get(1)).as("round %d：順序同請求", round)
+                    .extracting(TagInfo::name).containsExactlyElementsOf(backward);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM tags WHERE name LIKE ?", Integer.class,
+                    "race-o_-" + round)).as("round %d", round).isEqualTo(3);
         }
     }
 
