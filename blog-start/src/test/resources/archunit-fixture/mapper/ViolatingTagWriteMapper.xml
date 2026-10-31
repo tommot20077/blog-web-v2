@@ -10,6 +10,11 @@
 -->
 <mapper namespace="dowob.xyz.blog.module.article.mapper.ViolatingTagWriteMapper">
 
+    <!-- <sql> 片段內容含 DELETE，依內容判定為寫入——即使它只是共用片段 -->
+    <sql id="writeFragment">
+        DELETE FROM article_tags
+    </sql>
+
     <delete id="removeTags">
         DELETE FROM article_tags WHERE article_id = #{articleUuid}
     </delete>

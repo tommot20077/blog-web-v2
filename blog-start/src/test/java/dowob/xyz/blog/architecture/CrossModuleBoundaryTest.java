@@ -24,7 +24,6 @@ import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -53,8 +52,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       Spring Data JDBC {@code @Query}（帶 {@code @Modifying} 視為寫入）。模組以類別 package（XML 用 namespace）判定。</li>
  * </ul>
  *
- * <p><b>界限</b>：以 {@code FROM}／{@code JOIN}／{@code UPDATE}／{@code INTO}／{@code USING} 後緊接表名來認表，
- * 逗號式隱含 JOIN（{@code FROM a, users u}）與動態組字串的 SQL 認不出；{@code @SelectProvider} 等 provider
+ * <p><b>認表方式</b>：{@code FROM}／{@code JOIN}／{@code UPDATE}／{@code INTO}／{@code USING}／{@code TRUNCATE}
+ * 後緊接表名（容許 {@code public.} schema 與雙引號識別字），加上同一個 FROM 子句內逗號之後的表名
+ * （{@code FROM a, users u}）與 TRUNCATE 多表清單。{@code TRUNCATE} 一律視為寫入。
+ * XML 的 {@code <sql>} 共用片段依內容判定讀寫：含 insert／update／delete／truncate／merge 才算寫入。</p>
+ *
+ * <p><b>界限</b>：動態組字串的 SQL（執行期才拼表名）認不出；{@code @SelectProvider} 等 provider
  * 類標註不在掃描內。守衛擋的是常見寫法的回退，不是完整的 SQL 解析。</p>
  *
  * <p><b>annotation value 一律是陣列（重要更正）</b>：MyBatis 的 {@code @Select} /
@@ -109,32 +112,74 @@ class CrossModuleBoundaryTest {
     /** Spring Data JDBC 的 {@code @Modifying}（標在 {@code @Query} 方法上表示寫入） */
     private static final String SPRING_MODIFYING = "org.springframework.data.jdbc.repository.query.Modifying";
 
-    /** XML mapper 中承載 SQL 的元素 → 讀寫種類（{@code <sql>} 片段無法得知被誰引用，保守視為寫入） */
+    /**
+     * XML mapper 中承載 SQL 的元素 → 讀寫種類。{@code <sql>} 共用片段無法由元素本身得知被誰引用，
+     * 改依內容判定，見 {@link #SQL_FRAGMENT_WRITE}，所以不在此表。
+     */
     private static final Map<String, Access> XML_ELEMENTS = Map.of(
             "select", Access.READ,
             "insert", Access.WRITE,
             "update", Access.WRITE,
-            "delete", Access.WRITE,
-            "sql", Access.WRITE);
+            "delete", Access.WRITE);
+
+    /** {@code <sql>} 片段元素名 */
+    private static final String SQL_FRAGMENT_ELEMENT = "sql";
+
+    /**
+     * {@code <sql>} 片段含有這些寫入關鍵字才算寫入，否則算讀取（唯讀 JOIN tag 參照資料的共用片段才不會被誤判，
+     * Yuan 2026-10-31 決定）。含 {@code FOR UPDATE} 的片段會被保守地視為寫入。
+     */
+    private static final Pattern SQL_FRAGMENT_WRITE =
+            Pattern.compile("(?is)\\b(insert|update|delete|truncate|merge)\\b");
 
     /** 有 SQL 的業務模組（search、recommend 沒有自己的表與 SQL） */
     private static final Set<String> MODULES_WITH_SQL =
             Set.of("article", "comment", "file", "reading", "series", "tag", "user", "version");
 
     /**
-     * 表名 → 該表名的 SQL 比對 pattern（每個表各自一條，非硬編碼）。
+     * 表名 → 該表名的 SQL 比對 pattern（每個表各自一條組，非硬編碼）。
      *
-     * <p>要求 word boundary（{@code \b}）＋容許任意空白（含換行，SQL text block
-     * 常見寫法如 {@code FROM\n    articles}）＋可選 {@code public.} schema 前綴。
-     * {@code \b} 是防 false positive 的關鍵：{@code article_tags} /
-     * {@code article_categories} / {@code article_versions} 這些以 {@code article}
-     * 開頭但接底線的真實表名，不會被誤判為 {@code articles}。</p>
+     * <p>表參照寫成 {@code (?:"?public"?\.)?"?<表>"?(?![\w])}：schema 前綴與表名都容許可選的雙引號
+     * （{@code "users"}、{@code public."users"}、{@code "public"."users"}），結尾以 {@code (?![\w])} 而非 {@code \b}
+     * 收尾，才不會把 {@code users_count}、{@code articles_x} 誤判成 {@code users}／{@code articles}
+     * （底線是 word 字元，{@code article_tags} 同理不會被當成 {@code articles}）。</p>
+     *
+     * <p>每張表有三條 pattern，只要任一條命中就算存取：</p>
+     * <ol>
+     *   <li>主 pattern：{@code FROM／JOIN／UPDATE／INTO／USING／TRUNCATE [TABLE] [ONLY]} 後緊接表名；</li>
+     *   <li>逗號式 JOIN：同一個 FROM 子句內、出現在逗號之後（{@code FROM comments c, users u}）。
+     *       子句範圍 {@code [^;()]*?} 不跨分號與括號，並在遇到 {@code WHERE／GROUP／ORDER／HAVING／LIMIT／…}
+     *       等關鍵字時截斷，所以 {@code SELECT a, users_count FROM comments}（逗號在 FROM 之前）、
+     *       {@code IN (1, 2)}（括號內）與 {@code ORDER BY c.id, users_count}（子句已結束）都不會誤判；</li>
+     *   <li>TRUNCATE 多表：{@code TRUNCATE comments, users}。</li>
+     * </ol>
      */
-    private static final Map<String, Pattern> TABLE_PATTERNS = ModuleTableOwnership.OWNER_BY_TABLE.keySet().stream()
-            .collect(Collectors.toMap(
-                    table -> table,
-                    table -> Pattern.compile(
-                            "(?is)\\b(from|join|update|into|using)\\s+(public\\.)?" + Pattern.quote(table) + "\\b")));
+    private static final Map<String, TablePatterns> TABLE_PATTERNS = ModuleTableOwnership.OWNER_BY_TABLE.keySet().stream()
+            .collect(Collectors.toMap(table -> table, TablePatterns::of));
+
+    /** 逗號式 JOIN 的子句截斷關鍵字：遇到即視為 FROM 子句已結束 */
+    private static final String FROM_CLAUSE_STOP =
+            "(?:(?!\\b(?:where|group|order|having|limit|offset|union|intersect|except|window|fetch|returning|select|set)\\b)[^;()])*?";
+
+    /**
+     * 一張表的 SQL 比對 pattern 組。
+     *
+     * @param primary       {@code FROM／JOIN／UPDATE／INTO／USING} 後緊接表名
+     * @param truncate      {@code TRUNCATE [TABLE] [ONLY]} 後緊接表名
+     * @param commaJoin     同一個 FROM 子句內逗號之後的表名
+     * @param truncateList  TRUNCATE 多表清單中逗號之後的表名
+     */
+    private record TablePatterns(Pattern primary, Pattern truncate, Pattern commaJoin, Pattern truncateList) {
+
+        static TablePatterns of(String table) {
+            String ref = "(?:\"?public\"?\\.)?\"?" + Pattern.quote(table) + "\"?(?![\\w])";
+            return new TablePatterns(
+                    Pattern.compile("(?is)\\b(?:from|join|update|into|using)\\s+" + ref),
+                    Pattern.compile("(?is)\\btruncate\\s+(?:table\\s+)?(?:only\\s+)?" + ref),
+                    Pattern.compile("(?is)\\bfrom\\s+" + FROM_CLAUSE_STOP + ",\\s*" + ref),
+                    Pattern.compile("(?is)\\btruncate\\s+" + FROM_CLAUSE_STOP + ",\\s*" + ref));
+        }
+    }
 
     /** SQL 的讀寫種類 */
     private enum Access { READ, WRITE }
@@ -182,7 +227,7 @@ class CrossModuleBoundaryTest {
         sources.addAll(xmlSources(PRODUCTION_MAPPER_XML));
         Map<String, Set<String>> ownTablesHitByModule = new HashMap<>();
         for (SqlSource source : sources) {
-            for (String table : touchedTables(source.sql())) {
+            for (String table : touchedTables(source.sql()).keySet()) {
                 if (ModuleTableOwnership.OWNER_BY_TABLE.get(table).equals(source.module())) {
                     ownTablesHitByModule.computeIfAbsent(source.module(), m -> new TreeSet<>()).add(table);
                 }
@@ -224,6 +269,14 @@ class CrossModuleBoundaryTest {
                         "[article] " + fx("article.mapper.ArticleUsersJoinMapper") + "#joinUsers -> users",
                         "[article] " + fx("article.mapper.ArticleTagWriterMapper") + "#insertArticleTag -> article_tags",
                         "[article] " + fx("article.mapper.ArticleTagWriterMapper") + "#deleteTag -> tags",
+                        "[article] " + fx("article.mapper.ArticleTagWriterMapper") + "#truncateDisguisedAsSelect -> article_tags",
+                        "[comment] " + fx("comment.mapper.CommentSqlSyntaxMapper") + "#commaJoin -> users",
+                        "[comment] " + fx("comment.mapper.CommentSqlSyntaxMapper") + "#commaJoinThird -> users",
+                        "[comment] " + fx("comment.mapper.CommentSqlSyntaxMapper") + "#quotedTable -> users",
+                        "[comment] " + fx("comment.mapper.CommentSqlSyntaxMapper") + "#quotedTableWithSchema -> users",
+                        "[comment] " + fx("comment.mapper.CommentSqlSyntaxMapper") + "#fullyQuoted -> users",
+                        "[comment] " + fx("comment.mapper.CommentSqlSyntaxMapper") + "#truncateTable -> users",
+                        "[comment] " + fx("comment.mapper.CommentSqlSyntaxMapper") + "#truncateList -> users",
                         "[reading] " + fx("reading.mapper.ReadingVersionTableMapper") + "#readPreferences -> user_preferences");
     }
 
@@ -315,11 +368,14 @@ class CrossModuleBoundaryTest {
 
         assertThat(violations)
                 .as("守衛若抓不到已知違規，正向掃描為空就沒有意義——這正是 29a1000 修過的靜默假陰性形態。"
-                  + "CompliantArticleMapper（article 查自己的 articles、唯讀 JOIN tags）與 CompliantUserMapper（user 讀寫 users）不得出現")
+                  + "CompliantArticleMapper（article 查自己的 articles、唯讀 JOIN tags）、CompliantArticleSqlFragmentMapper"
+                  + "（article 的唯讀 <sql> 片段 JOIN tags）與 CompliantUserMapper（user 讀寫 users）不得出現")
                 .containsExactlyInAnyOrder(
                         "[series] ViolatingSeriesMapper.xml#countPublishedArticles -> articles",
                         "[article] ViolatingUsersJoinMapper.xml#findWithAuthor -> users",
-                        "[article] ViolatingTagWriteMapper.xml#removeTags -> article_tags");
+                        "[article] ViolatingTagWriteMapper.xml#removeTags -> article_tags",
+                        "[article] ViolatingTagWriteMapper.xml#writeFragment -> article_tags",
+                        "[comment] ViolatingCommentSqlFragmentMapper.xml#tagJoin -> tags");
     }
 
     // ─── 判定邏輯 ───
@@ -333,21 +389,31 @@ class CrossModuleBoundaryTest {
     private static List<String> findViolations(List<SqlSource> sources) {
         Set<String> violations = new TreeSet<>();
         for (SqlSource source : sources) {
-            for (String table : touchedTables(source.sql())) {
-                if (!ModuleTableOwnership.mayAccess(source.module(), table, source.access() == Access.READ)) {
+            touchedTables(source.sql()).forEach((table, truncated) -> {
+                boolean readOnly = source.access() == Access.READ && !truncated;
+                if (!ModuleTableOwnership.mayAccess(source.module(), table, readOnly)) {
                     violations.add("[" + source.module() + "] " + source.location() + " -> " + table);
                 }
-            }
+            });
         }
         return List.copyOf(violations);
     }
 
-    /** SQL 文字中以 FROM／JOIN／UPDATE／INTO／USING 存取的、已登記於對照表的表。 */
-    private static Set<String> touchedTables(String sql) {
-        Set<String> tables = new LinkedHashSet<>();
-        TABLE_PATTERNS.forEach((table, pattern) -> {
-            if (pattern.matcher(sql).find()) {
-                tables.add(table);
+    /**
+     * SQL 文字存取的、已登記於對照表的表，及其是否被 TRUNCATE（TRUNCATE 一律視為寫入，不論 SQL 標在哪種標註上）。
+     *
+     * @param sql SQL 文字
+     * @return 表名 → 是否被 TRUNCATE
+     */
+    private static Map<String, Boolean> touchedTables(String sql) {
+        Map<String, Boolean> tables = new java.util.LinkedHashMap<>();
+        TABLE_PATTERNS.forEach((table, patterns) -> {
+            boolean truncated = patterns.truncate().matcher(sql).find() || patterns.truncateList().matcher(sql).find();
+            boolean touched = truncated
+                    || patterns.primary().matcher(sql).find()
+                    || patterns.commaJoin().matcher(sql).find();
+            if (touched) {
+                tables.put(table, truncated);
             }
         });
         return tables;
@@ -425,10 +491,15 @@ class CrossModuleBoundaryTest {
             Matcher matcher = MODULE_OF_NAME.matcher(namespace);
             String module = matcher.find() ? matcher.group(1) : UNKNOWN_MODULE;
             for (Node child = mapper.getFirstChild(); child != null; child = child.getNextSibling()) {
-                if (child instanceof Element element && XML_ELEMENTS.containsKey(element.getTagName())) {
+                if (child instanceof Element element
+                        && (XML_ELEMENTS.containsKey(element.getTagName())
+                        || SQL_FRAGMENT_ELEMENT.equals(element.getTagName()))) {
+                    String text = element.getTextContent();
+                    Access access = SQL_FRAGMENT_ELEMENT.equals(element.getTagName())
+                            ? (SQL_FRAGMENT_WRITE.matcher(text).find() ? Access.WRITE : Access.READ)
+                            : XML_ELEMENTS.get(element.getTagName());
                     sources.add(new SqlSource("xml:<" + element.getTagName() + ">", module,
-                            resource.getFilename() + "#" + element.getAttribute("id"),
-                            XML_ELEMENTS.get(element.getTagName()), element.getTextContent()));
+                            resource.getFilename() + "#" + element.getAttribute("id"), access, text));
                 }
             }
         }
