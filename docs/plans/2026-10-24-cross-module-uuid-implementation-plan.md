@@ -529,6 +529,7 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 ③ IT：以 information_schema 斷言沒有跨模組 FK——模組→表的對照表在本 Task 重寫為完整版（現行 CrossModuleBoundaryTest 的
    BUSINESS_TABLE_OWNERS 只有 articles、comments 兩張表；需涵蓋所有業務表，含 user_preferences 屬 version）
 ④ 新增守衛：除 user 模組外，mapper SQL 不得 JOIN／FROM users（現行守衛 #5 豁免 users）
+   （Yuan 2026-10-31：`tags`／`article_tags` 維持 reference data，守衛明文允許 article 模組 JOIN；拆服務時再改 TagFacade）
 ⑤ pom 守衛：`blog-module-*/pom.xml` 不得以 compile scope 依賴其他 `blog-module-*`（test scope 另列；T0a-7 審查建議——跨模組引用連編譯都過不了，常數內聯盲點自然消失）
 每條都要有反向驗證 fixture。
 【驗收條件】守衛全綠；反向驗證各附一次紅燈輸出
@@ -542,6 +543,7 @@ comment、series、version 的授權判斷用 `article.authorId().equals(userId)
 【目標與動機】設計 §6。所有 consumer 已冪等。依 findings 順序：PERF-15（手刻 container factory 使 spring.rabbitmq.listener.simple.* 失效）
 → ARCH-02＋PERF-30（retry interceptor 是死碼；修活時必須設 concurrency，避免單一訊息卡住整條 queue）。
 - ConsumerExecutor 改為拋例外交由 retry interceptor 處理
+- 寄信類 consumer（`EmailVerificationConsumer`、`PasswordResetConsumer`，無資料庫業務寫入）：Yuan 2026-10-31 決定改為**寄信成功後才標記**（寄信失敗會重試、可能重寄同一連結；DLQ 人工重投可補寄）
 - **冪等順序**：現行 IdempotencyService.markProcessed 是「先標記（REQUIRES_NEW 即時提交）再處理」——直接套重試會讓第一次失敗的訊息
   在重試時被判「已處理」而遺失。改為：**`processed_events` 的寫入與業務寫入在同一個資料庫交易中**（業務失敗 → 標記一起 rollback；
   標記與業務一起 commit → 重送必被跳過），冪等檢查集中在 ConsumerExecutor。業務不寫資料庫的 consumer（例如只寫 ES、Redis）在回報中逐一列出並說明重複處理的影響
