@@ -222,12 +222,14 @@ class ArticleControllerIT {
     /**
      * 每次測試後清理文章資料
      *
-     * <p>先刪文章（article_tags / article_categories 隨 CASCADE 清除），再刪列表篩選情境建立的
-     * 標籤與分類——article_tags.tag_id 無 CASCADE，順序不可顛倒。</p>
+     * <p>先刪文章（article_categories 隨 CASCADE 清除），再刪列表篩選情境建立的標籤與分類。
+     * V33 起 article_tags.article_id 沒有指向 articles 的 FK（刪文章不再 CASCADE 清除關聯，改由 tag 模組的事件 consumer
+     * 負責，本測試不載入它），而 article_tags.tag_id 無 CASCADE——所以刪標籤前要先顯式清掉其關聯列，順序不可顛倒。</p>
      */
     @AfterEach
     void cleanUp() {
         articleRepository.deleteAll();
+        jdbcTemplate.update("DELETE FROM article_tags WHERE tag_id IN (SELECT id FROM tags WHERE slug LIKE 'it-list-%')");
         jdbcTemplate.update("DELETE FROM tags WHERE slug LIKE 'it-list-%'");
         jdbcTemplate.update("DELETE FROM categories WHERE slug LIKE 'it-list-%'");
     }

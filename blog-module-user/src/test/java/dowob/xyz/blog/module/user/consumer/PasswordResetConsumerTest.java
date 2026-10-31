@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.user.consumer;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
@@ -14,6 +15,7 @@ import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.Logger;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,20 +27,28 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
  * {@link PasswordResetConsumer} 單元測試
  *
- * <p>驗證消費者在處理密碼重設事件後，是否正確呼叫 Manual Ack。</p>
+ * <p>驗證消費者在處理密碼重設事件後，是否正確呼叫 Manual Ack。M8 起事件帶 {@code userUuid} 與
+ * {@code eventId}，consumer 以 {@link IdempotencyService}（依 eventId）去重，避免同一事件重送時
+ * 重寄重設密碼信；舊格式 in-flight 訊息（{@code eventId} 為 null）照常寄送。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PasswordResetConsumer 單元測試")
@@ -60,6 +70,33 @@ class PasswordResetConsumerTest {
     @Mock
     private UserMailService userMailService;
 
+    /** Mock 冪等服務（預設視為第一次處理） */
+    @Mock
+    private IdempotencyService idempotencyService;
+
+    /** 測試用事件 dedup key */
+    private static final UUID EVENT_ID = UUID.fromString("aaaaaaaa-0000-4000-8000-000000000011");
+
+    /** 測試用使用者 uuid（與任何 Long 主鍵無數值關聯） */
+    private static final UUID USER_UUID = UUID.fromString("bbbbbbbb-0000-4000-8000-000000000012");
+
+    /**
+     * 預設第一次處理（markProcessed 回 true）。
+     */
+    @BeforeEach
+    void setUp() {
+        lenient().when(idempotencyService.markProcessed(any(), anyString())).thenReturn(true);
+    }
+
+    /**
+     * 建立帶 eventId 與 userUuid 的測試事件。
+     *
+     * @return 新格式的密碼重設申請事件
+     */
+    private static UserPasswordResetRequestedEvent event() {
+        return new UserPasswordResetRequestedEvent(EVENT_ID, USER_UUID, "test@example.com", "reset-token-abc");
+    }
+
     /**
      * 驗證成功處理事件後，basicAck 被正確呼叫
      *
@@ -69,7 +106,7 @@ class PasswordResetConsumerTest {
     @DisplayName("處理密碼重設事件後應呼叫 basicAck")
     void handlePasswordResetRequested_success_acksMessage() throws IOException {
         UserPasswordResetRequestedEvent event =
-                new UserPasswordResetRequestedEvent(1L, "test@example.com", "reset-token-abc");
+                event();
         long deliveryTag = 42L;
 
         consumer.handlePasswordResetRequested(event, channel, deliveryTag);
@@ -87,7 +124,7 @@ class PasswordResetConsumerTest {
     @DisplayName("寄送密碼重設信失敗時呼叫 basicNack")
     void handlePasswordResetRequested_onMailFailure_callsBasicNack() throws IOException {
         UserPasswordResetRequestedEvent event =
-                new UserPasswordResetRequestedEvent(1L, "test@example.com", "reset-token-abc");
+                event();
         long deliveryTag = 88L;
 
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendPasswordResetEmail(event);
@@ -107,7 +144,7 @@ class PasswordResetConsumerTest {
     @DisplayName("basicAck 失敗時呼叫 basicNack")
     void handlePasswordResetRequested_onAckFailure_callsBasicNack() throws IOException {
         UserPasswordResetRequestedEvent event =
-                new UserPasswordResetRequestedEvent(1L, "test@example.com", "reset-token-abc");
+                event();
         long deliveryTag = 99L;
 
         doThrow(new IOException("ACK failed")).when(channel).basicAck(deliveryTag, false);
@@ -126,7 +163,7 @@ class PasswordResetConsumerTest {
     @DisplayName("handlePasswordResetRequested：成功時 ConsumerExecutor 計入 processed 指標")
     void handlePasswordResetRequested_success_recordsProcessedMetric() throws Exception {
         UserPasswordResetRequestedEvent event =
-                new UserPasswordResetRequestedEvent(1L, "test@example.com", "reset-token-abc");
+                event();
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -149,7 +186,7 @@ class PasswordResetConsumerTest {
     @DisplayName("handlePasswordResetRequested：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
     void handlePasswordResetRequested_onFailure_recordsMetricsAndLogsContext() throws Exception {
         UserPasswordResetRequestedEvent event =
-                new UserPasswordResetRequestedEvent(1L, "test@example.com", "reset-token-abc");
+                event();
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendPasswordResetEmail(event);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
@@ -161,12 +198,85 @@ class PasswordResetConsumerTest {
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
-                        .contains("userId=1");
+                        .contains("userUuid=" + USER_UUID)
+                        .contains("eventId=" + EVENT_ID);
             });
         } finally {
             Metrics.removeRegistry(registry);
             registry.close();
         }
+    }
+
+    /**
+     * 情境：同一事件重送（markProcessed 回 false）→ 不重寄重設密碼信，但仍 ack（不進 DLQ）
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handlePasswordResetRequested：eventId 已處理過（重送）→ 不重寄重設密碼信，仍 ack")
+    void handlePasswordResetRequested_duplicateEventId_skipsMailButAcks() throws IOException {
+        when(idempotencyService.markProcessed(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME)).thenReturn(false);
+
+        consumer.handlePasswordResetRequested(event(), channel, 11L);
+
+        verify(userMailService, never()).sendPasswordResetEmail(any());
+        verify(channel).basicAck(11L, false);
+        verify(channel, never()).basicNack(eq(11L), eq(false), eq(false));
+    }
+
+    /**
+     * 情境：第一次處理 → 以 eventId 與 CONSUMER_NAME 標記並寄信
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handlePasswordResetRequested：第一次處理 → 以 (eventId, CONSUMER_NAME) 標記後寄信")
+    void handlePasswordResetRequested_firstDelivery_marksEventIdThenSends() throws IOException {
+        consumer.handlePasswordResetRequested(event(), channel, 12L);
+
+        verify(idempotencyService).markProcessed(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME);
+        verify(userMailService).sendPasswordResetEmail(event());
+        verify(channel).basicAck(12L, false);
+    }
+
+    /**
+     * 情境：舊格式 in-flight 訊息（eventId、userUuid 皆為 null）→ 不去重，照常寄信並 ack
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handlePasswordResetRequested：舊格式訊息（eventId 為 null）→ 不呼叫冪等服務，照常寄信並 ack")
+    void handlePasswordResetRequested_legacyMessageWithoutEventId_sendsWithoutDedup() throws IOException {
+        UserPasswordResetRequestedEvent legacy =
+                new UserPasswordResetRequestedEvent(null, null, "test@example.com", "reset-token-abc");
+
+        consumer.handlePasswordResetRequested(legacy, channel, 13L);
+
+        verifyNoInteractions(idempotencyService);
+        verify(userMailService).sendPasswordResetEmail(legacy);
+        verify(channel).basicAck(13L, false);
+    }
+
+    /**
+     * 情境：重複事件被跳過時，營運端必須看得到（INFO，帶 eventId、userUuid 與「重複事件已跳過」），
+     * 否則 DLQ 人工重投或 ack 前當機造成的重投被靜默吞掉，無從追查。
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handlePasswordResetRequested：重複事件被跳過時以 INFO 記錄 eventId、userUuid 與「重複事件已跳過」")
+    void handlePasswordResetRequested_duplicateEventId_logsSkipAtInfo() throws Exception {
+        when(idempotencyService.markProcessed(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME)).thenReturn(false);
+
+        List<LogEvent> logs = captureLogsOf(PasswordResetConsumer.class, () -> consumer.handlePasswordResetRequested(event(), channel, 14L));
+
+        assertThat(logs).anySatisfy(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.INFO);
+            assertThat(e.getMessage().getFormattedMessage())
+                    .contains("重複事件已跳過")
+                    .contains("eventId=" + EVENT_ID)
+                    .contains("userUuid=" + USER_UUID);
+        });
     }
 
     /**
@@ -190,9 +300,21 @@ class PasswordResetConsumerTest {
      * @throws Exception 動作拋出的例外
      */
     private static List<LogEvent> captureExecutorLogs(ThrowingRunnable action) throws Exception {
+        return captureLogsOf(ConsumerExecutor.class, action);
+    }
+
+    /**
+     * 執行動作並捕捉指定類別的 logger 輸出的日誌事件。
+     *
+     * @param source 日誌來源類別
+     * @param action 要執行的動作
+     * @return 捕捉到的日誌事件
+     * @throws Exception 動作拋出的例外
+     */
+    private static List<LogEvent> captureLogsOf(Class<?> source, ThrowingRunnable action) throws Exception {
         CapturingAppender appender = new CapturingAppender();
         appender.start();
-        Logger logger = (Logger) LogManager.getLogger(ConsumerExecutor.class);
+        Logger logger = (Logger) LogManager.getLogger(source);
         logger.addAppender(appender);
         try {
             action.run();

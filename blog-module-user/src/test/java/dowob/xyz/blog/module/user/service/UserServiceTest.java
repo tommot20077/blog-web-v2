@@ -183,6 +183,40 @@ class UserServiceTest {
     }
 
     /**
+     * 驗證：先查通過、寫入（UPDATE）時撞到 nickname 唯一約束（併發改成同一暱稱落敗）→ NICKNAME_DUPLICATED。
+     */
+    @Test
+    @DisplayName("updateProfile → 寫入撞 uq_users_nickname（併發落敗）→ 拋 NICKNAME_DUPLICATED")
+    void updateProfile_nicknameUniqueViolationOnSave_throwsNicknameDuplicated() {
+        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(buildActiveUser()));
+        when(userRepository.existsByNickname("contested")).thenReturn(false);
+        when(userRepository.save(any(User.class))).thenThrow(new org.springframework.dao.DuplicateKeyException(
+                "update users failed", new java.sql.SQLException(
+                "ERROR: duplicate key value violates unique constraint \"uq_users_nickname\"\n"
+                        + "  Detail: Key (nickname)=(contested) already exists.", "23505")));
+
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, "contested", null, null, null, null, null))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
+    }
+
+    /**
+     * 驗證：寫入時的其他錯誤（含不認得的約束）不被吞掉，原例外照常拋出。
+     */
+    @Test
+    @DisplayName("updateProfile → 寫入撞到不認得的約束或其他錯誤 → 原例外照常拋出")
+    void updateProfile_unknownFailureOnSave_rethrowsOriginal() {
+        when(userRepository.findById(TEST_USER_ID)).thenReturn(Optional.of(buildActiveUser()));
+        org.springframework.dao.DuplicateKeyException unknown = new org.springframework.dao.DuplicateKeyException(
+                "update users failed", new java.sql.SQLException(
+                "ERROR: duplicate key value violates unique constraint \"users_email_key\"", "23505"));
+        when(userRepository.save(any(User.class))).thenThrow(unknown);
+
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_ID, TEST_NICKNAME, null, null, null, null, null))
+                .isSameAs(unknown);
+    }
+
+    /**
      * 驗證：updateProfile 在用戶不存在時應拋出 USER_NOT_FOUND BusinessException。
      */
     @Test

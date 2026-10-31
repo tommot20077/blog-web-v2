@@ -132,6 +132,8 @@ class ArticleFacadeReadingUuidIT {
     void cleanUp() {
         SecurityContextHolder.clearContext();
         insertedArticles.forEach(uuid -> jdbcTemplate.update("DELETE FROM articles WHERE uuid = ?", uuid));
+        /* V33 起刪文章不再 CASCADE 清除 article_tags（FK 已移除），刪標籤前先顯式清掉其關聯列 */
+        insertedTags.forEach(id -> jdbcTemplate.update("DELETE FROM article_tags WHERE tag_id = ?", id));
         insertedTags.forEach(id -> jdbcTemplate.update("DELETE FROM tags WHERE id = ?", id));
         insertedUsers.forEach(id -> jdbcTemplate.update("DELETE FROM users WHERE id = ?", id));
         insertedArticles.clear();
