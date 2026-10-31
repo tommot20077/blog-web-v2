@@ -23,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -204,6 +205,112 @@ class AuthServiceTest {
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
+    }
+
+    /* ---- RACE-02／RACE-03：併發註冊撞到唯一約束，轉成與依序第二次註冊相同的業務錯誤碼 ---- */
+
+    /**
+     * 建立與 PostgreSQL JDBC 驅動訊息格式相同的唯一約束違反例外（Spring 翻譯後的 DuplicateKeyException）。
+     *
+     * @param constraint 約束名稱
+     * @return 模擬寫入 users 時撞到唯一約束的例外
+     */
+    private static DuplicateKeyException uniqueViolationOn(String constraint) {
+        return new DuplicateKeyException("insert users failed", new java.sql.SQLException(
+                "ERROR: duplicate key value violates unique constraint \"" + constraint + "\"\n"
+                        + "  Detail: Key already exists.", "23505"));
+    }
+
+    /**
+     * 讓寫入交易拋出指定例外（模擬 users INSERT 在交易內撞到約束）。
+     *
+     * @param failure 要拋出的例外
+     */
+    private void failTransactionWith(RuntimeException failure) {
+        doThrow(failure).when(transactionTemplate).execute(any());
+    }
+
+    /**
+     * 驗證：先查通過、寫入時撞到 email 唯一約束 → EMAIL_DUPLICATED，且不發任何事件。
+     */
+    @Test
+    @DisplayName("register → 寫入撞 users_email_key（併發落敗）→ 拋 EMAIL_DUPLICATED，不發事件")
+    void register_emailUniqueViolationOnInsert_throwsEmailDuplicated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        failTransactionWith(uniqueViolationOn("users_email_key"));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.EMAIL_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：寫入時撞到 username 唯一約束 → USERNAME_DUPLICATED。
+     */
+    @Test
+    @DisplayName("register → 寫入撞 users_username_key（併發落敗）→ 拋 USERNAME_DUPLICATED")
+    void register_usernameUniqueViolationOnInsert_throwsUsernameDuplicated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        failTransactionWith(uniqueViolationOn("users_username_key"));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.USERNAME_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：寫入時撞到 nickname 唯一約束 → NICKNAME_DUPLICATED。
+     */
+    @Test
+    @DisplayName("register → 寫入撞 uq_users_nickname（併發落敗）→ 拋 NICKNAME_DUPLICATED")
+    void register_nicknameUniqueViolationOnInsert_throwsNicknameDuplicated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        failTransactionWith(uniqueViolationOn("uq_users_nickname"));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：被包在其他例外內（Spring Data JDBC 的 DbActionExecutionException 形式）也能判讀。
+     */
+    @Test
+    @DisplayName("register → 唯一約束例外被包在一般 RuntimeException 內也能轉成業務錯誤碼")
+    void register_wrappedUniqueViolation_stillTranslated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        failTransactionWith(new RuntimeException("Failed to execute DbAction.InsertRoot",
+                uniqueViolationOn("users_email_key")));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.EMAIL_DUPLICATED.getCode()));
+    }
+
+    /**
+     * 驗證：不認得的約束（或非約束錯誤）不被吞掉，原例外照常往外拋（維持 500，不錯誤標示成使用者可修正的重複）。
+     */
+    @Test
+    @DisplayName("register → 撞到不認得的約束，或非唯一約束錯誤 → 原例外照常拋出，不轉成業務錯誤")
+    void register_unknownConstraintOrOtherFailure_rethrowsOriginal() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        DuplicateKeyException unknown = uniqueViolationOn("verification_tokens_token_key");
+        failTransactionWith(unknown);
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isSameAs(unknown);
+
+        IllegalStateException other = new IllegalStateException("db down");
+        failTransactionWith(other);
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isSameAs(other);
     }
 
     /**

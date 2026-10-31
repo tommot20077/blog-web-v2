@@ -91,6 +91,17 @@ public class AuthService {
      * {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。此限流與信箱/用戶名唯一性檢查獨立，
      * 用於抑制單一 IP 大量建立假帳號。{@code clientIp} 為 null 時跳過 IP 限流。</p>
      *
+     * <p><b>併發註冊（RACE-02／RACE-03）</b>：{@code exists*} 先查只是快速路徑；兩個併發請求可能都先通過先查，
+     * 此時由 DB 唯一約束兜底——寫入撞到 {@code users_email_key}／{@code users_username_key}／
+     * {@code uq_users_nickname} 時，依約束名稱轉成 {@link UserErrorCode#EMAIL_DUPLICATED}／
+     * {@link UserErrorCode#USERNAME_DUPLICATED}／{@link UserErrorCode#NICKNAME_DUPLICATED}，
+     * 對外行為（狀態碼、錯誤碼）與「依序第二次註冊」完全一致，不再是 500。
+     * 若多條約束同時違反，回哪一個取決於 PostgreSQL 檢查唯一索引的順序（email、username、nickname），
+     * 與依序註冊的先查順序相同。</p>
+     *
+     * <p>註：Q8（email 重複一律回成功並寄通知信，避免帳號枚舉）不在此處理；
+     * 之後另案改寫時，{@code EMAIL_DUPLICATED} 的轉換須一併調整。</p>
+     *
      * @param email    電子信箱
      * @param password 明文密碼
      * @param username 用戶名（唯一登入識別符）
@@ -123,22 +134,31 @@ public class AuthService {
         user.setStatus(UserStatus.PENDING_VERIFICATION);
         user.setTokenVersion("v1");
 
-        /** DB 操作（save user + save verificationToken）在同一個 transaction 內 */
+        /**
+         * DB 操作（save user + save verificationToken）在同一個 transaction 內。
+         * users 的 INSERT 是交易內第一個寫入：撞到唯一約束時例外立即中止交易（之後不再執行任何 SQL），
+         * 在交易之外轉成業務錯誤碼（RACE-02／RACE-03）。
+         */
         String tokenValue = UUID.randomUUID().toString();
         String verificationCode = generateVerificationCode();
-        User savedUser = transactionTemplate.execute(status -> {
-            User saved = userRepository.save(user);
+        User savedUser;
+        try {
+            savedUser = transactionTemplate.execute(status -> {
+                User saved = userRepository.save(user);
 
-            VerificationToken verificationToken = new VerificationToken();
-            verificationToken.setUserId(saved.getId());
-            verificationToken.setToken(tokenValue);
-            verificationToken.setType("EMAIL_VERIFICATION");
-            verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
-            verificationToken.setCreatedAt(LocalDateTime.now());
-            verificationTokenRepository.save(verificationToken);
+                VerificationToken verificationToken = new VerificationToken();
+                verificationToken.setUserId(saved.getId());
+                verificationToken.setToken(tokenValue);
+                verificationToken.setType("EMAIL_VERIFICATION");
+                verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
+                verificationToken.setCreatedAt(LocalDateTime.now());
+                verificationTokenRepository.save(verificationToken);
 
-            return saved;
-        });
+                return saved;
+            });
+        } catch (RuntimeException e) {
+            throw translateRegistrationConflict(e);
+        }
 
         /** DB 已 commit，best-effort 發 MQ（失敗不影響註冊結果） */
         saveEmailVerificationCode(savedUser.getEmail(), verificationCode);
@@ -151,6 +171,31 @@ public class AuthService {
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * 將註冊寫入時的例外轉成業務例外。
+     *
+     * <p>只轉換「users 的 email／username／nickname 唯一約束」；撞到其他約束（例如
+     * {@code verification_tokens} 的 token 唯一約束）或非約束錯誤時原樣回傳，維持原本的錯誤處理（500），
+     * 不把真正的系統錯誤誤標成使用者可修正的重複。</p>
+     *
+     * @param failure 交易內拋出的例外
+     * @return 對應的 {@link BusinessException}；不認得的例外則原樣回傳
+     */
+    private RuntimeException translateRegistrationConflict(RuntimeException failure) {
+        String constraint = UniqueConstraintViolations.constraintNameOf(failure).orElse("");
+        UserErrorCode errorCode = switch (constraint) {
+            case UniqueConstraintViolations.USERS_EMAIL -> UserErrorCode.EMAIL_DUPLICATED;
+            case UniqueConstraintViolations.USERS_USERNAME -> UserErrorCode.USERNAME_DUPLICATED;
+            case UniqueConstraintViolations.USERS_NICKNAME -> UserErrorCode.NICKNAME_DUPLICATED;
+            default -> null;
+        };
+        if (errorCode == null) {
+            return failure;
+        }
+        log.info("註冊併發落敗：寫入撞到唯一約束 {}，回 {}", constraint, errorCode.getCode());
+        return new BusinessException(errorCode);
     }
 
     /**

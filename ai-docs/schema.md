@@ -1,8 +1,8 @@
 # Database Schema（PostgreSQL）
 
-> **真相來源**：本文件描述套用所有 migrations V1–V31 後的當前 DB schema。
+> **真相來源**：本文件描述套用所有 migrations V1–V34 後的當前 DB schema。
 > **維護規則**：每次新增 Flyway migration 都必須同步更新此文件（詳見 CLAUDE.md §Schema Maintenance）。
-> 最後更新版本：**V31**
+> 最後更新版本：**V34**
 
 ---
 
@@ -24,7 +24,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 | uuid | UUID | NOT NULL UNIQUE DEFAULT uuid_generate_v4() | 對外公開識別碼 |
 | email | VARCHAR(255) | NOT NULL UNIQUE | |
 | password_hash | VARCHAR(255) | NOT NULL | bcrypt 雜湊 |
-| nickname | VARCHAR(50) | NOT NULL | |
+| nickname | VARCHAR(50) | NOT NULL | V34 起 UNIQUE（`uq_users_nickname`）：精確比對（區分大小寫）、含軟刪除（DELETED）使用者，與應用層 `existsByNickname` 一致 |
 | username | VARCHAR(50) | NOT NULL UNIQUE DEFAULT '' | V3 新增 |
 | avatar_url | VARCHAR(512) | | |
 | bio | TEXT | | |
@@ -48,6 +48,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `users_uuid_key`（auto, UNIQUE）on uuid
 - `users_email_key`（auto, UNIQUE）on email
 - `users_username_key`（auto, UNIQUE）on username
+- `uq_users_nickname`（UNIQUE constraint，V34, RACE-02）on nickname — 兜底併發註冊／改名產生的重複暱稱；寫入撞此約束時應用層轉成 `NICKNAME_DUPLICATED`。`users_email_key`／`users_username_key` 同樣在併發註冊時由應用層依約束名稱轉成 `EMAIL_DUPLICATED`／`USERNAME_DUPLICATED`（RACE-03）
 
 **Foreign keys:** 無（被其他表參照）
 
@@ -560,6 +561,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V30** | DROP 舊 `files` 表（V1 建立、V8 起被 `file_metadata` 取代，無任何程式碼讀寫；連帶移除 `files_pkey`／`files_uuid_key`／`files_storage_key_key`／`idx_files_uploader`／`idx_files_reference` 與 `uploader_id` → `users(id)` 的 FK）。設計 §4「Migration 授權」明列整張 DROP；`file_metadata` 不動（`uploader_id` 本來就是 UUID，`article_uuid` 依 V20 刻意無 FK） |
 | **V31** | 跨模組識別全面改 UUID（article 模組，作者維度）：`articles` 新增 `author_uuid UUID`，由 `users.uuid` 回填後 `SET NOT NULL`（找不到作者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `author_id`（連帶移除 `articles_author_id_fkey` → `users(id)` 與 `idx_articles_author_id` (author_id)）；以同名在 `author_uuid` 上重建 `idx_articles_author_id`。新 uuid 欄位不建 FK；`articles.series_id` → `series(id)` ON DELETE SET NULL 是系列維度，到 M6-b 才動。使用者只做軟刪除，不新增連動 |
 | **V32** | 跨模組識別全面改 UUID（article 模組，系列維度，M6 完成）：`articles` 新增 `series_uuid UUID`，由 `series.uuid` 回填（`series_id` 為 NULL 者維持 NULL；`series_id` 非 NULL 卻找不到系列時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `series_id`（連帶移除 `articles_series_id_fkey` → `series(id)` ON DELETE SET NULL 與 partial index `idx_articles_series_position` (series_id, series_position)）；以同名在 (series_uuid, series_position) 上重建 partial index（WHERE series_uuid IS NOT NULL）。`series_uuid` 維持可 NULL、**不建 FK**；`series_position` 不動。刪除連動改由 article 訂閱 `SeriesDeletedEvent`（queue `article.series-deleted`）清空 `series_uuid`／`series_position`，並以每日校正排程兜底。至此 `articles` 沒有任何跨模組 FK |
+| **V34** | RACE-02（M8，user 階段）：`users` 新增 UNIQUE 約束 `uq_users_nickname` (nickname)。比對語意與應用層 `existsByNickname` 一致（精確比對、含軟刪除者，不加 lower()／不排除 DELETED）。遷移前先檢查既有重複：有重複 → `RAISE EXCEPTION` 列出重複的暱稱與筆數、**不修改任何資料**（需人工處理後再遷移）。應用層保留 `existsByNickname` 先查作為快速路徑，註冊與改名寫入時撞到 `uq_users_nickname` 轉成 `NICKNAME_DUPLICATED`；註冊撞 `users_email_key`／`users_username_key` 轉成 `EMAIL_DUPLICATED`／`USERNAME_DUPLICATED`（RACE-03，無 schema 變動） |
 
 ---
 
