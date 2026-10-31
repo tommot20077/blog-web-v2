@@ -1,6 +1,5 @@
 package dowob.xyz.blog.infrastructure.mq;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
@@ -25,11 +24,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 
 /**
  * {@link ConsumerExecutor#executeIdempotent} 對真實 Postgres 的整合測試。
@@ -49,9 +43,6 @@ class ConsumerExecutorIdempotencyIntegrationTest {
     /** 測試用 consumer 名稱 */
     private static final String CONSUMER = "it-idempotent-consumer";
 
-    /** 測試用 delivery tag */
-    private static final long TAG = 1L;
-
     /** Postgres 容器 */
     private static PostgreSQLContainer<?> postgres;
 
@@ -63,9 +54,6 @@ class ConsumerExecutorIdempotencyIntegrationTest {
 
     /** 被測物件（真實交易管理員＋真實 IdempotencyService） */
     private static ConsumerExecutor executor;
-
-    /** 模擬的 AMQP channel */
-    private Channel channel;
 
     @BeforeAll
     static void startPostgres() {
@@ -94,7 +82,6 @@ class ConsumerExecutorIdempotencyIntegrationTest {
     void cleanUp() {
         jdbc.execute("TRUNCATE it_idem_business");
         jdbc.update("DELETE FROM processed_events WHERE consumer_name = ?", CONSUMER);
-        channel = mock(Channel.class);
     }
 
     /**
@@ -123,41 +110,38 @@ class ConsumerExecutorIdempotencyIntegrationTest {
     void bodySucceeds_marksOneRow() throws Exception {
         UUID eventId = UUID.randomUUID();
 
-        executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId,
+        executor.executeIdempotent(CONSUMER, null, eventId,
                 () -> jdbc.update("INSERT INTO it_idem_business (note) VALUES ('ok')"));
 
         assertThat(markCount(eventId)).isEqualTo(1);
         assertThat(businessCount()).isEqualTo(1);
-        verify(channel).basicAck(TAG, false);
     }
 
     @Test
-    @DisplayName("(b) body 寫入業務列後拋例外：業務列與標記都不存在，nack 不 ack")
-    void bodyThrowsAfterWrite_rollsBackBusinessRowAndMark() throws Exception {
+    @DisplayName("(b) body 寫入業務列後拋例外：業務列與標記都不存在，例外往外拋")
+    void bodyThrowsAfterWrite_rollsBackBusinessRowAndMark() {
         UUID eventId = UUID.randomUUID();
 
-        executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId, () -> {
+        assertThatThrownBy(() -> executor.executeIdempotent(CONSUMER, null, eventId, () -> {
             jdbc.update("INSERT INTO it_idem_business (note) VALUES ('will-vanish')");
             throw new IllegalStateException("boom after write");
-        });
+        })).isInstanceOf(IllegalStateException.class).hasMessage("boom after write");
 
         assertThat(businessCount()).isZero();
         assertThat(markCount(eventId)).isZero();
-        verify(channel).basicNack(TAG, false, false);
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
     }
 
     @Test
     @DisplayName("(c) (b) 之後以同一 eventId 再處理且成功：body 真的執行（不是被冪等跳過），最終業務列一筆、標記一列")
     void retryAfterRollback_runsBodyAgain() throws Exception {
         UUID eventId = UUID.randomUUID();
-        executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId, () -> {
+        assertThatThrownBy(() -> executor.executeIdempotent(CONSUMER, null, eventId, () -> {
             jdbc.update("INSERT INTO it_idem_business (note) VALUES ('first-attempt')");
             throw new IllegalStateException("boom after write");
-        });
+        })).isInstanceOf(IllegalStateException.class);
         AtomicInteger runs = new AtomicInteger();
 
-        executor.executeIdempotent(CONSUMER, null, channel, 2L, eventId, () -> {
+        executor.executeIdempotent(CONSUMER, null, eventId, () -> {
             runs.incrementAndGet();
             jdbc.update("INSERT INTO it_idem_business (note) VALUES ('second-attempt')");
         });
@@ -166,22 +150,20 @@ class ConsumerExecutorIdempotencyIntegrationTest {
         assertThat(businessCount()).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT note FROM it_idem_business", String.class)).isEqualTo("second-attempt");
         assertThat(markCount(eventId)).isEqualTo(1);
-        verify(channel).basicAck(2L, false);
     }
 
     @Test
     @DisplayName("成功處理後同一 eventId 重送：body 不再執行，仍 ack（冪等跳過）")
     void redeliveryAfterSuccess_skipsBody() throws Exception {
         UUID eventId = UUID.randomUUID();
-        executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId,
+        executor.executeIdempotent(CONSUMER, null, eventId,
                 () -> jdbc.update("INSERT INTO it_idem_business (note) VALUES ('once')"));
         AtomicInteger runs = new AtomicInteger();
 
-        executor.executeIdempotent(CONSUMER, null, channel, 2L, eventId, runs::incrementAndGet);
+        executor.executeIdempotent(CONSUMER, null, eventId, runs::incrementAndGet);
 
         assertThat(runs).hasValue(0);
         assertThat(businessCount()).isEqualTo(1);
-        verify(channel).basicAck(2L, false);
     }
 
     @Test
@@ -190,8 +172,8 @@ class ConsumerExecutorIdempotencyIntegrationTest {
         UUID eventId = UUID.randomUUID();
         AtomicInteger runs = new AtomicInteger();
         try {
-            executor.executeIdempotent(CONSUMER, null, channel, 1L, eventId, runs::incrementAndGet);
-            executor.executeIdempotent(CONSUMER + "-other", null, channel, 2L, eventId, runs::incrementAndGet);
+            executor.executeIdempotent(CONSUMER, null, eventId, runs::incrementAndGet);
+            executor.executeIdempotent(CONSUMER + "-other", null, eventId, runs::incrementAndGet);
 
             assertThat(runs).hasValue(2);
         } finally {
@@ -214,7 +196,7 @@ class ConsumerExecutorIdempotencyIntegrationTest {
                 futures[i] = pool.submit(() -> {
                     ready.countDown();
                     go.await();
-                    executor.executeIdempotent(CONSUMER, null, mock(Channel.class), tag, eventId, () -> {
+                    executor.executeIdempotent(CONSUMER, null, eventId, () -> {
                         runs.incrementAndGet();
                         jdbc.update("INSERT INTO it_idem_business (note) VALUES ('concurrent')");
                         Thread.sleep(300);
@@ -246,7 +228,7 @@ class ConsumerExecutorIdempotencyIntegrationTest {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             Future<?> first = pool.submit(() -> {
-                executor.executeIdempotent(CONSUMER, null, mock(Channel.class), 20L, eventId, () -> {
+                executor.executeIdempotent(CONSUMER, null, eventId, () -> {
                     firstInside.countDown();
                     secondStarted.await();
                     Thread.sleep(300);
@@ -257,13 +239,16 @@ class ConsumerExecutorIdempotencyIntegrationTest {
             assertThat(firstInside.await(10, TimeUnit.SECONDS)).isTrue();
             Future<?> second = pool.submit(() -> {
                 secondStarted.countDown();
-                executor.executeIdempotent(CONSUMER, null, mock(Channel.class), 21L, eventId, () -> {
+                executor.executeIdempotent(CONSUMER, null, eventId, () -> {
                     secondRuns.incrementAndGet();
                     jdbc.update("INSERT INTO it_idem_business (note) VALUES ('second')");
                 });
                 return null;
             });
-            first.get(30, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> first.get(30, TimeUnit.SECONDS))
+                    .as("先進入者的失敗現在往外拋（交給容器重試）")
+                    .isInstanceOf(java.util.concurrent.ExecutionException.class)
+                    .hasRootCauseMessage("first fails");
             second.get(30, TimeUnit.SECONDS);
         } finally {
             pool.shutdownNow();

@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.series.event;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
@@ -53,8 +52,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -210,7 +207,7 @@ class SeriesDeletedEventIT {
                 .as("V32 起沒有 FK：事件被消費前，文章仍帶著已刪除系列的 uuid（最終一致）").isEqualTo(seriesUuid);
 
         SeriesDeletedEvent event = capturePublishedEvent();
-        articleSeriesDeletedConsumer.onSeriesDeleted(event, Mockito.mock(Channel.class), 1L);
+        articleSeriesDeletedConsumer.onSeriesDeleted(event);
 
         Article unlinked = articleRepo.findById(article.getId()).orElseThrow();
         assertThat(unlinked.getSeriesUuid()).isNull();
@@ -229,15 +226,11 @@ class SeriesDeletedEventIT {
                         .with(asUser(SeededUsers.USER1_ID, Role.AUTHOR)))
                 .andExpect(status().isOk());
         SeriesDeletedEvent event = capturePublishedEvent();
-        Channel channel = Mockito.mock(Channel.class);
 
-        articleSeriesDeletedConsumer.onSeriesDeleted(event, channel, 1L);
-        articleSeriesDeletedConsumer.onSeriesDeleted(event, channel, 2L);
+        articleSeriesDeletedConsumer.onSeriesDeleted(event);
+        articleSeriesDeletedConsumer.onSeriesDeleted(event);
 
         assertThat(articleRepo.findById(article.getId()).orElseThrow().getSeriesUuid()).isNull();
-        verify(channel).basicAck(1L, false);
-        verify(channel).basicAck(2L, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     /** 取得 series 實際發給 broker 的那個事件（IT 不真起 broker，改由測試把它交給 article consumer）。 */

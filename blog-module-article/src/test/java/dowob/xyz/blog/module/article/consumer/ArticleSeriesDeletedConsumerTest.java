@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.article.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
@@ -26,11 +25,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -48,10 +44,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 @DisplayName("ArticleSeriesDeletedConsumer")
 class ArticleSeriesDeletedConsumerTest {
 
-    private static final long DELIVERY_TAG = 42L;
-
     @Mock private ArticleSeriesCleanupMapper cleanupMapper;
-    @Mock private Channel channel;
 
     private ArticleSeriesDeletedConsumer consumer;
 
@@ -65,40 +58,33 @@ class ArticleSeriesDeletedConsumerTest {
     }
 
     @Test
-    @DisplayName("收到事件：以 seriesUuid 清空成員文章的系列歸屬，然後 ack")
+    @DisplayName("收到事件：以 seriesUuid 清空成員文章的系列歸屬，然後正常返回")
     void onSeriesDeleted_clearsMembershipBySeriesUuidAndAcks() throws Exception {
         UUID seriesUuid = UUID.randomUUID();
 
-        consumer.onSeriesDeleted(event(seriesUuid), channel, DELIVERY_TAG);
+        consumer.onSeriesDeleted(event(seriesUuid));
 
         verify(cleanupMapper).clearSeriesByUuid(seriesUuid);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("沒有成員文章（清空 0 列）：視為成功，仍 ack（重複事件不出錯）")
+    @DisplayName("沒有成員文章（清空 0 列）：視為成功，仍正常返回（重複事件不出錯）")
     void onSeriesDeleted_noMembers_stillAcks() throws Exception {
         UUID seriesUuid = UUID.randomUUID();
         org.mockito.Mockito.when(cleanupMapper.clearSeriesByUuid(seriesUuid)).thenReturn(0);
 
-        consumer.onSeriesDeleted(event(seriesUuid), channel, DELIVERY_TAG);
-
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        consumer.onSeriesDeleted(event(seriesUuid));
     }
 
     @Test
-    @DisplayName("缺 seriesUuid 的 payload：不更新任何資料、記 warn、仍 ack（避免無限重送）")
+    @DisplayName("缺 seriesUuid 的 payload：不更新任何資料、記 warn、仍正常返回（避免無限重送）")
     void onSeriesDeleted_nullSeriesUuid_warnsAndAcksWithoutUpdating() throws Exception {
         SeriesDeletedEvent ev = event(null);
 
         List<LogEvent> logs = captureLogs(ArticleSeriesDeletedConsumer.class,
-                () -> consumer.onSeriesDeleted(ev, channel, DELIVERY_TAG));
+                () -> consumer.onSeriesDeleted(ev));
 
         verifyNoInteractions(cleanupMapper);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.WARN);
             assertThat(e.getMessage().getFormattedMessage()).contains("eventId=" + ev.eventId());
@@ -106,15 +92,12 @@ class ArticleSeriesDeletedConsumerTest {
     }
 
     @Test
-    @DisplayName("更新拋例外：nack（requeue=false）送往 DLQ，不 ack")
+    @DisplayName("更新拋例外：例外往外拋（交由容器重試，耗盡進 DLQ）")
     void onSeriesDeleted_updateThrows_nacksToDlq() throws Exception {
         UUID seriesUuid = UUID.randomUUID();
         doThrow(new RuntimeException("DB down")).when(cleanupMapper).clearSeriesByUuid(seriesUuid);
 
-        consumer.onSeriesDeleted(event(seriesUuid), channel, DELIVERY_TAG);
-
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
-        verify(channel, times(1)).basicNack(DELIVERY_TAG, false, false);
+        assertThatThrownBy(() -> consumer.onSeriesDeleted(event(seriesUuid))).isInstanceOf(RuntimeException.class);
     }
 
     @Test
@@ -125,7 +108,7 @@ class ArticleSeriesDeletedConsumerTest {
         doThrow(new RuntimeException("DB down")).when(cleanupMapper).clearSeriesByUuid(seriesUuid);
 
         List<LogEvent> logs = captureLogs(ConsumerExecutor.class,
-                () -> consumer.onSeriesDeleted(ev, channel, DELIVERY_TAG));
+                () -> assertThatThrownBy(() -> consumer.onSeriesDeleted(ev)).isInstanceOf(RuntimeException.class));
 
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.ERROR);
@@ -139,7 +122,7 @@ class ArticleSeriesDeletedConsumerTest {
     @DisplayName("onSeriesDeleted 訂閱 article.series-deleted queue")
     void onSeriesDeleted_listensOnArticleSeriesDeletedQueue() throws Exception {
         RabbitListener listener = ArticleSeriesDeletedConsumer.class
-                .getMethod("onSeriesDeleted", SeriesDeletedEvent.class, Channel.class, long.class)
+                .getMethod("onSeriesDeleted", SeriesDeletedEvent.class)
                 .getAnnotation(RabbitListener.class);
 
         assertThat(listener).isNotNull();

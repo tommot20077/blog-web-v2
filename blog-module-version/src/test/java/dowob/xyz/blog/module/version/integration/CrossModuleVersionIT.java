@@ -231,7 +231,7 @@ class CrossModuleVersionIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
+        consumer.onContentChanged(event);
 
         // 3. 驗證：article_versions 有至少 1 筆 type=AUTO
         long autoCount = countAutoVersions(article.getUuid());
@@ -261,7 +261,7 @@ class CrossModuleVersionIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
+        consumer.onContentChanged(event);
 
         // 3. 驗證：1 筆 PUBLISHED + 0 筆 AUTO（清光）
         List<ArticleVersion> allVersions = new ArrayList<>();
@@ -413,7 +413,7 @@ class CrossModuleVersionIT {
 
         // 3. 收到 ArticleDeletedEvent → consumer 刪除該文章的版本，其他文章不受影響（結果與改造前的 CASCADE 一致）
         ArticleDeletedEvent event = new ArticleDeletedEvent(UUID.randomUUID(), article.getUuid(), List.of(), List.of(), Instant.now(), null, null);
-        deletedConsumer.onArticleDeleted(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
+        deletedConsumer.onArticleDeleted(event);
 
         assertThat(countAllVersions(article.getUuid())).isZero();
         assertThat(countAllVersions(other.getUuid())).isEqualTo(1);
@@ -439,7 +439,7 @@ class CrossModuleVersionIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event, org.mockito.Mockito.mock(com.rabbitmq.client.Channel.class), 1L);
+        consumer.onContentChanged(event);
 
         // 4. 驗證：article_versions 中該 article 的 AUTO row 為 0
         long autoCount = countAutoVersions(article.getUuid());

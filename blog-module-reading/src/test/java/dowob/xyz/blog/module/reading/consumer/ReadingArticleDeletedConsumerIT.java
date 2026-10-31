@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.reading.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.model.Article;
@@ -16,10 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -34,9 +30,6 @@ import static org.mockito.Mockito.verify;
  */
 @DisplayName("ReadingArticleDeletedConsumer 整合測試")
 class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
-
-    private static final long DELIVERY_TAG = 7L;
-
     @Autowired private ReadingArticleDeletedConsumer consumer;
 
     private static ArticleDeletedEvent eventOf(UUID articleUuid) {
@@ -62,16 +55,13 @@ class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
         insertBookmark(USER_UUID, target.getUuid());
         insertLike(USER_UUID, other.getUuid());
         insertBookmark(USER_UUID, other.getUuid());
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(eventOf(target.getUuid()));
 
         assertThat(countLikes(target.getUuid())).isZero();
         assertThat(countBookmarks(target.getUuid())).isZero();
         assertThat(countLikes(other.getUuid())).isEqualTo(1);
         assertThat(countBookmarks(other.getUuid())).isEqualTo(1);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
@@ -85,19 +75,17 @@ class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
         insertProgress(OTHER_USER_UUID, target.getUuid());
         insertHighlight(USER_UUID, other.getUuid());
         insertProgress(USER_UUID, other.getUuid());
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(eventOf(target.getUuid()));
 
         assertThat(countHighlights(target.getUuid())).isZero();
         assertThat(countProgress(target.getUuid())).isZero();
         assertThat(countHighlights(other.getUuid())).isEqualTo(1);
         assertThat(countProgress(other.getUuid())).isEqualTo(1);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("閱讀進度表刪除失敗：前三張表（含劃線）的刪除一併回滾，並 nack 送往 DLQ")
+    @DisplayName("閱讀進度表刪除失敗：前三張表（含劃線）的刪除一併回滾，並讓例外往外拋（交由容器重試）")
     void onArticleDeleted_progressTableFails_rollsBackEarlierTables() throws Exception {
         Article target = createArticle(ArticleStatus.PUBLISHED);
         insertLike(USER_UUID, target.getUuid());
@@ -108,16 +96,13 @@ class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
                 + "BEGIN RAISE EXCEPTION 'progress delete blocked by test'; END; $$ LANGUAGE plpgsql");
         jdbc.execute("CREATE TRIGGER trg_fail_progress_delete BEFORE DELETE ON user_reading_progress "
                 + "FOR EACH ROW EXECUTE FUNCTION fail_progress_delete()");
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);
+        assertThatThrownBy(() -> consumer.onArticleDeleted(eventOf(target.getUuid()))).isInstanceOf(RuntimeException.class);
 
         assertThat(countLikes(target.getUuid())).isEqualTo(1);
         assertThat(countBookmarks(target.getUuid())).isEqualTo(1);
         assertThat(countHighlights(target.getUuid())).as("劃線的刪除已隨交易回滾").isEqualTo(1);
         assertThat(countProgress(target.getUuid())).isEqualTo(1);
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
-        verify(channel, times(1)).basicNack(DELIVERY_TAG, false, false);
     }
 
     @Test
@@ -129,36 +114,30 @@ class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
         insertBookmark(USER_UUID, target.getUuid());
         insertLike(USER_UUID, other.getUuid());
         ArticleDeletedEvent event = eventOf(target.getUuid());
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(event, channel, 1L);
-        consumer.onArticleDeleted(event, channel, 2L);
+        consumer.onArticleDeleted(event);
+        consumer.onArticleDeleted(event);
 
         assertThat(countLikes(target.getUuid())).isZero();
         assertThat(countBookmarks(target.getUuid())).isZero();
         assertThat(countLikes(other.getUuid())).isEqualTo(1);
-        verify(channel, times(1)).basicAck(1L, false);
-        verify(channel, times(1)).basicAck(2L, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("缺 articleUuid 的舊 payload：不刪除任何資料，仍 ack")
+    @DisplayName("缺 articleUuid 的舊 payload：不刪除任何資料，仍正常返回")
     void onArticleDeleted_nullArticleUuid_removesNothingAndAcks() throws Exception {
         Article article = createArticle(ArticleStatus.PUBLISHED);
         insertLike(USER_UUID, article.getUuid());
         insertBookmark(USER_UUID, article.getUuid());
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(null), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(eventOf(null));
 
         assertThat(countLikes(article.getUuid())).isEqualTo(1);
         assertThat(countBookmarks(article.getUuid())).isEqualTo(1);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("兩張表在同一個交易內刪除：收藏刪除失敗時，按讚的刪除一併回滾，並 nack 送往 DLQ")
+    @DisplayName("兩張表在同一個交易內刪除：收藏刪除失敗時，按讚的刪除一併回滾，並讓例外往外拋（交由容器重試）")
     void onArticleDeleted_secondTableFails_rollsBackFirstTableDeletion() throws Exception {
         Article target = createArticle(ArticleStatus.PUBLISHED);
         insertLike(USER_UUID, target.getUuid());
@@ -167,13 +146,10 @@ class ReadingArticleDeletedConsumerIT extends ReadingCleanupITSupport {
                 + "BEGIN RAISE EXCEPTION 'bookmark delete blocked by test'; END; $$ LANGUAGE plpgsql");
         jdbc.execute("CREATE TRIGGER trg_fail_bookmark_delete BEFORE DELETE ON user_bookmarks "
                 + "FOR EACH ROW EXECUTE FUNCTION fail_bookmark_delete()");
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);
+        assertThatThrownBy(() -> consumer.onArticleDeleted(eventOf(target.getUuid()))).isInstanceOf(RuntimeException.class);
 
         assertThat(countLikes(target.getUuid())).as("按讚的刪除已隨交易回滾").isEqualTo(1);
         assertThat(countBookmarks(target.getUuid())).isEqualTo(1);
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
-        verify(channel, times(1)).basicNack(DELIVERY_TAG, false, false);
     }
 }

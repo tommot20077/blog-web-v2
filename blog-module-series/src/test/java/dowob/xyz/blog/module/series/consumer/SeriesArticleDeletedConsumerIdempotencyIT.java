@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.series.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
@@ -35,10 +34,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -147,47 +144,37 @@ class SeriesArticleDeletedConsumerIdempotencyIT {
     }
 
     @Test
-    @DisplayName("業務與標記都已寫入後 commit 失敗：計數與標記一起 rollback、nack；同一 eventId 重送會真的重做，之後再重送才被跳過")
+    @DisplayName("業務與標記都已寫入後 commit 失敗：計數與標記一起 rollback、例外往外拋；同一 eventId 重送會真的重做，之後再重送才被跳過")
     void commitFailure_rollsBackCountAndMark_thenRedeliveryReallyReruns() throws Exception {
         UUID eventId = UUID.randomUUID();
-        Channel failedChannel = mock(Channel.class);
         installCommitTimeFailure();
 
-        consumer.onArticleDeleted(event(eventId), failedChannel, 1L);
+        assertThatThrownBy(() -> consumer.onArticleDeleted(event(eventId))).isInstanceOf(RuntimeException.class);
 
         assertThat(articleCount()).as("計數寫入已 rollback").isEqualTo(3);
         assertThat(markCount(eventId)).as("標記一起 rollback").isZero();
-        verify(failedChannel).basicNack(1L, false, false);
-        verify(failedChannel, never()).basicAck(anyLong(), anyBoolean());
 
         dropFailingTrigger();
-        Channel retryChannel = mock(Channel.class);
-        consumer.onArticleDeleted(event(eventId), retryChannel, 2L);
+        consumer.onArticleDeleted(event(eventId));
 
         assertThat(articleCount()).as("重送真的執行了業務").isEqualTo(2);
         assertThat(markCount(eventId)).isEqualTo(1);
-        verify(retryChannel).basicAck(2L, false);
-
-        Channel dupChannel = mock(Channel.class);
-        consumer.onArticleDeleted(event(eventId), dupChannel, 3L);
+        consumer.onArticleDeleted(event(eventId));
 
         assertThat(articleCount()).as("成功後再重送被冪等跳過").isEqualTo(2);
         assertThat(markCount(eventId)).isEqualTo(1);
-        verify(dupChannel).basicAck(3L, false);
     }
 
     @Test
-    @DisplayName("seriesUuid 為 null（文章不在 series）：no-op ack，不寫 processed_events")
+    @DisplayName("seriesUuid 為 null（文章不在 series）：no-op 正常返回，不寫 processed_events")
     void noSeries_acksWithoutWritingMark() throws Exception {
         UUID eventId = UUID.randomUUID();
-        Channel channel = mock(Channel.class);
         ArticleDeletedEvent noSeries = new ArticleDeletedEvent(eventId, UUID.randomUUID(), List.of(), List.of(),
                 Instant.now(), null, null);
 
-        consumer.onArticleDeleted(noSeries, channel, 4L);
+        consumer.onArticleDeleted(noSeries);
 
         assertThat(markCount(eventId)).isZero();
         assertThat(articleCount()).isEqualTo(3);
-        verify(channel).basicAck(4L, false);
     }
 }

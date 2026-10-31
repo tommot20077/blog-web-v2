@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.file.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.file.TestFileApplication;
@@ -35,10 +34,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -169,15 +165,13 @@ class ThumbnailConsumerIT {
             jdbcTemplate.update("UPDATE file_metadata SET article_uuid = ? WHERE id = ?", articleUuid, fileId);
             return null;
         });
-        Channel channel = mock(Channel.class);
 
-        thumbnailConsumer.handleImageUploaded(eventOf(fileId), channel, 1L);
+        thumbnailConsumer.handleImageUploaded(eventOf(fileId));
 
         assertThat(articleUuidOf(fileId))
                 .as("consumer 寫旗標不得把處理期間寫入的 article_uuid 蓋回舊值 null")
                 .isEqualTo(articleUuid);
         assertThat(hasThumbnailOf(fileId)).isTrue();
-        verify(channel).basicAck(1L, false);
     }
 
     /** 縮圖處理期間檔案被刪除 → 正常 ack，不拋例外、不 nack */
@@ -191,12 +185,8 @@ class ThumbnailConsumerIT {
             jdbcTemplate.update("DELETE FROM file_metadata WHERE id = ?", fileId);
             return null;
         });
-        Channel channel = mock(Channel.class);
 
-        thumbnailConsumer.handleImageUploaded(eventOf(fileId), channel, 2L);
-
-        verify(channel).basicAck(2L, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        thumbnailConsumer.handleImageUploaded(eventOf(fileId));
         assertThat(fileMetadataRepository.findById(fileId)).isEmpty();
     }
 }

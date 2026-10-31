@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.search.listener;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.search.config.SearchRabbitMqConfig;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
@@ -11,8 +10,6 @@ import dowob.xyz.blog.module.search.service.SearchService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.support.AmqpHeaders;
-import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -24,7 +21,7 @@ import java.util.stream.Collectors;
  * <p>
  * 消費 RabbitMQ 隊列，接收文章發布、更新、刪除、下架事件，
  * 同步維護 Elasticsearch 索引。
- * ack／nack 與失敗計數統一交由 {@link ConsumerExecutor} 處理。
+ * 失敗日誌與計數統一交由 {@link ConsumerExecutor} 處理；失敗往外拋，由容器重試、耗盡後進 DLQ。
  * </p>
  *
  * @author Yuan
@@ -53,7 +50,7 @@ public class ArticleSearchListener {
     private final SearchService searchService;
 
     /**
-     * MQ consumer 共用 ack/nack 包裝與計數
+     * MQ consumer 共用執行包裝（失敗日誌、計數、冪等）
      */
     private final ConsumerExecutor consumerExecutor;
 
@@ -61,16 +58,12 @@ public class ArticleSearchListener {
      * 接收文章發布事件，建立 Elasticsearch 索引
      *
      * @param message     文章發布訊息
-     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
-     * @param deliveryTag 訊息標籤
      */
     @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX, containerFactory = "rabbitListenerContainerFactory")
-    public void onArticlePublished(ArticlePublishedMessage message,
-            Channel channel,
-            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+    public void onArticlePublished(ArticlePublishedMessage message) {
         log.info("收到文章發布事件，開始建立索引：uuid={}, eventId={}", message.getArticleUuid(), message.getEventId());
         consumerExecutor.execute(CONSUMER_NAME_INDEX, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
-                channel, deliveryTag, () -> {
+                () -> {
                     ArticleDocument document = toDocument(message);
                     searchService.indexArticle(document);
                     log.debug("文章索引建立成功：uuid={}", message.getArticleUuid());
@@ -86,16 +79,12 @@ public class ArticleSearchListener {
      * </p>
      *
      * @param message     文章更新訊息（結構同發布訊息）
-     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
-     * @param deliveryTag 訊息標籤
      */
     @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_UPDATE, containerFactory = "rabbitListenerContainerFactory")
-    public void onArticleUpdated(ArticlePublishedMessage message,
-            Channel channel,
-            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+    public void onArticleUpdated(ArticlePublishedMessage message) {
         log.info("收到文章更新事件，重新索引：uuid={}, eventId={}", message.getArticleUuid(), message.getEventId());
         consumerExecutor.execute(CONSUMER_NAME_INDEX_UPDATE, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
-                channel, deliveryTag, () -> {
+                () -> {
                     ArticleDocument document = toDocument(message);
                     searchService.indexArticle(document);
                     log.debug("文章索引更新成功：uuid={}", message.getArticleUuid());
@@ -106,16 +95,12 @@ public class ArticleSearchListener {
      * 接收文章刪除事件，從 Elasticsearch 移除索引
      *
      * @param message     文章刪除訊息
-     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
-     * @param deliveryTag 訊息標籤
      */
     @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_DELETE, containerFactory = "rabbitListenerContainerFactory")
-    public void onArticleDeleted(ArticleDeletedMessage message,
-            Channel channel,
-            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+    public void onArticleDeleted(ArticleDeletedMessage message) {
         log.info("收到文章刪除事件，移除索引：uuid={}, eventId={}", message.getArticleUuid(), message.getEventId());
         consumerExecutor.execute(CONSUMER_NAME_INDEX_DELETE, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
-                channel, deliveryTag, () -> {
+                () -> {
                     searchService.deleteIndex(message.getArticleUuid().toString());
                     log.debug("文章索引移除成功：uuid={}", message.getArticleUuid());
                 });
@@ -138,22 +123,18 @@ public class ArticleSearchListener {
      * </p>
      *
      * @param message     文章下架訊息
-     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
-     * @param deliveryTag 訊息標籤
      */
     @RabbitListener(queues = SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_ARCHIVE, containerFactory = "rabbitListenerContainerFactory")
-    public void onArticleArchived(ArticleArchivedMessage message,
-            Channel channel,
-            @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+    public void onArticleArchived(ArticleArchivedMessage message) {
         log.info("收到文章下架事件，移除索引：uuid={}", message.getArticleUuid());
         /*
-         * requeue=false ⇒ 直入 DLQ，沒有自動重試。下架是合規動作，這條路徑失敗
+         * 失敗會由容器重試（最多 3 次），耗盡才進 DLQ。下架是合規動作，這條路徑最終失敗
          * 代表文章仍留在搜尋索引裡，故失敗日誌（由 ConsumerExecutor 輸出）必須帶足人工補送所需的上下文：
          * articleUuid（要刪哪一篇）與 eventId（對得回 producer 端的那筆事件）。
          */
         consumerExecutor.execute(CONSUMER_NAME_INDEX_ARCHIVE,
                 () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
-                channel, deliveryTag, () -> {
+                () -> {
                     searchService.deleteIndex(message.getArticleUuid().toString());
                     log.debug("已下架文章索引移除成功：uuid={}", message.getArticleUuid());
                 });

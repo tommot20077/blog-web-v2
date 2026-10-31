@@ -193,7 +193,7 @@ public class ArticleEventPublisher {
      * 與其他事件一致採 best-effort，發送失敗不往外拋、不影響已 commit 的下架結果。</p>
      *
      * <p><b>失敗一律 ERROR（與其他 best-effort 事件的 warn 不同）</b>：下架用於法務／侵權撤下，
-     * 而移除 ES 索引是唯一的撤下機制，consumer 端失敗又是 requeue=false 直入 DLQ。
+     * 而移除 ES 索引是唯一的撤下機制，consumer 端失敗重試 3 次仍失敗就進 DLQ。
      * 若這裡只留 warn，「端點回 200 下架成功」與「文章仍搜尋得到」會同時成立而無人察覺。
      * 訊息帶 eventId 與 articleUuid，讓維運可告警並人工補送。</p>
      *

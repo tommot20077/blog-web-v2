@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.series.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
@@ -373,7 +372,7 @@ class SeriesControllerIT {
         verify(rabbitTemplate).convertAndSend(
                 eq(SeriesEventContract.EXCHANGE), eq(SeriesEventContract.ROUTING_KEY_DELETED), published.capture());
         articleSeriesDeletedConsumer.onSeriesDeleted(
-                (SeriesDeletedEvent) published.getValue(), Mockito.mock(Channel.class), 1L);
+                (SeriesDeletedEvent) published.getValue());
 
         // 文章的 series_uuid／series_position 已清空，文章本身仍在
         Article updatedArticle = articleRepo.findById(article.getId()).orElseThrow();

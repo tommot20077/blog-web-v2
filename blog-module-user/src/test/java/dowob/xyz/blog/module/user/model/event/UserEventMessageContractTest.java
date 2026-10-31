@@ -2,7 +2,6 @@ package dowob.xyz.blog.module.user.model.event;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.config.RabbitMqConfig;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
@@ -132,40 +131,36 @@ class UserEventMessageContractTest {
     }
 
     @Test
-    @DisplayName("舊格式註冊訊息經 EmailVerificationConsumer：照常寄驗證信、不查冪等表、ack")
+    @DisplayName("舊格式註冊訊息經 EmailVerificationConsumer：照常寄驗證信、不查冪等表、正常返回")
     void legacyRegisteredMessage_isStillMailedByConsumer() throws Exception {
         UserMailService mailService = mock(UserMailService.class);
         IdempotencyService idempotency = mock(IdempotencyService.class);
-        Channel channel = mock(Channel.class);
         EmailVerificationConsumer consumer =
                 new EmailVerificationConsumer(mailService, new ConsumerExecutor(
                         new TransactionTemplate(mock(PlatformTransactionManager.class)), idempotency));
         UserRegisteredEvent legacy = (UserRegisteredEvent)
                 CONVERTER.fromMessage(messageOf(LEGACY_REGISTERED, UserRegisteredEvent.class));
 
-        consumer.handleUserRegistered(legacy, channel, 1L);
+        consumer.handleUserRegistered(legacy);
 
         verify(mailService).sendVerificationEmail(legacy);
         verifyNoInteractions(idempotency);
-        verify(channel).basicAck(1L, false);
     }
 
     @Test
-    @DisplayName("舊格式密碼重設訊息經 PasswordResetConsumer：照常寄重設信、不查冪等表、ack")
+    @DisplayName("舊格式密碼重設訊息經 PasswordResetConsumer：照常寄重設信、不查冪等表、正常返回")
     void legacyResetMessage_isStillMailedByConsumer() throws Exception {
         UserMailService mailService = mock(UserMailService.class);
         IdempotencyService idempotency = mock(IdempotencyService.class);
-        Channel channel = mock(Channel.class);
         PasswordResetConsumer consumer =
                 new PasswordResetConsumer(mailService, new ConsumerExecutor(
                         new TransactionTemplate(mock(PlatformTransactionManager.class)), idempotency));
         UserPasswordResetRequestedEvent legacy = (UserPasswordResetRequestedEvent)
                 CONVERTER.fromMessage(messageOf(LEGACY_RESET, UserPasswordResetRequestedEvent.class));
 
-        consumer.handlePasswordResetRequested(legacy, channel, 2L);
+        consumer.handlePasswordResetRequested(legacy);
 
         verify(mailService).sendPasswordResetEmail(legacy);
         verifyNoInteractions(idempotency);
-        verify(channel).basicAck(2L, false);
     }
 }

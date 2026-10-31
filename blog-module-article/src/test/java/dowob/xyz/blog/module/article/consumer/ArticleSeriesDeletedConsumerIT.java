@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.article.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
 import dowob.xyz.blog.module.article.support.ArticleSeriesITSupport;
 import org.junit.jupiter.api.DisplayName;
@@ -13,10 +12,6 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -34,9 +29,6 @@ import static org.mockito.Mockito.verify;
  */
 @DisplayName("ArticleSeriesDeletedConsumer 整合測試")
 class ArticleSeriesDeletedConsumerIT extends ArticleSeriesITSupport {
-
-    private static final long DELIVERY_TAG = 7L;
-
     @Autowired private ArticleSeriesDeletedConsumer consumer;
 
     private static SeriesDeletedEvent eventOf(UUID seriesUuid) {
@@ -52,9 +44,8 @@ class ArticleSeriesDeletedConsumerIT extends ArticleSeriesITSupport {
         UUID member2 = insertArticle(deletedSeries, 2, "DRAFT");
         UUID otherMember = insertArticle(otherSeries, 5, "PUBLISHED");
         UUID loner = insertArticle(null, null, "PUBLISHED");
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onSeriesDeleted(eventOf(deletedSeries), channel, DELIVERY_TAG);
+        consumer.onSeriesDeleted(eventOf(deletedSeries));
 
         assertThat(seriesUuidOf(member1)).isNull();
         assertThat(positionOf(member1)).isNull();
@@ -64,8 +55,6 @@ class ArticleSeriesDeletedConsumerIT extends ArticleSeriesITSupport {
         assertThat(positionOf(otherMember)).isEqualTo(5);
         assertThat(seriesUuidOf(loner)).isNull();
         assertThat(countArticles()).as("刪除語意不變：文章留存，只清空歸屬").isEqualTo(4);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
@@ -75,7 +64,7 @@ class ArticleSeriesDeletedConsumerIT extends ArticleSeriesITSupport {
         LocalDateTime fixed = LocalDateTime.of(2026, 1, 2, 3, 4, 5);
         UUID member = insertArticleWithAudit(series, 3, 4, fixed);
 
-        consumer.onSeriesDeleted(eventOf(series), Mockito.mock(Channel.class), DELIVERY_TAG);
+        consumer.onSeriesDeleted(eventOf(series));
 
         assertThat(seriesUuidOf(member)).isNull();
         assertThat(versionOf(member)).isEqualTo(5);
@@ -89,8 +78,8 @@ class ArticleSeriesDeletedConsumerIT extends ArticleSeriesITSupport {
         UUID member = insertArticleWithAudit(series, 1, 4, LocalDateTime.of(2026, 1, 2, 3, 4, 5));
         SeriesDeletedEvent event = eventOf(series);
 
-        consumer.onSeriesDeleted(event, Mockito.mock(Channel.class), 1L);
-        consumer.onSeriesDeleted(event, Mockito.mock(Channel.class), 2L);
+        consumer.onSeriesDeleted(event);
+        consumer.onSeriesDeleted(event);
 
         assertThat(versionOf(member)).isEqualTo(5);
     }
@@ -103,40 +92,32 @@ class ArticleSeriesDeletedConsumerIT extends ArticleSeriesITSupport {
         UUID member = insertArticle(series, 1, "PUBLISHED");
         UUID other = insertArticle(otherSeries, 2, "PUBLISHED");
         SeriesDeletedEvent event = eventOf(series);
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onSeriesDeleted(event, channel, 1L);
-        consumer.onSeriesDeleted(event, channel, 2L);
+        consumer.onSeriesDeleted(event);
+        consumer.onSeriesDeleted(event);
 
         assertThat(seriesUuidOf(member)).isNull();
         assertThat(seriesUuidOf(other)).isEqualTo(otherSeries);
-        verify(channel, times(1)).basicAck(1L, false);
-        verify(channel, times(1)).basicAck(2L, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("沒有任何成員文章的系列被刪除：不出錯、仍 ack")
+    @DisplayName("沒有任何成員文章的系列被刪除：不出錯、仍正常返回")
     void onSeriesDeleted_seriesWithoutMembers_acksWithoutError() throws Exception {
         UUID unrelated = insertArticle(UUID.randomUUID(), 1, "PUBLISHED");
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onSeriesDeleted(eventOf(UUID.randomUUID()), channel, DELIVERY_TAG);
+        consumer.onSeriesDeleted(eventOf(UUID.randomUUID()));
 
         assertThat(seriesUuidOf(unrelated)).isNotNull();
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("缺 seriesUuid 的 payload：不清空任何文章，仍 ack")
+    @DisplayName("缺 seriesUuid 的 payload：不清空任何文章，仍正常返回")
     void onSeriesDeleted_nullSeriesUuid_changesNothingAndAcks() throws Exception {
         UUID series = UUID.randomUUID();
         UUID member = insertArticle(series, 1, "PUBLISHED");
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onSeriesDeleted(eventOf(null), channel, DELIVERY_TAG);
+        consumer.onSeriesDeleted(eventOf(null));
 
         assertThat(seriesUuidOf(member)).isEqualTo(series);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 }

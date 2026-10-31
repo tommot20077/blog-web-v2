@@ -12,7 +12,7 @@ spring:
     publisher-returns: true
     listener:
       simple:
-        acknowledge-mode: manual
+        acknowledge-mode: auto
 
 mybatis:
   mapper-locations: classpath*:mapper/*.xml

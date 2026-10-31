@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.tag.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
@@ -10,9 +9,7 @@ import dowob.xyz.blog.module.tag.repository.TagRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -51,7 +48,7 @@ public class TagUsageConsumer {
     private final RedisTemplate<String, String> stringRedisTemplate;
 
     /**
-     * MQ consumer 共用 ack/nack 包裝與計數
+     * MQ consumer 共用執行包裝（失敗日誌、計數、冪等）
      */
     private final ConsumerExecutor consumerExecutor;
 
@@ -61,20 +58,16 @@ public class TagUsageConsumer {
      * <p>
      * 對事件中每個標籤 ID：查找標籤 → 遞增 usageCount → 儲存至資料庫 → 更新 Redis ZSet 分數。
      * 不存在的標籤 ID 將被靜默忽略。
-     * 採用手動 ACK 模式：ack／nack 與失敗計數統一交由 {@link ConsumerExecutor} 處理
-     * （處理成功則 ack；失敗則 nack，送 DLQ）。
+     * 採用 AUTO ACK 模式：失敗日誌與計數統一交由 {@link ConsumerExecutor} 處理
+     * （處理成功則正常返回、容器 ack；失敗則往外拋，由容器重試，耗盡後送 DLQ）。
      * </p>
      *
      * @param event       文章標籤事件
-     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
-     * @param deliveryTag 消息投遞標籤
      */
     @RabbitListener(queues = TagRabbitMqConfig.QUEUE_TAG_ARTICLE_TAGGED)
-    public void handleArticleTagged(ArticleTagEvent event,
-                                    Channel channel,
-                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+    public void handleArticleTagged(ArticleTagEvent event) {
         consumerExecutor.executeIdempotent(CONSUMER_NAME, () -> "eventId=" + event.eventId(),
-                channel, deliveryTag, event.eventId(), () -> {
+                event.eventId(), () -> {
                     /* Redis 無法隨交易 rollback：先完成全部 DB 寫入，才一次更新熱門分數，
                      * 避免第 N 個標籤的 DB 寫入失敗時，前 N-1 個標籤的分數已被加上而重送時重複加 */
                     List<UUID> savedTagIds = new ArrayList<>();

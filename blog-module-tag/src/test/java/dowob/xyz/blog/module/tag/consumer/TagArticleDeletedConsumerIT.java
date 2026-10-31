@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.tag.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.tag.support.TagCleanupITSupport;
 import org.junit.jupiter.api.DisplayName;
@@ -13,11 +12,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -30,9 +25,6 @@ import static org.mockito.Mockito.verify;
  */
 @DisplayName("TagArticleDeletedConsumer 整合測試")
 class TagArticleDeletedConsumerIT extends TagCleanupITSupport {
-
-    private static final long DELIVERY_TAG = 7L;
-
     @Autowired private TagArticleDeletedConsumer consumer;
 
     private static ArticleDeletedEvent event(UUID articleUuid) {
@@ -40,9 +32,8 @@ class TagArticleDeletedConsumerIT extends TagCleanupITSupport {
     }
 
     @Test
-    @DisplayName("刪除事件：該文章的所有標籤關聯被刪除；其他文章的關聯、tags 與 usage_count 不動；ack")
+    @DisplayName("刪除事件：該文章的所有標籤關聯被刪除；其他文章的關聯、tags 與 usage_count 不動；正常返回")
     void onArticleDeleted_deletesOnlyThatArticlesTagLinks() throws IOException {
-        Channel channel = mock(Channel.class);
         UUID tagA = insertTag("java", 3);
         UUID tagB = insertTag("spring", 5);
         UUID doomed = UUID.randomUUID();
@@ -51,21 +42,18 @@ class TagArticleDeletedConsumerIT extends TagCleanupITSupport {
         insertArticleTag(doomed, tagB);
         insertArticleTag(other, tagA);
 
-        consumer.onArticleDeleted(event(doomed), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(event(doomed));
 
         assertThat(countArticleTags(doomed)).as("被刪文章的關聯清空").isZero();
         assertThat(countArticleTags(other)).as("其他文章的關聯保留").isEqualTo(1);
         assertThat(countTags()).as("tags 本身不動").isEqualTo(2);
         assertThat(usageCountOf(tagA)).as("usage_count 不動（DATA-01 另案）").isEqualTo(3);
         assertThat(usageCountOf(tagB)).isEqualTo(5);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("重複投遞同一事件（或文章本來就沒有標籤）：不出錯、不影響他人，仍 ack")
+    @DisplayName("重複投遞同一事件（或文章本來就沒有標籤）：不出錯、不影響他人，仍正常返回")
     void onArticleDeleted_redelivery_isIdempotent() throws IOException {
-        Channel channel = mock(Channel.class);
         UUID tag = insertTag("java", 1);
         UUID doomed = UUID.randomUUID();
         UUID other = UUID.randomUUID();
@@ -73,27 +61,23 @@ class TagArticleDeletedConsumerIT extends TagCleanupITSupport {
         insertArticleTag(other, tag);
         ArticleDeletedEvent same = event(doomed);
 
-        consumer.onArticleDeleted(same, channel, 1L);
-        consumer.onArticleDeleted(same, channel, 2L);
-        consumer.onArticleDeleted(event(UUID.randomUUID()), channel, 3L);
+        consumer.onArticleDeleted(same);
+        consumer.onArticleDeleted(same);
+        consumer.onArticleDeleted(event(UUID.randomUUID()));
 
         assertThat(countArticleTags(doomed)).isZero();
         assertThat(countArticleTags(other)).isEqualTo(1);
-        verify(channel, times(3)).basicAck(anyLong(), anyBoolean());
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("舊 payload 缺 articleUuid：不刪任何資料，仍 ack")
+    @DisplayName("舊 payload 缺 articleUuid：不刪任何資料，仍正常返回")
     void onArticleDeleted_missingArticleUuid_deletesNothingAndAcks() throws IOException {
-        Channel channel = mock(Channel.class);
         UUID tag = insertTag("java", 1);
         UUID someArticle = UUID.randomUUID();
         insertArticleTag(someArticle, tag);
 
-        consumer.onArticleDeleted(event(null), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(event(null));
 
         assertThat(countArticleTags(someArticle)).isEqualTo(1);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 }
