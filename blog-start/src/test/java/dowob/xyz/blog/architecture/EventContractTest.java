@@ -15,7 +15,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -45,10 +44,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       （跨模組事件必須放 {@code infrastructure.event}，新增模組內事件須經人工確認後登記）。</li>
  * </ol>
  *
- * <p><b>例外清單起步、各模組階段逐步清空</b>：(a)(b) 各有一份例外清單，key 為類別全名
- * （(b) 為 {@code 類別全名#欄位}），value 必須以預計清除的階段（{@code M1}～{@code M8} 或 {@code Z}）開頭。
- * 各模組 PR 清掉自己的條目；<b>收尾階段兩份例外清單必須為空</b>。{@link #INTERNAL_EVENTS} 是登記簿
- * 而非例外，不要求清空。</p>
+ * <p><b>沒有例外清單（Z2 起）</b>：重構期間 (a)(b) 曾各有一份例外清單逐模組清除現存違規，
+ * M1～M8 完成後清單已為空，Z2 將「清單」這個機制本身刪除。往後要放行任何事件違規，
+ * 必須修改本守衛的判定邏輯，該修改會出現在 PR diff 中被審查。
+ * {@link #INTERNAL_EVENTS} 是登記簿而非例外（登記的是「確認過只有本模組使用」的內部事件），予以保留。</p>
  *
  * <p><b>為何附防死條目與反向驗證</b>：與 {@link EndpointAuthorizationTest} 同理——
  * 清單會腐爛，守衛也可能壞掉而「掃不到」被誤認為「沒違規」，故兩者都以測試驗證。</p>
@@ -79,21 +78,8 @@ class EventContractTest {
     /** 反向驗證 fixture 的共用契約位置 */
     private static final String FIXTURE_SHARED_EVENT_PACKAGE = FIXTURE_ROOT + ".shared.event";
 
-    /** 例外清單 value 的格式：以預計清除階段開頭 */
-    private static final Pattern STAGE_PREFIX = Pattern.compile("^(M[1-8]|Z)[：:].+");
-
     /** 快取的正式碼匯入結果（匯入約數秒，各測試共用） */
     private static JavaClasses productionClasses;
-
-    /**
-     * 規則 (a) 例外清單：缺少 {@code UUID eventId} 的事件。key 為類別全名，value 為「階段：說明」。
-     */
-    private static final Map<String, String> MISSING_EVENT_ID_EXEMPT = Map.ofEntries();
-
-    /**
-     * 規則 (b) 例外清單：仍含 Long 欄位的事件。key 為 {@code 類別全名#欄位}，value 為「階段：說明」。
-     */
-    private static final Map<String, String> LONG_FIELD_EXEMPT = Map.ofEntries();
 
     /**
      * 規則 (c) 登記簿：允許留在 {@code module.*..} 之下的<b>模組內部事件</b>（只有本模組自己發送與消費）。
@@ -110,28 +96,18 @@ class EventContractTest {
                     "user 內部：寄送重設密碼信（PasswordResetConsumer 同模組消費）"));
 
     @Test
-    @DisplayName("規則 (a)：事件必須有 UUID eventId（例外清單以外不得缺）")
+    @DisplayName("規則 (a)：事件必須有 UUID eventId（無例外清單）")
     void eventMustHaveUuidEventId() {
-        List<String> violations = findMissingEventId(importProduction()).stream()
-                .filter(v -> !MISSING_EVENT_ID_EXEMPT.containsKey(v))
-                .toList();
-
-        assertThat(violations)
-                .as("事件缺少 java.util.UUID eventId，consumer 無法冪等去重。"
-                  + "請補上 eventId；若為尚未改造的模組，加入 MISSING_EVENT_ID_EXEMPT 並標明清除階段。")
+        assertThat(findMissingEventId(importProduction()))
+                .as("事件缺少 java.util.UUID eventId，consumer 無法冪等去重。請補上 eventId。")
                 .isEmpty();
     }
 
     @Test
-    @DisplayName("規則 (b)：事件不得有 Long/long 欄位（含泛型、陣列、父類別；例外清單以外不得有）")
+    @DisplayName("規則 (b)：事件不得有 Long/long 欄位（含泛型、陣列、父類別；無例外清單）")
     void eventMustNotHaveLongFields() {
-        List<String> violations = findLongFields(importProduction(), SHARED_EVENT_PACKAGE).stream()
-                .filter(v -> !LONG_FIELD_EXEMPT.containsKey(v))
-                .toList();
-
-        assertThat(violations)
-                .as("事件含 Long/long 欄位，跨模組識別一律改用 UUID。"
-                  + "若為過渡欄位，加入 LONG_FIELD_EXEMPT（key 為 類別全名#欄位）並標明清除階段。")
+        assertThat(findLongFields(importProduction(), SHARED_EVENT_PACKAGE))
+                .as("事件含 Long/long 欄位，跨模組識別一律改用 UUID。")
                 .isEmpty();
     }
 
@@ -148,26 +124,6 @@ class EventContractTest {
     }
 
     @Test
-    @DisplayName("防死條目 (a)：例外清單的每一項都必須仍缺 eventId")
-    void missingEventIdExemptListMustNotContainStaleEntries() {
-        List<String> actual = findMissingEventId(importProduction());
-
-        assertThat(MISSING_EVENT_ID_EXEMPT.keySet())
-                .as("條目對應的事件若已補上 eventId 或已被刪除，就成了死條目，請移除。")
-                .allSatisfy(exempt -> assertThat(actual).contains(exempt));
-    }
-
-    @Test
-    @DisplayName("防死條目 (b)：例外清單的每一項都必須仍是實際的 Long 欄位")
-    void longFieldExemptListMustNotContainStaleEntries() {
-        List<String> actual = findLongFields(importProduction(), SHARED_EVENT_PACKAGE);
-
-        assertThat(LONG_FIELD_EXEMPT.keySet())
-                .as("條目對應的欄位若已改為 UUID 或已被刪除，就成了死條目，請移除。")
-                .allSatisfy(exempt -> assertThat(actual).contains(exempt));
-    }
-
-    @Test
     @DisplayName("防死條目 (c)：登記簿的每一項都必須仍是 module 套件下的事件")
     void internalEventRegistryMustNotContainStaleEntries() {
         List<String> actual = findModuleResidentEvents(importProduction(), MODULE_ROOT);
@@ -175,13 +131,6 @@ class EventContractTest {
         assertThat(INTERNAL_EVENTS.keySet())
                 .as("登記的事件若已被刪除或搬到共用位置，就成了死條目，請移除。")
                 .allSatisfy(registered -> assertThat(actual).contains(registered));
-    }
-
-    @Test
-    @DisplayName("例外清單每個條目都必須標明預計清除的階段（M1～M8 或 Z）")
-    void everyExemptEntryMustDeclareClearingStage() {
-        assertThat(MISSING_EVENT_ID_EXEMPT.values()).allSatisfy(v -> assertThat(v).matches(STAGE_PREFIX));
-        assertThat(LONG_FIELD_EXEMPT.values()).allSatisfy(v -> assertThat(v).matches(STAGE_PREFIX));
     }
 
     @Test

@@ -17,7 +17,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -39,12 +38,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@code blog-module-*&#47;src/main/java} 的原始碼（先去除註解，再比對
  * {@code dowob.xyz.blog.module.<B>.} 的完整類名；萬用字元 import 一律視為違規），
  * 以及 {@code src/main/resources} 下 XML 的 {@code resultType}／{@code type} 等屬性。
- * 例外清單與防死條目都對「聯集」比對。</p>
+ * 違規判定對「聯集」進行。</p>
  *
- * <p><b>例外清單起步、各模組階段逐步清空</b>：現存違規列入 {@link #EXEMPT}，
- * key 以「來源類別 -&gt; 目標類別」為單位（內部類別、匿名類別歸併到最外層類別），
- * value 必須以預計清除的階段（{@code M1}～{@code M8} 或 {@code Z}＝尚未排定）開頭。
- * 各模組 PR 清掉自己的條目；<b>收尾階段清單必須為空</b>。</p>
+ * <p><b>沒有例外清單（Z2 起）</b>：重構期間曾以例外清單逐模組清除現存違規，M1～M8 完成後清單已為空，
+ * Z2 將「清單」這個機制本身刪除。往後要放行任何跨模組依賴，必須修改本守衛的判定邏輯，
+ * 該修改會出現在 PR diff 中被審查，而不是在清單裡悄悄加一行。
+ * 違規描述的 key 仍以「來源類別 -&gt; 目標類別」為單位（內部類別、匿名類別歸併到最外層類別）。</p>
  *
  * <p><b>為何附防死條目與反向驗證</b>：見 {@link EndpointAuthorizationTest}——
  * 清單會腐爛、守衛也可能壞掉，故兩者都以測試驗證。</p>
@@ -59,9 +58,6 @@ class CrossModuleImportTest {
 
     /** 反向驗證 fixture 的模組根套件 */
     private static final String FIXTURE_MODULE_ROOT = "dowob.xyz.blog.architecture.fixture.moduleimport";
-
-    /** 例外清單 value 的格式：以預計清除階段開頭 */
-    private static final Pattern STAGE_PREFIX = Pattern.compile("^(M[1-8]|Z)[：:].+");
 
     /** 業務模組目錄的名稱前綴 */
     private static final String MODULE_DIR_PREFIX = "blog-module-";
@@ -96,39 +92,13 @@ class CrossModuleImportTest {
     /** key 與 value 之間的箭頭 */
     private static final String ARROW = " -> ";
 
-    /**
-     * 現存跨模組依賴的例外清單：{@code 來源類別 -> 目標類別} → 「階段：說明」。
-     */
-    private static final Map<String, String> EXEMPT = Map.ofEntries();
-
     @Test
-    @DisplayName("模組不得依賴他模組的類別（bytecode ∪ source 聯集；例外清單以外不得有）")
+    @DisplayName("模組不得依賴他模組的類別（bytecode ∪ source 聯集；無例外清單）")
     void moduleMustNotDependOnAnotherModule() {
-        List<String> violations = findAllCrossModuleDependencies().stream()
-                .filter(v -> !EXEMPT.containsKey(v))
-                .toList();
-
-        assertThat(violations)
+        assertThat(findAllCrossModuleDependencies())
                 .as("模組之間只能透過 facade 與共用事件契約（blog-infrastructure）溝通，不得直接 import 他模組的類別。"
-                  + "若為尚未改造的模組，加入 EXEMPT（key 為 來源類別 -> 目標類別）並標明清除階段。")
+                  + "本守衛沒有例外清單；若確有必要放行，請修改守衛判定邏輯並在 PR 說明。")
                 .isEmpty();
-    }
-
-    @Test
-    @DisplayName("防死條目：例外清單的每一項都必須仍是實際的跨模組依賴（對 bytecode ∪ source 聯集比對）")
-    void exemptListMustNotContainStaleEntries() {
-        List<String> actual = findAllCrossModuleDependencies();
-
-        assertThat(EXEMPT.keySet())
-                .as("條目對應的依賴若已被移除（改走 facade／共用事件）或類別已刪除，就成了死條目，"
-                  + "會靜靜掩蓋日後同一組來源→目標的真違規，請移除。")
-                .allSatisfy(exempt -> assertThat(actual).contains(exempt));
-    }
-
-    @Test
-    @DisplayName("例外清單每個條目都必須標明預計清除的階段（M1～M8 或 Z）")
-    void everyExemptEntryMustDeclareClearingStage() {
-        assertThat(EXEMPT.values()).allSatisfy(v -> assertThat(v).matches(STAGE_PREFIX));
     }
 
     @Test
