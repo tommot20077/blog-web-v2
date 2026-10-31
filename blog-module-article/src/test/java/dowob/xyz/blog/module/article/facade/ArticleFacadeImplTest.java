@@ -732,7 +732,7 @@ class ArticleFacadeImplTest {
         /**
          * 版本還原曾是唯一繞過 {@code validateStatusTransition} 的狀態轉換路徑：REJECTED 的文章
          * 只要還原一份舊的 PUBLISHED 快照就會直接變成 PUBLISHED，帶著 admin 寫的內部駁回評語
-         * 進入匿名可讀的公開狀態。SEC-02 已從 {@code ArticleRestoreSource} 沒有 status 欄位堵住此路，
+         * 進入匿名可讀的公開狀態。SEC-02 讓 {@code ArticleRestoreSource} 不帶 status 欄位而堵住此路，
          * 本測試從「內部評語不得外流」的角度把該保證釘住：還原不得改狀態，rejectReason 也不受影響。
          */
         @Test
@@ -779,6 +779,25 @@ class ArticleFacadeImplTest {
             ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
             facade.applyRestoreContent(articleUuid, data);
+
+            assertThat(existing.getToc()).isEqualTo("[]");
+        }
+
+        @Test
+        @DisplayName("TOC 序列化結果為 null（防禦分支）→ 存空 JSON 陣列，不得把 null 寫進 articles.toc")
+        void applyRestoreContent_serializedTocNull_storesEmptyJsonArray() {
+            ArticleTocCodec nullCodec = org.mockito.Mockito.mock(ArticleTocCodec.class);
+            when(nullCodec.serialize(any())).thenReturn(null);
+            ArticleFacadeImpl facadeWithNullToc = new ArticleFacadeImpl(
+                articleMapper, userFacade, recommendMapper, articleService,
+                articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
+                new ArticleFileBinder(fileFacade), new ArticleDataAssembler(),
+                null, renderer, nullCodec
+            );
+            existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
+            ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "## 新章節", "sum", null, List.of());
+
+            facadeWithNullToc.applyRestoreContent(articleUuid, data);
 
             assertThat(existing.getToc()).isEqualTo("[]");
         }

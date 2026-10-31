@@ -162,6 +162,26 @@ class ArticleFacadeRestoreUuidIT {
     }
 
     @Test
+    @DisplayName("UUID 版還原：title／slug／summary／content_md／cover_image_url 以與還原前不同的值寫入 DB")
+    void applyRestoreContent_uuidVersion_persistsAllContentColumns() {
+        UUID uuid = insertArticle("DRAFT");
+        Map<String, Object> before = rowOf(uuid);
+        String newSlug = "restored-" + uuid;
+
+        articleFacade.applyRestoreContent(uuid, source(newSlug, List.of()));
+
+        Map<String, Object> row = rowOf(uuid);
+        assertThat(before.get("title")).isNotEqualTo("新標題");
+        assertThat(before.get("summary")).isNotEqualTo("新摘要");
+        assertThat(before.get("cover_image_url")).isNotEqualTo("https://cdn/new.jpg");
+        assertThat(row.get("title")).isEqualTo("新標題");
+        assertThat(row.get("slug")).isEqualTo(newSlug);
+        assertThat(row.get("summary")).isEqualTo("新摘要");
+        assertThat(row.get("cover_image_url")).isEqualTo("https://cdn/new.jpg");
+        assertThat(row.get("content_md")).isEqualTo(MARKDOWN);
+    }
+
+    @Test
     @DisplayName("SEC-02：UUID 版還原不改變文章狀態（DRAFT／REJECTED 皆然，rejectReason 亦不動）")
     void applyRestoreContent_uuidVersion_doesNotChangeStatus() {
         UUID draft = insertArticle("DRAFT");
