@@ -2,7 +2,6 @@ package dowob.xyz.blog.infrastructure.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
@@ -15,6 +14,7 @@ import org.springframework.amqp.rabbit.retry.RejectAndDontRequeueRecoverer;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.retry.backoff.ExponentialBackOffPolicy;
@@ -130,51 +130,27 @@ public class RabbitMqConfig {
      * RabbitMQ 監聽容器工廠
      *
      * <p>
-     * 配置手動確認模式（MANUAL ACK）與有狀態重試攔截器（指數退避），
-     * 重試耗盡後透過 {@link RejectAndDontRequeueRecoverer} nack 訊息以觸發 DLQ 路由。
+     * <b>先</b>交給 Spring Boot 的 {@link SimpleRabbitListenerContainerFactoryConfigurer} 套用
+     * {@code spring.rabbitmq.listener.simple.*}（concurrency、max-concurrency、prefetch、acknowledge-mode 等），
+     * <b>再</b>疊加本專案的設定（訊息轉換器、有狀態重試攔截器）。過去此工廠從零手建、未經 configurer，
+     * yaml 的 listener 設定一律靜默失效（PERF-15）。
      * </p>
      *
+     * @param configurer        Spring Boot 提供的容器工廠設定器（讀取 {@code spring.rabbitmq.listener.simple.*}）
      * @param connectionFactory RabbitMQ 連接工廠
      * @param converter         消息轉換器
      * @return 已配置的 SimpleRabbitListenerContainerFactory
      */
     @Bean(name = "rabbitListenerContainerFactory")
     public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
+            SimpleRabbitListenerContainerFactoryConfigurer configurer,
             ConnectionFactory connectionFactory,
             MessageConverter converter) {
 
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
+        configurer.configure(factory, connectionFactory);
         factory.setMessageConverter(converter);
-        factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
         factory.setAdviceChain(buildRetryInterceptor());
-        return factory;
-    }
-
-    /**
-     * 自動確認模式的監聽容器工廠
-     *
-     * <p>
-     * 適用於非關鍵業務或無法處理重試的消費者（如日誌記錄、非同步統計）。
-     * 設置為 AUTO 模式，消費者無需手動調用 basicAck。
-     * </p>
-     *
-     * @param connectionFactory RabbitMQ 連接工廠
-     * @param converter         消息轉換器
-     * @return 已配置為 AUTO ACK 的 SimpleRabbitListenerContainerFactory
-     */
-    @Bean(name = "autoAckContainerFactory")
-    public SimpleRabbitListenerContainerFactory autoAckContainerFactory(ConnectionFactory connectionFactory,MessageConverter converter) {
-
-        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
-        factory.setMessageConverter(converter);
-        factory.setAcknowledgeMode(AcknowledgeMode.AUTO);
-        /**
-         * 對於 Auto Ack 模式，通常不建議配置複雜的 RetryInterceptor，
-         * 因為一旦拋出異常，Spring AMQP 預設行為是無限 Requeue（除非配置了 error handler）。
-         * 這裡保持預設行為，若有需要可額外配置 ErrorHandler。
-         */
         return factory;
     }
 

@@ -16,6 +16,8 @@ import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
+import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.amqp.core.ReturnedMessage;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
@@ -98,7 +100,8 @@ class RabbitMqConfigTest {
     }
 
     /**
-     * 驗證 SimpleRabbitListenerContainerFactory 配置為手動確認模式
+     * 驗證容器工廠的 acknowledge mode 來自 {@code spring.rabbitmq.listener.simple.acknowledge-mode}（經 configurer），
+     * 而不是程式碼寫死
      *
      * <p>
      * 透過建立 container 並檢查其 acknowledge mode 來驗證，
@@ -106,18 +109,19 @@ class RabbitMqConfigTest {
      * </p>
      */
     @Test
-    @DisplayName("rabbitListenerContainerFactory 應配置為 MANUAL acknowledge mode")
-    void rabbitListenerContainerFactory_hasManualAck() {
+    @DisplayName("rabbitListenerContainerFactory 的 acknowledge mode 取自 RabbitProperties（經 configurer）")
+    void rabbitListenerContainerFactory_acknowledgeModeComesFromProperties() {
+        RabbitProperties properties = new RabbitProperties();
+        properties.getListener().getSimple().setAcknowledgeMode(AcknowledgeMode.MANUAL);
         MessageConverter converter = config.messageConverter();
-        SimpleRabbitListenerContainerFactory factory =
-                config.rabbitListenerContainerFactory(connectionFactory, converter);
+        SimpleRabbitListenerContainerFactory factory = config.rabbitListenerContainerFactory(
+                new SimpleRabbitListenerContainerFactoryConfigurer(properties), connectionFactory, converter);
 
         assertThat(factory).isNotNull();
 
         SimpleMessageListenerContainer container =
                 (SimpleMessageListenerContainer) factory.createListenerContainer();
-        assertThat(container.getAcknowledgeMode())
-                .isEqualTo(org.springframework.amqp.core.AcknowledgeMode.MANUAL);
+        assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.MANUAL);
     }
 
     /**
@@ -148,23 +152,6 @@ class RabbitMqConfigTest {
 
         assertThat(converter).isNotNull();
         assertThat(converter).isInstanceOf(Jackson2JsonMessageConverter.class);
-    }
-
-    /**
-     * 驗證 autoAckContainerFactory 配置為 AUTO acknowledge mode
-     */
-    @Test
-    @DisplayName("autoAckContainerFactory 應配置為 AUTO acknowledge mode")
-    void autoAckContainerFactory_hasAutoAck() {
-        MessageConverter converter = config.messageConverter();
-        SimpleRabbitListenerContainerFactory factory =
-                config.autoAckContainerFactory(connectionFactory, converter);
-
-        assertThat(factory).isNotNull();
-
-        SimpleMessageListenerContainer container =
-                (SimpleMessageListenerContainer) factory.createListenerContainer();
-        assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.AUTO);
     }
 
     /**
