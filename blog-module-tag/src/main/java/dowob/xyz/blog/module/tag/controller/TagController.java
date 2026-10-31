@@ -1,10 +1,7 @@
 package dowob.xyz.blog.module.tag.controller;
 
-import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
-import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.security.AuthUser;
-import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.model.dto.TagDetailResponse;
 import dowob.xyz.blog.module.tag.service.TagService;
@@ -42,11 +39,6 @@ public class TagController {
      * 標籤業務服務
      */
     private final TagService tagService;
-
-    /**
-     * 用戶 Facade（跨模組查詢使用者 UUID）
-     */
-    private final UserFacade userFacade;
 
     /**
      * 取得標籤自動補全建議（公開）
@@ -97,8 +89,8 @@ public class TagController {
     /**
      * 依 Slug 取得標籤詳情（公開）
      *
-     * <p>已認證使用者會在 response.followed 看到自己對該標籤的追蹤狀態；
-     * 未認證或 UserFacade 查不到 UUID 時 followed 為 false（不丟錯）。</p>
+     * <p>已認證使用者會在 response.followed 看到自己對該標籤的追蹤狀態（以 {@link AuthUser#uuid()} 比對）；
+     * 未認證時 followed 為 false（不丟錯）。</p>
      *
      * @param slug   標籤 Slug
      * @param user 當前登入者（AuthUser；可為 null，未認證時不注入）
@@ -108,52 +100,43 @@ public class TagController {
     public ApiResponse<TagDetailResponse> getTagDetail(
             @PathVariable String slug,
             @AuthenticationPrincipal AuthUser user) {
-        Long currentUserId = user == null ? null : user.id();
-        UUID currentUserUuid = currentUserId == null
-                ? null
-                : userFacade.getUserUuidById(currentUserId).orElse(null);
+        UUID currentUserUuid = user == null ? null : user.uuid();
         return ApiResponse.success(tagService.getTagDetail(slug, currentUserUuid));
     }
 
     /**
      * 使用者追蹤標籤（需登入）
      *
-     * <p>透過 {@link UserFacade} 以使用者內部 ID 查詢其真實 UUID，確保操作對應實際使用者。</p>
+     * <p>直接使用登入身分的 {@link AuthUser#uuid()}（JWT 驗證階段已確認使用者存在），不再跨模組查詢。</p>
      *
-     * @param id     標籤 ID
+     * @param id   標籤 ID
      * @param user 當前登入者（AuthUser；從 JWT 注入）
      * @return 成功回應
-     * @throws BusinessException 若使用者不存在（UserErrorCode.USER_NOT_FOUND）
      */
     @PreAuthorize("isAuthenticated()")
     @PostMapping("/{id}/follow")
     public ApiResponse<Void> followTag(
             @PathVariable UUID id,
             @AuthenticationPrincipal AuthUser user) {
-        UUID userUuid = userFacade.getUserUuidById(user.id())
-                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
-        tagService.followTag(id, userUuid);
+        tagService.followTag(id, user.uuid());
         return ApiResponse.success();
     }
 
     /**
      * 使用者取消追蹤標籤（需登入）
      *
-     * <p>透過 {@link UserFacade} 以使用者內部 ID 查詢其真實 UUID，確保操作對應實際使用者。</p>
+     * <p>直接使用登入身分的 {@link AuthUser#uuid()}（JWT 驗證階段已確認使用者存在），不再跨模組查詢。</p>
      *
-     * @param id     標籤 ID
+     * @param id   標籤 ID
      * @param user 當前登入者（AuthUser；從 JWT 注入）
      * @return 成功回應
-     * @throws BusinessException 若使用者不存在（UserErrorCode.USER_NOT_FOUND）
      */
     @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/{id}/follow")
     public ApiResponse<Void> unfollowTag(
             @PathVariable UUID id,
             @AuthenticationPrincipal AuthUser user) {
-        UUID userUuid = userFacade.getUserUuidById(user.id())
-                .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
-        tagService.unfollowTag(id, userUuid);
+        tagService.unfollowTag(id, user.uuid());
         return ApiResponse.success();
     }
 }

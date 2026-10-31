@@ -9,6 +9,7 @@ import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
+import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
@@ -22,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -30,6 +32,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -204,6 +207,112 @@ class AuthServiceTest {
         verify(userRepository, never()).save(any());
     }
 
+    /* ---- RACE-02／RACE-03：併發註冊撞到唯一約束，轉成與依序第二次註冊相同的業務錯誤碼 ---- */
+
+    /**
+     * 建立與 PostgreSQL JDBC 驅動訊息格式相同的唯一約束違反例外（Spring 翻譯後的 DuplicateKeyException）。
+     *
+     * @param constraint 約束名稱
+     * @return 模擬寫入 users 時撞到唯一約束的例外
+     */
+    private static DuplicateKeyException uniqueViolationOn(String constraint) {
+        return new DuplicateKeyException("insert users failed", new java.sql.SQLException(
+                "ERROR: duplicate key value violates unique constraint \"" + constraint + "\"\n"
+                        + "  Detail: Key already exists.", "23505"));
+    }
+
+    /**
+     * 讓寫入交易拋出指定例外（模擬 users INSERT 在交易內撞到約束）。
+     *
+     * @param failure 要拋出的例外
+     */
+    private void failTransactionWith(RuntimeException failure) {
+        doThrow(failure).when(transactionTemplate).execute(any());
+    }
+
+    /**
+     * 驗證：先查通過、寫入時撞到 email 唯一約束 → EMAIL_DUPLICATED，且不發任何事件。
+     */
+    @Test
+    @DisplayName("register → 寫入撞 users_email_key（併發落敗）→ 拋 EMAIL_DUPLICATED，不發事件")
+    void register_emailUniqueViolationOnInsert_throwsEmailDuplicated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        failTransactionWith(uniqueViolationOn("users_email_key"));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.EMAIL_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：寫入時撞到 username 唯一約束 → USERNAME_DUPLICATED。
+     */
+    @Test
+    @DisplayName("register → 寫入撞 users_username_key（併發落敗）→ 拋 USERNAME_DUPLICATED")
+    void register_usernameUniqueViolationOnInsert_throwsUsernameDuplicated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        failTransactionWith(uniqueViolationOn("users_username_key"));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.USERNAME_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：寫入時撞到 nickname 唯一約束 → NICKNAME_DUPLICATED。
+     */
+    @Test
+    @DisplayName("register → 寫入撞 uq_users_nickname（併發落敗）→ 拋 NICKNAME_DUPLICATED")
+    void register_nicknameUniqueViolationOnInsert_throwsNicknameDuplicated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        failTransactionWith(uniqueViolationOn("uq_users_nickname"));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：被包在其他例外內（Spring Data JDBC 的 DbActionExecutionException 形式）也能判讀。
+     */
+    @Test
+    @DisplayName("register → 唯一約束例外被包在一般 RuntimeException 內也能轉成業務錯誤碼")
+    void register_wrappedUniqueViolation_stillTranslated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        failTransactionWith(new RuntimeException("Failed to execute DbAction.InsertRoot",
+                uniqueViolationOn("users_email_key")));
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.EMAIL_DUPLICATED.getCode()));
+    }
+
+    /**
+     * 驗證：不認得的約束（或非約束錯誤）不被吞掉，原例外照常往外拋（維持 500，不錯誤標示成使用者可修正的重複）。
+     */
+    @Test
+    @DisplayName("register → 撞到不認得的約束，或非唯一約束錯誤 → 原例外照常拋出，不轉成業務錯誤")
+    void register_unknownConstraintOrOtherFailure_rethrowsOriginal() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        DuplicateKeyException unknown = uniqueViolationOn("verification_tokens_token_key");
+        failTransactionWith(unknown);
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isSameAs(unknown);
+
+        IllegalStateException other = new IllegalStateException("db down");
+        failTransactionWith(other);
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isSameAs(other);
+    }
+
     /**
      * 驗證：成功註冊後應發布 UserRegisteredEvent 至 RabbitMQ。
      */
@@ -228,6 +337,26 @@ class AuthServiceTest {
                 eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
                 eq(TimeUnit.MINUTES)
         );
+    }
+
+    /**
+     * 驗證：註冊事件帶儲存後使用者的 uuid 與發送端產生的 eventId（不再帶 Long 主鍵）。
+     */
+    @Test
+    @DisplayName("register → 事件帶 userUuid（取自儲存後的使用者）與非 null 的 eventId")
+    void register_event_carriesUserUuidAndEventId() {
+        when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(false);
+        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        when(userRepository.save(any(User.class))).thenReturn(buildActiveUser());
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().userUuid()).isEqualTo(USER_UUID);
+        assertThat(eventCaptor.getValue().eventId()).isNotNull();
     }
 
     /**
@@ -659,6 +788,27 @@ class AuthServiceTest {
     }
 
     /**
+     * 驗證：密碼重設申請事件帶使用者 uuid 與發送端產生的 eventId（不再帶 Long 主鍵）。
+     */
+    @Test
+    @DisplayName("forgotPassword → 事件帶 userUuid 與非 null 的 eventId")
+    void forgotPassword_event_carriesUserUuidAndEventId() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(buildActiveUser()));
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.forgotPassword(TEST_EMAIL);
+
+        ArgumentCaptor<UserPasswordResetRequestedEvent> eventCaptor =
+                ArgumentCaptor.forClass(UserPasswordResetRequestedEvent.class);
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().userUuid()).isEqualTo(USER_UUID);
+        assertThat(eventCaptor.getValue().eventId()).isNotNull();
+        assertThat(eventCaptor.getValue().email()).isEqualTo(TEST_EMAIL);
+    }
+
+    /**
      * 驗證：forgotPassword 對不存在的信箱應靜默忽略，不拋出例外。
      */
     @Test
@@ -945,6 +1095,33 @@ class AuthServiceTest {
                 eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
                 eq(TimeUnit.MINUTES)
         );
+    }
+
+    /**
+     * 驗證：重發驗證信的事件帶 userUuid 與 eventId，且每次重發都是新的 eventId
+     * （否則 consumer 依 eventId 去重會把使用者主動要求的重發誤判為重送而不寄）。
+     */
+    @Test
+    @DisplayName("resendVerification → 事件帶 userUuid；連續兩次重發的 eventId 不同（不被 consumer 去重吃掉）")
+    void resendVerification_event_carriesUserUuidAndFreshEventIdEachTime() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.increment(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        mockUser.setStatus(UserStatus.PENDING_VERIFICATION);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.resendVerification(TEST_EMAIL);
+        authService.resendVerification(TEST_EMAIL);
+
+        ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+        verify(rabbitTemplate, times(2)).convertAndSend(anyString(), anyString(), eventCaptor.capture());
+        List<UserRegisteredEvent> events = eventCaptor.getAllValues();
+        assertThat(events).allSatisfy(e -> {
+            assertThat(e.userUuid()).isEqualTo(USER_UUID);
+            assertThat(e.eventId()).isNotNull();
+        });
+        assertThat(events.get(0).eventId()).isNotEqualTo(events.get(1).eventId());
     }
 
     /**

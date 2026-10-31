@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.user.consumer;
 
 import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.user.config.UserRabbitMqConfig;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
@@ -39,8 +40,24 @@ public class EmailVerificationConsumer {
     /** MQ consumer 共用 ack/nack 包裝與計數 */
     private final ConsumerExecutor consumerExecutor;
 
+    /** MQ event 冪等處理服務 */
+    private final IdempotencyService idempotencyService;
+
     /**
      * 處理用戶已註冊事件，發送電子信箱驗證信
+     *
+     * <p><b>冪等</b>：事件帶發送端產生的 {@code eventId}，以 {@link IdempotencyService}（依
+     * {@code (eventId, CONSUMER_NAME)}）去重——同一事件重送時不會重寄驗證信，但仍 ack（不進 DLQ）。
+     * 使用者主動重發驗證信時 {@code AuthService} 會產生新的 {@code eventId}，不會被誤判為重送。
+     * 舊格式 in-flight 訊息的 {@code eventId} 為 null，無法去重，照常寄送。</p>
+     *
+     * <p><b>取捨</b>：標記發生在寄信「前」（沿用 {@link IdempotencyService} 既有語意）。寄信失敗進 DLQ 後，
+     * 若人工以同一訊息重新投遞會被去重擋下；使用者可改走「重發驗證信」（產生新 eventId）取得新信。
+     * 這是刻意選擇「寧可漏寄一次、不重複寄送含一次性驗證碼的信」。</p>
+     *
+     * <p><b>營運須知</b>：被去重跳過時會以 INFO 記錄「重複事件已跳過」（含 eventId、userUuid）。
+     * DLQ 人工重投同一個 eventId 的訊息、或 ack 前當機造成的重投，都會被擋下而不寄信；
+     * 要補寄，請使用者走「重發驗證信」（產生新 eventId）。</p>
      *
      * <p>郵件發送成功後由 {@link ConsumerExecutor} 確認（ack）訊息；失敗則 nack 送 DLQ。</p>
      *
@@ -55,12 +72,17 @@ public class EmailVerificationConsumer {
     public void handleUserRegistered(UserRegisteredEvent event,
                                      Channel channel,
                                      @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        consumerExecutor.execute(CONSUMER_NAME, () -> "userId=" + event.userId(),
+        consumerExecutor.execute(CONSUMER_NAME,
+                () -> "userUuid=" + event.userUuid() + ", eventId=" + event.eventId(),
                 channel, deliveryTag, () -> {
-                    log.info("收到用戶註冊事件 - userId={}, email={}, nickname={}",
-                            event.userId(), event.email(), event.nickname());
+                    if (event.eventId() != null
+                            && !idempotencyService.markProcessed(event.eventId(), CONSUMER_NAME)) {
+                        log.info("重複事件已跳過（未重寄驗證信）- eventId={}, userUuid={}", event.eventId(), event.userUuid());
+                        return;
+                    }
+                    log.info("收到用戶註冊事件 - userUuid={}, eventId={}", event.userUuid(), event.eventId());
                     userMailService.sendVerificationEmail(event);
-                    log.info("驗證信已送出 - userId={}", event.userId());
+                    log.info("驗證信已送出 - userUuid={}", event.userUuid());
                 });
     }
 }

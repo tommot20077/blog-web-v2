@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
-import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.tag.TestTagApplication;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,15 +29,13 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.when;
-
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -132,12 +129,6 @@ class TagControllerIT {
     private UserAuthService userAuthService;
 
     /**
-     * Mock UserFacade（避免依賴 User 模組）
-     */
-    @MockitoBean
-    private UserFacade userFacade;
-
-    /**
      * Mock ArticleFacade（ArticleTagOrphanReconciliationJob 依賴；owner 在 article 模組，本測試不載入）
      */
     @MockitoBean
@@ -173,10 +164,24 @@ class TagControllerIT {
     }
 
     /**
+     * 由使用者 ID 推得固定的測試 UUID。
+     *
+     * <p>刻意與 id <b>不同構</b>（不是 {@code new UUID(0, id)}）：若 controller 誤把 id 當 uuid 使用，
+     * 寫入的追蹤列就對不上此處的 uuid，測試會失敗（M6-a 審查發現的「id／uuid 同構」測試盲點）。</p>
+     *
+     * @param userId 使用者 ID
+     * @return 與 userId 無數值關聯的固定 UUID
+     */
+    private static UUID userUuidOf(Long userId) {
+        return UUID.nameUUIDFromBytes(("tag-it-user-" + userId).getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
      * 建立模擬認證物件
      *
      * <p>
-     * 使用 {@link UsernamePasswordAuthenticationToken} 以 {@link AuthUser}（id 為 userId、uuid 為固定測試 UUID）作為 principal，
+     * 使用 {@link UsernamePasswordAuthenticationToken} 以 {@link AuthUser}（id 為 userId、uuid 為
+     * {@link #userUuidOf(Long)} 推得且與 id 不同構的測試 UUID）作為 principal，
      * 並注入角色與權限作為 {@link org.springframework.security.core.GrantedAuthority}。
      * </p>
      *
@@ -191,7 +196,7 @@ class TagControllerIT {
         for (String perm : permissions) {
             authorities.add(new SimpleGrantedAuthority(perm));
         }
-        return new UsernamePasswordAuthenticationToken(new AuthUser(userId, new UUID(0L, userId), Role.valueOf(role)), null, authorities);
+        return new UsernamePasswordAuthenticationToken(new AuthUser(userId, userUuidOf(userId), Role.valueOf(role)), null, authorities);
     }
 
     @Test
@@ -333,8 +338,6 @@ class TagControllerIT {
     @DisplayName("GET /api/v1/tags/{slug} - 已認證但未追蹤 → $.data.followed=false")
     void getTagDetail_authenticatedNotFollowing_returnsFollowedFalse() throws Exception {
         insertTestTag("Rust", "rust", 5);
-        UUID userUuid = UUID.randomUUID();
-        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.of(userUuid));
 
         mockMvc.perform(get("/api/v1/tags/rust")
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
@@ -347,11 +350,9 @@ class TagControllerIT {
     @DisplayName("GET /api/v1/tags/{slug} - 已認證且已追蹤 → $.data.followed=true")
     void getTagDetail_authenticatedFollowing_returnsFollowedTrue() throws Exception {
         UUID tagId = insertTestTag("Scala", "scala", 5);
-        UUID userUuid = UUID.randomUUID();
-        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.of(userUuid));
         jdbcTemplate.update(
                 "INSERT INTO user_tag_follows (user_id, tag_id) VALUES (?, ?)",
-                userUuid, tagId);
+                userUuidOf(1L), tagId);
 
         mockMvc.perform(get("/api/v1/tags/scala")
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
@@ -361,10 +362,12 @@ class TagControllerIT {
     }
 
     @Test
-    @DisplayName("GET /api/v1/tags/{slug} - 已認證但 UserFacade 查不到 UUID → $.data.followed=false 且不丟錯")
-    void getTagDetail_authenticatedButUserFacadeEmpty_returnsFollowedFalseNoError() throws Exception {
-        insertTestTag("Elixir", "elixir", 5);
-        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.empty());
+    @DisplayName("GET /api/v1/tags/{slug} - 以 id 同構的 uuid 追蹤者不算本人已追蹤 → $.data.followed=false（證明讀的是 principal.uuid 而非 id）")
+    void getTagDetail_followRowKeyedByIdIsomorphicUuid_returnsFollowedFalse() throws Exception {
+        UUID tagId = insertTestTag("Elixir", "elixir", 5);
+        jdbcTemplate.update(
+                "INSERT INTO user_tag_follows (user_id, tag_id) VALUES (?, ?)",
+                new UUID(0L, 1L), tagId);
 
         mockMvc.perform(get("/api/v1/tags/elixir")
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
@@ -378,8 +381,6 @@ class TagControllerIT {
     @DisplayName("POST /api/v1/tags/{id}/follow - 已認證使用者追蹤標籤，回傳 200 成功")
     void followTag_authenticated_returns200() throws Exception {
         UUID tagId = insertTestTag("Kubernetes", "kubernetes", 5);
-        UUID userUuid = UUID.randomUUID();
-        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.of(userUuid));
 
         mockMvc.perform(post("/api/v1/tags/{id}/follow", tagId)
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
@@ -387,20 +388,11 @@ class TagControllerIT {
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
-    }
 
-    @Test
-    @DisplayName("POST /api/v1/tags/{id}/follow - UserFacade 回傳 empty 時，回傳 400 且 code 為 A0101")
-    void followTag_userNotFound_returns400WithA0101() throws Exception {
-        UUID tagId = insertTestTag("Docker", "docker", 3);
-        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.empty());
-
-        mockMvc.perform(post("/api/v1/tags/{id}/follow", tagId)
-                        .with(SecurityMockMvcRequestPostProcessors.authentication(
-                                buildAuth(1L, "USER", "COMMENT_WRITE")))
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("A0101"));
+        /* 追蹤列的 user_id 必須是 principal.uuid，而不是由 id 推出的值 */
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT user_id FROM user_tag_follows WHERE tag_id = ?", UUID.class, tagId))
+                .containsExactly(userUuidOf(1L));
     }
 
     @Test
@@ -444,8 +436,6 @@ class TagControllerIT {
     @DisplayName("DELETE /api/v1/tags/{id}/follow - 已認證使用者取消追蹤標籤，回傳 200 成功")
     void unfollowTag_authenticated_returns200() throws Exception {
         UUID tagId = insertTestTag("Kubernetes", "kubernetes", 5);
-        UUID userUuid = UUID.randomUUID();
-        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.of(userUuid));
 
         // 先追蹤
         mockMvc.perform(post("/api/v1/tags/{id}/follow", tagId)
@@ -460,19 +450,10 @@ class TagControllerIT {
                                 buildAuth(1L, "USER", "COMMENT_WRITE"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
-    }
 
-    @Test
-    @DisplayName("DELETE /api/v1/tags/{id}/follow - UserFacade 回傳 empty 時，回傳 400 且 code 為 A0101")
-    void unfollowTag_userNotFound_returns400WithA0101() throws Exception {
-        UUID tagId = insertTestTag("Docker", "docker", 3);
-        when(userFacade.getUserUuidById(eq(1L))).thenReturn(Optional.empty());
-
-        mockMvc.perform(delete("/api/v1/tags/{id}/follow", tagId)
-                        .with(SecurityMockMvcRequestPostProcessors.authentication(
-                                buildAuth(1L, "USER", "COMMENT_WRITE"))))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("A0101"));
+        /* 取消追蹤確實刪除以 principal.uuid 為鍵的追蹤列 */
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM user_tag_follows WHERE tag_id = ?", Long.class, tagId)).isZero();
     }
 
     @Test

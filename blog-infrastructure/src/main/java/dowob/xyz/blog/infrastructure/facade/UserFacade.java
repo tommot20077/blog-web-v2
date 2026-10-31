@@ -1,11 +1,9 @@
 package dowob.xyz.blog.infrastructure.facade;
 
-import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 
 import java.util.Collection;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -16,46 +14,13 @@ import java.util.UUID;
  * 實作由 blog-module-user 提供，透過 Spring DI 注入。
  * </p>
  *
+ * <p>M8 起<b>全面 UUID</b>：跨模組識別一律是使用者公開 UUID（登入身分取 {@code AuthUser.uuid()}），
+ * 不再提供以 Long 使用者主鍵為參數或鍵的方法。</p>
+ *
  * @author Yuan
- * @version 1.0
+ * @version 2.0（M8：移除 Long 版方法）
  */
 public interface UserFacade {
-
-    /**
-     * 根據用戶內部 ID 取得對外公開的 UUID
-     *
-     * @param userId 用戶資料庫主鍵
-     * @return 用戶 UUID，若不存在則回傳 empty
-     */
-    Optional<UUID> getUserUuidById(Long userId);
-
-    /**
-     * 根據用戶內部 ID 取得暱稱
-     *
-     * @param userId 用戶資料庫主鍵
-     * @return 用戶暱稱，若不存在則回傳 empty
-     */
-    Optional<String> getUserNicknameById(Long userId);
-
-    /**
-     * 根據用戶內部 ID 取得帳號名稱（username）
-     *
-     * @param userId 用戶資料庫主鍵
-     * @return 用戶帳號，若不存在則回傳 empty
-     */
-    Optional<String> getUserUsernameById(Long userId);
-
-    /**
-     * 批次取得作者投影（uuid ＋ nickname），供文章列表一次解析整頁作者。
-     *
-     * <p>列表路徑<b>必須</b>用本方法，不得對每筆呼叫 {@link #getUserUuidById} /
-     * {@link #getUserNicknameById}——後者一頁 N 篇即 2N 條查詢（PERF-02）。
-     * 輸入可含重複 id（一頁文章常出自同一作者），實作負責去重與切批。</p>
-     *
-     * @param userIds 使用者資料庫主鍵集合；{@code null}、空集合或其中的 {@code null} 元素皆被忽略
-     * @return 使用者主鍵 → 作者投影；查無的 id 不出現在結果中，永不回傳 {@code null}
-     */
-    Map<Long, AuthorInfo> getAuthorInfoByIds(Collection<Long> userIds);
 
     /**
      * 以使用者公開 UUID 批次取得顯示資訊（uuid ＋ nickname ＋ avatarUrl），供其他模組在列表上一次解析整頁的使用者。

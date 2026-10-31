@@ -10,6 +10,7 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Properties;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -34,7 +35,8 @@ class UserMailServiceTest {
         when(mailSender.createMimeMessage()).thenReturn(message);
         UserMailService service = buildService(mailSender);
         UserRegisteredEvent event =
-                new UserRegisteredEvent(1L, "new-user@example.com", "Yuan", "verify-token-abc", "123456");
+                new UserRegisteredEvent(UUID.randomUUID(), UUID.randomUUID(), "new-user@example.com", "Yuan",
+                        "verify-token-abc", "123456");
 
         service.sendVerificationEmail(event);
 
@@ -58,7 +60,8 @@ class UserMailServiceTest {
         when(mailSender.createMimeMessage()).thenReturn(message);
         UserMailService service = buildService(mailSender);
         UserPasswordResetRequestedEvent event =
-                new UserPasswordResetRequestedEvent(1L, "user@example.com", "reset-token-abc");
+                new UserPasswordResetRequestedEvent(UUID.randomUUID(), UUID.randomUUID(), "user@example.com",
+                        "reset-token-abc");
 
         service.sendPasswordResetEmail(event);
 

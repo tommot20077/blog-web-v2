@@ -88,22 +88,12 @@ class EventContractTest {
     /**
      * 規則 (a) 例外清單：缺少 {@code UUID eventId} 的事件。key 為類別全名，value 為「階段：說明」。
      */
-    private static final Map<String, String> MISSING_EVENT_ID_EXEMPT = Map.ofEntries(
-            // 預計 M8（user 階段）：模組內事件（註冊、重設密碼）一併改 uuid＋eventId
-            Map.entry("dowob.xyz.blog.module.user.model.event.UserRegisteredEvent",
-                    "M8：user 模組內部事件，user 階段補 eventId"),
-            Map.entry("dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent",
-                    "M8：user 模組內部事件，user 階段補 eventId"));
+    private static final Map<String, String> MISSING_EVENT_ID_EXEMPT = Map.ofEntries();
 
     /**
      * 規則 (b) 例外清單：仍含 Long 欄位的事件。key 為 {@code 類別全名#欄位}，value 為「階段：說明」。
      */
-    private static final Map<String, String> LONG_FIELD_EXEMPT = Map.ofEntries(
-            // 預計 M8（user 階段）：模組內事件改 uuid
-            Map.entry("dowob.xyz.blog.module.user.model.event.UserRegisteredEvent#userId",
-                    "M8：user 模組內部事件，user 階段改 userUuid"),
-            Map.entry("dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent#userId",
-                    "M8：user 模組內部事件，user 階段改 userUuid"));
+    private static final Map<String, String> LONG_FIELD_EXEMPT = Map.ofEntries();
 
     /**
      * 規則 (c) 登記簿：允許留在 {@code module.*..} 之下的<b>模組內部事件</b>（只有本模組自己發送與消費）。

@@ -72,6 +72,10 @@ public class UserService {
      * <p>更新暱稱、個人簡介、個人網站、社群連結、頭貼與所在地；
      * 若新暱稱已被其他用戶使用，拋出 BusinessException。</p>
      *
+     * <p><b>併發改名（RACE-02）</b>：{@code existsByNickname} 先查只是快速路徑；兩個請求同時改成同一暱稱時
+     * 都會通過先查，由 DB 的 {@code uq_users_nickname} 兜底。UPDATE（{@code save}）是本方法最後一個 DB 操作，
+     * 撞到約束就地轉成 {@link UserErrorCode#NICKNAME_DUPLICATED}，之後不再執行任何 SQL（交易隨例外回滾）。</p>
+     *
      * @param userId      用戶 ID
      * @param nickname    新的暱稱
      * @param bio         新的個人簡介（可為 null）
@@ -96,7 +100,15 @@ public class UserService {
         user.setSocialLinks(socialLinks);
         user.setAvatarUrl(avatarUrl);
         user.setLocation(location);
-        userRepository.save(user);
+        try {
+            userRepository.save(user);
+        } catch (RuntimeException e) {
+            if (UniqueConstraintViolations.constraintNameOf(e)
+                    .filter(UniqueConstraintViolations.USERS_NICKNAME::equals).isPresent()) {
+                throw new BusinessException(UserErrorCode.NICKNAME_DUPLICATED);
+            }
+            throw e;
+        }
     }
 
     /**
