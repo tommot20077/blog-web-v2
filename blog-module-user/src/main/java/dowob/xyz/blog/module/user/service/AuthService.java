@@ -96,8 +96,11 @@ public class AuthService {
      * {@code uq_users_nickname} 時，依約束名稱轉成 {@link UserErrorCode#EMAIL_DUPLICATED}／
      * {@link UserErrorCode#USERNAME_DUPLICATED}／{@link UserErrorCode#NICKNAME_DUPLICATED}，
      * 對外行為（狀態碼、錯誤碼）與「依序第二次註冊」完全一致，不再是 500。
-     * 若多條約束同時違反，回哪一個取決於 PostgreSQL 檢查唯一索引的順序（通常依索引建立先後：
-     * email、username、nickname，與依序註冊的先查順序相同；本測試只涵蓋單一約束違反的情境）。</p>
+     * <b>已知限制</b>：若多條約束同時違反（例如 email 與暱稱同時撞到），回哪一個錯誤碼取決於
+     * PostgreSQL 檢查唯一索引的順序。該順序不是契約：通常依索引建立先後（email、username、nickname），
+     * 但 {@code pg_dump} 還原等操作重建索引後順序可能改變，因此併發下同時違反多條約束時的錯誤碼不保證，
+     * 且不保證與依序註冊（先查順序固定為 email、username、nickname）相同；本行為只保證
+     * 「單一約束違反」時與依序註冊一致；撞到這三條約束的任何組合都不會回 500。</p>
      *
      * <p>註：Q8（email 重複一律回成功並寄通知信，避免帳號枚舉）不在此處理；
      * 之後另案改寫時，{@code EMAIL_DUPLICATED} 的轉換須一併調整。</p>
@@ -178,7 +181,8 @@ public class AuthService {
      *
      * <p>只轉換「users 的 email／username／nickname 唯一約束」；撞到其他約束（例如
      * {@code verification_tokens} 的 token 唯一約束）或非約束錯誤時原樣回傳，維持原本的錯誤處理（500），
-     * 不把真正的系統錯誤誤標成使用者可修正的重複。</p>
+     * 不把真正的系統錯誤誤標成使用者可修正的重複。多條約束同時違反時只會看到 PostgreSQL 回報的那一條，
+     * 順序見 {@link #register(String, String, String, String, String)} 的「已知限制」。</p>
      *
      * @param failure 交易內拋出的例外
      * @return 對應的 {@link BusinessException}；不認得的例外則原樣回傳

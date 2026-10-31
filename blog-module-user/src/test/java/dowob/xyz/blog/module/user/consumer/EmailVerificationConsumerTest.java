@@ -252,6 +252,28 @@ class EmailVerificationConsumerTest {
     }
 
     /**
+     * 情境：重複事件被跳過時，營運端必須看得到（INFO，帶 eventId、userUuid 與「重複事件已跳過」），
+     * 否則 DLQ 人工重投或 ack 前當機造成的重投被靜默吞掉，無從追查。
+     *
+     * @throws Exception 測試過程中的例外
+     */
+    @Test
+    @DisplayName("handleUserRegistered：重複事件被跳過時以 INFO 記錄 eventId、userUuid 與「重複事件已跳過」")
+    void handleUserRegistered_duplicateEventId_logsSkipAtInfo() throws Exception {
+        when(idempotencyService.markProcessed(EVENT_ID, EmailVerificationConsumer.CONSUMER_NAME)).thenReturn(false);
+
+        List<LogEvent> logs = captureLogsOf(EmailVerificationConsumer.class, () -> consumer.handleUserRegistered(event(), channel, 14L));
+
+        assertThat(logs).anySatisfy(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.INFO);
+            assertThat(e.getMessage().getFormattedMessage())
+                    .contains("重複事件已跳過")
+                    .contains("eventId=" + EVENT_ID)
+                    .contains("userUuid=" + USER_UUID);
+        });
+    }
+
+    /**
      * 讀取指定 consumer 的指標計數，指標不存在時視為 0。
      *
      * @param registry     測試用 registry
@@ -272,9 +294,21 @@ class EmailVerificationConsumerTest {
      * @throws Exception 動作拋出的例外
      */
     private static List<LogEvent> captureExecutorLogs(ThrowingRunnable action) throws Exception {
+        return captureLogsOf(ConsumerExecutor.class, action);
+    }
+
+    /**
+     * 執行動作並捕捉指定類別的 logger 輸出的日誌事件。
+     *
+     * @param source 日誌來源類別
+     * @param action 要執行的動作
+     * @return 捕捉到的日誌事件
+     * @throws Exception 動作拋出的例外
+     */
+    private static List<LogEvent> captureLogsOf(Class<?> source, ThrowingRunnable action) throws Exception {
         CapturingAppender appender = new CapturingAppender();
         appender.start();
-        Logger logger = (Logger) LogManager.getLogger(ConsumerExecutor.class);
+        Logger logger = (Logger) LogManager.getLogger(source);
         logger.addAppender(appender);
         try {
             action.run();

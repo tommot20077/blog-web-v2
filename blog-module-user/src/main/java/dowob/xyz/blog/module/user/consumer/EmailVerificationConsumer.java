@@ -55,6 +55,10 @@ public class EmailVerificationConsumer {
      * 若人工以同一訊息重新投遞會被去重擋下；使用者可改走「重發驗證信」（產生新 eventId）取得新信。
      * 這是刻意選擇「寧可漏寄一次、不重複寄送含一次性驗證碼的信」。</p>
      *
+     * <p><b>營運須知</b>：被去重跳過時會以 INFO 記錄「重複事件已跳過」（含 eventId、userUuid）。
+     * DLQ 人工重投同一個 eventId 的訊息、或 ack 前當機造成的重投，都會被擋下而不寄信；
+     * 要補寄，請使用者走「重發驗證信」（產生新 eventId）。</p>
+     *
      * <p>郵件發送成功後由 {@link ConsumerExecutor} 確認（ack）訊息；失敗則 nack 送 DLQ。</p>
      *
      * @param event       用戶已註冊事件，包含信箱、暱稱與驗證 Token
@@ -73,7 +77,7 @@ public class EmailVerificationConsumer {
                 channel, deliveryTag, () -> {
                     if (event.eventId() != null
                             && !idempotencyService.markProcessed(event.eventId(), CONSUMER_NAME)) {
-                        log.debug("用戶註冊事件 {} 已處理過，跳過重複寄信", event.eventId());
+                        log.info("重複事件已跳過（未重寄驗證信）- eventId={}, userUuid={}", event.eventId(), event.userUuid());
                         return;
                     }
                     log.info("收到用戶註冊事件 - userUuid={}, eventId={}", event.userUuid(), event.eventId());

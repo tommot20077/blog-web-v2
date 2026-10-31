@@ -3,9 +3,12 @@ package dowob.xyz.blog.module.user.race;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.module.user.model.User;
+import dowob.xyz.blog.module.user.model.VerificationToken;
+import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.service.AbstractIntegrationTest;
 import dowob.xyz.blog.module.user.service.AuthService;
@@ -14,7 +17,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.ArrayList;
@@ -30,6 +35,10 @@ import java.util.function.IntFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * user 模組兩個併發問題的整合測試（真實 Postgres，經 service → 交易，不 mock 任何約束）。
@@ -74,6 +83,9 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private StringRedisTemplate redis;
 
     /** 每個測試前後都清掉本測試建立的使用者與觸發器 */
     @BeforeEach
@@ -125,6 +137,51 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    /** 每輪併發註冊前重置會被驗證的 mock（它們在整個測試方法內是同一個實例）。 */
+    private void resetRegistrationSideEffectMocks() {
+        reset(rabbitTemplate, verificationTokenRepository);
+    }
+
+    /**
+     * 斷言併發註冊中「輸的那一方」沒有留下任何副作用，且贏的那一方的副作用完整只有一份：
+     * <ul>
+     *   <li>DB：沒有輸家的 {@code users} 列；{@code verification_tokens} 只儲存過一次，且屬於贏家
+     *       （本模組測試基底把 {@code VerificationTokenRepository} 換成 mock，故以其 {@code save} 呼叫驗證，
+     *       不查真實資料表）；</li>
+     *   <li>MQ：只發出一個註冊事件，事件屬於贏家；</li>
+     *   <li>Redis：驗證碼 key 的值是贏家事件的驗證碼；email 不同時，輸家的 email 沒有任何驗證碼 key。</li>
+     * </ul>
+     *
+     * @param outcomes  兩條執行緒的結果（依執行緒編號排序，恰一個為 {@code OK}）
+     * @param emails    兩條執行緒各自使用的 email（依執行緒編號，可相同）
+     * @param keyColumn 能分辨兩條執行緒的 users 欄位（{@code username} 或 {@code email}，兩者的值必須不同）
+     * @param keys      兩條執行緒在 {@code keyColumn} 上各自的值（依執行緒編號）
+     */
+    private void assertLoserLeftNoTraces(List<String> outcomes, String[] emails, String keyColumn, String[] keys) {
+        int winner = OK.equals(outcomes.get(0)) ? 0 : 1;
+        int loser = 1 - winner;
+
+        assertThat(countWhere(keyColumn, keys[loser])).as("輸家不得有 users 列").isZero();
+        Long winnerId = jdbc.queryForObject("SELECT id FROM users WHERE " + keyColumn + " = ?", Long.class, keys[winner]);
+
+        ArgumentCaptor<VerificationToken> token = ArgumentCaptor.forClass(VerificationToken.class);
+        verify(verificationTokenRepository, times(1)).save(token.capture());
+        assertThat(token.getValue().getUserId()).as("唯一儲存的驗證 token 屬於贏家").isEqualTo(winnerId);
+
+        ArgumentCaptor<UserRegisteredEvent> event = ArgumentCaptor.forClass(UserRegisteredEvent.class);
+        verify(rabbitTemplate, times(1)).convertAndSend(anyString(), anyString(), event.capture());
+        assertThat(event.getValue().email()).as("唯一發出的事件屬於贏家").isEqualTo(emails[winner]);
+
+        assertThat(redis.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(emails[winner])))
+                .as("贏家的驗證碼 key").isEqualTo(event.getValue().verificationCode());
+        if (!emails[loser].equals(emails[winner])) {
+            assertThat(redis.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(emails[loser])))
+                    .as("輸家的 email 沒有任何驗證碼 key").isNull();
+        }
+        redis.delete(RedisKeyConstant.getEmailVerifyCodeKey(emails[winner]));
+        redis.delete(RedisKeyConstant.getEmailVerifyCodeKey(emails[loser]));
     }
 
     private long countWhere(String column, String value) {
@@ -195,13 +252,16 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
         for (int round = 0; round < ROUNDS; round++) {
             String email = EMAIL_PREFIX + "email-" + round + "@example.com";
             int r = round;
+            String[] usernames = {EMAIL_PREFIX + "email-" + r + "-u0", EMAIL_PREFIX + "email-" + r + "-u1"};
+            resetRegistrationSideEffectMocks();
 
             List<String> outcomes = runConcurrently(i -> () -> outcomeOf(() -> authService.register(
-                    email, PASSWORD, EMAIL_PREFIX + "email-" + r + "-u" + i, "EmailRaceNick" + r + "x" + i)));
+                    email, PASSWORD, usernames[i], "EmailRaceNick" + r + "x" + i)));
 
             assertThat(outcomes).as("第 %d 輪", round)
                     .containsExactlyInAnyOrder(OK, UserErrorCode.EMAIL_DUPLICATED.getCode());
             assertThat(countWhere("email", email)).as("第 %d 輪的使用者列數", round).isEqualTo(1L);
+            assertLoserLeftNoTraces(outcomes, new String[]{email, email}, "username", usernames);
         }
     }
 
@@ -212,14 +272,17 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
         for (int round = 0; round < ROUNDS; round++) {
             String username = EMAIL_PREFIX + "uname-" + round;
             int r = round;
+            String[] emails = {EMAIL_PREFIX + "uname-" + r + "-0@example.com",
+                    EMAIL_PREFIX + "uname-" + r + "-1@example.com"};
+            resetRegistrationSideEffectMocks();
 
             List<String> outcomes = runConcurrently(i -> () -> outcomeOf(() -> authService.register(
-                    EMAIL_PREFIX + "uname-" + r + "-" + i + "@example.com", PASSWORD, username,
-                    "UnameRaceNick" + r + "x" + i)));
+                    emails[i], PASSWORD, username, "UnameRaceNick" + r + "x" + i)));
 
             assertThat(outcomes).as("第 %d 輪", round)
                     .containsExactlyInAnyOrder(OK, UserErrorCode.USERNAME_DUPLICATED.getCode());
             assertThat(countWhere("username", username)).as("第 %d 輪的使用者列數", round).isEqualTo(1L);
+            assertLoserLeftNoTraces(outcomes, emails, "email", emails);
         }
     }
 
@@ -232,14 +295,17 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
         for (int round = 0; round < ROUNDS; round++) {
             String nickname = "NickRace" + round;
             int r = round;
+            String[] emails = {EMAIL_PREFIX + "nick-" + r + "-0@example.com",
+                    EMAIL_PREFIX + "nick-" + r + "-1@example.com"};
+            resetRegistrationSideEffectMocks();
 
             List<String> outcomes = runConcurrently(i -> () -> outcomeOf(() -> authService.register(
-                    EMAIL_PREFIX + "nick-" + r + "-" + i + "@example.com", PASSWORD,
-                    EMAIL_PREFIX + "nick-" + r + "-u" + i, nickname)));
+                    emails[i], PASSWORD, EMAIL_PREFIX + "nick-" + r + "-u" + i, nickname)));
 
             assertThat(outcomes).as("第 %d 輪", round)
                     .containsExactlyInAnyOrder(OK, UserErrorCode.NICKNAME_DUPLICATED.getCode());
             assertThat(countWhere("nickname", nickname)).as("第 %d 輪的同暱稱列數", round).isEqualTo(1L);
+            assertLoserLeftNoTraces(outcomes, emails, "email", emails);
         }
     }
 
