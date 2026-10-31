@@ -174,9 +174,8 @@
                             <includes>
                                 <include>**/*E2E.java</include>
                             </includes>
-                            <excludes combine.self="override">
-                                <exclude>**/red/*RedE2E.java</exclude>
-                            </excludes>
+                            <!-- red/*RedE2E 於 2026-10-31 全數轉綠（T2 併發修復後），併入 e2e（TEST-10） -->
+                            <excludes combine.self="override"/>
                         </configuration>
                     </plugin>
                 </plugins>
