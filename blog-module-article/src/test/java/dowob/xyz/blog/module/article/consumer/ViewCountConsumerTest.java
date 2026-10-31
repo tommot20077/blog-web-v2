@@ -15,12 +15,14 @@ import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.Logger;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
@@ -30,6 +32,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -62,13 +66,24 @@ class ViewCountConsumerTest {
     @Mock
     private Channel channel;
 
-    /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
-    @Spy
-    private ConsumerExecutor consumerExecutor = new ConsumerExecutor();
+    /** 交易管理員替身：用來觀察 commit／rollback（getTransaction 回傳簡易 status） */
+    private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+
+    /** 真實的 ack/nack/冪等共用包裝（非 Mock），搭配 Mock 的 IdempotencyService 與交易管理員 */
+    private ConsumerExecutor consumerExecutor;
 
     /** 待測消費者 */
-    @InjectMocks
     private ViewCountConsumer viewCountConsumer;
+
+    /**
+     * 建立被測物件：ConsumerExecutor 使用真實實例，冪等服務為 Mock、交易由 Mock 交易管理員模擬。
+     */
+    @BeforeEach
+    void buildSubjectUnderTest() {
+        when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        consumerExecutor = new ConsumerExecutor(new TransactionTemplate(txManager), idempotencyService);
+        viewCountConsumer = new ViewCountConsumer(viewCountService, consumerExecutor);
+    }
 
     /**
      * 情境：收到 ArticleViewedEvent → 增加計數並 ACK
@@ -79,7 +94,7 @@ class ViewCountConsumerTest {
         UUID uuid = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), uuid, Instant.now());
         long deliveryTag = 42L;
-        when(idempotencyService.markProcessed(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
+        when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
 
         viewCountConsumer.handleArticleViewed(event, channel, deliveryTag);
 
@@ -96,7 +111,7 @@ class ViewCountConsumerTest {
         UUID uuid = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), uuid, Instant.now());
         long deliveryTag = 99L;
-        when(idempotencyService.markProcessed(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
+        when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
         doThrow(new RuntimeException("Redis error")).when(viewCountService).incrementRedisViewCount(uuid);
 
         viewCountConsumer.handleArticleViewed(event, channel, deliveryTag);
@@ -116,8 +131,8 @@ class ViewCountConsumerTest {
         UUID uuid = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(eventId, uuid, Instant.now());
-        // 第一次 markProcessed 回 true（首次處理），第二次回 false（已處理過要 skip）
-        when(idempotencyService.markProcessed(eventId, ViewCountConsumer.CONSUMER_NAME))
+        // 第一次 tryMark 回 true（首次處理），第二次回 false（已處理過要 skip）
+        when(idempotencyService.tryMark(eventId, ViewCountConsumer.CONSUMER_NAME))
                 .thenReturn(true, false);
 
         viewCountConsumer.handleArticleViewed(event, channel, 1L);
@@ -144,7 +159,7 @@ class ViewCountConsumerTest {
 
         verify(viewCountService).incrementRedisViewCount(uuid);
         verify(channel).basicAck(7L, false);
-        verify(idempotencyService, never()).markProcessed(any(), any());
+        verify(idempotencyService, never()).tryMark(any(), any());
     }
 
     /**
@@ -156,7 +171,7 @@ class ViewCountConsumerTest {
     @DisplayName("handleArticleViewed：成功時 ConsumerExecutor 計入 processed 指標")
     void handleArticleViewed_success_recordsProcessedMetric() throws Exception {
         ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), UUID.randomUUID(), Instant.now());
-        when(idempotencyService.markProcessed(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
+        when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -181,7 +196,7 @@ class ViewCountConsumerTest {
         UUID uuid = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(eventId, uuid, Instant.now());
-        when(idempotencyService.markProcessed(eventId, ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
+        when(idempotencyService.tryMark(eventId, ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
         doThrow(new RuntimeException("Redis error")).when(viewCountService).incrementRedisViewCount(uuid);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
@@ -200,6 +215,48 @@ class ViewCountConsumerTest {
             Metrics.removeRegistry(registry);
             registry.close();
         }
+    }
+
+    /**
+     * 情境：業務（Redis 計數）失敗 → 標記所在的交易 rollback、不 commit，訊息 nack。
+     *
+     * @throws IOException basicNack 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleArticleViewed：業務失敗 → 冪等標記所在交易 rollback（不 commit）並 nack")
+    void handleArticleViewed_onBodyFailure_rollsBackMarkTransaction() throws IOException {
+        UUID uuid = UUID.randomUUID();
+        ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), uuid, Instant.now());
+        when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
+        doThrow(new RuntimeException("Redis error")).when(viewCountService).incrementRedisViewCount(uuid);
+
+        viewCountConsumer.handleArticleViewed(event, channel, 3L);
+
+        verify(txManager).rollback(any());
+        verify(txManager, never()).commit(any());
+        verify(channel).basicNack(3L, false, false);
+        verify(channel, never()).basicAck(eq(3L), eq(false));
+    }
+
+    /**
+     * 情境：成功 → 先標記、再計數、commit 之後才 ack。
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleArticleViewed：成功 → tryMark、計數、commit、ack 依序發生")
+    void handleArticleViewed_success_marksThenCountsThenCommitsThenAcks() throws IOException {
+        UUID uuid = UUID.randomUUID();
+        ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), uuid, Instant.now());
+        when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
+
+        viewCountConsumer.handleArticleViewed(event, channel, 4L);
+
+        org.mockito.InOrder order = inOrder(idempotencyService, viewCountService, txManager, channel);
+        order.verify(idempotencyService).tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME);
+        order.verify(viewCountService).incrementRedisViewCount(uuid);
+        order.verify(txManager).commit(any());
+        order.verify(channel).basicAck(4L, false);
     }
 
     /**

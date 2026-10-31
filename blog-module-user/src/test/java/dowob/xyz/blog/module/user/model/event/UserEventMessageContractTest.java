@@ -6,6 +6,8 @@ import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.config.RabbitMqConfig;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import dowob.xyz.blog.module.user.consumer.EmailVerificationConsumer;
 import dowob.xyz.blog.module.user.consumer.PasswordResetConsumer;
 import dowob.xyz.blog.module.user.service.UserMailService;
@@ -136,7 +138,8 @@ class UserEventMessageContractTest {
         IdempotencyService idempotency = mock(IdempotencyService.class);
         Channel channel = mock(Channel.class);
         EmailVerificationConsumer consumer =
-                new EmailVerificationConsumer(mailService, new ConsumerExecutor(), idempotency);
+                new EmailVerificationConsumer(mailService, new ConsumerExecutor(
+                        new TransactionTemplate(mock(PlatformTransactionManager.class)), idempotency));
         UserRegisteredEvent legacy = (UserRegisteredEvent)
                 CONVERTER.fromMessage(messageOf(LEGACY_REGISTERED, UserRegisteredEvent.class));
 
@@ -154,7 +157,8 @@ class UserEventMessageContractTest {
         IdempotencyService idempotency = mock(IdempotencyService.class);
         Channel channel = mock(Channel.class);
         PasswordResetConsumer consumer =
-                new PasswordResetConsumer(mailService, new ConsumerExecutor(), idempotency);
+                new PasswordResetConsumer(mailService, new ConsumerExecutor(
+                        new TransactionTemplate(mock(PlatformTransactionManager.class)), idempotency));
         UserPasswordResetRequestedEvent legacy = (UserPasswordResetRequestedEvent)
                 CONVERTER.fromMessage(messageOf(LEGACY_RESET, UserPasswordResetRequestedEvent.class));
 

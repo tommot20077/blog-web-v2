@@ -16,12 +16,13 @@ import org.apache.logging.log4j.core.Logger;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
@@ -30,6 +31,9 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -54,13 +58,24 @@ import static org.mockito.Mockito.verify;
 @DisplayName("PasswordResetConsumer 單元測試")
 class PasswordResetConsumerTest {
 
-    /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
-    @Spy
-    private ConsumerExecutor consumerExecutor = new ConsumerExecutor();
+    /** 交易管理員替身：用來觀察 commit／rollback（getTransaction 回傳簡易 status） */
+    private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
+
+    /** 真實的 ack/nack/冪等共用包裝（非 Mock），搭配 Mock 的 IdempotencyService 與交易管理員 */
+    private ConsumerExecutor consumerExecutor;
 
     /** 受測物件 */
-    @InjectMocks
     private PasswordResetConsumer consumer;
+
+    /**
+     * 建立被測物件：ConsumerExecutor 使用真實實例，冪等服務為 Mock、交易由 Mock 交易管理員模擬。
+     */
+    @BeforeEach
+    void buildSubjectUnderTest() {
+        when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        consumerExecutor = new ConsumerExecutor(new TransactionTemplate(txManager), idempotencyService);
+        consumer = new PasswordResetConsumer(userMailService, consumerExecutor);
+    }
 
     /** Mock RabbitMQ Channel */
     @Mock
@@ -81,11 +96,11 @@ class PasswordResetConsumerTest {
     private static final UUID USER_UUID = UUID.fromString("bbbbbbbb-0000-4000-8000-000000000012");
 
     /**
-     * 預設第一次處理（markProcessed 回 true）。
+     * 預設第一次處理（tryMark 回 true）。
      */
     @BeforeEach
     void setUp() {
-        lenient().when(idempotencyService.markProcessed(any(), anyString())).thenReturn(true);
+        lenient().when(idempotencyService.tryMark(any(), anyString())).thenReturn(true);
     }
 
     /**
@@ -208,14 +223,14 @@ class PasswordResetConsumerTest {
     }
 
     /**
-     * 情境：同一事件重送（markProcessed 回 false）→ 不重寄重設密碼信，但仍 ack（不進 DLQ）
+     * 情境：同一事件重送（tryMark 回 false）→ 不重寄重設密碼信，但仍 ack（不進 DLQ）
      *
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
     @DisplayName("handlePasswordResetRequested：eventId 已處理過（重送）→ 不重寄重設密碼信，仍 ack")
     void handlePasswordResetRequested_duplicateEventId_skipsMailButAcks() throws IOException {
-        when(idempotencyService.markProcessed(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME)).thenReturn(false);
+        when(idempotencyService.tryMark(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME)).thenReturn(false);
 
         consumer.handlePasswordResetRequested(event(), channel, 11L);
 
@@ -234,7 +249,7 @@ class PasswordResetConsumerTest {
     void handlePasswordResetRequested_firstDelivery_marksEventIdThenSends() throws IOException {
         consumer.handlePasswordResetRequested(event(), channel, 12L);
 
-        verify(idempotencyService).markProcessed(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME);
+        verify(idempotencyService).tryMark(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME);
         verify(userMailService).sendPasswordResetEmail(event());
         verify(channel).basicAck(12L, false);
     }
@@ -266,9 +281,9 @@ class PasswordResetConsumerTest {
     @Test
     @DisplayName("handlePasswordResetRequested：重複事件被跳過時以 INFO 記錄 eventId、userUuid 與「重複事件已跳過」")
     void handlePasswordResetRequested_duplicateEventId_logsSkipAtInfo() throws Exception {
-        when(idempotencyService.markProcessed(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME)).thenReturn(false);
+        when(idempotencyService.tryMark(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME)).thenReturn(false);
 
-        List<LogEvent> logs = captureLogsOf(PasswordResetConsumer.class, () -> consumer.handlePasswordResetRequested(event(), channel, 14L));
+        List<LogEvent> logs = captureLogsOf(ConsumerExecutor.class, () -> consumer.handlePasswordResetRequested(event(), channel, 14L));
 
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.INFO);
@@ -277,6 +292,43 @@ class PasswordResetConsumerTest {
                     .contains("eventId=" + EVENT_ID)
                     .contains("userUuid=" + USER_UUID);
         });
+    }
+
+    /**
+     * 情境：寄信失敗 → 標記所在的交易 rollback、不 commit（寄信失敗不留下「已處理」標記），訊息 nack。
+     *
+     * @throws IOException basicNack 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handlePasswordResetRequested：寄信失敗 → 冪等標記所在交易 rollback（不 commit）並 nack")
+    void handlePasswordResetRequested_onMailFailure_rollsBackMarkTransaction() throws IOException {
+        UserPasswordResetRequestedEvent event = event();
+        doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendPasswordResetEmail(event);
+
+        consumer.handlePasswordResetRequested(event, channel, 21L);
+
+        verify(txManager).rollback(any());
+        verify(txManager, never()).commit(any());
+        verify(channel).basicNack(21L, false, false);
+        verify(channel, never()).basicAck(21L, false);
+    }
+
+    /**
+     * 情境：寄信成功 → 寄信完成之後標記才 commit，commit 之後才 ack（Yuan 2026-10-31：寄信成功後才標記）。
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handlePasswordResetRequested：寄信成功後標記才 commit，commit 之後才 ack")
+    void handlePasswordResetRequested_onSuccess_commitsMarkOnlyAfterMailSent() throws IOException {
+        UserPasswordResetRequestedEvent event = event();
+
+        consumer.handlePasswordResetRequested(event, channel, 22L);
+
+        org.mockito.InOrder order = inOrder(userMailService, txManager, channel);
+        order.verify(userMailService).sendPasswordResetEmail(event);
+        order.verify(txManager).commit(any());
+        order.verify(channel).basicAck(22L, false);
     }
 
     /**
@@ -316,9 +368,13 @@ class PasswordResetConsumerTest {
         appender.start();
         Logger logger = (Logger) LogManager.getLogger(source);
         logger.addAppender(appender);
+        Level original = logger.getLevel();
+        /* ConsumerExecutor 所在套件的預設輸出等級較高；暫時調到 INFO 才捕捉得到「重複事件已跳過」 */
+        logger.setLevel(Level.INFO);
         try {
             action.run();
         } finally {
+            logger.setLevel(original);
             logger.removeAppender(appender);
             appender.stop();
         }

@@ -2,7 +2,6 @@ package dowob.xyz.blog.module.tag.consumer;
 
 import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
-import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
 import dowob.xyz.blog.infrastructure.event.ArticleTagEvent;
@@ -50,11 +49,6 @@ public class TagUsageConsumer {
     private final RedisTemplate<String, String> stringRedisTemplate;
 
     /**
-     * MQ event 冪等處理服務
-     */
-    private final IdempotencyService idempotencyService;
-
-    /**
      * MQ consumer 共用 ack/nack 包裝與計數
      */
     private final ConsumerExecutor consumerExecutor;
@@ -77,14 +71,8 @@ public class TagUsageConsumer {
     public void handleArticleTagged(ArticleTagEvent event,
                                     Channel channel,
                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        consumerExecutor.execute(CONSUMER_NAME, () -> "eventId=" + event.eventId(),
-                channel, deliveryTag, () -> {
-                    /* 冪等 check：舊訊息 eventId 為 null 則跳過去重照舊處理；重送（markProcessed=false）則 skip（仍會 ack） */
-                    if (event.eventId() != null
-                            && !idempotencyService.markProcessed(event.eventId(), CONSUMER_NAME)) {
-                        log.debug("標籤事件 {} 已處理過，skip", event.eventId());
-                        return;
-                    }
+        consumerExecutor.executeIdempotent(CONSUMER_NAME, () -> "eventId=" + event.eventId(),
+                channel, deliveryTag, event.eventId(), () -> {
                     for (UUID tagId : event.tagIds()) {
                         Optional<Tag> tagOpt = tagRepository.findById(tagId);
                         if (tagOpt.isEmpty()) {
