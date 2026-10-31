@@ -12,10 +12,18 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import dowob.xyz.blog.common.api.errorcode.TagErrorCode;
+import dowob.xyz.blog.common.exception.BusinessException;
+import org.mockito.InOrder;
+
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -51,6 +59,12 @@ class TagFacadeImplTest {
         return tag;
     }
 
+    /** 讓 mock 的 normalize 行為近似真實實作（轉小寫），供排序鍵使用 */
+    private void stubNormalizeAsLowerCase() {
+        lenient().when(tagNormalizationService.normalize(anyString()))
+                .thenAnswer(invocation -> invocation.<String>getArgument(0).trim().toLowerCase());
+    }
+
     /** ----------------------------------------------------------------------- */
     /** findOrCreateTags                                                        */
     /** ----------------------------------------------------------------------- */
@@ -67,6 +81,7 @@ class TagFacadeImplTest {
             Tag tag1 = buildTag(id1, "Spring", "spring");
             Tag tag2 = buildTag(id2, "Java", "java");
 
+            stubNormalizeAsLowerCase();
             when(tagNormalizationService.findOrCreate("Spring")).thenReturn(tag1);
             when(tagNormalizationService.findOrCreate("Java")).thenReturn(tag2);
 
@@ -82,6 +97,7 @@ class TagFacadeImplTest {
         void findOrCreateTags_returnsTagInfoWithCorrectFields() {
             UUID id1 = UUID.randomUUID();
             Tag tag1 = buildTag(id1, "Spring", "spring");
+            stubNormalizeAsLowerCase();
             when(tagNormalizationService.findOrCreate("Spring")).thenReturn(tag1);
 
             List<TagInfo> result = tagFacadeImpl.findOrCreateTags(List.of("Spring"));
@@ -91,6 +107,75 @@ class TagFacadeImplTest {
             assertThat(info.id()).isEqualTo(id1);
             assertThat(info.name()).isEqualTo("Spring");
             assertThat(info.slug()).isEqualTo("spring");
+        }
+
+        @Test
+        @DisplayName("死結防護：依 slug 排序的固定順序呼叫 findOrCreate，回傳順序仍與輸入一致")
+        void findOrCreateTags_createsInSlugOrder_butReturnsInInputOrder() {
+            stubNormalizeAsLowerCase();
+            Tag zeta = buildTag(UUID.randomUUID(), "zeta", "zeta");
+            Tag alpha = buildTag(UUID.randomUUID(), "alpha", "alpha");
+            Tag mid = buildTag(UUID.randomUUID(), "mid", "mid");
+            when(tagNormalizationService.findOrCreate("Zeta")).thenReturn(zeta);
+            when(tagNormalizationService.findOrCreate("Alpha")).thenReturn(alpha);
+            when(tagNormalizationService.findOrCreate("Mid")).thenReturn(mid);
+
+            List<TagInfo> result = tagFacadeImpl.findOrCreateTags(List.of("Zeta", "Alpha", "Mid"));
+
+            InOrder order = inOrder(tagNormalizationService);
+            order.verify(tagNormalizationService).findOrCreate("Alpha");
+            order.verify(tagNormalizationService).findOrCreate("Mid");
+            order.verify(tagNormalizationService).findOrCreate("Zeta");
+            assertThat(result).extracting(TagInfo::slug).containsExactly("zeta", "alpha", "mid");
+        }
+
+        @Test
+        @DisplayName("死結防護：不同順序的輸入，呼叫 findOrCreate 的順序相同")
+        void findOrCreateTags_sameCreationOrderForDifferentInputOrders() {
+            stubNormalizeAsLowerCase();
+            when(tagNormalizationService.findOrCreate(anyString())).thenAnswer(invocation -> {
+                String name = invocation.getArgument(0);
+                return buildTag(UUID.randomUUID(), name, name);
+            });
+
+            tagFacadeImpl.findOrCreateTags(List.of("b", "c", "a"));
+            tagFacadeImpl.findOrCreateTags(List.of("c", "a", "b"));
+
+            InOrder order = inOrder(tagNormalizationService);
+            for (int i = 0; i < 2; i++) {
+                order.verify(tagNormalizationService).findOrCreate("a");
+                order.verify(tagNormalizationService).findOrCreate("b");
+                order.verify(tagNormalizationService).findOrCreate("c");
+            }
+        }
+
+        @Test
+        @DisplayName("死結防護：slug 相同（C++／C#）時再比正規化後的 name，順序固定；兩者都被建立且依輸入位置回傳")
+        void findOrCreateTags_sameSlug_tieBrokenByNormalizedName() {
+            stubNormalizeAsLowerCase();
+            Tag first = buildTag(UUID.randomUUID(), "c#", "c");
+            Tag second = buildTag(UUID.randomUUID(), "c++", "c");
+            when(tagNormalizationService.findOrCreate("C++")).thenReturn(second);
+            when(tagNormalizationService.findOrCreate("C#")).thenReturn(first);
+
+            List<TagInfo> result = tagFacadeImpl.findOrCreateTags(List.of("C++", "C#"));
+
+            InOrder order = inOrder(tagNormalizationService);
+            order.verify(tagNormalizationService).findOrCreate("C#");
+            order.verify(tagNormalizationService).findOrCreate("C++");
+            assertThat(result).extracting(TagInfo::id).containsExactly(second.getId(), first.getId());
+        }
+
+        @Test
+        @DisplayName("blank 名稱提早拋 BusinessException：在建立任何標籤之前就失敗")
+        void findOrCreateTags_blankName_failsBeforeCreatingAnything() {
+            when(tagNormalizationService.normalize("  ")).thenThrow(new BusinessException(TagErrorCode.TAG_INVALID_NAME));
+            lenient().when(tagNormalizationService.normalize("Java")).thenReturn("java");
+
+            assertThatThrownBy(() -> tagFacadeImpl.findOrCreateTags(List.of("Java", "  ")))
+                    .isInstanceOf(BusinessException.class);
+
+            verify(tagNormalizationService, never()).findOrCreate(anyString());
         }
 
         @Test

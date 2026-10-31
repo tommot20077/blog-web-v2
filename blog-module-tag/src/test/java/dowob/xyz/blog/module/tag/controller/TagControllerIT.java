@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.tag.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.tag.TestTagApplication;
 import org.junit.jupiter.api.BeforeEach;
@@ -126,6 +127,12 @@ class TagControllerIT {
      */
     @MockitoBean
     private UserAuthService userAuthService;
+
+    /**
+     * Mock ArticleFacade（ArticleTagOrphanReconciliationJob 依賴；owner 在 article 模組，本測試不載入）
+     */
+    @MockitoBean
+    private ArticleFacade articleFacade;
 
     /**
      * 每次測試前清理資料表，確保測試隔離

@@ -7,6 +7,7 @@ import org.springframework.data.jdbc.repository.query.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -60,4 +61,62 @@ public interface ArticleTagRepository extends Repository<ArticleTag, UUID> {
      */
     @Query("SELECT COUNT(*) FROM article_tags WHERE tag_id = :tagId")
     int countByTagId(@Param("tagId") UUID tagId);
+
+    /**
+     * 刪除指定文章的全部標籤關聯（文章刪除連動用）。
+     *
+     * <p>天然冪等：該文章已無關聯時刪除 0 筆，不會出錯。只刪 {@code article_tags} 的列，
+     * 不動 {@code tags}（含 {@code usage_count}；與原 FK 的 {@code ON DELETE CASCADE} 行為一致）。</p>
+     *
+     * @param articleId 文章 UUID
+     * @return 刪除的關聯筆數
+     */
+    @Modifying
+    @Query("DELETE FROM article_tags WHERE article_id = :articleId")
+    int deleteByArticleId(@Param("articleId") UUID articleId);
+
+    /**
+     * 以 keyset 分頁取得 {@code article_tags.article_id} 中不重複的文章 UUID（孤兒校正用）。
+     *
+     * <p>排序與比較都由資料庫的 uuid 型別決定（位元組無號比較），不可改在 Java 端排序，
+     * 見 {@code OrphanReconciliationJob#fetchReferencedUuids} 的說明。</p>
+     *
+     * @param after 游標（不含）；null 表示從頭開始
+     * @param limit 本頁筆數上限
+     * @return 升冪、去重的文章 UUID
+     */
+    default List<UUID> findReferencedArticleIdsAfter(UUID after, int limit) {
+        return after == null
+                ? findReferencedArticleIdsFromStart(limit)
+                : findReferencedArticleIdsAfterCursor(after, limit);
+    }
+
+    /**
+     * {@link #findReferencedArticleIdsAfter} 的「從頭開始」查詢（內部使用）。
+     *
+     * @param limit 本頁筆數上限
+     * @return 升冪、去重的文章 UUID
+     */
+    @Query("SELECT DISTINCT article_id FROM article_tags ORDER BY article_id LIMIT :limit")
+    List<UUID> findReferencedArticleIdsFromStart(@Param("limit") int limit);
+
+    /**
+     * {@link #findReferencedArticleIdsAfter} 的「游標之後」查詢（內部使用）。
+     *
+     * @param after 游標（不含）
+     * @param limit 本頁筆數上限
+     * @return 升冪、去重的文章 UUID
+     */
+    @Query("SELECT DISTINCT article_id FROM article_tags WHERE article_id > :after ORDER BY article_id LIMIT :limit")
+    List<UUID> findReferencedArticleIdsAfterCursor(@Param("after") UUID after, @Param("limit") int limit);
+
+    /**
+     * 刪除多篇文章的全部標籤關聯（孤兒校正用）。呼叫端須保證集合非空，避免產生 {@code IN ()} 語法錯誤。
+     *
+     * @param articleIds 文章 UUID，至少一筆
+     * @return 刪除的關聯筆數
+     */
+    @Modifying
+    @Query("DELETE FROM article_tags WHERE article_id IN (:articleIds)")
+    int deleteByArticleIds(@Param("articleIds") Collection<UUID> articleIds);
 }
