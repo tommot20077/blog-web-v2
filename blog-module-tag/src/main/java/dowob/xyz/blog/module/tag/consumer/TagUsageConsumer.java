@@ -15,6 +15,8 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -73,6 +75,9 @@ public class TagUsageConsumer {
                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
         consumerExecutor.executeIdempotent(CONSUMER_NAME, () -> "eventId=" + event.eventId(),
                 channel, deliveryTag, event.eventId(), () -> {
+                    /* Redis 無法隨交易 rollback：先完成全部 DB 寫入，才一次更新熱門分數，
+                     * 避免第 N 個標籤的 DB 寫入失敗時，前 N-1 個標籤的分數已被加上而重送時重複加 */
+                    List<UUID> savedTagIds = new ArrayList<>();
                     for (UUID tagId : event.tagIds()) {
                         Optional<Tag> tagOpt = tagRepository.findById(tagId);
                         if (tagOpt.isEmpty()) {
@@ -81,6 +86,9 @@ public class TagUsageConsumer {
                         Tag tag = tagOpt.get();
                         tag.incrementUsage();
                         tagRepository.save(tag);
+                        savedTagIds.add(tagId);
+                    }
+                    for (UUID tagId : savedTagIds) {
                         stringRedisTemplate.opsForZSet().incrementScore(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 1.0);
                     }
                 });

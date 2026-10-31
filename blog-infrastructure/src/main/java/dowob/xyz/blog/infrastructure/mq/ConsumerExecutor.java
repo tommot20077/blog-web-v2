@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
@@ -183,6 +184,13 @@ public class ConsumerExecutor {
             });
         } catch (BodyFailure failure) {
             throw failure.original;
+        } catch (TransactionSystemException rollbackFailure) {
+            /* body 失敗後 rollback 本身也失敗：Spring 只把原始例外放在 applicationException，不在 cause chain，
+             * 日誌會看不到真正的業務失敗原因，故補成 suppressed */
+            if (rollbackFailure.getApplicationException() instanceof BodyFailure failure) {
+                rollbackFailure.addSuppressed(failure.original);
+            }
+            throw rollbackFailure;
         }
     }
 

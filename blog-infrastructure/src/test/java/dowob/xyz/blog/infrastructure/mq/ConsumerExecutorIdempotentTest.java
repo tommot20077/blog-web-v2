@@ -16,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -197,6 +198,47 @@ class ConsumerExecutorIdempotentTest {
             assertThat(e.getThrown()).isSameAs(original);
             assertThat(e.getMessage().getFormattedMessage()).contains(CONSUMER).contains("userUuid=u1");
         });
+    }
+
+    @Test
+    @DisplayName("body 失敗後 rollback 本身也失敗：ERROR 日誌的例外（或其 suppressed）仍含原始 body 例外")
+    void rollbackFails_originalBodyExceptionStaysInLoggedThrowable() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        when(idempotencyService.tryMark(eventId, CONSUMER)).thenReturn(true);
+        doThrow(new TransactionSystemException("rollback failed")).when(txManager).rollback(any());
+        IllegalStateException original = new IllegalStateException("original body failure");
+
+        List<LogEvent> logs = captureLogs(() -> executor.executeIdempotent(
+                CONSUMER, null, channel, TAG, eventId, () -> {
+                    throw original;
+                }));
+
+        verify(channel).basicNack(TAG, false, false);
+        assertThat(logs).anySatisfy(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+            Throwable thrown = e.getThrown();
+            assertThat(thrown).isNotNull();
+            List<Throwable> related = new ArrayList<>();
+            collect(thrown, related);
+            assertThat(related).contains(original);
+        });
+    }
+
+    /**
+     * 遞迴蒐集例外、其 cause 與 suppressed。
+     *
+     * @param t   起點例外
+     * @param out 蒐集結果
+     */
+    private static void collect(Throwable t, List<Throwable> out) {
+        if (t == null || out.contains(t)) {
+            return;
+        }
+        out.add(t);
+        collect(t.getCause(), out);
+        for (Throwable s : t.getSuppressed()) {
+            collect(s, out);
+        }
     }
 
     @Test

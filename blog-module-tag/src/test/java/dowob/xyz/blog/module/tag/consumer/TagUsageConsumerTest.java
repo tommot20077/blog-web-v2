@@ -335,6 +335,67 @@ class TagUsageConsumerTest {
     }
 
     /**
+     * 情境：事件有兩個標籤，第 2 個標籤的 DB 寫入失敗 → 第 1 個標籤的 Redis 熱門分數也不得被加
+     * （DB 會 rollback，Redis 無法 rollback；重試時才不會重複加分）。
+     *
+     * @throws IOException basicNack 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleArticleTagged: 第 2 個標籤 DB 寫入失敗 → Redis ZSet 完全不被呼叫")
+    void handleArticleTagged_secondTagDbWriteFails_neverTouchesRedis() throws IOException {
+        UUID firstId = UUID.randomUUID();
+        UUID secondId = UUID.randomUUID();
+        Tag first = new Tag();
+        first.setId(firstId);
+        first.setUsageCount(0);
+        Tag second = new Tag();
+        second.setId(secondId);
+        second.setUsageCount(0);
+        when(tagRepository.findById(firstId)).thenReturn(Optional.of(first));
+        when(tagRepository.findById(secondId)).thenReturn(Optional.of(second));
+        when(tagRepository.save(first)).thenReturn(first);
+        when(tagRepository.save(second)).thenThrow(new RuntimeException("DB write error"));
+        when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
+        ArticleTagEvent event = new ArticleTagEvent(UUID.randomUUID(), UUID.randomUUID(), List.of(firstId, secondId));
+
+        tagUsageConsumer.handleArticleTagged(event, channel, 41L);
+
+        verify(stringRedisTemplate, never()).opsForZSet();
+        verify(zSetOps, never()).incrementScore(any(), any(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(txManager).rollback(any());
+        verify(channel).basicNack(41L, false, false);
+    }
+
+    /**
+     * 情境：兩個標籤都成功 → 兩個標籤的 Redis 分數都加一。
+     *
+     * @throws IOException basicAck 可能拋出的 IO 例外
+     */
+    @Test
+    @DisplayName("handleArticleTagged: 所有 DB 寫入成功後才更新 Redis，兩個標籤都加分")
+    void handleArticleTagged_allDbWritesSucceed_incrementsRedisForEveryTag() throws IOException {
+        UUID firstId = UUID.randomUUID();
+        UUID secondId = UUID.randomUUID();
+        Tag first = new Tag();
+        first.setId(firstId);
+        Tag second = new Tag();
+        second.setId(secondId);
+        when(tagRepository.findById(firstId)).thenReturn(Optional.of(first));
+        when(tagRepository.findById(secondId)).thenReturn(Optional.of(second));
+        when(tagRepository.save(any(Tag.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
+        ArticleTagEvent event = new ArticleTagEvent(UUID.randomUUID(), UUID.randomUUID(), List.of(firstId, secondId));
+
+        tagUsageConsumer.handleArticleTagged(event, channel, 42L);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(tagRepository, zSetOps);
+        order.verify(tagRepository).save(second);
+        order.verify(zSetOps).incrementScore(RedisKeyConstant.TAG_HOT_KEY, firstId.toString(), 1.0);
+        order.verify(zSetOps).incrementScore(RedisKeyConstant.TAG_HOT_KEY, secondId.toString(), 1.0);
+        verify(channel).basicAck(42L, false);
+    }
+
+    /**
      * 讀取指定 consumer 的指標計數，指標不存在時視為 0。
      *
      * @param registry     測試用 registry
