@@ -96,8 +96,8 @@ public class AuthService {
      * {@code uq_users_nickname} 時，依約束名稱轉成 {@link UserErrorCode#EMAIL_DUPLICATED}／
      * {@link UserErrorCode#USERNAME_DUPLICATED}／{@link UserErrorCode#NICKNAME_DUPLICATED}，
      * 對外行為（狀態碼、錯誤碼）與「依序第二次註冊」完全一致，不再是 500。
-     * 若多條約束同時違反，回哪一個取決於 PostgreSQL 檢查唯一索引的順序（email、username、nickname），
-     * 與依序註冊的先查順序相同。</p>
+     * 若多條約束同時違反，回哪一個取決於 PostgreSQL 檢查唯一索引的順序（通常依索引建立先後：
+     * email、username、nickname，與依序註冊的先查順序相同；本測試只涵蓋單一約束違反的情境）。</p>
      *
      * <p>註：Q8（email 重複一律回成功並寄通知信，避免帳號枚舉）不在此處理；
      * 之後另案改寫時，{@code EMAIL_DUPLICATED} 的轉換須一併調整。</p>
