@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  守衛 #5 XML 掃描的反向驗證 fixture —— 故意違規，不得被當成範例。
+
+  namespace 宣告 owner 為 article 模組。tag 參照資料只放行唯讀（<select>）；
+  <delete> 的 DELETE FROM article_tags 雖然字面是 FROM，仍是寫入，必須被抓到。
+-->
+<mapper namespace="dowob.xyz.blog.module.article.mapper.ViolatingTagWriteMapper">
+
+    <delete id="removeTags">
+        DELETE FROM article_tags WHERE article_id = #{articleUuid}
+    </delete>
+
+</mapper>

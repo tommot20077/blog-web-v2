@@ -1,20 +1,35 @@
 package dowob.xyz.blog.architecture;
 
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 import java.io.IOException;
+import java.io.StringReader;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -24,9 +39,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 跨模組邊界守衛（architecture.md §Cross-Module Boundary Rules）。
  *
- * <p>守衛 #5：模組的 mapper SQL 字面值不得出現<b>他模組的業務表</b>名。
- * reference data（{@code users} / {@code tags}）依規範可直接 JOIN，故不在此限——
- * 這條豁免是必要的，否則會誤判 PERF-01（reindex 改 JOIN users）為違規。</p>
+ * <p>守衛 #5：模組的 SQL 字面值不得出現<b>他模組的表</b>名。表與 owner 模組的對照見
+ * {@link ModuleTableOwnership}（涵蓋所有表，與 {@link NoCrossModuleForeignKeyIT} 共用）。
+ * Z2 起的範圍：</p>
+ * <ul>
+ *   <li><b>{@code users} 不再豁免</b>：只有 user 模組可 FROM／JOIN／UPDATE／INSERT／DELETE {@code users}；
+ *       跨模組取使用者資料一律走 {@code UserFacade}。</li>
+ *   <li><b>tag 參照資料例外（Yuan 2026-10-31 決定）</b>：article 模組可唯讀 FROM／JOIN {@code tags}、{@code article_tags}，
+ *       其他模組不行；寫入仍只有 tag 模組。具名常數與拆服務時的處置見
+ *       {@link ModuleTableOwnership#TAG_REFERENCE_DATA_TABLES}。</li>
+ *   <li><b>三種 SQL 來源</b>：MyBatis 註解（{@code @Select}／{@code @Insert}／{@code @Update}／{@code @Delete}）、
+ *       MyBatis XML（{@code classpath*:mapper/*.xml}，以元素種類區分讀寫）、
+ *       Spring Data JDBC {@code @Query}（帶 {@code @Modifying} 視為寫入）。模組以類別 package（XML 用 namespace）判定。</li>
+ * </ul>
+ *
+ * <p><b>界限</b>：以 {@code FROM}／{@code JOIN}／{@code UPDATE}／{@code INTO}／{@code USING} 後緊接表名來認表，
+ * 逗號式隱含 JOIN（{@code FROM a, users u}）與動態組字串的 SQL 認不出；{@code @SelectProvider} 等 provider
+ * 類標註不在掃描內。守衛擋的是常見寫法的回退，不是完整的 SQL 解析。</p>
  *
  * <p><b>annotation value 一律是陣列（重要更正）</b>：MyBatis 的 {@code @Select} /
  * {@code @Update} 宣告的是 {@code String[] value()}——陣列型 annotation member。
@@ -49,71 +78,178 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class CrossModuleBoundaryTest {
 
-    /** 業務表 → 擁有它的模組套件片段。只有非 owner 模組碰到才算違規。 */
-    private static final Map<String, String> BUSINESS_TABLE_OWNERS = Map.of(
-            "articles", "module.article",
-            "comments", "module.comment"
-    );
+    /** 業務模組根套件，其下第一層為模組名 */
+    private static final String MODULE_ROOT = "dowob.xyz.blog.module";
+
+    /** 反向驗證 fixture（bytecode）的模組根套件 */
+    private static final String FIXTURE_MODULE_ROOT = "dowob.xyz.blog.architecture.fixture.tableaccess.module";
+
+    /** 正式碼 XML mapper 的 classpath 位置 */
+    private static final String PRODUCTION_MAPPER_XML = "classpath*:mapper/*.xml";
+
+    /** 反向驗證 fixture（XML）的 classpath 位置 */
+    private static final String FIXTURE_MAPPER_XML = "classpath*:archunit-fixture/mapper/*.xml";
+
+    /** 從 package／namespace 取出模組名：{@code dowob.xyz.blog.module.<模組>.…} */
+    private static final Pattern MODULE_OF_NAME = Pattern.compile("(?:^|\\.)module\\.(\\w+)(?:\\.|$)");
+
+    /** 無法判定模組時的占位名（不等於任何 owner，所以任何存取都算違規） */
+    private static final String UNKNOWN_MODULE = "<unknown>";
+
+    /** MyBatis 註解 → 讀寫種類 */
+    private static final Map<String, Access> MYBATIS_ANNOTATIONS = Map.of(
+            "org.apache.ibatis.annotations.Select", Access.READ,
+            "org.apache.ibatis.annotations.Insert", Access.WRITE,
+            "org.apache.ibatis.annotations.Update", Access.WRITE,
+            "org.apache.ibatis.annotations.Delete", Access.WRITE);
+
+    /** Spring Data JDBC 的 {@code @Query} */
+    private static final String SPRING_QUERY = "org.springframework.data.jdbc.repository.query.Query";
+
+    /** Spring Data JDBC 的 {@code @Modifying}（標在 {@code @Query} 方法上表示寫入） */
+    private static final String SPRING_MODIFYING = "org.springframework.data.jdbc.repository.query.Modifying";
+
+    /** XML mapper 中承載 SQL 的元素 → 讀寫種類（{@code <sql>} 片段無法得知被誰引用，保守視為寫入） */
+    private static final Map<String, Access> XML_ELEMENTS = Map.of(
+            "select", Access.READ,
+            "insert", Access.WRITE,
+            "update", Access.WRITE,
+            "delete", Access.WRITE,
+            "sql", Access.WRITE);
+
+    /** 有 SQL 的業務模組（search、recommend 沒有自己的表與 SQL） */
+    private static final Set<String> MODULES_WITH_SQL =
+            Set.of("article", "comment", "file", "reading", "series", "tag", "user", "version");
 
     /**
-     * 業務表 → 該表名的 SQL 比對 pattern（每個表各自一條，非硬編碼）。
+     * 表名 → 該表名的 SQL 比對 pattern（每個表各自一條，非硬編碼）。
      *
      * <p>要求 word boundary（{@code \b}）＋容許任意空白（含換行，SQL text block
      * 常見寫法如 {@code FROM\n    articles}）＋可選 {@code public.} schema 前綴。
      * {@code \b} 是防 false positive 的關鍵：{@code article_tags} /
      * {@code article_categories} / {@code article_versions} 這些以 {@code article}
-     * 開頭但接底線的真實表名，因為 {@code articles} 字面值本身在其中根本不出現
-     * （少了結尾的 {@code s} 緊接在 {@code e} 後面），加上 {@code \b} 雙重保險，
-     * 兩者都不會被誤判為 {@code articles}。（詳見 CrossModuleBoundaryTest 對應
-     * false-positive 驗證，task-7_5-report.md）</p>
+     * 開頭但接底線的真實表名，不會被誤判為 {@code articles}。</p>
      */
-    private static final Map<String, Pattern> BUSINESS_TABLE_PATTERNS = BUSINESS_TABLE_OWNERS.keySet().stream()
+    private static final Map<String, Pattern> TABLE_PATTERNS = ModuleTableOwnership.OWNER_BY_TABLE.keySet().stream()
             .collect(Collectors.toMap(
                     table -> table,
                     table -> Pattern.compile(
-                            "(?is)\\b(from|join|update)\\s+(public\\.)?" + Pattern.quote(table) + "\\b")));
+                            "(?is)\\b(from|join|update|into|using)\\s+(public\\.)?" + Pattern.quote(table) + "\\b")));
+
+    /** SQL 的讀寫種類 */
+    private enum Access { READ, WRITE }
 
     /**
-     * 模組擁有權 pattern：owner 套件片段（如 {@code module.article}）必須以
-     * 完整 segment 出現在 mapper 的 package name 中，不可只是子字串前綴。
+     * 一段待檢查的 SQL。
      *
-     * <p>修這個是因為原本用 {@code packageName.contains("module.article")}，
-     * 未來若有模組取名為 {@code ...module.articleWorkflow.mapper}，
-     * {@code "module.articleWorkflow".contains("module.article")} 為 true，
-     * 會被誤判為 articles 的 owner，靜默豁免——這正是要堵的假陰性。
-     * 用 {@code (^|\.)owner(\.|$)} 要求 owner 片段前後都是 package 分隔點
-     * 或字串邊界，{@code module.articleWorkflow} 就不會匹配
-     * {@code module.article}。</p>
+     * @param kind     來源種類（如 {@code @Select}、{@code xml:<delete>}），供防空轉斷言分類計數
+     * @param module   發出 SQL 的模組名
+     * @param location 位置（{@code 類別#方法} 或 {@code 檔名#statementId}）
+     * @param access   讀寫種類
+     * @param sql      SQL 文字
      */
-    private static final Map<String, Pattern> OWNER_PACKAGE_PATTERNS = BUSINESS_TABLE_OWNERS.values().stream()
-            .distinct()
-            .collect(Collectors.toMap(
-                    owner -> owner,
-                    owner -> Pattern.compile("(^|\\.)" + Pattern.quote(owner) + "(\\.|$)")));
+    private record SqlSource(String kind, String module, String location, Access access, String sql) {
+    }
+
+    // ─── 守衛 #5：註解（MyBatis ＋ Spring Data JDBC @Query）───
 
     @Test
-    @DisplayName("mapper 不得在 SQL 中存取他模組的業務表")
+    @DisplayName("守衛 #5：mapper／repository 註解 SQL 不得存取他模組的表（users 不豁免；tag 參照資料僅 article 可唯讀）")
     void mapperMustNotAccessForeignModuleBusinessTable() {
-        JavaClasses classes = new ClassFileImporter()
-                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
-                .importPackages("dowob.xyz.blog.module");
+        assertThat(findViolations(annotationSources(productionClasses(), MODULE_ROOT)))
+                .as("SQL 不得存取他模組的表（對照表見 ModuleTableOwnership）。"
+                  + "跨模組取資料請走 facade；唯一例外是 article 唯讀 tags／article_tags（Yuan 2026-10-31 決定）。")
+                .isEmpty();
+    }
 
-        List<String> violations = classes.stream()
-                .filter(c -> c.getPackageName().contains(".mapper"))
-                .flatMap(c -> c.getMethods().stream()
-                        .flatMap(m -> m.getAnnotations().stream()
-                                .filter(a -> a.getRawType().getName().endsWith(".Select")
-                                          || a.getRawType().getName().endsWith(".Update"))
-                                .map(a -> flattenAnnotationValue(a.get("value").orElse("")))
-                                .filter(sql -> hasForeignBusinessTable(sql, c.getPackageName()))
-                                .map(sql -> c.getName() + "#" + m.getName())))
-                .distinct()
-                .toList();
+    @Test
+    @DisplayName("防假陰性：註解 SQL 掃描必須涵蓋 @Select/@Insert/@Update/@Delete/@Query/@Modifying @Query 與所有有 SQL 的模組")
+    void productionAnnotationScanMustActuallyFindSql() {
+        List<SqlSource> sources = annotationSources(productionClasses(), MODULE_ROOT);
+
+        assertThat(sources.stream().map(SqlSource::kind).collect(Collectors.toSet()))
+                .as("每一種 SQL 標註都必須在正式碼掃到至少一筆；缺任何一種，該種標註的守衛就是空轉的")
+                .containsExactlyInAnyOrder("@Select", "@Insert", "@Update", "@Delete", "@Query", "@Modifying @Query");
+        assertThat(sources.stream().map(SqlSource::module).collect(Collectors.toSet()))
+                .as("註解 SQL 所在的模組")
+                .containsAll(Set.of("article", "comment", "file", "reading", "series", "tag", "user", "version"));
+    }
+
+    @Test
+    @DisplayName("防假陰性：每個有 SQL 的模組都必須掃到命中「自己的表」，users 也必須被 user 模組命中（表名 pattern 有效）")
+    void productionScanMustMatchOwnTablesOfEveryModule() {
+        List<SqlSource> sources = new ArrayList<>(annotationSources(productionClasses(), MODULE_ROOT));
+        sources.addAll(xmlSources(PRODUCTION_MAPPER_XML));
+        Map<String, Set<String>> ownTablesHitByModule = new HashMap<>();
+        for (SqlSource source : sources) {
+            for (String table : touchedTables(source.sql())) {
+                if (ModuleTableOwnership.OWNER_BY_TABLE.get(table).equals(source.module())) {
+                    ownTablesHitByModule.computeIfAbsent(source.module(), m -> new TreeSet<>()).add(table);
+                }
+            }
+        }
+
+        assertThat(ownTablesHitByModule.keySet())
+                .as("表名 pattern 若對 owner 自己的 SQL 都命中不了，對他模組的 SQL 也一樣會漏，守衛等於空轉")
+                .containsAll(MODULES_WITH_SQL);
+        assertThat(ownTablesHitByModule.get("user"))
+                .as("Z2 的重點：users 不再豁免，pattern 必須真的認得 users")
+                .contains("users");
+    }
+
+    @Test
+    @DisplayName("tripwire：正式碼掃描不得掃進 architecture.fixture")
+    void productionScanMustNotContainFixtures() {
+        assertThat(annotationSources(productionClasses(), MODULE_ROOT))
+                .as("fixture 的故意違規若被掃進正式碼結果，會污染守衛")
+                .noneMatch(s -> s.location().contains(".architecture.fixture"));
+    }
+
+    @Test
+    @DisplayName("反向驗證（註解）：抓得到 users／tags／articles／user_preferences 的跨模組存取（含 Insert/Delete/@Query/陣列寫法），不誤判合規者")
+    void annotationScanDetectsViolationsWithoutFalsePositive() {
+        List<String> violations = findViolations(annotationSources(fixtureClasses(), FIXTURE_MODULE_ROOT));
 
         assertThat(violations)
-                .as("mapper SQL 不得存取他模組業務表；reference data（users/tags）不在此限。"
-                  + "若需跨模組集合查詢，改由 owner 模組提供 facade 集合述詞方法。")
-                .isEmpty();
+                .as("守衛若抓不到已知違規，「正向掃描為空」就沒有意義。"
+                  + "合規者（comment 讀寫自己的表、article 唯讀 tag 參照資料、user 讀寫 users、series 的 @Query 讀 series）不得出現")
+                .containsExactlyInAnyOrder(
+                        "[comment] " + fx("comment.mapper.CommentUsersJoinMapper") + "#joinUsers -> users",
+                        "[comment] " + fx("comment.mapper.CommentUsersJoinMapper") + "#readTags -> tags",
+                        "[series] " + fx("series.mapper.SeriesWriteUsersMapper") + "#insertUser -> users",
+                        "[series] " + fx("series.mapper.SeriesWriteUsersMapper") + "#updateUser -> users",
+                        "[series] " + fx("series.mapper.SeriesWriteUsersMapper") + "#deleteUser -> users",
+                        "[series] " + fx("series.repository.SeriesQueryRepository") + "#readUsers -> users",
+                        "[series] " + fx("series.repository.SeriesQueryRepository") + "#deleteArticles -> articles",
+                        "[article] " + fx("article.mapper.ArticleUsersJoinMapper") + "#joinUsers -> users",
+                        "[article] " + fx("article.mapper.ArticleTagWriterMapper") + "#insertArticleTag -> article_tags",
+                        "[article] " + fx("article.mapper.ArticleTagWriterMapper") + "#deleteTag -> tags",
+                        "[reading] " + fx("reading.mapper.ReadingVersionTableMapper") + "#readPreferences -> user_preferences");
+    }
+
+    @Test
+    @DisplayName("存取規則：owner 一律可；tag 參照資料僅 article 可唯讀；users 除 user 外一律不可")
+    void accessRuleMatrix() {
+        assertThat(ModuleTableOwnership.mayAccess("user", "users", false)).isTrue();
+        assertThat(ModuleTableOwnership.mayAccess("article", "users", true)).isFalse();
+        assertThat(ModuleTableOwnership.mayAccess("comment", "users", true)).isFalse();
+        assertThat(ModuleTableOwnership.mayAccess("tag", "tags", false)).isTrue();
+        assertThat(ModuleTableOwnership.mayAccess("article", "tags", true)).isTrue();
+        assertThat(ModuleTableOwnership.mayAccess("article", "article_tags", true)).isTrue();
+        assertThat(ModuleTableOwnership.mayAccess("article", "tags", false)).isFalse();
+        assertThat(ModuleTableOwnership.mayAccess("article", "user_tag_follows", true))
+                .as("放行只及 tags／article_tags，不含 user_tag_follows").isFalse();
+        assertThat(ModuleTableOwnership.mayAccess("comment", "tags", true)).isFalse();
+        assertThat(ModuleTableOwnership.mayAccess("version", "articles", true)).isFalse();
+    }
+
+    @Test
+    @DisplayName("對照表只能出現已知業務模組，且涵蓋所有有 SQL 的模組")
+    void ownershipMapMustOnlyNameKnownModules() {
+        assertThat(ModuleTableOwnership.businessModules())
+                .containsAll(MODULES_WITH_SQL)
+                .allSatisfy(m -> assertThat(Set.of("article", "comment", "file", "reading", "recommend", "search",
+                        "series", "tag", "user", "version")).contains(m));
     }
 
     /**
@@ -124,9 +260,7 @@ class CrossModuleBoundaryTest {
      * {@code @Select("...")} 還是陣列字面值 {@code @Select({"...", ...})}。
      * 陣列以空白 join 避免片段黏成單一 token，讓多元素形式（MyBatis 動態 SQL
      * {@code <script>}/{@code <foreach>} 慣用寫法）也能正確比對。
-     * {@code instanceof Object[]} 以外的 fallback 分支純屬防禦性寫法
-     * （供非陣列型 annotation member 誤用本 helper 時不至於丟例外），
-     * 在本守衛實際掃描的 {@code @Select}/{@code @Update} 場景下不會被觸發。
+     * Spring Data 的 {@code @Query.value()} 是單一 {@code String}，走 fallback 分支。
      */
     private static String flattenAnnotationValue(Object raw) {
         return (raw instanceof Object[] parts)
@@ -134,28 +268,14 @@ class CrossModuleBoundaryTest {
                 : String.valueOf(raw);
     }
 
-    private static boolean hasForeignBusinessTable(String sql, String packageName) {
-        return BUSINESS_TABLE_OWNERS.entrySet().stream().anyMatch(e -> {
-            boolean touches = BUSINESS_TABLE_PATTERNS.get(e.getKey()).matcher(sql).find();
-            boolean isOwner = OWNER_PACKAGE_PATTERNS.get(e.getValue()).matcher(packageName).find();
-            return touches && !isOwner;
-        });
-    }
-
-    // ─── XML mapper 掃描（PR #71 review 補洞）───
-
-    /** MyBatis XML mapper 的 namespace 宣告，其值即該 mapper 的所屬型別全名 */
-    private static final Pattern XML_NAMESPACE = Pattern.compile("namespace\s*=\s*\"([^\"]+)\"");
-
-    /** 正式碼 XML mapper 的 classpath 位置 */
-    private static final String PRODUCTION_MAPPER_XML = "classpath*:mapper/*.xml";
+    // ─── 守衛 #5：XML mapper ───
 
     @Test
-    @DisplayName("守衛 #5（XML）：XML mapper 不得在 SQL 中存取他模組的業務表")
+    @DisplayName("守衛 #5（XML）：XML mapper 不得在 SQL 中存取他模組的表")
     void xmlMapperMustNotAccessForeignModuleBusinessTable() {
-        assertThat(findXmlViolations(PRODUCTION_MAPPER_XML))
+        assertThat(findViolations(xmlSources(PRODUCTION_MAPPER_XML)))
                 .as("XML mapper 與註解式 mapper 受同一條規則約束。"
-                  + "本項存在的原因：註解式掃描讀的是 bytecode 的 @Select/@Update，"
+                  + "本項存在的原因：註解式掃描讀的是 bytecode 的註解，"
                   + "對 XML 完全失明，使 XML 成為繞過本守衛的合法路徑（PR #71 review 指出）。")
                 .isEmpty();
     }
@@ -175,82 +295,181 @@ class CrossModuleBoundaryTest {
     }
 
     @Test
-    @DisplayName("反向驗證：XML 掃描抓得到違規，且不誤判 owner 自查與 reference data")
+    @DisplayName("防假陰性：XML 守衛必須實際解析到 <select> 語句，否則元素解析失效時恆綠")
+    void productionXmlScanMustActuallyParseStatements() {
+        List<SqlSource> sources = xmlSources(PRODUCTION_MAPPER_XML);
+
+        assertThat(sources)
+                .as("解析出的 SQL 元素數；為 0 代表 DOM 解析或元素名判讀失效")
+                .isNotEmpty();
+        assertThat(sources).anySatisfy(s -> {
+            assertThat(s.kind()).isEqualTo("xml:<select>");
+            assertThat(s.module()).isEqualTo("article");
+        });
+    }
+
+    @Test
+    @DisplayName("反向驗證（XML）：抓得到 article JOIN users 與 article 寫 article_tags，不誤判 owner 自查與 tag 唯讀")
     void xmlScanDetectsViolationWithoutFalsePositive() {
-        List<String> violations = findXmlViolations("classpath*:archunit-fixture/mapper/*.xml");
+        List<String> violations = findViolations(xmlSources(FIXTURE_MAPPER_XML));
 
         assertThat(violations)
-                .as("守衛若抓不到已知違規，正向掃描為空就沒有意義——"
-                  + "這正是 29a1000 修過的靜默假陰性形態")
-                .anySatisfy(v -> assertThat(v).contains("ViolatingSeriesMapper"));
-        assertThat(violations)
-                .as("article 模組的 XML 查自己的 articles、JOIN reference data（users/tags）皆合規")
-                .noneMatch(v -> v.contains("CompliantArticleMapper"));
+                .as("守衛若抓不到已知違規，正向掃描為空就沒有意義——這正是 29a1000 修過的靜默假陰性形態。"
+                  + "CompliantArticleMapper（article 查自己的 articles、唯讀 JOIN tags）與 CompliantUserMapper（user 讀寫 users）不得出現")
+                .containsExactlyInAnyOrder(
+                        "[series] ViolatingSeriesMapper.xml#countPublishedArticles -> articles",
+                        "[article] ViolatingUsersJoinMapper.xml#findWithAuthor -> users",
+                        "[article] ViolatingTagWriteMapper.xml#removeTags -> article_tags");
+    }
+
+    // ─── 判定邏輯 ───
+
+    /**
+     * 找出存取他模組表的 SQL。
+     *
+     * @param sources 待檢查的 SQL
+     * @return 違規描述 {@code [模組] 位置 -> 表}，已去重排序
+     */
+    private static List<String> findViolations(List<SqlSource> sources) {
+        Set<String> violations = new TreeSet<>();
+        for (SqlSource source : sources) {
+            for (String table : touchedTables(source.sql())) {
+                if (!ModuleTableOwnership.mayAccess(source.module(), table, source.access() == Access.READ)) {
+                    violations.add("[" + source.module() + "] " + source.location() + " -> " + table);
+                }
+            }
+        }
+        return List.copyOf(violations);
+    }
+
+    /** SQL 文字中以 FROM／JOIN／UPDATE／INTO／USING 存取的、已登記於對照表的表。 */
+    private static Set<String> touchedTables(String sql) {
+        Set<String> tables = new LinkedHashSet<>();
+        TABLE_PATTERNS.forEach((table, pattern) -> {
+            if (pattern.matcher(sql).find()) {
+                tables.add(table);
+            }
+        });
+        return tables;
+    }
+
+    // ─── SQL 來源蒐集 ───
+
+    private static JavaClasses productionClasses() {
+        return new ClassFileImporter()
+                .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
+                .importPackages(MODULE_ROOT);
+    }
+
+    private static JavaClasses fixtureClasses() {
+        return new ClassFileImporter().importPackages(FIXTURE_MODULE_ROOT);
+    }
+
+    private static String fx(String relativeName) {
+        return FIXTURE_MODULE_ROOT + "." + relativeName;
+    }
+
+    /**
+     * 蒐集 bytecode 上的 SQL 註解（MyBatis 四種 ＋ Spring Data JDBC {@code @Query}）。
+     *
+     * @param classes    匯入的類別
+     * @param moduleRoot 模組根套件，其下第一層為模組名
+     * @return SQL 來源
+     */
+    private static List<SqlSource> annotationSources(JavaClasses classes, String moduleRoot) {
+        List<SqlSource> sources = new ArrayList<>();
+        for (JavaClass javaClass : classes) {
+            if (!javaClass.getPackageName().startsWith(moduleRoot + ".")) {
+                continue;
+            }
+            String module = moduleOfPackage(javaClass.getPackageName(), moduleRoot);
+            for (JavaMethod method : javaClass.getMethods()) {
+                method.getAnnotations().forEach(annotation -> {
+                    String type = annotation.getRawType().getName();
+                    String location = javaClass.getName() + "#" + method.getName();
+                    Optional<Object> value = annotation.get("value");
+                    String sql = flattenAnnotationValue(value.orElse(""));
+                    if (MYBATIS_ANNOTATIONS.containsKey(type)) {
+                        sources.add(new SqlSource("@" + annotation.getRawType().getSimpleName(), module, location,
+                                MYBATIS_ANNOTATIONS.get(type), sql));
+                    } else if (SPRING_QUERY.equals(type)) {
+                        boolean modifying = method.isAnnotatedWith(SPRING_MODIFYING);
+                        sources.add(new SqlSource(modifying ? "@Modifying @Query" : "@Query", module, location,
+                                modifying ? Access.WRITE : Access.READ, sql));
+                    }
+                });
+            }
+        }
+        return sources;
+    }
+
+    private static String moduleOfPackage(String packageName, String moduleRoot) {
+        String rest = packageName.substring(moduleRoot.length() + 1);
+        int dot = rest.indexOf('.');
+        return dot < 0 ? rest : rest.substring(0, dot);
+    }
+
+    /**
+     * 蒐集 XML mapper 的 SQL：逐個 {@code <select>}／{@code <insert>}／{@code <update>}／{@code <delete>}／{@code <sql>}
+     * 元素取文字（DOM 不含 XML 註解）。模組由 {@code <mapper namespace="…">} 的 package 判定——
+     * namespace 的值即 mapper 介面全名，其 package 與註解式 mapper 同構。
+     *
+     * @param locationPattern classpath 位置樣式
+     * @return SQL 來源
+     */
+    private static List<SqlSource> xmlSources(String locationPattern) {
+        List<SqlSource> sources = new ArrayList<>();
+        for (Resource resource : resolve(locationPattern)) {
+            Element mapper = parse(resource).getDocumentElement();
+            String namespace = mapper.getAttribute("namespace");
+            Matcher matcher = MODULE_OF_NAME.matcher(namespace);
+            String module = matcher.find() ? matcher.group(1) : UNKNOWN_MODULE;
+            for (Node child = mapper.getFirstChild(); child != null; child = child.getNextSibling()) {
+                if (child instanceof Element element && XML_ELEMENTS.containsKey(element.getTagName())) {
+                    sources.add(new SqlSource("xml:<" + element.getTagName() + ">", module,
+                            resource.getFilename() + "#" + element.getAttribute("id"),
+                            XML_ELEMENTS.get(element.getTagName()), element.getTextContent()));
+                }
+            }
+        }
+        return sources;
     }
 
     /**
      * 列出指定位置實際掃到的 XML mapper 檔名。
      *
-     * <p>供防假陰性測試使用：{@link #findXmlViolations(String)} 回傳空清單有兩種可能——
-     * 真的沒有違規，或根本沒掃到檔案。分開這兩者才能讓守衛的「綠」有意義。</p>
+     * <p>供防假陰性測試使用：違規清單為空有兩種可能——真的沒有違規，或根本沒掃到檔案。
+     * 分開這兩者才能讓守衛的「綠」有意義。</p>
      *
      * @param locationPattern classpath 位置樣式
      * @return 掃到的檔名清單
      */
     private static List<String> listScannedMappers(String locationPattern) {
+        return Arrays.stream(resolve(locationPattern))
+                .map(Resource::getFilename)
+                .filter(java.util.Objects::nonNull)
+                .sorted()
+                .toList();
+    }
+
+    private static Resource[] resolve(String locationPattern) {
         try {
-            return Arrays.stream(new PathMatchingResourcePatternResolver().getResources(locationPattern))
-                    .map(Resource::getFilename)
-                    .filter(java.util.Objects::nonNull)
-                    .sorted()
-                    .toList();
+            return new PathMatchingResourcePatternResolver().getResources(locationPattern);
         } catch (IOException e) {
             throw new UncheckedIOException("無法掃描 XML mapper: " + locationPattern, e);
         }
     }
 
-    /**
-     * 掃描 XML mapper，找出存取他模組業務表者。
-     *
-     * <p>owner 模組由 {@code <mapper namespace="...">} 解析而得——namespace 的值即該
-     * mapper 介面的型別全名，其 package 與註解式 mapper 的 package 同構，故可直接
-     * 複用 {@link #hasForeignBusinessTable(String, String)} 這份判定邏輯，
-     * 兩種來源共用同一組表名 pattern 與 owner 豁免規則。</p>
-     *
-     * <p>比對對象為整份 XML 的內容而非逐個 {@code <select>} 元素：表名 pattern 要求
-     * {@code from}／{@code join}／{@code update} 前綴，故 namespace 宣告本身不會被誤判；
-     * 這個取捨換來的是不必在測試裡引入 XML 解析。</p>
-     *
-     * @param locationPattern classpath 位置樣式
-     * @return 違規的 {@code 檔名#namespace} 描述，無違規則為空清單
-     */
-    private static List<String> findXmlViolations(String locationPattern) {
-        Resource[] resources;
+    /** 解析 mapper XML；DOCTYPE 指向的外部 DTD 一律以空內容取代，避免測試時連網。 */
+    private static Document parse(Resource resource) {
         try {
-            resources = new PathMatchingResourcePatternResolver().getResources(locationPattern);
+            DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+            builder.setEntityResolver((publicId, systemId) -> new InputSource(new StringReader("")));
+            return builder.parse(resource.getInputStream());
+        } catch (ParserConfigurationException | SAXException e) {
+            throw new IllegalStateException("無法解析 " + resource.getFilename(), e);
         } catch (IOException e) {
-            throw new UncheckedIOException("無法掃描 XML mapper: " + locationPattern, e);
+            throw new UncheckedIOException("無法讀取 " + resource.getFilename(), e);
         }
-
-        List<String> violations = new ArrayList<>();
-        for (Resource resource : resources) {
-            String content;
-            try {
-                content = new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                throw new UncheckedIOException("無法讀取 " + resource.getFilename(), e);
-            }
-            Matcher matcher = XML_NAMESPACE.matcher(content);
-            if (!matcher.find()) {
-                continue;
-            }
-            String namespace = matcher.group(1);
-            int lastDot = namespace.lastIndexOf('.');
-            String packageName = lastDot < 0 ? namespace : namespace.substring(0, lastDot);
-            if (hasForeignBusinessTable(content, packageName)) {
-                violations.add(resource.getFilename() + "#" + namespace);
-            }
-        }
-        return violations.stream().distinct().sorted().toList();
     }
 }
