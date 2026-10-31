@@ -199,7 +199,7 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    @DisplayName("通過驗證時 principal 為 AuthUser(id, uuid, role)，role 取自 token 的 role claim")
+    @DisplayName("通過驗證時 principal 為 AuthUser(uuid, role)，role 取自 token 的 role claim")
     void authenticated_principalShouldBeAuthUserWithTokenRole() throws Exception {
         performFilterWithRole(Role.AUTHOR);
 
