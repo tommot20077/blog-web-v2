@@ -13,24 +13,23 @@ import java.util.UUID;
  * 讀取 principal 一律經由 {@code SecurityUtils.currentAuthUser(Authentication)}，
  * 不得直接呼叫 {@code Authentication.getPrincipal()}（由 ArchUnit {@code PrincipalTypeTest} 守衛）。</p>
  *
- * <p>三個欄位一律非 null：過渡期間各模組仍依賴 {@link #id()}，因此 {@code id} 在 Z1 移除前皆為非 null。
- * 任一欄位為 null 時建構即拋 {@link NullPointerException}，避免半殘身分流入授權判斷。</p>
+ * <p>兩個欄位一律非 null，任一欄位為 null 時建構即拋 {@link NullPointerException}，
+ * 避免半殘身分流入授權判斷。身分只以 {@link #uuid()} 識別；各模組自有的 Long 主鍵不屬於登入身分，
+ * 需要時由 owner 模組內部以 uuid 查詢。</p>
  *
- * @param id   使用者主鍵。<b>過渡欄位，收尾階段（Z1）移除，新程式碼一律用 {@link #uuid()}</b>
  * @param uuid 使用者對外／跨模組識別
  * @param role 使用者角色
  * @author Yuan
- * @version 1.0
+ * @version 2.0（移除欄位 id）
  */
-public record AuthUser(Long id, UUID uuid, Role role) {
+public record AuthUser(UUID uuid, Role role) {
 
     /**
-     * 檢查三個欄位皆非 null。
+     * 檢查兩個欄位皆非 null。
      *
      * @throws NullPointerException 任一欄位為 null 時
      */
     public AuthUser {
-        Objects.requireNonNull(id, "id must not be null");
         Objects.requireNonNull(uuid, "uuid must not be null");
         Objects.requireNonNull(role, "role must not be null");
     }

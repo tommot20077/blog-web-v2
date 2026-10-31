@@ -268,11 +268,10 @@ public class AuthService {
         String accessToken = jwtService.generateAccessToken(user.getUuid(), user.getRole().name(), user.getTokenVersion());
         String refreshToken = jwtService.generateRefreshToken(user.getUuid());
 
-        /** auth hash 以 uuid 為鍵；id 欄位供 JwtAuthenticationFilter 組出 AuthUser（缺 id 的 hash 會被視為 miss） */
+        /** auth hash 以 uuid 為鍵；身分只以 uuid 識別，不再寫入使用者主鍵 */
         String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
-        /** 一次 putAll 寫入四個欄位（與 AuthStateLoader 回填一致，避免寫到一半留下半殘 hash） */
+        /** 一次 putAll 寫入三個欄位（與 AuthStateLoader 回填一致，避免寫到一半留下半殘 hash） */
         redisTemplate.opsForHash().putAll(authKey, Map.of(
-                RedisKeyConstant.FIELD_ID, String.valueOf(user.getId()),
                 RedisKeyConstant.FIELD_VERSION, user.getTokenVersion(),
                 RedisKeyConstant.FIELD_STATUS, user.getStatus().name(),
                 RedisKeyConstant.FIELD_ROLE, user.getRole().name()));

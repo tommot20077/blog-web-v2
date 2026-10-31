@@ -93,7 +93,7 @@ class AdminTagControllerTest {
         Role.ADMIN.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(1L, new UUID(0L, 1L), Role.ADMIN), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 1L), Role.ADMIN), null, authorities);
         return authentication(auth);
     }
 
@@ -103,7 +103,7 @@ class AdminTagControllerTest {
         Role.USER.getPermissions().forEach(p ->
                 authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth =
-                new UsernamePasswordAuthenticationToken(new AuthUser(2L, new UUID(0L, 2L), Role.USER), null, authorities);
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 2L), Role.USER), null, authorities);
         return authentication(auth);
     }
 

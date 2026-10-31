@@ -44,7 +44,7 @@ public class UserController {
     @PreAuthorize("isAuthenticated()")
     @GetMapping("/me")
     public ApiResponse<UserProfileResponse> getMe(@AuthenticationPrincipal AuthUser user) {
-        return ApiResponse.success(userService.getUserProfile(user.id()));
+        return ApiResponse.success(userService.getUserProfile(user.uuid()));
     }
 
     /**
@@ -59,7 +59,7 @@ public class UserController {
     @PatchMapping("/me/profile")
     public ApiResponse<Void> updateProfile(@AuthenticationPrincipal AuthUser user,
                                             @Valid @RequestBody UpdateProfileRequest request) {
-        userService.updateProfile(user.id(), request.getNickname(), request.getBio(), request.getWebsite(),
+        userService.updateProfile(user.uuid(), request.getNickname(), request.getBio(), request.getWebsite(),
                 request.getSocialLinks(), request.getAvatarUrl(), request.getLocation());
         return ApiResponse.success();
     }
@@ -76,7 +76,7 @@ public class UserController {
     @PatchMapping("/me/notifications")
     public ApiResponse<Void> updateNotifications(@AuthenticationPrincipal AuthUser user,
                                                  @Valid @RequestBody NotificationPreferencesRequest request) {
-        userService.updateNotificationPreferences(user.id(),
+        userService.updateNotificationPreferences(user.uuid(),
                 request.getComment(), request.getLike(), request.getReview(),
                 request.getFollow(), request.getNewsletter());
         return ApiResponse.success();
@@ -94,7 +94,7 @@ public class UserController {
     @PostMapping("/me/change-password")
     public ApiResponse<Void> changePassword(@AuthenticationPrincipal AuthUser user,
                                              @Valid @RequestBody ChangePasswordRequest request) {
-        userService.changePassword(user.id(), request.getOldPassword(), request.getNewPassword());
+        userService.changePassword(user.uuid(), request.getOldPassword(), request.getNewPassword());
         return ApiResponse.success();
     }
 
@@ -110,7 +110,7 @@ public class UserController {
     @DeleteMapping("/me")
     public ApiResponse<Void> deleteAccount(@AuthenticationPrincipal AuthUser user,
                                             @Valid @RequestBody DeleteAccountRequest request) {
-        userService.deleteAccount(user.id(), request.getPassword());
+        userService.deleteAccount(user.uuid(), request.getPassword());
         return ApiResponse.success();
     }
 }

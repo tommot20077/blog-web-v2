@@ -130,7 +130,7 @@ class SeriesRaceConditionIT {
         authorities.add(new SimpleGrantedAuthority(Role.AUTHOR.getSpringSecurityRole()));
         Role.AUTHOR.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
         UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
-                new AuthUser(SeededUsers.USER1_ID, SeededUsers.USER1_UUID, Role.AUTHOR), null, authorities);
+                new AuthUser(SeededUsers.USER1_UUID, Role.AUTHOR), null, authorities);
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 

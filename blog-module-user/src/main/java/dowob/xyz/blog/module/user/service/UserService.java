@@ -13,6 +13,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.UUID;
+
 /**
  * 用戶自助服務
  *
@@ -38,14 +40,14 @@ public class UserService {
     /**
      * 取得使用者個人資料
      *
-     * <p>依 userId 查詢使用者，並回傳對外公開的個人資料。若使用者不存在，拋出 BusinessException。</p>
+     * <p>依 userUuid 查詢使用者，並回傳對外公開的個人資料。若使用者不存在，拋出 BusinessException。</p>
      *
-     * @param userId 用戶 ID
+     * @param userUuid 用戶 UUID
      * @return 使用者個人資料 DTO
      */
     @Transactional(readOnly = true)
-    public UserProfileResponse getUserProfile(Long userId) {
-        User user = userRepository.findById(userId)
+    public UserProfileResponse getUserProfile(UUID userUuid) {
+        User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
         return new UserProfileResponse(
                 user.getUuid(),
@@ -76,7 +78,7 @@ public class UserService {
      * 都會通過先查，由 DB 的 {@code uq_users_nickname} 兜底。UPDATE（{@code save}）是本方法最後一個 DB 操作，
      * 撞到約束就地轉成 {@link UserErrorCode#NICKNAME_DUPLICATED}，之後不再執行任何 SQL（交易隨例外回滾）。</p>
      *
-     * @param userId      用戶 ID
+     * @param userUuid    用戶 UUID
      * @param nickname    新的暱稱
      * @param bio         新的個人簡介（可為 null）
      * @param website     個人網站 URL（可為 null）
@@ -85,9 +87,9 @@ public class UserService {
      * @param location    所在地（可為 null）
      */
     @Transactional
-    public void updateProfile(Long userId, String nickname, String bio, String website, String socialLinks,
+    public void updateProfile(UUID userUuid, String nickname, String bio, String website, String socialLinks,
                               String avatarUrl, String location) {
-        User user = userRepository.findById(userId)
+        User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
         if (!user.getNickname().equals(nickname) && userRepository.existsByNickname(nickname)) {
@@ -116,7 +118,7 @@ public class UserService {
      *
      * <p>更新 5 個通知偏好開關（留言、按讚、審核、追蹤、電子報）。</p>
      *
-     * @param userId     用戶 ID
+     * @param userUuid   用戶 UUID
      * @param comment    留言通知偏好
      * @param like       按讚通知偏好
      * @param review     審核結果通知偏好
@@ -124,9 +126,9 @@ public class UserService {
      * @param newsletter 電子報訂閱偏好
      */
     @Transactional
-    public void updateNotificationPreferences(Long userId, boolean comment, boolean like,
+    public void updateNotificationPreferences(UUID userUuid, boolean comment, boolean like,
                                               boolean review, boolean follow, boolean newsletter) {
-        User user = userRepository.findById(userId)
+        User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
         user.setNotificationComment(comment);
@@ -143,13 +145,13 @@ public class UserService {
      * <p>驗證舊密碼正確後更新密碼雜湊並遞增 tokenVersion，隨即撤銷該用戶所有既有 session
      * （清除 Redis auth hash 與 refresh ZSet），使既有 Access Token 與 Refresh Token 立即失效。</p>
      *
-     * @param userId      用戶 ID
+     * @param userUuid    用戶 UUID
      * @param oldPassword 當前舊密碼（明文）
      * @param newPassword 新密碼（明文）
      */
     @Transactional
-    public void changePassword(Long userId, String oldPassword, String newPassword) {
-        User user = userRepository.findById(userId)
+    public void changePassword(UUID userUuid, String oldPassword, String newPassword) {
+        User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
         if (!passwordEncoder.matches(oldPassword, user.getPasswordHash())) {
@@ -170,12 +172,12 @@ public class UserService {
      * <p>驗證密碼正確後將帳號狀態設為 DELETED，並清除 Redis 中的所有快取，
      * 使所有現有 Token 立即失效。</p>
      *
-     * @param userId   用戶 ID
+     * @param userUuid 用戶 UUID
      * @param password 當前密碼（明文），用於二次確認身份
      */
     @Transactional
-    public void deleteAccount(Long userId, String password) {
-        User user = userRepository.findById(userId)
+    public void deleteAccount(UUID userUuid, String password) {
+        User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
         if (!passwordEncoder.matches(password, user.getPasswordHash())) {

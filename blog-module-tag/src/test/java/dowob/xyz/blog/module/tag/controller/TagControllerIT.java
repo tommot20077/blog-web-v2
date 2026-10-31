@@ -196,7 +196,7 @@ class TagControllerIT {
         for (String perm : permissions) {
             authorities.add(new SimpleGrantedAuthority(perm));
         }
-        return new UsernamePasswordAuthenticationToken(new AuthUser(userId, userUuidOf(userId), Role.valueOf(role)), null, authorities);
+        return new UsernamePasswordAuthenticationToken(new AuthUser(userUuidOf(userId), Role.valueOf(role)), null, authorities);
     }
 
     @Test

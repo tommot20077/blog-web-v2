@@ -92,12 +92,6 @@ class RedisKeyConstantTest {
     }
 
     @Test
-    @DisplayName("FIELD_ID 應為 id（auth hash 的使用者主鍵欄位）")
-    void fieldId_hasExpectedValue() {
-        assertThat(RedisKeyConstant.FIELD_ID).isEqualTo("id");
-    }
-
-    @Test
     @DisplayName("FIELD_ROLE 應為 role")
     void fieldRole_hasExpectedValue() {
         assertThat(RedisKeyConstant.FIELD_ROLE).isEqualTo("role");

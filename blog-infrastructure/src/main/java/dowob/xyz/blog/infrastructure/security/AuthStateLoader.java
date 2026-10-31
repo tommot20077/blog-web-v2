@@ -21,9 +21,12 @@ import java.util.concurrent.TimeUnit;
  * <p>{@code JwtAuthenticationFilter} 與 {@code /auth/refresh} 共用，確保兩者對「快取沒有資料」
  * 的處理一致（修正 SEC-26：refresh 在 Redis miss 時不再誤判為帳號停權）。</p>
  *
- * <p>快取結構：Hash {@code user:auth:{uuid}}，欄位 {@code id / status / role / version}。
- * <b>四個欄位缺任何一個（含 id）、或內容無法解析，一律視為 miss</b>，改查 DB 並以完整內容覆寫回填；
- * 因此舊格式（不含 id）的 hash 會自動升級。DB 也查不到時回傳 empty，絕不建出缺欄位的 {@link AuthState}。</p>
+ * <p>快取結構：Hash {@code user:auth:{uuid}}，欄位 {@code status / role / version}。
+ * <b>三個欄位缺任何一個、或內容無法解析，一律視為 miss</b>，改查 DB 並以完整內容覆寫回填。
+ * DB 也查不到時回傳 empty，絕不建出缺欄位的 {@link AuthState}。</p>
+ *
+ * <p><b>向下相容</b>：舊版 hash 多帶一個 {@code id} 欄位；本類只以 multiGet 取上述三個欄位，
+ * 多出的 {@code id} 被忽略，不影響命中判斷，也不會因此判定停權（既有 hash 到 TTL 過期前照常使用）。</p>
  *
  * <p>本類只負責「取資料」，不判斷哪些狀態可以通過——該政策留在呼叫端
  * （filter 接受 ACTIVE 與 PENDING_VERIFICATION，refresh 只接受 ACTIVE）。</p>
@@ -34,7 +37,7 @@ import java.util.concurrent.TimeUnit;
  * 根治方案另案處理。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 1.1（auth hash 不再讀寫 id）
  */
 @Slf4j
 @Component
@@ -43,7 +46,6 @@ public class AuthStateLoader {
 
     /** auth hash 的讀取欄位（順序即 multiGet 回傳順序） */
     private static final List<String> HASH_FIELDS = List.of(
-            RedisKeyConstant.FIELD_ID,
             RedisKeyConstant.FIELD_STATUS,
             RedisKeyConstant.FIELD_ROLE,
             RedisKeyConstant.FIELD_VERSION);
@@ -86,11 +88,10 @@ public class AuthStateLoader {
         }
         try {
             return Optional.of(new AuthState(
-                    Long.valueOf((String) values.get(0)),
                     uuid,
-                    UserStatus.valueOf((String) values.get(1)),
-                    Role.valueOf((String) values.get(2)),
-                    (String) values.get(3)));
+                    UserStatus.valueOf((String) values.get(0)),
+                    Role.valueOf((String) values.get(1)),
+                    (String) values.get(2)));
         } catch (RuntimeException e) {
             log.warn("User auth cache {} is corrupted, fallback to DB: {}", key, e.getMessage());
             return Optional.empty();
@@ -98,14 +99,13 @@ public class AuthStateLoader {
     }
 
     /**
-     * 以完整內容回填 Redis（一次寫入四個欄位，避免留下半殘 hash）並設定 TTL。
+     * 以完整內容回填 Redis（一次寫入三個欄位，避免留下半殘 hash）並設定 TTL。
      *
      * @param key   auth hash 的 Redis Key
      * @param state 來自 DB 的認證狀態
      */
     private void writeCache(String key, AuthState state) {
         Map<String, String> fields = new LinkedHashMap<>();
-        fields.put(RedisKeyConstant.FIELD_ID, String.valueOf(state.id()));
         fields.put(RedisKeyConstant.FIELD_STATUS, state.status().name());
         fields.put(RedisKeyConstant.FIELD_ROLE, state.role().name());
         fields.put(RedisKeyConstant.FIELD_VERSION, state.tokenVersion());

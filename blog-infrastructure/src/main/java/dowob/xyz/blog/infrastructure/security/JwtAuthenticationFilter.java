@@ -83,7 +83,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
 
                     /** principal 的 role 與 authorities 同源（皆取自 token 的 role claim） */
-                    AuthUser principal = new AuthUser(authState.id(), authState.uuid(), role);
+                    AuthUser principal = new AuthUser(authState.uuid(), role);
                     UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                             principal, null, authorities);
 

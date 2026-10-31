@@ -1769,16 +1769,16 @@ class AuthServiceTest {
      * @return VerificationToken 實體
      */
     // =========================================================================
-    // uuid 化：JWT subject、auth hash（含 id）、Redis key
+    // uuid 化：JWT subject、auth hash、Redis key
     // =========================================================================
 
     /**
-     * 驗證：login 寫入的 auth hash 必須含 id（欄位值為資料庫主鍵），且 key 以 uuid 為鍵。
+     * 驗證：login 寫入的 auth hash 以 uuid 為鍵，內容為 version／status／role 三個欄位（Z1 起不含 id）。
      */
     @Test
-    @DisplayName("login → auth hash 以 uuid 為鍵，且以一次 putAll 寫入 id／version／status／role 四個欄位")
+    @DisplayName("login → auth hash 以 uuid 為鍵，且以一次 putAll 寫入 version／status／role 三個欄位")
     @SuppressWarnings("unchecked")
-    void login_shouldWriteIdIntoAuthHashKeyedByUuid() {
+    void login_shouldWriteThreeFieldsIntoAuthHashKeyedByUuid() {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(anyString())).thenReturn(null);
@@ -1797,10 +1797,36 @@ class AuthServiceTest {
         ArgumentCaptor<Map<String, String>> fields = ArgumentCaptor.forClass(Map.class);
         verify(hashOperations).putAll(eq("user:auth:" + USER_UUID), fields.capture());
         assertThat(fields.getValue()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                RedisKeyConstant.FIELD_ID, "1",
                 RedisKeyConstant.FIELD_VERSION, "v1",
                 RedisKeyConstant.FIELD_STATUS, "ACTIVE",
                 RedisKeyConstant.FIELD_ROLE, "AUTHOR"));
+    }
+
+    /**
+     * 驗證（Z1）：login 寫入 auth hash 時不再帶 {@code id} 欄位，只寫 version／status／role。
+     */
+    @Test
+    @DisplayName("Z1：login → auth hash 不含 id 欄位")
+    @SuppressWarnings("unchecked")
+    void login_shouldNotWriteIdIntoAuthHash() {
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(anyString())).thenReturn(null);
+        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
+        when(zSetOps.zCard(anyString())).thenReturn(1L);
+        User mockUser = buildActiveUser();
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
+        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
+        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        ArgumentCaptor<Map<String, String>> fields = ArgumentCaptor.forClass(Map.class);
+        verify(hashOperations).putAll(eq("user:auth:" + USER_UUID), fields.capture());
+        assertThat(fields.getValue()).containsOnlyKeys(
+                RedisKeyConstant.FIELD_VERSION, RedisKeyConstant.FIELD_STATUS, RedisKeyConstant.FIELD_ROLE);
     }
 
     /**
