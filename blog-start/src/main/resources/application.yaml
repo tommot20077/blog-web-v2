@@ -21,6 +21,17 @@ spring:
     username: ${DATABASE_USERNAME:postgres}
     password: ${DATABASE_PASSWORD:password}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # 連線池預算（Z3-b，與下方 spring.rabbitmq.listener.simple 綁定）：
+      #   executeIdempotent 的 consumer 在整個 body 期間持有一條 DB 連線（寄信 consumer 的 SMTP 最壞約 15 秒）。
+      #   使用 DB 的 @RabbitListener container 共 12 個（見回報），每個 container 最多同時 max-concurrency 條執行緒，
+      #   最壞同時佔用 = 12 × max-concurrency = 12 × 2 = 24 條；30 − 24 = 至少 6 條留給 HTTP／排程。
+      #   調高 MQ_LISTENER_MAX_CONCURRENCY 時，務必同步調高本值：maximum-pool-size ≥ 12 × max-concurrency + HTTP 預留（≥ 6）。
+      #   多副本部署時 DB 總連線 = 副本數 × 本值，需不超過 Postgres max_connections。
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:30}
+      # minimum-idle 未設時等於 maximum-pool-size，會讓每個副本常駐 30 條連線（原本預設 10）；
+      # 改為平時只保留 10 條，尖峰（MQ consumer 吃滿）才長到 maximum-pool-size，閒置後由 Hikari 收回。
+      minimum-idle: ${DB_POOL_MIN_IDLE:10}
 
   # RabbitMQ
   rabbitmq:
@@ -33,7 +44,17 @@ spring:
     publisher-returns: true
     listener:
       simple:
-        acknowledge-mode: manual
+        # AUTO：listener 正常返回即 ack、拋例外即 nack(requeue)，重試攔截器才有機會介入。
+        # MANUAL 下容器不會對一般例外 nack，訊息停在 unacked，重試形同死碼（見 AckModeRetryProofIntegrationTest）。
+        acknowledge-mode: auto
+        # 並行度（PERF-30）：stateful retry 的退避睡眠發生在 consumer 執行緒上，單一毒訊息會佔住一條執行緒
+        # 約 6 秒（1s＋5s）。concurrency ≥ 2 讓同一 queue 的其他訊息由另一條執行緒處理，不被頭部阻塞。
+        concurrency: ${MQ_LISTENER_CONCURRENCY:2}
+        # 上限刻意等於 concurrency（不自動擴張）：每個 container 的最大並行度受 DB 連線池預算約束（見 hikari 註解）。
+        max-concurrency: ${MQ_LISTENER_MAX_CONCURRENCY:2}
+        # prefetch=1：退避睡眠中的執行緒只持有「正在重試的那一則」未確認訊息，不會把其他訊息囤在
+        # 自己的 prefetch 緩衝裡等睡眠結束（prefetch>1 時緩衝中的訊息會一起被卡住約 6 秒）。
+        prefetch: ${MQ_LISTENER_PREFETCH:1}
 
   # SMTP / Transactional Mail
   mail:

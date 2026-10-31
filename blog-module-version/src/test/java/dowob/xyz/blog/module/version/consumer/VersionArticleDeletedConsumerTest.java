@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.version.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
@@ -25,11 +24,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -45,10 +41,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 @DisplayName("VersionArticleDeletedConsumer")
 class VersionArticleDeletedConsumerTest {
 
-    private static final long DELIVERY_TAG = 42L;
-
     @Mock private VersionArticleCleanupMapper cleanupMapper;
-    @Mock private Channel channel;
 
     private VersionArticleDeletedConsumer consumer;
 
@@ -62,37 +55,30 @@ class VersionArticleDeletedConsumerTest {
     }
 
     @Test
-    @DisplayName("收到事件：以 articleUuid 刪除該文章的所有版本快照，然後 ack")
+    @DisplayName("收到事件：以 articleUuid 刪除該文章的所有版本快照，然後正常返回")
     void onArticleDeleted_deletesVersionsByArticleUuidAndAcks() throws Exception {
         UUID articleUuid = UUID.randomUUID();
 
-        consumer.onArticleDeleted(event(articleUuid), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(event(articleUuid));
 
         verify(cleanupMapper).deleteByArticleUuid(articleUuid);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("舊 payload 缺 articleUuid：不刪除、仍 ack（避免無限重送）")
+    @DisplayName("舊 payload 缺 articleUuid：不刪除、仍正常返回（避免無限重送）")
     void onArticleDeleted_nullArticleUuid_doesNotDeleteAndAcks() throws Exception {
-        consumer.onArticleDeleted(event(null), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(event(null));
 
         verifyNoInteractions(cleanupMapper);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("刪除拋例外：nack（requeue=false）送往 DLQ，不 ack")
+    @DisplayName("刪除拋例外：例外往外拋（交由容器重試，耗盡進 DLQ）")
     void onArticleDeleted_deleteThrows_nacksToDlq() throws Exception {
         UUID articleUuid = UUID.randomUUID();
         doThrow(new RuntimeException("DB down")).when(cleanupMapper).deleteByArticleUuid(articleUuid);
 
-        consumer.onArticleDeleted(event(articleUuid), channel, DELIVERY_TAG);
-
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
-        verify(channel, times(1)).basicNack(DELIVERY_TAG, false, false);
+        assertThatThrownBy(() -> consumer.onArticleDeleted(event(articleUuid))).isInstanceOf(RuntimeException.class);
     }
 
     @Test
@@ -102,7 +88,7 @@ class VersionArticleDeletedConsumerTest {
         ArticleDeletedEvent ev = event(articleUuid);
         doThrow(new RuntimeException("DB down")).when(cleanupMapper).deleteByArticleUuid(articleUuid);
 
-        List<LogEvent> logs = captureExecutorLogs(() -> consumer.onArticleDeleted(ev, channel, DELIVERY_TAG));
+        List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> consumer.onArticleDeleted(ev)).isInstanceOf(RuntimeException.class));
 
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.ERROR);
@@ -116,7 +102,7 @@ class VersionArticleDeletedConsumerTest {
     @DisplayName("onArticleDeleted 訂閱 version.article-deleted queue")
     void onArticleDeleted_listensOnVersionArticleDeletedQueue() throws Exception {
         RabbitListener listener = VersionArticleDeletedConsumer.class
-                .getMethod("onArticleDeleted", ArticleDeletedEvent.class, Channel.class, long.class)
+                .getMethod("onArticleDeleted", ArticleDeletedEvent.class)
                 .getAnnotation(RabbitListener.class);
 
         assertThat(listener).isNotNull();

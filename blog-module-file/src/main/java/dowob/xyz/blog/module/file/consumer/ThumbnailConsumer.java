@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.file.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
@@ -11,9 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.coobird.thumbnailator.Thumbnails;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayInputStream;
@@ -28,7 +25,7 @@ import java.io.InputStream;
  * 使用 Thumbnailator 產生 300px 寬縮圖後上傳回 MinIO，並更新 DB 的 has_thumbnail 欄位。
  * </p>
  *
- * <p>冪等性：以 {@code has_thumbnail} 旗標做天然冪等，重送的事件在旗標已為 true 時直接 ack。</p>
+ * <p>冪等性：以 {@code has_thumbnail} 旗標做天然冪等，重送的事件在旗標已為 true 時直接返回（容器 ack）。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -52,7 +49,7 @@ public class ThumbnailConsumer {
     private final FileMetadataRepository fileMetadataRepository;
 
     /**
-     * MQ consumer 共用 ack/nack 包裝與計數
+     * MQ consumer 共用執行包裝（失敗日誌、計數、冪等）
      */
     private final ConsumerExecutor consumerExecutor;
 
@@ -66,14 +63,10 @@ public class ThumbnailConsumer {
      * 處理圖片上傳事件，產生縮圖
      *
      * @param event       圖片上傳事件
-     * @param channel     RabbitMQ Channel，交由 {@link ConsumerExecutor} 執行 ack／nack
-     * @param deliveryTag 消息投遞標籤
      */
     @RabbitListener(queues = "file.thumbnail")
-    public void handleImageUploaded(ImageUploadedEvent event,
-                                    Channel channel,
-                                    @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
-        consumerExecutor.execute(CONSUMER_NAME, () -> "fileId=" + event.fileId() + ", eventId=" + event.eventId(), channel, deliveryTag, () -> {
+    public void handleImageUploaded(ImageUploadedEvent event) {
+        consumerExecutor.execute(CONSUMER_NAME, () -> "fileId=" + event.fileId() + ", eventId=" + event.eventId(), () -> {
             if (!event.contentType().startsWith("image/")) {
                 log.debug("非圖片類型，跳過縮圖處理: {}", event.contentType());
                 return;
@@ -81,7 +74,7 @@ public class ThumbnailConsumer {
 
             /*
              * 天然冪等（不使用 IdempotencyService）：縮圖是否完成已由 file_metadata.has_thumbnail 記錄，
-             * 重送時旗標為 true 就直接 ack，不再下載、產生與上傳。
+             * 重送時旗標為 true 就直接返回（容器 ack），不再下載、產生與上傳。
              * 不用 processed_events 的原因：它在處理「前」標記，處理中途失敗（MinIO 暫時不可用）後
              * 重試會被誤判為已處理而永遠漏做縮圖；旗標是處理「後」才寫，失敗重試仍會重做。
              * 兩次遞送若在旗標寫入前併發，結果只是同一個縮圖物件被覆寫一次（內容相同），無害。

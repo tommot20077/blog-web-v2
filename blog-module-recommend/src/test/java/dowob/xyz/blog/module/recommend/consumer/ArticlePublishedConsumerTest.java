@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.recommend.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.ArticlePublishedEvent;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
@@ -28,6 +27,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -53,14 +53,9 @@ class ArticlePublishedConsumerTest {
     @Mock
     private StringRedisTemplate stringRedisTemplate;
 
-    @Mock
-    private Channel channel;
-
     private ArticlePublishedConsumer consumer;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
-    private static final long DELIVERY_TAG = 42L;
-
     /**
      * 建立受測物件
      */
@@ -76,34 +71,21 @@ class ArticlePublishedConsumerTest {
     }
 
     @Test
-    @DisplayName("正常情境：清除快取並呼叫 basicAck")
+    @DisplayName("正常情境：清除快取並正常返回")
     void handleArticlePublished_正常_清除快取並ACK() throws IOException {
-        consumer.handleArticlePublished(event(), channel, DELIVERY_TAG);
+        consumer.handleArticlePublished(event());
 
         verify(stringRedisTemplate).delete("recommend:related:" + ARTICLE_UUID);
-        verify(channel).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("ACK 失敗時呼叫 basicNack 避免訊息卡住")
-    void handleArticlePublished_ACK失敗_呼叫basicNack() throws IOException {
-        doThrow(new IOException("ACK failed")).when(channel).basicAck(DELIVERY_TAG, false);
-
-        consumer.handleArticlePublished(event(), channel, DELIVERY_TAG);
-
-        verify(channel).basicNack(eq(DELIVERY_TAG), eq(false), eq(false));
-    }
-
-    @Test
-    @DisplayName("Redis 拋出 RuntimeException 時仍應呼叫 basicNack")
+    @DisplayName("Redis 拋出 RuntimeException 時仍應例外往外拋")
     void handleArticlePublished_Redis拋出RuntimeException_呼叫basicNack() throws IOException {
         org.springframework.data.redis.RedisConnectionFailureException redisEx =
                 new org.springframework.data.redis.RedisConnectionFailureException("連線失敗");
         doThrow(redisEx).when(stringRedisTemplate).delete(anyString());
 
-        consumer.handleArticlePublished(event(), channel, DELIVERY_TAG);
-
-        verify(channel).basicNack(eq(DELIVERY_TAG), eq(false), eq(false));
+        assertThatThrownBy(() -> consumer.handleArticlePublished(event())).isInstanceOf(RuntimeException.class);
     }
 
     /**
@@ -117,7 +99,7 @@ class ArticlePublishedConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            consumer.handleArticlePublished(event(), channel, 5L);
+            consumer.handleArticlePublished(event());
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticlePublishedConsumer.CONSUMER_NAME)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticlePublishedConsumer.CONSUMER_NAME)).isZero();
@@ -128,22 +110,22 @@ class ArticlePublishedConsumerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("handleArticlePublished：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("handleArticlePublished：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void handleArticlePublished_onFailure_recordsMetricsAndLogsContext() throws Exception {
         doThrow(new org.springframework.data.redis.RedisConnectionFailureException("連線失敗"))
                 .when(stringRedisTemplate).delete(anyString());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> consumer.handleArticlePublished(event(), channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> consumer.handleArticlePublished(event())).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticlePublishedConsumer.CONSUMER_NAME)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticlePublishedConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticlePublishedConsumer.CONSUMER_NAME)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())

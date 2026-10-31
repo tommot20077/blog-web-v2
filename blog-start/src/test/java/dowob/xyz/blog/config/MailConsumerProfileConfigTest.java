@@ -23,9 +23,7 @@ class MailConsumerProfileConfigTest {
         ConditionalOnProperty conditional = EmailVerificationConsumer.class.getAnnotation(ConditionalOnProperty.class);
         Method listenerMethod = EmailVerificationConsumer.class.getMethod(
                 "handleUserRegistered",
-                dowob.xyz.blog.module.user.model.event.UserRegisteredEvent.class,
-                com.rabbitmq.client.Channel.class,
-                long.class
+                dowob.xyz.blog.module.user.model.event.UserRegisteredEvent.class
         );
         RabbitListener listener = listenerMethod.getAnnotation(RabbitListener.class);
 
@@ -44,9 +42,7 @@ class MailConsumerProfileConfigTest {
         ConditionalOnProperty conditional = PasswordResetConsumer.class.getAnnotation(ConditionalOnProperty.class);
         Method listenerMethod = PasswordResetConsumer.class.getMethod(
                 "handlePasswordResetRequested",
-                dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent.class,
-                com.rabbitmq.client.Channel.class,
-                long.class
+                dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent.class
         );
         RabbitListener listener = listenerMethod.getAnnotation(RabbitListener.class);
 

@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.version.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
@@ -111,10 +110,7 @@ class ArticleVersionConsumerIT {
     private FileFacade fileFacade;
 
     private static final Long AUTHOR_ID = 1L;
-    private static final long DELIVERY_TAG = 1L;
-
     private Article testArticle;
-    private Channel mockChannel;
 
     @BeforeEach
     void setup() {
@@ -123,7 +119,6 @@ class ArticleVersionConsumerIT {
         articleRepo.deleteAll();
 
         // 每個測試獨立的 mock channel
-        mockChannel = Mockito.mock(Channel.class);
 
         // 建立測試文章
         testArticle = new Article();
@@ -156,7 +151,7 @@ class ArticleVersionConsumerIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event, mockChannel, DELIVERY_TAG);
+        consumer.onContentChanged(event);
 
         List<ArticleVersion> versions = (List<ArticleVersion>) versionRepo.findAll();
         assertThat(versions).hasSize(1);
@@ -199,7 +194,7 @@ class ArticleVersionConsumerIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event, mockChannel, DELIVERY_TAG);
+        consumer.onContentChanged(event);
 
         // 驗證：所有 AUTO 被清除，僅留 1 個 PUBLISHED
         List<ArticleVersion> after = (List<ArticleVersion>) versionRepo.findAll();
@@ -225,7 +220,7 @@ class ArticleVersionConsumerIT {
                 Instant.now()
         );
 
-        consumer.onContentChanged(event, mockChannel, DELIVERY_TAG);
+        consumer.onContentChanged(event);
 
         long countAfter = countVersionsForArticle(testArticle.getUuid());
         assertThat(countAfter).isZero();

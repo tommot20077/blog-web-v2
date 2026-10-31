@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.comment.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.model.Article;
@@ -17,10 +16,6 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -36,9 +31,6 @@ import static org.mockito.Mockito.verify;
  */
 @DisplayName("CommentArticleDeletedConsumer 整合測試")
 class CommentArticleDeletedConsumerIT extends CommentCleanupITSupport {
-
-    private static final long DELIVERY_TAG = 7L;
-
     @Autowired private CommentArticleDeletedConsumer consumer;
 
     private static ArticleDeletedEvent eventOf(UUID articleUuid) {
@@ -56,15 +48,12 @@ class CommentArticleDeletedConsumerIT extends CommentCleanupITSupport {
         createLike(reply.getId(), SeededUsers.OTHER_USER_UUID);
         Comment otherComment = createComment(other, null);
         createLike(otherComment.getId(), SeededUsers.USER_UUID);
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(eventOf(target.getUuid()));
 
         assertThat(countComments(target.getUuid())).isZero();
         assertThat(countComments(other.getUuid())).isEqualTo(1);
         assertThat(countAllLikes()).as("只剩其他文章那則留言的讚").isEqualTo(1);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
@@ -75,15 +64,11 @@ class CommentArticleDeletedConsumerIT extends CommentCleanupITSupport {
         createComment(target, null);
         createComment(other, null);
         ArticleDeletedEvent event = eventOf(target.getUuid());
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(event, channel, 1L);
-        consumer.onArticleDeleted(event, channel, 2L);
+        consumer.onArticleDeleted(event);
+        consumer.onArticleDeleted(event);
 
         assertThat(countComments(target.getUuid())).isZero();
         assertThat(countComments(other.getUuid())).isEqualTo(1);
-        verify(channel, times(1)).basicAck(1L, false);
-        verify(channel, times(1)).basicAck(2L, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 }

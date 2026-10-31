@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.series.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
@@ -15,12 +14,14 @@ import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.Logger;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
@@ -29,6 +30,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -41,15 +44,22 @@ class SeriesArticleDeletedConsumerTest {
 
     @Mock private IdempotencyService idempotencyService;
     @Mock private SeriesMapper seriesMapper;
-    /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
-    @Spy
-    private ConsumerExecutor consumerExecutor = new ConsumerExecutor();
+    /** 交易管理員替身：用來觀察 commit／rollback（getTransaction 回傳簡易 status） */
+    private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
 
-    @Mock private Channel channel;
-    @InjectMocks private SeriesArticleDeletedConsumer consumer;
+    /** 真實的 ack/nack/冪等共用包裝（非 Mock），搭配 Mock 的 IdempotencyService 與交易管理員 */
+    private ConsumerExecutor consumerExecutor;
+    private SeriesArticleDeletedConsumer consumer;
 
-    private static final long DELIVERY_TAG = 42L;
-
+    /**
+     * 建立被測物件：ConsumerExecutor 使用真實實例，冪等服務為 Mock、交易由 Mock 交易管理員模擬。
+     */
+    @BeforeEach
+    void buildSubjectUnderTest() {
+        when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        consumerExecutor = new ConsumerExecutor(new TransactionTemplate(txManager), idempotencyService);
+        consumer = new SeriesArticleDeletedConsumer(seriesMapper, consumerExecutor);
+    }
     /** 事件所屬的 series 公開 UUID（consumer 只以 UUID 處理，不讀任何 Long 欄位） */
     private static final UUID SERIES_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000d1");
 
@@ -65,57 +75,51 @@ class SeriesArticleDeletedConsumerTest {
     }
 
     @Test
-    @DisplayName("onArticleDeleted：seriesUuid 為 null（文章不在 series）→ no-op 並 ack，不寫冪等紀錄")
+    @DisplayName("onArticleDeleted：seriesUuid 為 null（文章不在 series）→ no-op 並正常返回，不寫冪等紀錄")
     void onArticleDeleted_seriesUuidNull_acksAndNoOp() throws Exception {
         ArticleDeletedEvent ev = event(null);
 
-        consumer.onArticleDeleted(ev, channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(ev);
 
-        verify(idempotencyService, never()).markProcessed(any(), any());
+        verify(idempotencyService, never()).tryMark(any(), any());
         verify(seriesMapper, never()).decrementArticleCountByUuid(any());
         verify(seriesMapper, never()).decrementArticleCount(any());
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("onArticleDeleted：第一次處理 → 以 seriesUuid 扣計數並 ack（不使用舊的 Long seriesId）")
+    @DisplayName("onArticleDeleted：第一次處理 → 以 seriesUuid 扣計數並正常返回（不使用舊的 Long seriesId）")
     void onArticleDeleted_firstTime_decrementsCountBySeriesUuidAndAcks() throws Exception {
         ArticleDeletedEvent ev = event(SERIES_UUID);
-        when(idempotencyService.markProcessed(eq(ev.eventId()),
+        when(idempotencyService.tryMark(eq(ev.eventId()),
                 eq(SeriesArticleDeletedConsumer.CONSUMER_NAME))).thenReturn(true);
 
-        consumer.onArticleDeleted(ev, channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(ev);
 
         verify(seriesMapper, times(1)).decrementArticleCountByUuid(SERIES_UUID);
         verify(seriesMapper, never()).decrementArticleCount(any());
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("onArticleDeleted：同一事件重送 → 冪等去重，不再扣計數，仍 ack")
+    @DisplayName("onArticleDeleted：同一事件重送 → 冪等去重，不再扣計數，仍正常返回")
     void onArticleDeleted_replayed_skipsDecrementAndAcks() throws Exception {
         ArticleDeletedEvent ev = event(SERIES_UUID);
-        when(idempotencyService.markProcessed(eq(ev.eventId()),
+        when(idempotencyService.tryMark(eq(ev.eventId()),
                 eq(SeriesArticleDeletedConsumer.CONSUMER_NAME))).thenReturn(false);
 
-        consumer.onArticleDeleted(ev, channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(ev);
 
         verify(seriesMapper, never()).decrementArticleCountByUuid(any());
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("onArticleDeleted：扣計數拋例外 → nack 進 DLQ、不 ack")
+    @DisplayName("onArticleDeleted：扣計數拋例外 → 例外往外拋（交由容器重試）")
     void onArticleDeleted_decrementThrows_nacksTowardsDlq() throws Exception {
         ArticleDeletedEvent ev = event(SERIES_UUID);
-        when(idempotencyService.markProcessed(any(), any())).thenReturn(true);
+        when(idempotencyService.tryMark(any(), any())).thenReturn(true);
         org.mockito.Mockito.doThrow(new RuntimeException("DB down"))
             .when(seriesMapper).decrementArticleCountByUuid(SERIES_UUID);
 
-        consumer.onArticleDeleted(ev, channel, DELIVERY_TAG);
-
-        verify(channel, never()).basicAck(any(long.class), any(boolean.class));
-        verify(channel, times(1)).basicNack(DELIVERY_TAG, false, false);
+        assertThatThrownBy(() -> consumer.onArticleDeleted(ev)).isInstanceOf(RuntimeException.class);
     }
 
     /**
@@ -127,12 +131,12 @@ class SeriesArticleDeletedConsumerTest {
     @DisplayName("onArticleDeleted：成功時 ConsumerExecutor 計入 processed 指標")
     void onArticleDeleted_success_recordsProcessedMetric() throws Exception {
         ArticleDeletedEvent ev = event(SERIES_UUID);
-        when(idempotencyService.markProcessed(eq(ev.eventId()),
+        when(idempotencyService.tryMark(eq(ev.eventId()),
                 eq(SeriesArticleDeletedConsumer.CONSUMER_NAME))).thenReturn(true);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            consumer.onArticleDeleted(ev, channel, 5L);
+            consumer.onArticleDeleted(ev);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, SeriesArticleDeletedConsumer.CONSUMER_NAME)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, SeriesArticleDeletedConsumer.CONSUMER_NAME)).isZero();
@@ -143,24 +147,24 @@ class SeriesArticleDeletedConsumerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("onArticleDeleted：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("onArticleDeleted：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void onArticleDeleted_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ArticleDeletedEvent ev = event(SERIES_UUID);
-        when(idempotencyService.markProcessed(any(), any())).thenReturn(true);
+        when(idempotencyService.tryMark(any(), any())).thenReturn(true);
         org.mockito.Mockito.doThrow(new RuntimeException("DB down"))
             .when(seriesMapper).decrementArticleCountByUuid(SERIES_UUID);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> consumer.onArticleDeleted(ev, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> consumer.onArticleDeleted(ev)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, SeriesArticleDeletedConsumer.CONSUMER_NAME)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, SeriesArticleDeletedConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, SeriesArticleDeletedConsumer.CONSUMER_NAME)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
@@ -172,6 +176,33 @@ class SeriesArticleDeletedConsumerTest {
             Metrics.removeRegistry(registry);
             registry.close();
         }
+    }
+
+    @Test
+    @DisplayName("onArticleDeleted：扣計數拋例外 → 冪等標記所在交易 rollback（不 commit）")
+    void onArticleDeleted_decrementThrows_rollsBackMarkTransaction() throws Exception {
+        ArticleDeletedEvent ev = event(SERIES_UUID);
+        when(idempotencyService.tryMark(any(), any())).thenReturn(true);
+        org.mockito.Mockito.doThrow(new RuntimeException("DB down"))
+            .when(seriesMapper).decrementArticleCountByUuid(SERIES_UUID);
+
+        assertThatThrownBy(() -> consumer.onArticleDeleted(ev)).isInstanceOf(RuntimeException.class);
+
+        verify(idempotencyService).tryMark(ev.eventId(), SeriesArticleDeletedConsumer.CONSUMER_NAME);
+        verify(txManager).rollback(any());
+        verify(txManager, never()).commit(any());
+    }
+
+    @Test
+    @DisplayName("onArticleDeleted：舊訊息 eventId 為 null 但帶 seriesUuid → 不去重、照舊扣計數並正常返回（不再對 null 寫 processed_events）")
+    void onArticleDeleted_nullEventIdWithSeriesUuid_decrementsWithoutIdempotency() throws Exception {
+        ArticleDeletedEvent ev = new ArticleDeletedEvent(
+            null, UUID.randomUUID(), List.of(), List.of(), Instant.now(), null, SERIES_UUID);
+
+        consumer.onArticleDeleted(ev);
+
+        verify(idempotencyService, never()).tryMark(any(), any());
+        verify(seriesMapper, times(1)).decrementArticleCountByUuid(SERIES_UUID);
     }
 
     /**

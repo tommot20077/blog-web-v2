@@ -1,6 +1,6 @@
 package dowob.xyz.blog.module.version.consumer;
 
-import com.rabbitmq.client.Channel;
+import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent.Action;
@@ -22,6 +22,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.time.Instant;
@@ -30,12 +33,14 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,17 +65,22 @@ class ArticleVersionConsumerTest {
     @Mock
     private AutoSnapshotPolicy autoSnapshotPolicy;
 
+    /** 冪等標記服務（Mock，預設視為首次處理） */
     @Mock
-    private Channel channel;
+    private IdempotencyService idempotencyService;
+
+    /** 交易管理員替身：用來觀察 commit／rollback */
+    private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
 
     private ArticleVersionConsumer consumer;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
-    private static final long DELIVERY_TAG = 42L;
-
     @BeforeEach
     void setUp() {
-        consumer = new ArticleVersionConsumer(versioningService, autoSnapshotPolicy, new ConsumerExecutor());
+        lenient().when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        lenient().when(idempotencyService.tryMark(any(), anyString())).thenReturn(true);
+        consumer = new ArticleVersionConsumer(versioningService, autoSnapshotPolicy,
+                new ConsumerExecutor(new TransactionTemplate(txManager), idempotencyService));
     }
 
     private ArticleContentChangedEvent event(Action action) {
@@ -83,77 +93,91 @@ class ArticleVersionConsumerTest {
     }
 
     @Test
-    @DisplayName("SAVED + shouldSnapshot=true: 寫入快照並 basicAck")
+    @DisplayName("SAVED + shouldSnapshot=true: 寫入快照並正常返回")
     void onContentChanged_savedAndShouldSnapshot_recordsAndAcks() throws IOException {
         when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(true);
 
-        consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
+        consumer.onContentChanged(event(Action.SAVED));
 
         verify(versioningService).recordAutoSnapshot(ARTICLE_UUID);
-        verify(channel).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("SAVED + shouldSnapshot=false: 不寫入但仍 basicAck")
+    @DisplayName("SAVED + shouldSnapshot=false: 不寫入但仍正常返回")
     void onContentChanged_savedButPolicyFalse_skipsButAcks() throws IOException {
         when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(false);
 
-        consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
+        consumer.onContentChanged(event(Action.SAVED));
 
         verify(versioningService, never()).recordAutoSnapshot(ARTICLE_UUID);
-        verify(channel).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("PUBLISHED: 凍結發布快照並 basicAck")
+    @DisplayName("PUBLISHED: 凍結發布快照並正常返回")
     void onContentChanged_published_freezesAndAcks() throws IOException {
-        consumer.onContentChanged(event(Action.PUBLISHED), channel, DELIVERY_TAG);
+        consumer.onContentChanged(event(Action.PUBLISHED));
 
         verify(versioningService).freezePublished(ARTICLE_UUID);
-        verify(channel).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("RESTORED: no-op 但仍 basicAck")
+    @DisplayName("RESTORED: no-op 但仍正常返回")
     void onContentChanged_restored_isNoOpButAcks() throws IOException {
-        consumer.onContentChanged(event(Action.RESTORED), channel, DELIVERY_TAG);
+        consumer.onContentChanged(event(Action.RESTORED));
 
         verify(versioningService, never()).recordAutoSnapshot(ARTICLE_UUID);
         verify(versioningService, never()).freezePublished(ARTICLE_UUID);
-        verify(channel).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("舊 payload 缺 articleUuid: 不觸發任何快照流程，仍 basicAck（重送也不會變好）")
+    @DisplayName("舊 payload 缺 articleUuid: 不觸發任何快照流程，仍正常返回（重送也不會變好）")
     void onContentChanged_nullArticleUuid_skipsAndAcks() throws IOException {
-        consumer.onContentChanged(event(Action.SAVED, null), channel, DELIVERY_TAG);
-        consumer.onContentChanged(event(Action.PUBLISHED, null), channel, DELIVERY_TAG);
+        consumer.onContentChanged(event(Action.SAVED, null));
+        consumer.onContentChanged(event(Action.PUBLISHED, null));
 
         verifyNoInteractions(versioningService, autoSnapshotPolicy);
-        verify(channel, times(2)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("Service 拋例外: 呼叫 basicNack（不重新入隊）")
+    @DisplayName("Service 拋例外: 例外往外拋（不重新入隊）")
     void onContentChanged_serviceThrows_callsBasicNack() throws IOException {
         when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(true);
         doThrow(new RuntimeException("DB error")).when(versioningService).recordAutoSnapshot(ARTICLE_UUID);
 
-        consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
-
-        verify(channel).basicNack(eq(DELIVERY_TAG), eq(false), eq(false));
+        assertThatThrownBy(() -> consumer.onContentChanged(event(Action.SAVED))).isInstanceOf(RuntimeException.class);
     }
 
     @Test
-    @DisplayName("ACK 失敗時呼叫 basicNack 避免訊息卡住")
-    void onContentChanged_ackThrows_callsBasicNack() throws IOException {
-        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(true);
-        doThrow(new IOException("ACK failed")).when(channel).basicAck(DELIVERY_TAG, false);
+    @DisplayName("SAVED/PUBLISHED 帶 eventId: 以 (eventId, CONSUMER_NAME) 標記，業務失敗時標記所在交易 rollback")
+    void onContentChanged_serviceThrows_rollsBackMarkTransaction() throws IOException {
+        ArticleContentChangedEvent ev = event(Action.PUBLISHED);
+        doThrow(new RuntimeException("DB error")).when(versioningService).freezePublished(ARTICLE_UUID);
 
-        consumer.onContentChanged(event(Action.SAVED), channel, DELIVERY_TAG);
+        assertThatThrownBy(() -> consumer.onContentChanged(ev)).isInstanceOf(RuntimeException.class);
 
-        verify(channel).basicNack(eq(DELIVERY_TAG), eq(false), eq(false));
+        verify(idempotencyService).tryMark(ev.eventId(), ArticleVersionConsumer.CONSUMER_NAME);
+        verify(txManager).rollback(any());
+        verify(txManager, never()).commit(any());
+    }
+
+    @Test
+    @DisplayName("同一事件重送（tryMark=false）: 不再寫快照，仍正常返回")
+    void onContentChanged_duplicateEvent_skipsSnapshotButAcks() throws IOException {
+        ArticleContentChangedEvent ev = event(Action.PUBLISHED);
+        when(idempotencyService.tryMark(ev.eventId(), ArticleVersionConsumer.CONSUMER_NAME)).thenReturn(false);
+
+        consumer.onContentChanged(ev);
+
+        verify(versioningService, never()).freezePublished(ARTICLE_UUID);
+    }
+
+    @Test
+    @DisplayName("RESTORED 與缺 articleUuid 是 no-op: 不寫 processed_events（沒有業務可去重）")
+    void onContentChanged_noOpEvents_doNotTouchIdempotency() throws IOException {
+        consumer.onContentChanged(event(Action.RESTORED));
+        consumer.onContentChanged(event(Action.SAVED, null));
+
+        verifyNoInteractions(idempotencyService);
     }
 
     /**
@@ -167,7 +191,7 @@ class ArticleVersionConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            consumer.onContentChanged(event(Action.PUBLISHED), channel, 5L);
+            consumer.onContentChanged(event(Action.PUBLISHED));
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleVersionConsumer.CONSUMER_NAME)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleVersionConsumer.CONSUMER_NAME)).isZero();
@@ -178,21 +202,21 @@ class ArticleVersionConsumerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("onContentChanged：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("onContentChanged：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void onContentChanged_onFailure_recordsMetricsAndLogsContext() throws Exception {
         doThrow(new RuntimeException("DB error")).when(versioningService).freezePublished(ARTICLE_UUID);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> consumer.onContentChanged(event(Action.PUBLISHED), channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> consumer.onContentChanged(event(Action.PUBLISHED))).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleVersionConsumer.CONSUMER_NAME)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleVersionConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleVersionConsumer.CONSUMER_NAME)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())

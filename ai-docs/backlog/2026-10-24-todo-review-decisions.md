@@ -93,15 +93,36 @@
 | 7 | UUID 全面改造的設計討論（ARCH-30 擴大） | 兩 repo | 無；**須在 #8 實作前完成**，以決定新端點寫法 |
 | 8 | 公開作者功能 後端 PR → 重抓快照 → 前端 PR（含 SEC-04 第 2 段） | 兩 repo | #7 |
 | 9 | SEC-04 第 3 段：`MAX_SIZE` 1000 → 100 | 後端 | #8 前端上線後 |
-| 10 | UUID 改造：各模組一個 PR（含該模組 T2 修復） | 後端（＋事件） | #7 |
-| 11 | SEC-16 互動路徑「可讀才可互動」 | 後端 | #10 的 comment、reading 完成後 |
-| 12 | ES 重建：存 `authorUuid`、移除 `username`，拿掉搜尋的批次作者查詢 | 後端 | #10 |
+| 10 | UUID 改造：各模組一個 PR（含該模組 T2 修復） | 後端（＋事件） | #7；**M1～M8、Z1、Z2、Z3 已完成（2026-10-31）**，見下方進度表 |
+| 11 | SEC-16 互動路徑「可讀才可互動」 | 後端 | #10 的 comment、reading 完成後（**依賴已滿足**：M1 PR #83、M2 PR #84 已合併；本項尚未開工） |
+| 12 | ES 重建：存 `authorUuid`、移除 `username`，拿掉搜尋的批次作者查詢 | 後端 | #10；**程式已完成**（M7-search，PR #89），部署後仍須執行 admin reindex |
 | 13 | CSP Report-Only | 前端 nginx／infrastructure | 無 |
-| 14 | 第 3 段：拆 CASCADE、事件驅動刪除 | 後端 | ARCH-16 可觀測性 |
+| 14 | 第 3 段：拆 CASCADE、事件驅動刪除 | 後端 | ARCH-16 可觀測性；**已併入 #10 完成**（範圍擴大為 (c)，M1～M8 逐模組拆 FK、改事件連動＋每日孤兒校正，Z2 以 `NoCrossModuleForeignKeyIT` 守衛；PR #83～#92）；ARCH-16 仍 OPEN |
 | 15 | 查證 ArticleList 左欄 Tags 連結以名稱代 slug | 前端 | 無 |
 | — | 對帳後仍 OPEN 的其他 findings（FE-01 全域錯誤處理、FE-02 未存檔守衛等）重新排序 | 兩 repo | #1 |
 
 **#7 已完成**（2026-10-24）：設計 `docs/plans/2026-10-24-cross-module-uuid-design.md`、實作計畫 `docs/plans/2026-10-24-cross-module-uuid-implementation-plan.md`。範圍擴大為 (c)：含拆跨模組 FK 與事件驅動刪除；JWT 直接切換（全體重新登入，無正式環境）；Q9 併入 0b；Q11 以「例外清單逐步清空」解決；`user_preferences.user_id` 追加為第 18 個欄位；`files` 表 DROP。#10～#12 併入該計畫的 M／Z 階段。
+
+**#10 跨模組 UUID 重構進度（2026-10-31 對帳，develop 上的合併提交）**：
+
+| 階段 | PR | 內容 | 狀態 |
+|---|---|---|---|
+| T0a | #81 | 安全網、孤兒校正排程框架、事件契約搬遷、過渡 API、守衛起步 | 完成 |
+| T0b | #82 | 認證鏈改用 uuid（JWT subject、`AuthStateLoader`）、全模組 principal 改 `AuthUser`（含 Q9／SEC-26） | 完成 |
+| M1（comment） | #83 | V25；修 RACE-01、RACE-09 | 完成 |
+| M2（reading） | #84 | V26、V27；修 RACE-01、RACE-04、RACE-13；PERF-31 部分 | 完成 |
+| RP-1（閱讀進度） | #85 | 帶版本時間的單調寫入（修 DATA-08 殘留的回退） | 完成 |
+| M3（version） | #86 | V28 | 完成 |
+| M4（series） | #87 | V29；修 RACE-14、RACE-15 | 完成 |
+| M5（file） | #88 | V30（DROP 舊 `files` 表）；`ImageUploadedEvent` 補 `eventId` | 完成 |
+| M7-search | #89 | ES 作者改存 uuid、移除 `username` | 完成 |
+| M6（article） | #90 | V31、V32 | 完成 |
+| M7-tag ＋ M8（user） | #91 | V33（含 PERF-07 索引）、V34；修 RACE-08、RACE-02、RACE-03 | 完成 |
+| Z1 ＋ Z2 | #92 | 移除過渡 Long API；全域守衛（`FacadeIdentifierTypeTest`、`NoCrossModuleForeignKeyIT`、`CrossModuleBoundaryTest` 全表對照、`ModulePomDependencyTest`、`EventContractTest` 刪例外清單） | 完成 |
+| Z3-a | 與 Z3-b 同一 PR（merge `88a77e3`） | 冪等標記與業務同交易，為打開 MQ 重試鋪路 | 完成 |
+| Z3-b | 與 Z3-a 同一 PR | 打開 MQ 重試（ARCH-02／PERF-15／PERF-30）、刪除連動 queue 真 broker 綁定測試 | 完成 |
+
+`findings.md` 已據此對帳：ARCH-30、ARCH-07、ARCH-09、ARCH-13、PERF-07、PERF-31（部分）、RACE-01/02/03/04/08/09/13/14/15、DATA-08、TEST-04/05 的狀態更新見 `findings.md`「稽核輪次」2026-10-31 列；ARCH-02（含 PERF-30）、PERF-15 已於 Z3-b 完成後改為 DONE。M7-recommend 在 git log 無獨立 merge 提交（未逐項確認其範圍是否已併入 M6）。
 
 ---
 
@@ -114,8 +135,8 @@
 - **`comment_likes` 缺以 `comment_id` 開頭的索引（既有）**：UNIQUE 為 (user_uuid, comment_id)，刪除留言時 FK CASCADE 找讚列需全表掃描。V25 前即存在（舊 UNIQUE 同樣以 user_id 開頭），不在 M1 授權內。修法：新 migration 加 `idx_comment_likes_comment(comment_id)`。（M1-b 回報）
 - **寫入與文章刪除的窗口（M1-b 起，設計接受）**：寫入端在 `existsByUuid` 與 INSERT 之間文章被刪，會留下孤兒列，直到每日 `OrphanReconciliationJob` 子類別清除；FK 拿掉後的固有代價。適用：留言（M1-b）、按讚與收藏（M2-b）、劃線（M2-c）。（M1-b、M2-b 回報）
 - **comment 列表作者欄位缺端到端測試**：comment 模組 IT 一律 mock `UserFacade`，`UserFacadeImpl` 端由 `UserFacadeIntegrationTest` 覆蓋，兩端以 `Map<UUID, UserDisplayInfo>` 契約銜接，但沒有測試走過「真實 UserFacade → listComments → JSON」。併入 TEST-10 E2E 進 CI gate 時補 author 斷言。（M1-b 審查 MEDIUM）
-- **刪除連動 queue 缺真 broker 的 binding 測試**：`comment.article-deleted`、`reading.article-deleted` 只有 config 單元測試與 ContextSmokeTest（context 能啟動），沒有測試以真 RabbitMQ 發布 `ArticleDeletedEvent` 後證明 consumer 收到。Z3（打開 MQ 重試）前補一個 blog-start 層的 Testcontainers RabbitMQ IT 涵蓋全部刪除連動 queue。（M2-b 審查）
-- **閱讀進度一致性（既有，M2-c 審查以 PoC 重現；建議合併為一個 Task）**：M2-c 已修 RACE-13（flush 改 Lua compare-and-remove，at-least-once），以下仍未處理，PoC 測試存於 `ai-docs/backlog/poc/2026-10-25-reading-progress-Review2PocIT.java.txt`：
+- **刪除連動 queue 缺真 broker 的 binding 測試**（**2026-10-31 已處理**：Z3-b 新增 `DeleteCascadeQueueBindingIT`，以正式 publisher 發布、涵蓋 comment／reading／series／tag／version／search 與 `article.series-deleted`）：`comment.article-deleted`、`reading.article-deleted` 只有 config 單元測試與 ContextSmokeTest（context 能啟動），沒有測試以真 RabbitMQ 發布 `ArticleDeletedEvent` 後證明 consumer 收到。Z3（打開 MQ 重試）前補一個 blog-start 層的 Testcontainers RabbitMQ IT 涵蓋全部刪除連動 queue。（M2-b 審查）
+- **閱讀進度一致性（既有，M2-c 審查以 PoC 重現；建議合併為一個 Task）**：M2-c 已修 RACE-13（flush 改 Lua compare-and-remove，at-least-once）。**2026-10-31 對帳**：(a)(b)(c)(d) 已由 RP-1（PR #85）處理——Redis 寫入與快取回填改走單一 Lua `WRITE_IF_NEWER`（HSET＋EXPIRE＋SADD 原子、只接受不比現有舊的值），DB upsert 加 `updated_at <= EXCLUDED.updated_at` 守衛；(e)(f) 維持現況（目前無寫入路徑會產生缺欄位 hash、Redis 為單機）；RP-1 自身的殘留見下一條。以下為原始盤點，PoC 測試存於 `ai-docs/backlog/poc/2026-10-25-reading-progress-Review2PocIT.java.txt`：
   - (a) 兩個 flusher 交錯（多實例、無 ShedLock）：F1 讀舊值停頓、F2 寫新值並清標記、F1 再寫舊值 → DB 回退（poc2）
   - (b) 完成路徑（≥ 門檻直寫 DB 並 DEL hash）與 flush 交錯 → DB 被 flush 讀到的舊值覆寫（poc3）
   - (a)(b) 修法：upsert 加單調守衛 `WHERE user_reading_progress.updated_at <= EXCLUDED.updated_at`，`updated_at` 改傳 hash 的 `updatedAt`（動到時間欄位語意），或 flush 加 Redis 鎖
@@ -128,6 +149,6 @@
 - **M6 前置（M4-b 審查）**：(1) `SeriesDeletedEvent` 發送失敗目前只記 warn——M6 移除 `articles.series_id` 的 `ON DELETE SET NULL` 後事件遺失會留下孤兒成員，M6 前升為 error 並由 article 端校正排程兜底；(2) `TransactionMqBoundaryTest` 只偵測直接呼叫 `RabbitTemplate`，看不到經 `*EventPublisher` 的間接呼叫——考慮擴充守衛規則；(3) `deleteSeries` 與 add／remove 的鎖順序相反（series→article vs article→series，既有），併發下有死鎖可能，M6 改寫時一併檢視。 **【M6-b 處理結果】** (1) 已處理：`SeriesEventPublisher` 發送失敗改記 error（附 seriesUuid、eventId），article 端新增 `ArticleSeriesOrphanReconciliationJob`（03:53）兜底；(3) 已不成立：V32 移除 `articles.series_id` FK 後，`deleteSeries` 只動 series 列、不再因 ON DELETE SET NULL 觸碰 articles，與 add／remove（article→series）不再有相反的鎖順序（`ArticleSeriesUuidMigrationIT` 以 lock_timeout 對照 V31／V32 實測）；(2) 未處理，仍待評估。
 - **Z 階段文件修訂（M6-a 審查）**：`architecture.md` :49/:70/:74/:86 仍以已刪除的 `ArticleFacade.filterReadableIds` 為例，應改為 `filterReadableUuids`——併入 Z 階段 architecture.md 修訂提案交 Yuan 簽核。
 - **模組測試預設不載入 MyBatis XML mapper（M6-a 發現）**：各模組 `*TestApplication`／`application-test.yaml` 未設 `mybatis.mapper-locations`，`ArticleRecommendMapper.xml`（全 repo 唯一的 XML mapper）在 M6-a 之前從未在模組 IT 對真 PG 執行；正式環境與 e2e 有載入。M6-a 的 `ArticleFacadeRecommendAuthorIT` 已自行設定。新增 XML mapper 時須同步確認測試設定。
-- **寄信 consumer 冪等取捨（M8 審查；Yuan 2026-10-31 決定：Z3 改為「寄後標記」）**：`EmailVerificationConsumer`／`PasswordResetConsumer` 在寄信**前**標記 eventId，寄信失敗進 DLQ 後人工重投同一 eventId 會被擋下（使用者需自行重發驗證信或再次忘記密碼）。替代方案：寄信失敗時清除標記，或改為寄後標記（代價是重投可能重寄同一連結）。若 DLQ 重投是營運流程，建議改。
+- **寄信 consumer 冪等取捨（M8 審查；Yuan 2026-10-31 決定：Z3 改為「寄後標記」；**已於 Z3-a 實作**：標記與寄信同交易、寄信成功才 commit）**：`EmailVerificationConsumer`／`PasswordResetConsumer` 在寄信**前**標記 eventId，寄信失敗進 DLQ 後人工重投同一 eventId 會被擋下（使用者需自行重發驗證信或再次忘記密碼）。替代方案：寄信失敗時清除標記，或改為寄後標記（代價是重投可能重寄同一連結）。若 DLQ 重投是營運流程，建議改。
 - **tags 是否仍視為 reference data（M7-tag 盤點；Yuan 2026-10-31 決定：維持 reference data，Z2 守衛明文允許 article JOIN `tags`／`article_tags`，拆服務時再改 TagFacade）**：article 模組 SQL 直接 JOIN `article_tags`／`tags`（`ArticleMapper`、`ArticleRecommendMapper`＋XML），`CrossModuleBoundaryTest` 目前允許。拆服務時需改為 TagFacade 批次查詢；另 `ArticleCommandSubService:287,295`、`ArticleMapper:198,525-527` 註解仍寫 article_tags FK CASCADE（已過時）。
 - **refresh token 可被當 access token 送進 filter（既有）**：`JwtService.validateToken` 不檢查 token type；目前因 refresh token 無 role claim 被 filter 的 catch 偶然擋下。應在 filter 明確檢查 type=access 並補測試。（T0b-2 審查）

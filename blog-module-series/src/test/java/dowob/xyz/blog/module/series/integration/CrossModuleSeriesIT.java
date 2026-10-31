@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.series.integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
@@ -174,8 +173,7 @@ class CrossModuleSeriesIT {
         try {
             ArticleDeletedEvent event = new ArticleDeletedEvent(
                 eventId, articleUuid, List.of(), List.of(), Instant.now(), null, seriesUuid);
-            Channel mockChannel = Mockito.mock(Channel.class);
-            seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
+            seriesArticleDeletedConsumer.onArticleDeleted(event);
         } catch (Exception e) {
             throw new RuntimeException("simulateConsumerProcessing 失敗", e);
         }
@@ -333,13 +331,12 @@ class CrossModuleSeriesIT {
             eventId, article.getUuid(), List.of(), List.of(), Instant.now(), null, series.getUuid());
 
         // 3. 第一次處理 → article_count 從 1 變 0
-        Channel mockChannel = Mockito.mock(Channel.class);
-        seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
+        seriesArticleDeletedConsumer.onArticleDeleted(event);
         Series afterFirst = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
         assertThat(afterFirst.getArticleCount()).isEqualTo(0);
 
         // 4. 第二次處理（同一 event，模擬重送）
-        seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 2L);
+        seriesArticleDeletedConsumer.onArticleDeleted(event);
 
         // 5. article_count 仍是 0（沒被扣到 -1，dedup 生效）
         Series afterReplay = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
@@ -361,8 +358,7 @@ class CrossModuleSeriesIT {
         // 1. 構造 seriesUuid == null 的事件
         ArticleDeletedEvent event = new ArticleDeletedEvent(
             UUID.randomUUID(), UUID.randomUUID(), List.of(), List.of(), Instant.now(), null, null);
-        Channel mockChannel = Mockito.mock(Channel.class);
-        seriesArticleDeletedConsumer.onArticleDeleted(event, mockChannel, 1L);
+        seriesArticleDeletedConsumer.onArticleDeleted(event);
 
         // 2. 無 processed_events 記錄（早返不寫 dedup）
         long count = jdbcTemplate.queryForObject(
@@ -416,7 +412,7 @@ class CrossModuleSeriesIT {
                 eq(SeriesEventContract.EXCHANGE), eq(SeriesEventContract.ROUTING_KEY_DELETED), published.capture());
         SeriesDeletedEvent event = (SeriesDeletedEvent) published.getValue();
         assertThat(event.seriesUuid()).isEqualTo(series.getUuid());
-        articleSeriesDeletedConsumer.onSeriesDeleted(event, Mockito.mock(Channel.class), 1L);
+        articleSeriesDeletedConsumer.onSeriesDeleted(event);
 
         // 8. 文章的 series_uuid／series_position 已清空，文章本身仍在
         Article unlinked = articleRepo.findById(article.getId()).orElseThrow();
