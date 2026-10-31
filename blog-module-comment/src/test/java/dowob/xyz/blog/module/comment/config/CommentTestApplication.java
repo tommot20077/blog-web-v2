@@ -1,5 +1,8 @@
 package dowob.xyz.blog.module.comment.config;
 
+import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
+import org.springframework.boot.autoconfigure.amqp.SimpleRabbitListenerContainerFactoryConfigurer;
+import org.springframework.context.annotation.Bean;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.amqp.RabbitAutoConfiguration;
@@ -46,4 +49,17 @@ import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
         "dowob.xyz.blog.module.reading.mapper"
 })
 public class CommentTestApplication {
+
+    /**
+     * 補上被排除的 {@code RabbitAutoConfiguration} 原本提供的容器工廠設定器。
+     *
+     * <p>{@code RabbitMqConfig.rabbitListenerContainerFactory} 依賴它（PERF-15：listener 設定必須經 configurer 套用）。
+     * 本測試應用程式不連線 broker，使用預設的 {@link RabbitProperties} 即可。</p>
+     *
+     * @return 以預設 RabbitProperties 建立的設定器
+     */
+    @Bean
+    public SimpleRabbitListenerContainerFactoryConfigurer simpleRabbitListenerContainerFactoryConfigurer() {
+        return new SimpleRabbitListenerContainerFactoryConfigurer(new RabbitProperties());
+    }
 }

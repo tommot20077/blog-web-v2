@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.user.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.user.config.UserRabbitMqConfig;
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
@@ -8,9 +7,7 @@ import dowob.xyz.blog.module.user.service.UserMailService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 /**
@@ -18,7 +15,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>監聽 {@code user.password.reset} Queue，接收密碼重設請求後發送重設密碼信。
  * 採用 Manual Ack 模式，確保訊息成功處理後才回報 ACK；
- * ack／nack 與失敗計數統一交由 {@link ConsumerExecutor} 處理。</p>
+ * 失敗日誌與計數統一交由 {@link ConsumerExecutor} 處理；失敗往外拋，由容器重試、耗盡後進 DLQ。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -35,7 +32,7 @@ public class PasswordResetConsumer {
     /** 用戶郵件服務 */
     private final UserMailService userMailService;
 
-    /** MQ consumer 共用 ack/nack 包裝與計數 */
+    /** MQ consumer 共用執行包裝（失敗日誌、計數、冪等） */
     private final ConsumerExecutor consumerExecutor;
 
     /**
@@ -57,22 +54,18 @@ public class PasswordResetConsumer {
      * {@link ConsumerExecutor} 輸出）。ack 前當機造成的重投會被擋下而不重寄；若使用者仍沒收到信，
      * 請其走「再次忘記密碼」（產生新 eventId）。</p>
      *
-     * <p>郵件發送成功後由 {@link ConsumerExecutor} 確認（ack）訊息；失敗則 nack 送 DLQ。</p>
+     * <p>郵件發送成功後正常返回（容器 ack）；失敗則往外拋，由容器重試（最多 3 次，寄信失敗可能重寄同一連結），耗盡後送 DLQ。</p>
      *
      * @param event       密碼重設請求事件，包含用戶 UUID、信箱與重設 Token
-     * @param channel     RabbitMQ Channel（交由 {@link ConsumerExecutor} 執行 ack／nack）
-     * @param deliveryTag 訊息投遞標籤
      */
     @RabbitListener(
             queues = UserRabbitMqConfig.QUEUE_PASSWORD_RESET,
             autoStartup = "${app.mail.consumer-enabled:true}"
     )
-    public void handlePasswordResetRequested(UserPasswordResetRequestedEvent event,
-                                              Channel channel,
-                                              @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+    public void handlePasswordResetRequested(UserPasswordResetRequestedEvent event) {
         consumerExecutor.executeIdempotent(CONSUMER_NAME,
                 () -> "userUuid=" + event.userUuid() + ", eventId=" + event.eventId(),
-                channel, deliveryTag, event.eventId(), () -> {
+                event.eventId(), () -> {
                     log.info("收到密碼重設請求 - userUuid={}, eventId={}", event.userUuid(), event.eventId());
                     userMailService.sendPasswordResetEmail(event);
                     log.info("密碼重設信已送出 - userUuid={}", event.userUuid());

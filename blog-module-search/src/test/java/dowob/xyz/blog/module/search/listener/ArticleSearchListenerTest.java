@@ -2,7 +2,6 @@ package dowob.xyz.blog.module.search.listener;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
@@ -37,6 +36,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -59,9 +59,6 @@ class ArticleSearchListenerTest {
 
     @Mock
     private SearchService searchService;
-
-    @Mock
-    private Channel channel;
 
     /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
     @Spy
@@ -96,14 +93,13 @@ class ArticleSearchListenerTest {
     class OnArticlePublishedTests {
 
         @Test
-        @DisplayName("正常：收到發布訊息時，應建立 ES 索引並 ACK")
+        @DisplayName("正常：收到發布訊息時，應建立 ES 索引並正常返回")
         void onArticlePublished_shouldIndexAndAck() throws IOException {
             ArticlePublishedMessage message = buildPublishedMessage();
 
-            listener.onArticlePublished(message, channel, 1L);
+            listener.onArticlePublished(message);
 
             verify(searchService).indexArticle(any(ArticleDocument.class));
-            verify(channel).basicAck(1L, false);
         }
 
         @Test
@@ -111,7 +107,7 @@ class ArticleSearchListenerTest {
         void onArticlePublished_shouldBuildAuthorFromUuidAndNicknameOnly() throws Exception {
             ArticlePublishedMessage message = buildPublishedMessage();
 
-            listener.onArticlePublished(message, channel, 10L);
+            listener.onArticlePublished(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
             verify(searchService).indexArticle(captor.capture());
@@ -128,35 +124,21 @@ class ArticleSearchListenerTest {
             ArticlePublishedMessage message = buildPublishedMessage();
             message.setTags(null);
 
-            listener.onArticlePublished(message, channel, 2L);
+            listener.onArticlePublished(message);
 
             verify(searchService).indexArticle(any(ArticleDocument.class));
-            verify(channel).basicAck(2L, false);
         }
 
         @Test
-        @DisplayName("異常：ES 索引失敗時，應 NACK 至 DLQ（不重排隊）")
+        @DisplayName("異常：ES 索引失敗時，應讓例外往外拋（交由容器重試，耗盡進 DLQ）")
         void onArticlePublished_onEsException_shouldNack() throws IOException {
             ArticlePublishedMessage message = buildPublishedMessage();
 
             doThrow(new RuntimeException("ES cluster unavailable")).when(searchService).indexArticle(any());
 
-            listener.onArticlePublished(message, channel, 3L);
-
-            verify(channel).basicNack(3L, false, false);
+            assertThatThrownBy(() -> listener.onArticlePublished(message)).isInstanceOf(RuntimeException.class);
         }
 
-        @Test
-        @DisplayName("異常：basicAck 拋出 IOException 時，應觸發 basicNack")
-        void onArticlePublished_onAckIoException_shouldNack() throws IOException {
-            ArticlePublishedMessage message = buildPublishedMessage();
-
-            doThrow(new IOException("channel broken")).when(channel).basicAck(4L, false);
-
-            listener.onArticlePublished(message, channel, 4L);
-
-            verify(channel).basicNack(4L, false, false);
-        }
     }
 
     /**
@@ -180,10 +162,9 @@ class ArticleSearchListenerTest {
                 message.setAuthorNickname("Yuan");
             message.setTags(List.of());
 
-            listener.onArticleUpdated(message, channel, 1L);
+            listener.onArticleUpdated(message);
 
             verify(searchService).indexArticle(any(ArticleDocument.class));
-            verify(channel).basicAck(1L, false);
         }
 
         @Test
@@ -191,7 +172,7 @@ class ArticleSearchListenerTest {
         void onArticleUpdated_shouldBuildAuthorFromUuidAndNicknameOnly() throws Exception {
             ArticlePublishedMessage message = buildPublishedMessage();
 
-            listener.onArticleUpdated(message, channel, 11L);
+            listener.onArticleUpdated(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
             verify(searchService).indexArticle(captor.capture());
@@ -208,17 +189,16 @@ class ArticleSearchListenerTest {
             ArticlePublishedMessage message = buildPublishedMessage();
             message.setAuthorUuid(null);
 
-            listener.onArticlePublished(message, channel, 12L);
+            listener.onArticlePublished(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
             verify(searchService).indexArticle(captor.capture());
             assertThat(captor.getValue().getAuthor().getUuid()).isNull();
             assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo("Yuan");
-            verify(channel).basicAck(12L, false);
         }
 
         @Test
-        @DisplayName("異常：重新索引失敗時，應 NACK 至 DLQ")
+        @DisplayName("異常：重新索引失敗時，應讓例外往外拋（交由容器重試，耗盡進 DLQ）")
         void onArticleUpdated_onError_shouldNack() throws IOException {
             ArticlePublishedMessage message = new ArticlePublishedMessage();
             message.setArticleUuid(UUID.randomUUID());
@@ -228,9 +208,7 @@ class ArticleSearchListenerTest {
 
             doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any());
 
-            listener.onArticleUpdated(message, channel, 2L);
-
-            verify(channel).basicNack(2L, false, false);
+            assertThatThrownBy(() -> listener.onArticleUpdated(message)).isInstanceOf(RuntimeException.class);
         }
     }
 
@@ -245,7 +223,7 @@ class ArticleSearchListenerTest {
     class OnArticleArchivedTests {
 
         @Test
-        @DisplayName("正常：收到下架訊息時，應移除該文章的 ES 索引並 ACK")
+        @DisplayName("正常：收到下架訊息時，應移除該文章的 ES 索引並正常返回")
         void onArticleArchived_shouldDeleteIndexAndAck() throws IOException {
             UUID uuid = UUID.randomUUID();
             ArticleArchivedMessage message = new ArticleArchivedMessage();
@@ -253,14 +231,13 @@ class ArticleSearchListenerTest {
             message.setArticleUuid(uuid);
             message.setOccurredAt(Instant.now());
 
-            listener.onArticleArchived(message, channel, 1L);
+            listener.onArticleArchived(message);
 
             verify(searchService).deleteIndex(uuid.toString());
-            verify(channel).basicAck(1L, false);
         }
 
         @Test
-        @DisplayName("異常：移除索引失敗時，應 NACK 至 DLQ（不 requeue）")
+        @DisplayName("異常：移除索引失敗時，應讓例外往外拋（交由容器重試，耗盡進 DLQ）")
         void onArticleArchived_onError_shouldNack() throws IOException {
             UUID uuid = UUID.randomUUID();
             ArticleArchivedMessage message = new ArticleArchivedMessage();
@@ -270,9 +247,7 @@ class ArticleSearchListenerTest {
 
             doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
 
-            listener.onArticleArchived(message, channel, 7L);
-
-            verify(channel).basicNack(7L, false, false);
+            assertThatThrownBy(() -> listener.onArticleArchived(message)).isInstanceOf(RuntimeException.class);
         }
 
         /**
@@ -294,7 +269,7 @@ class ArticleSearchListenerTest {
 
             CapturingAppender appender = attachAppender();
             try {
-                listener.onArticleArchived(message, channel, 7L);
+                assertThatThrownBy(() -> listener.onArticleArchived(message)).isInstanceOf(RuntimeException.class);
             } finally {
                 detachAppender(appender);
             }
@@ -364,14 +339,13 @@ class ArticleSearchListenerTest {
             message.setArticleUuid(uuid);
             message.setOccurredAt(Instant.now());
 
-            listener.onArticleDeleted(message, channel, 1L);
+            listener.onArticleDeleted(message);
 
             verify(searchService).deleteIndex(uuid.toString());
-            verify(channel).basicAck(1L, false);
         }
 
         @Test
-        @DisplayName("異常：移除索引失敗時，應 NACK 至 DLQ")
+        @DisplayName("異常：移除索引失敗時，應讓例外往外拋（交由容器重試，耗盡進 DLQ）")
         void onArticleDeleted_onError_shouldNack() throws IOException {
             UUID uuid = UUID.randomUUID();
             ArticleDeletedMessage message = new ArticleDeletedMessage();
@@ -380,9 +354,7 @@ class ArticleSearchListenerTest {
 
             doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
 
-            listener.onArticleDeleted(message, channel, 3L);
-
-            verify(channel).basicNack(3L, false, false);
+            assertThatThrownBy(() -> listener.onArticleDeleted(message)).isInstanceOf(RuntimeException.class);
         }
     }
 
@@ -398,7 +370,7 @@ class ArticleSearchListenerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            listener.onArticlePublished(message, channel, 5L);
+            listener.onArticlePublished(message);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).isZero();
@@ -409,22 +381,22 @@ class ArticleSearchListenerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("onArticlePublished：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("onArticlePublished：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void onArticlePublished_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ArticlePublishedMessage message = buildPublishedMessage();
         doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> listener.onArticlePublished(message, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> listener.onArticlePublished(message)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
@@ -449,7 +421,7 @@ class ArticleSearchListenerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            listener.onArticleUpdated(message, channel, 5L);
+            listener.onArticleUpdated(message);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).isZero();
@@ -460,22 +432,22 @@ class ArticleSearchListenerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("onArticleUpdated：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("onArticleUpdated：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void onArticleUpdated_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ArticlePublishedMessage message = buildPublishedMessage();
         doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> listener.onArticleUpdated(message, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> listener.onArticleUpdated(message)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_UPDATE)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
@@ -502,7 +474,7 @@ class ArticleSearchListenerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            listener.onArticleDeleted(message, channel, 5L);
+            listener.onArticleDeleted(message);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).isZero();
@@ -513,12 +485,12 @@ class ArticleSearchListenerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("onArticleDeleted：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("onArticleDeleted：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void onArticleDeleted_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ArticleDeletedMessage message = new ArticleDeletedMessage();
         message.setArticleUuid(UUID.randomUUID());
@@ -528,10 +500,10 @@ class ArticleSearchListenerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> listener.onArticleDeleted(message, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> listener.onArticleDeleted(message)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_DELETE)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
@@ -559,7 +531,7 @@ class ArticleSearchListenerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            listener.onArticleArchived(message, channel, 5L);
+            listener.onArticleArchived(message);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).isZero();
@@ -570,12 +542,12 @@ class ArticleSearchListenerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("onArticleArchived：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("onArticleArchived：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void onArticleArchived_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ArticleArchivedMessage message = new ArticleArchivedMessage();
         message.setEventId(UUID.randomUUID());
@@ -585,10 +557,10 @@ class ArticleSearchListenerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> listener.onArticleArchived(message, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> listener.onArticleArchived(message)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ArticleSearchListener.CONSUMER_NAME_INDEX_ARCHIVE)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())

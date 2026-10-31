@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.article.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
@@ -8,8 +7,6 @@ import dowob.xyz.blog.module.article.mapper.ArticleSeriesCleanupMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.support.AmqpHeaders;
-import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 /**
@@ -25,11 +22,11 @@ import org.springframework.stereotype.Component;
  * <p>只讀事件的 {@code seriesUuid}。{@code UPDATE ... WHERE series_uuid = ?} 是單一 SQL 敘述（本身即原子）
  * 且天然冪等，重送只會更新 0 筆，因此不使用 IdempotencyService、也不需要交易模板。</p>
  *
- * <p>ACK 策略：手動 ACK，由 {@link ConsumerExecutor} 統一處理：</p>
+ * <p>ACK 策略：AUTO（正常返回即 ack；拋例外由容器重試，耗盡進 DLQ）；失敗日誌與計數由 {@link ConsumerExecutor} 統一處理：</p>
  * <ul>
  *   <li>成功（含更新 0 筆）→ ack</li>
  *   <li>缺 {@code seriesUuid} → 無法定位要清空的文章，記 warn 後 ack（重送也不會變好）</li>
- *   <li>例外 → nack（requeue=false）進 DLQ；每日孤兒校正排程是事件遺失時的第二道保險</li>
+ *   <li>例外 → 往外拋，容器重試（最多 3 次），耗盡進 DLQ；每日孤兒校正排程是事件遺失時的第二道保險</li>
  * </ul>
  *
  * @author Yuan
@@ -46,23 +43,19 @@ public class ArticleSeriesDeletedConsumer {
     /** 系列刪除連動用的 mapper */
     private final ArticleSeriesCleanupMapper cleanupMapper;
 
-    /** MQ consumer 共用 ack/nack 包裝與計數 */
+    /** MQ consumer 共用執行包裝（失敗日誌、計數、冪等） */
     private final ConsumerExecutor consumerExecutor;
 
     /**
      * 處理系列刪除事件。
      *
      * @param event       系列刪除事件
-     * @param channel     AMQP channel
-     * @param deliveryTag 訊息的 delivery tag
      */
     @RabbitListener(queues = ArticleRabbitMqConfig.QUEUE_SERIES_DELETED)
-    public void onSeriesDeleted(SeriesDeletedEvent event,
-                                Channel channel,
-                                @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+    public void onSeriesDeleted(SeriesDeletedEvent event) {
         consumerExecutor.execute(CONSUMER_NAME,
                 () -> "seriesUuid=" + event.seriesUuid() + ", eventId=" + event.eventId(),
-                channel, deliveryTag, () -> {
+                () -> {
                     if (event.seriesUuid() == null) {
                         log.warn("系列刪除事件缺少 seriesUuid，略過文章系列歸屬清空 eventId={}", event.eventId());
                         return;

@@ -41,7 +41,9 @@ spring:
     publisher-returns: true
     listener:
       simple:
-        acknowledge-mode: manual
+        # AUTO：listener 正常返回即 ack、拋例外即 nack(requeue)，重試攔截器才有機會介入。
+        # MANUAL 下容器不會對一般例外 nack，訊息停在 unacked，重試形同死碼（見 AckModeRetryProofIntegrationTest）。
+        acknowledge-mode: auto
         # 並行度（PERF-30）：stateful retry 的退避睡眠發生在 consumer 執行緒上，單一毒訊息會佔住一條執行緒
         # 約 6 秒（1s＋5s）。concurrency ≥ 2 讓同一 queue 的其他訊息由另一條執行緒處理，不被頭部阻塞。
         concurrency: ${MQ_LISTENER_CONCURRENCY:2}

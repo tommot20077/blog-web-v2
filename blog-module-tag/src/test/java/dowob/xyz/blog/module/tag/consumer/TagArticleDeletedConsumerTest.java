@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.tag.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
@@ -19,11 +18,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -37,10 +33,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 @DisplayName("TagArticleDeletedConsumer 單元測試")
 class TagArticleDeletedConsumerTest {
 
-    private static final long DELIVERY_TAG = 42L;
-
     @Mock private ArticleTagRepository articleTagRepository;
-    @Mock private Channel channel;
 
     private TagArticleDeletedConsumer consumer;
 
@@ -54,43 +47,37 @@ class TagArticleDeletedConsumerTest {
     }
 
     @Test
-    @DisplayName("收到事件：依 articleUuid 刪除該文章的標籤關聯並 ack")
+    @DisplayName("收到事件：依 articleUuid 刪除該文章的標籤關聯並正常返回")
     void onArticleDeleted_deletesArticleTagsAndAcks() throws Exception {
         UUID articleUuid = UUID.randomUUID();
 
-        consumer.onArticleDeleted(event(articleUuid), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(event(articleUuid));
 
         verify(articleTagRepository).deleteByArticleId(articleUuid);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("舊 payload 缺 articleUuid：不刪除、仍 ack（重送也不會變好）")
+    @DisplayName("舊 payload 缺 articleUuid：不刪除、仍正常返回（重送也不會變好）")
     void onArticleDeleted_nullArticleUuid_doesNotDeleteAndAcks() throws Exception {
-        consumer.onArticleDeleted(event(null), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(event(null));
 
         verifyNoInteractions(articleTagRepository);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
-    @DisplayName("刪除拋例外：nack（requeue=false）送往 DLQ，不 ack")
+    @DisplayName("刪除拋例外：例外往外拋（交由容器重試，耗盡進 DLQ）")
     void onArticleDeleted_deleteThrows_nacksWithoutRequeue() throws Exception {
         UUID articleUuid = UUID.randomUUID();
         doThrow(new RuntimeException("DB down")).when(articleTagRepository).deleteByArticleId(articleUuid);
 
-        consumer.onArticleDeleted(event(articleUuid), channel, DELIVERY_TAG);
-
-        verify(channel, times(1)).basicNack(DELIVERY_TAG, false, false);
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
+        assertThatThrownBy(() -> consumer.onArticleDeleted(event(articleUuid))).isInstanceOf(RuntimeException.class);
     }
 
     @Test
     @DisplayName("監聽 tag.article-deleted queue")
     void onArticleDeleted_listensToArticleDeletedQueue() throws Exception {
         Method method = TagArticleDeletedConsumer.class.getMethod(
-                "onArticleDeleted", ArticleDeletedEvent.class, Channel.class, long.class);
+                "onArticleDeleted", ArticleDeletedEvent.class);
 
         RabbitListener listener = method.getAnnotation(RabbitListener.class);
 

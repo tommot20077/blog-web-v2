@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.user.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.user.config.UserRabbitMqConfig;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
@@ -8,9 +7,7 @@ import dowob.xyz.blog.module.user.service.UserMailService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 /**
@@ -19,7 +16,7 @@ import org.springframework.stereotype.Component;
  * <p>監聽 {@code user.email.verification} Queue，接收用戶註冊事件後
  * 負責透過郵件服務發送驗證信至用戶信箱。
  * 採用 Manual Ack 模式，確保訊息成功處理後才回報 ACK；
- * ack／nack 與失敗計數統一交由 {@link ConsumerExecutor} 處理。</p>
+ * 失敗日誌與計數統一交由 {@link ConsumerExecutor} 處理；失敗往外拋，由容器重試、耗盡後進 DLQ。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -36,7 +33,7 @@ public class EmailVerificationConsumer {
     /** 用戶郵件服務 */
     private final UserMailService userMailService;
 
-    /** MQ consumer 共用 ack/nack 包裝與計數 */
+    /** MQ consumer 共用執行包裝（失敗日誌、計數、冪等） */
     private final ConsumerExecutor consumerExecutor;
 
     /**
@@ -58,22 +55,18 @@ public class EmailVerificationConsumer {
      * {@link ConsumerExecutor} 輸出）。ack 前當機造成的重投會被擋下而不重寄；若使用者仍沒收到信，
      * 請其走「重發驗證信」（產生新 eventId）。</p>
      *
-     * <p>郵件發送成功後由 {@link ConsumerExecutor} 確認（ack）訊息；失敗則 nack 送 DLQ。</p>
+     * <p>郵件發送成功後正常返回（容器 ack）；失敗則往外拋，由容器重試（最多 3 次，寄信失敗可能重寄同一連結），耗盡後送 DLQ。</p>
      *
      * @param event       用戶已註冊事件，包含信箱、暱稱與驗證 Token
-     * @param channel     RabbitMQ Channel（交由 {@link ConsumerExecutor} 執行 ack／nack）
-     * @param deliveryTag 訊息投遞標籤
      */
     @RabbitListener(
             queues = UserRabbitMqConfig.QUEUE_EMAIL_VERIFICATION,
             autoStartup = "${app.mail.consumer-enabled:true}"
     )
-    public void handleUserRegistered(UserRegisteredEvent event,
-                                     Channel channel,
-                                     @Header(AmqpHeaders.DELIVERY_TAG) long deliveryTag) {
+    public void handleUserRegistered(UserRegisteredEvent event) {
         consumerExecutor.executeIdempotent(CONSUMER_NAME,
                 () -> "userUuid=" + event.userUuid() + ", eventId=" + event.eventId(),
-                channel, deliveryTag, event.eventId(), () -> {
+                event.eventId(), () -> {
                     log.info("收到用戶註冊事件 - userUuid={}, eventId={}", event.userUuid(), event.eventId());
                     userMailService.sendVerificationEmail(event);
                     log.info("驗證信已送出 - userUuid={}", event.userUuid());

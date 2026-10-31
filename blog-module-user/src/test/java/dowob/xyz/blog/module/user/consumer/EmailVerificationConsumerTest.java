@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.user.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
@@ -31,7 +30,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.times;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
@@ -77,8 +76,6 @@ class EmailVerificationConsumerTest {
     }
 
     /** Mock RabbitMQ Channel */
-    @Mock
-    private Channel channel;
 
     /** Mock 郵件服務 */
     @Mock
@@ -117,15 +114,14 @@ class EmailVerificationConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("處理用戶註冊事件後應呼叫 basicAck")
+    @DisplayName("處理用戶註冊事件後應正常返回")
     void handleUserRegistered_success_acksMessage() throws IOException {
         UserRegisteredEvent event = event();
         long deliveryTag = 42L;
 
-        consumer.handleUserRegistered(event, channel, deliveryTag);
+        consumer.handleUserRegistered(event);
 
         verify(userMailService).sendVerificationEmail(event);
-        verify(channel).basicAck(deliveryTag, false);
     }
 
     /**
@@ -134,35 +130,14 @@ class EmailVerificationConsumerTest {
      * @throws IOException basicNack 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("寄送驗證信失敗時呼叫 basicNack")
+    @DisplayName("寄送驗證信失敗時讓例外往外拋")
     void handleUserRegistered_onMailFailure_callsBasicNack() throws IOException {
         UserRegisteredEvent event = event();
         long deliveryTag = 88L;
 
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendVerificationEmail(event);
 
-        consumer.handleUserRegistered(event, channel, deliveryTag);
-
-        verify(channel).basicNack(eq(deliveryTag), eq(false), eq(false));
-        verify(channel, never()).basicAck(deliveryTag, false);
-    }
-
-    /**
-     * 驗證 basicAck 失敗時，應呼叫 basicNack 將訊息送至 DLQ
-     *
-     * @throws IOException basicNack 可能拋出的 IO 例外
-     */
-    @Test
-    @DisplayName("basicAck 失敗時呼叫 basicNack")
-    void handleUserRegistered_onAckFailure_callsBasicNack() throws IOException {
-        UserRegisteredEvent event = event();
-        long deliveryTag = 99L;
-
-        doThrow(new IOException("ACK failed")).when(channel).basicAck(deliveryTag, false);
-
-        consumer.handleUserRegistered(event, channel, deliveryTag);
-
-        verify(channel).basicNack(eq(deliveryTag), eq(false), eq(false));
+        assertThatThrownBy(() -> consumer.handleUserRegistered(event)).isInstanceOf(RuntimeException.class);
     }
 
     /**
@@ -177,7 +152,7 @@ class EmailVerificationConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            consumer.handleUserRegistered(event, channel, 5L);
+            consumer.handleUserRegistered(event);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, EmailVerificationConsumer.CONSUMER_NAME)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, EmailVerificationConsumer.CONSUMER_NAME)).isZero();
@@ -188,22 +163,22 @@ class EmailVerificationConsumerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("handleUserRegistered：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("handleUserRegistered：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void handleUserRegistered_onFailure_recordsMetricsAndLogsContext() throws Exception {
         UserRegisteredEvent event = event();
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendVerificationEmail(event);
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> consumer.handleUserRegistered(event, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> consumer.handleUserRegistered(event)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, EmailVerificationConsumer.CONSUMER_NAME)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, EmailVerificationConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, EmailVerificationConsumer.CONSUMER_NAME)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
@@ -222,15 +197,13 @@ class EmailVerificationConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handleUserRegistered：eventId 已處理過（重送）→ 不重寄驗證信，仍 ack")
+    @DisplayName("handleUserRegistered：eventId 已處理過（重送）→ 不重寄驗證信，仍正常返回")
     void handleUserRegistered_duplicateEventId_skipsMailButAcks() throws IOException {
         when(idempotencyService.tryMark(EVENT_ID, EmailVerificationConsumer.CONSUMER_NAME)).thenReturn(false);
 
-        consumer.handleUserRegistered(event(), channel, 11L);
+        consumer.handleUserRegistered(event());
 
         verify(userMailService, never()).sendVerificationEmail(any());
-        verify(channel).basicAck(11L, false);
-        verify(channel, never()).basicNack(eq(11L), eq(false), eq(false));
     }
 
     /**
@@ -241,11 +214,10 @@ class EmailVerificationConsumerTest {
     @Test
     @DisplayName("handleUserRegistered：第一次處理 → 以 (eventId, CONSUMER_NAME) 標記後寄信")
     void handleUserRegistered_firstDelivery_marksEventIdThenSends() throws IOException {
-        consumer.handleUserRegistered(event(), channel, 12L);
+        consumer.handleUserRegistered(event());
 
         verify(idempotencyService).tryMark(EVENT_ID, EmailVerificationConsumer.CONSUMER_NAME);
         verify(userMailService).sendVerificationEmail(event());
-        verify(channel).basicAck(12L, false);
     }
 
     /**
@@ -254,16 +226,15 @@ class EmailVerificationConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handleUserRegistered：舊格式訊息（eventId 為 null）→ 不呼叫冪等服務，照常寄信並 ack")
+    @DisplayName("handleUserRegistered：舊格式訊息（eventId 為 null）→ 不呼叫冪等服務，照常寄信並正常返回")
     void handleUserRegistered_legacyMessageWithoutEventId_sendsWithoutDedup() throws IOException {
         UserRegisteredEvent legacy =
                 new UserRegisteredEvent(null, null, "test@example.com", "TestUser", "token-abc", "123456");
 
-        consumer.handleUserRegistered(legacy, channel, 13L);
+        consumer.handleUserRegistered(legacy);
 
         verifyNoInteractions(idempotencyService);
         verify(userMailService).sendVerificationEmail(legacy);
-        verify(channel).basicAck(13L, false);
     }
 
     /**
@@ -277,7 +248,7 @@ class EmailVerificationConsumerTest {
     void handleUserRegistered_duplicateEventId_logsSkipAtInfo() throws Exception {
         when(idempotencyService.tryMark(EVENT_ID, EmailVerificationConsumer.CONSUMER_NAME)).thenReturn(false);
 
-        List<LogEvent> logs = captureLogsOf(ConsumerExecutor.class, () -> consumer.handleUserRegistered(event(), channel, 14L));
+        List<LogEvent> logs = captureLogsOf(ConsumerExecutor.class, () -> consumer.handleUserRegistered(event()));
 
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.INFO);
@@ -294,17 +265,15 @@ class EmailVerificationConsumerTest {
      * @throws IOException basicNack 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handleUserRegistered：寄信失敗 → 冪等標記所在交易 rollback（不 commit）並 nack")
+    @DisplayName("handleUserRegistered：寄信失敗 → 冪等標記所在交易 rollback（不 commit）並往外拋例外")
     void handleUserRegistered_onMailFailure_rollsBackMarkTransaction() throws IOException {
         UserRegisteredEvent event = event();
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendVerificationEmail(event);
 
-        consumer.handleUserRegistered(event, channel, 21L);
+        assertThatThrownBy(() -> consumer.handleUserRegistered(event)).isInstanceOf(RuntimeException.class);
 
         verify(txManager).rollback(any());
         verify(txManager, never()).commit(any());
-        verify(channel).basicNack(21L, false, false);
-        verify(channel, never()).basicAck(21L, false);
     }
 
     /**
@@ -313,16 +282,15 @@ class EmailVerificationConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handleUserRegistered：寄信成功後標記才 commit，commit 之後才 ack")
+    @DisplayName("handleUserRegistered：寄信成功後標記才 commit，commit 之後才正常返回")
     void handleUserRegistered_onSuccess_commitsMarkOnlyAfterMailSent() throws IOException {
         UserRegisteredEvent event = event();
 
-        consumer.handleUserRegistered(event, channel, 22L);
+        consumer.handleUserRegistered(event);
 
-        org.mockito.InOrder order = inOrder(userMailService, txManager, channel);
+        org.mockito.InOrder order = inOrder(userMailService, txManager);
         order.verify(userMailService).sendVerificationEmail(event);
         order.verify(txManager).commit(any());
-        order.verify(channel).basicAck(22L, false);
     }
 
     /**

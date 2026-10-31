@@ -1,6 +1,5 @@
 package dowob.xyz.blog.infrastructure.mq;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import io.micrometer.core.instrument.Metrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -28,13 +27,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -44,7 +41,7 @@ import static org.mockito.Mockito.doThrow;
  * {@link ConsumerExecutor#executeIdempotent} 的單元測試。
  *
  * <p>交易管理員與冪等服務皆為 Mockito 替身，驗證的是「呼叫順序與交易結局」
- * （commit 先於 ack、失敗時 rollback 且 nack）；標記與業務是否真的同生同滅由
+ * （先標記再執行 body 再 commit；失敗時 rollback 且把例外往外拋，交給容器重試）；標記與業務是否真的同生同滅由
  * {@code ConsumerExecutorIdempotencyIntegrationTest} 以真實 Postgres 證明。</p>
  *
  * @author Yuan
@@ -56,17 +53,11 @@ class ConsumerExecutorIdempotentTest {
     /** 測試用 consumer 名稱 */
     private static final String CONSUMER = "test-idempotent-consumer";
 
-    /** 測試用 delivery tag */
-    private static final long TAG = 7L;
-
     /** 模擬的交易管理員，用來觀察 commit／rollback */
     private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
 
     /** 模擬的冪等服務 */
     private final IdempotencyService idempotencyService = mock(IdempotencyService.class);
-
-    /** 模擬的 AMQP channel */
-    private final Channel channel = mock(Channel.class);
 
     /** 被測物件 */
     private ConsumerExecutor executor;
@@ -100,17 +91,16 @@ class ConsumerExecutorIdempotentTest {
     }
 
     @Test
-    @DisplayName("eventId 為 null（舊訊息）：照舊執行 body、不開交易、不標記、ack，並記 WARN 帶 consumerName 與上下文")
+    @DisplayName("eventId 為 null（舊訊息）：照舊執行 body、不開交易、不標記，並記 WARN 帶 consumerName 與上下文")
     void nullEventId_runsBodyWithoutMarking_andWarns() throws Exception {
         AtomicInteger runs = new AtomicInteger();
 
         List<LogEvent> logs = captureLogs(() -> executor.executeIdempotent(
-                CONSUMER, () -> "articleUuid=abc", channel, TAG, null, runs::incrementAndGet));
+                CONSUMER, () -> "articleUuid=abc", null, runs::incrementAndGet));
 
         assertThat(runs).hasValue(1);
         verifyNoInteractions(idempotencyService);
         verifyNoInteractions(txManager);
-        verify(channel).basicAck(TAG, false);
         assertThat(count(ConsumerExecutor.PROCESSED_METRIC)).isEqualTo(1.0);
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.WARN);
@@ -119,37 +109,33 @@ class ConsumerExecutorIdempotentTest {
     }
 
     @Test
-    @DisplayName("首次處理：先標記、再執行 body、commit 之後才 ack")
-    void firstTime_marksThenRunsBodyThenCommitsThenAcks() throws Exception {
+    @DisplayName("首次處理：先標記、再執行 body、commit；正常返回，processed 加一")
+    void firstTime_marksThenRunsBodyThenCommits() {
         UUID eventId = UUID.randomUUID();
         when(idempotencyService.tryMark(eventId, CONSUMER)).thenReturn(true);
         AtomicInteger runs = new AtomicInteger();
 
-        executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId, runs::incrementAndGet);
+        executor.executeIdempotent(CONSUMER, null, eventId, runs::incrementAndGet);
 
         assertThat(runs).hasValue(1);
-        InOrder order = inOrder(idempotencyService, txManager, channel);
+        InOrder order = inOrder(idempotencyService, txManager);
         order.verify(idempotencyService).tryMark(eventId, CONSUMER);
         order.verify(txManager).commit(any());
-        order.verify(channel).basicAck(TAG, false);
         verify(txManager, never()).rollback(any());
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
         assertThat(count(ConsumerExecutor.PROCESSED_METRIC)).isEqualTo(1.0);
     }
 
     @Test
-    @DisplayName("重複事件（INSERT 影響 0 列）：不執行 body、ack、記 INFO，並計入 processed")
-    void duplicate_skipsBodyAndAcks_logsInfo() throws Exception {
+    @DisplayName("重複事件（INSERT 影響 0 列）：不執行 body、正常返回（容器會 ack）、記 INFO，並計入 processed")
+    void duplicate_skipsBodyAndReturnsNormally_logsInfo() throws Exception {
         UUID eventId = UUID.randomUUID();
         when(idempotencyService.tryMark(eventId, CONSUMER)).thenReturn(false);
         AtomicInteger runs = new AtomicInteger();
 
         List<LogEvent> logs = captureLogs(() -> executor.executeIdempotent(
-                CONSUMER, () -> "articleUuid=abc", channel, TAG, eventId, runs::incrementAndGet));
+                CONSUMER, () -> "articleUuid=abc", eventId, runs::incrementAndGet));
 
         assertThat(runs).hasValue(0);
-        verify(channel).basicAck(TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
         assertThat(count(ConsumerExecutor.PROCESSED_METRIC)).isEqualTo(1.0);
         assertThat(count(ConsumerExecutor.FAILED_METRIC)).isZero();
         assertThat(logs).anySatisfy(e -> {
@@ -160,39 +146,36 @@ class ConsumerExecutorIdempotentTest {
     }
 
     @Test
-    @DisplayName("body 拋例外：交易 rollback（不 commit）、nack(requeue=false)、不 ack，failed 與 dead_lettered 各加一")
-    void bodyThrows_rollsBackAndNacks() throws Exception {
+    @DisplayName("body 拋例外：交易 rollback（不 commit），原始例外原樣往外拋，failed 加一")
+    void bodyThrows_rollsBackAndRethrowsOriginal() {
         UUID eventId = UUID.randomUUID();
         when(idempotencyService.tryMark(eventId, CONSUMER)).thenReturn(true);
+        IllegalStateException boom = new IllegalStateException("boom");
 
-        assertThatCode(() -> executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId, () -> {
-            throw new IllegalStateException("boom");
-        })).doesNotThrowAnyException();
+        assertThatThrownBy(() -> executor.executeIdempotent(CONSUMER, null, eventId, () -> {
+            throw boom;
+        })).isSameAs(boom);
 
         verify(txManager).rollback(any());
         verify(txManager, never()).commit(any());
-        verify(channel).basicNack(TAG, false, false);
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
         assertThat(count(ConsumerExecutor.FAILED_METRIC)).isEqualTo(1.0);
-        assertThat(count(ConsumerExecutor.DEAD_LETTERED_METRIC)).isEqualTo(1.0);
         assertThat(count(ConsumerExecutor.PROCESSED_METRIC)).isZero();
     }
 
     @Test
-    @DisplayName("body 拋受檢例外：rollback 並 nack，ERROR 日誌帶的是原始例外而非包裝例外")
+    @DisplayName("body 拋受檢例外：rollback 並往外拋 ConsumerExecutionException（cause 為原始例外），ERROR 日誌帶原始例外")
     void bodyThrowsCheckedException_rollsBackAndLogsOriginalException() throws Exception {
         UUID eventId = UUID.randomUUID();
         when(idempotencyService.tryMark(eventId, CONSUMER)).thenReturn(true);
         IOException original = new IOException("smtp down");
 
-        List<LogEvent> logs = captureLogs(() -> executor.executeIdempotent(
-                CONSUMER, () -> "userUuid=u1", channel, TAG, eventId, () -> {
+        List<LogEvent> logs = captureLogs(() -> assertThatThrownBy(() -> executor.executeIdempotent(
+                CONSUMER, () -> "userUuid=u1", eventId, () -> {
                     throw original;
-                }));
+                })).isInstanceOf(ConsumerExecutionException.class).hasCause(original));
 
         verify(txManager).rollback(any());
         verify(txManager, never()).commit(any());
-        verify(channel).basicNack(TAG, false, false);
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.ERROR);
             assertThat(e.getThrown()).isSameAs(original);
@@ -201,19 +184,23 @@ class ConsumerExecutorIdempotentTest {
     }
 
     @Test
-    @DisplayName("body 失敗後 rollback 本身也失敗：ERROR 日誌的例外（或其 suppressed）仍含原始 body 例外")
-    void rollbackFails_originalBodyExceptionStaysInLoggedThrowable() throws Exception {
+    @DisplayName("body 失敗後 rollback 本身也失敗：往外拋的例外與 ERROR 日誌的例外（含 suppressed）仍含原始 body 例外")
+    void rollbackFails_originalBodyExceptionStaysInThrowable() throws Exception {
         UUID eventId = UUID.randomUUID();
         when(idempotencyService.tryMark(eventId, CONSUMER)).thenReturn(true);
         doThrow(new TransactionSystemException("rollback failed")).when(txManager).rollback(any());
         IllegalStateException original = new IllegalStateException("original body failure");
 
-        List<LogEvent> logs = captureLogs(() -> executor.executeIdempotent(
-                CONSUMER, null, channel, TAG, eventId, () -> {
+        List<LogEvent> logs = captureLogs(() -> assertThatThrownBy(() -> executor.executeIdempotent(
+                CONSUMER, null, eventId, () -> {
                     throw original;
+                })).isInstanceOf(TransactionSystemException.class)
+                .satisfies(thrown -> {
+                    List<Throwable> related = new ArrayList<>();
+                    collect(thrown, related);
+                    assertThat(related).contains(original);
                 }));
 
-        verify(channel).basicNack(TAG, false, false);
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.ERROR);
             Throwable thrown = e.getThrown();
@@ -242,65 +229,62 @@ class ConsumerExecutorIdempotentTest {
     }
 
     @Test
-    @DisplayName("標記本身失敗（資料庫例外）：不執行 body、rollback、nack")
-    void markThrows_doesNotRunBody_rollsBackAndNacks() throws Exception {
+    @DisplayName("標記本身失敗（資料庫例外）：不執行 body、rollback、例外往外拋")
+    void markThrows_doesNotRunBody_rollsBackAndRethrows() {
         UUID eventId = UUID.randomUUID();
-        when(idempotencyService.tryMark(eventId, CONSUMER)).thenThrow(new IllegalStateException("db down"));
+        IllegalStateException dbDown = new IllegalStateException("db down");
+        when(idempotencyService.tryMark(eventId, CONSUMER)).thenThrow(dbDown);
         AtomicInteger runs = new AtomicInteger();
 
-        executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId, runs::incrementAndGet);
+        assertThatThrownBy(() -> executor.executeIdempotent(CONSUMER, null, eventId, runs::incrementAndGet))
+                .isSameAs(dbDown);
 
         assertThat(runs).hasValue(0);
         verify(txManager).rollback(any());
-        verify(channel).basicNack(TAG, false, false);
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
     }
 
     @Test
-    @DisplayName("commit 失敗：不 ack、改 nack（標記沒有 commit，body 的效果視其是否屬於同一交易）")
-    void commitFails_nacksAndDoesNotAck() throws Exception {
+    @DisplayName("commit 失敗：例外往外拋（容器會 nack 重試），failed 加一，processed 不加")
+    void commitFails_rethrowsAndCountsFailed() {
         UUID eventId = UUID.randomUUID();
         when(idempotencyService.tryMark(eventId, CONSUMER)).thenReturn(true);
-        doThrow(new IllegalStateException("commit failed")).when(txManager).commit(any());
+        IllegalStateException commitFailure = new IllegalStateException("commit failed");
+        doThrow(commitFailure).when(txManager).commit(any());
 
-        assertThatCode(() -> executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId, () -> { }))
-                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> executor.executeIdempotent(CONSUMER, null, eventId, () -> { }))
+                .isSameAs(commitFailure);
 
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
-        verify(channel, times(1)).basicNack(TAG, false, false);
+        assertThat(count(ConsumerExecutor.FAILED_METRIC)).isEqualTo(1.0);
+        assertThat(count(ConsumerExecutor.PROCESSED_METRIC)).isZero();
     }
 
     @Test
-    @DisplayName("body 拋 InterruptedException：rollback、nack，並還原執行緒 interrupt 旗標")
-    void bodyThrowsInterruptedException_restoresInterruptFlag() throws Exception {
+    @DisplayName("body 拋 InterruptedException：rollback、往外拋 ConsumerExecutionException，並還原執行緒 interrupt 旗標")
+    void bodyThrowsInterruptedException_restoresInterruptFlag() {
         UUID eventId = UUID.randomUUID();
         when(idempotencyService.tryMark(eventId, CONSUMER)).thenReturn(true);
         try {
-            executor.executeIdempotent(CONSUMER, null, channel, TAG, eventId, () -> {
+            assertThatThrownBy(() -> executor.executeIdempotent(CONSUMER, null, eventId, () -> {
                 throw new InterruptedException("stop");
-            });
+            })).isInstanceOf(ConsumerExecutionException.class).hasCauseInstanceOf(InterruptedException.class);
 
             assertThat(Thread.currentThread().isInterrupted()).isTrue();
             verify(txManager).rollback(any());
-            verify(channel).basicNack(TAG, false, false);
         } finally {
             Thread.interrupted();
         }
     }
 
     @Test
-    @DisplayName("沒有交易／冪等基礎設施（無 datasource 模組）卻帶 eventId：不執行 body，nack 而非靜默略過去重")
-    void noInfrastructureButEventIdPresent_nacksWithoutRunningBody() throws Exception {
+    @DisplayName("沒有交易／冪等基礎設施（無 datasource 模組）卻帶 eventId：不執行 body，明確失敗而非靜默略過去重")
+    void noInfrastructureButEventIdPresent_failsWithoutRunningBody() {
         ConsumerExecutor bare = new ConsumerExecutor();
         AtomicInteger runs = new AtomicInteger();
 
-        assertThatCode(() -> bare.executeIdempotent(
-                CONSUMER, null, channel, TAG, UUID.randomUUID(), runs::incrementAndGet))
-                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> bare.executeIdempotent(CONSUMER, null, UUID.randomUUID(), runs::incrementAndGet))
+                .isInstanceOf(IllegalStateException.class);
 
         assertThat(runs).hasValue(0);
-        verify(channel).basicNack(TAG, false, false);
-        verify(channel, never()).basicAck(anyLong(), anyBoolean());
     }
 
     /**

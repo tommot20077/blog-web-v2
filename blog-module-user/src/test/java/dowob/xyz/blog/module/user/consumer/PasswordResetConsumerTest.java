@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.user.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
@@ -31,7 +30,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.times;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
@@ -78,8 +77,6 @@ class PasswordResetConsumerTest {
     }
 
     /** Mock RabbitMQ Channel */
-    @Mock
-    private Channel channel;
 
     /** Mock 郵件服務 */
     @Mock
@@ -118,16 +115,15 @@ class PasswordResetConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("處理密碼重設事件後應呼叫 basicAck")
+    @DisplayName("處理密碼重設事件後應正常返回")
     void handlePasswordResetRequested_success_acksMessage() throws IOException {
         UserPasswordResetRequestedEvent event =
                 event();
         long deliveryTag = 42L;
 
-        consumer.handlePasswordResetRequested(event, channel, deliveryTag);
+        consumer.handlePasswordResetRequested(event);
 
         verify(userMailService).sendPasswordResetEmail(event);
-        verify(channel).basicAck(deliveryTag, false);
     }
 
     /**
@@ -136,7 +132,7 @@ class PasswordResetConsumerTest {
      * @throws IOException basicNack 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("寄送密碼重設信失敗時呼叫 basicNack")
+    @DisplayName("寄送密碼重設信失敗時讓例外往外拋")
     void handlePasswordResetRequested_onMailFailure_callsBasicNack() throws IOException {
         UserPasswordResetRequestedEvent event =
                 event();
@@ -144,29 +140,7 @@ class PasswordResetConsumerTest {
 
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendPasswordResetEmail(event);
 
-        consumer.handlePasswordResetRequested(event, channel, deliveryTag);
-
-        verify(channel).basicNack(eq(deliveryTag), eq(false), eq(false));
-        verify(channel, never()).basicAck(deliveryTag, false);
-    }
-
-    /**
-     * 驗證 basicAck 失敗時，應呼叫 basicNack 將訊息送至 DLQ
-     *
-     * @throws IOException basicNack 可能拋出的 IO 例外
-     */
-    @Test
-    @DisplayName("basicAck 失敗時呼叫 basicNack")
-    void handlePasswordResetRequested_onAckFailure_callsBasicNack() throws IOException {
-        UserPasswordResetRequestedEvent event =
-                event();
-        long deliveryTag = 99L;
-
-        doThrow(new IOException("ACK failed")).when(channel).basicAck(deliveryTag, false);
-
-        consumer.handlePasswordResetRequested(event, channel, deliveryTag);
-
-        verify(channel).basicNack(eq(deliveryTag), eq(false), eq(false));
+        assertThatThrownBy(() -> consumer.handlePasswordResetRequested(event)).isInstanceOf(RuntimeException.class);
     }
 
     /**
@@ -182,7 +156,7 @@ class PasswordResetConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            consumer.handlePasswordResetRequested(event, channel, 5L);
+            consumer.handlePasswordResetRequested(event);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, PasswordResetConsumer.CONSUMER_NAME)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, PasswordResetConsumer.CONSUMER_NAME)).isZero();
@@ -193,12 +167,12 @@ class PasswordResetConsumerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("handlePasswordResetRequested：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("handlePasswordResetRequested：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void handlePasswordResetRequested_onFailure_recordsMetricsAndLogsContext() throws Exception {
         UserPasswordResetRequestedEvent event =
                 event();
@@ -206,10 +180,10 @@ class PasswordResetConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> consumer.handlePasswordResetRequested(event, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> consumer.handlePasswordResetRequested(event)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, PasswordResetConsumer.CONSUMER_NAME)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, PasswordResetConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, PasswordResetConsumer.CONSUMER_NAME)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
@@ -228,15 +202,13 @@ class PasswordResetConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handlePasswordResetRequested：eventId 已處理過（重送）→ 不重寄重設密碼信，仍 ack")
+    @DisplayName("handlePasswordResetRequested：eventId 已處理過（重送）→ 不重寄重設密碼信，仍正常返回")
     void handlePasswordResetRequested_duplicateEventId_skipsMailButAcks() throws IOException {
         when(idempotencyService.tryMark(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME)).thenReturn(false);
 
-        consumer.handlePasswordResetRequested(event(), channel, 11L);
+        consumer.handlePasswordResetRequested(event());
 
         verify(userMailService, never()).sendPasswordResetEmail(any());
-        verify(channel).basicAck(11L, false);
-        verify(channel, never()).basicNack(eq(11L), eq(false), eq(false));
     }
 
     /**
@@ -247,11 +219,10 @@ class PasswordResetConsumerTest {
     @Test
     @DisplayName("handlePasswordResetRequested：第一次處理 → 以 (eventId, CONSUMER_NAME) 標記後寄信")
     void handlePasswordResetRequested_firstDelivery_marksEventIdThenSends() throws IOException {
-        consumer.handlePasswordResetRequested(event(), channel, 12L);
+        consumer.handlePasswordResetRequested(event());
 
         verify(idempotencyService).tryMark(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME);
         verify(userMailService).sendPasswordResetEmail(event());
-        verify(channel).basicAck(12L, false);
     }
 
     /**
@@ -260,16 +231,15 @@ class PasswordResetConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handlePasswordResetRequested：舊格式訊息（eventId 為 null）→ 不呼叫冪等服務，照常寄信並 ack")
+    @DisplayName("handlePasswordResetRequested：舊格式訊息（eventId 為 null）→ 不呼叫冪等服務，照常寄信並正常返回")
     void handlePasswordResetRequested_legacyMessageWithoutEventId_sendsWithoutDedup() throws IOException {
         UserPasswordResetRequestedEvent legacy =
                 new UserPasswordResetRequestedEvent(null, null, "test@example.com", "reset-token-abc");
 
-        consumer.handlePasswordResetRequested(legacy, channel, 13L);
+        consumer.handlePasswordResetRequested(legacy);
 
         verifyNoInteractions(idempotencyService);
         verify(userMailService).sendPasswordResetEmail(legacy);
-        verify(channel).basicAck(13L, false);
     }
 
     /**
@@ -283,7 +253,7 @@ class PasswordResetConsumerTest {
     void handlePasswordResetRequested_duplicateEventId_logsSkipAtInfo() throws Exception {
         when(idempotencyService.tryMark(EVENT_ID, PasswordResetConsumer.CONSUMER_NAME)).thenReturn(false);
 
-        List<LogEvent> logs = captureLogsOf(ConsumerExecutor.class, () -> consumer.handlePasswordResetRequested(event(), channel, 14L));
+        List<LogEvent> logs = captureLogsOf(ConsumerExecutor.class, () -> consumer.handlePasswordResetRequested(event()));
 
         assertThat(logs).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.INFO);
@@ -300,17 +270,15 @@ class PasswordResetConsumerTest {
      * @throws IOException basicNack 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handlePasswordResetRequested：寄信失敗 → 冪等標記所在交易 rollback（不 commit）並 nack")
+    @DisplayName("handlePasswordResetRequested：寄信失敗 → 冪等標記所在交易 rollback（不 commit）並往外拋例外")
     void handlePasswordResetRequested_onMailFailure_rollsBackMarkTransaction() throws IOException {
         UserPasswordResetRequestedEvent event = event();
         doThrow(new IllegalStateException("SMTP failed")).when(userMailService).sendPasswordResetEmail(event);
 
-        consumer.handlePasswordResetRequested(event, channel, 21L);
+        assertThatThrownBy(() -> consumer.handlePasswordResetRequested(event)).isInstanceOf(RuntimeException.class);
 
         verify(txManager).rollback(any());
         verify(txManager, never()).commit(any());
-        verify(channel).basicNack(21L, false, false);
-        verify(channel, never()).basicAck(21L, false);
     }
 
     /**
@@ -319,16 +287,15 @@ class PasswordResetConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handlePasswordResetRequested：寄信成功後標記才 commit，commit 之後才 ack")
+    @DisplayName("handlePasswordResetRequested：寄信成功後標記才 commit，commit 之後才正常返回")
     void handlePasswordResetRequested_onSuccess_commitsMarkOnlyAfterMailSent() throws IOException {
         UserPasswordResetRequestedEvent event = event();
 
-        consumer.handlePasswordResetRequested(event, channel, 22L);
+        consumer.handlePasswordResetRequested(event);
 
-        org.mockito.InOrder order = inOrder(userMailService, txManager, channel);
+        org.mockito.InOrder order = inOrder(userMailService, txManager);
         order.verify(userMailService).sendPasswordResetEmail(event);
         order.verify(txManager).commit(any());
-        order.verify(channel).basicAck(22L, false);
     }
 
     /**

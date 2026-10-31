@@ -36,7 +36,7 @@ class RabbitListenerYamlBindingTest {
             .withUserConfiguration(RabbitMqConfig.class);
 
     @Test
-    @DisplayName("yaml 的 concurrency=2、max-concurrency=2、prefetch=1 套用到 rabbitListenerContainerFactory 產出的容器")
+    @DisplayName("yaml 的 concurrency=2、max-concurrency=2、prefetch=1、acknowledge-mode=auto 套用到 rabbitListenerContainerFactory 產出的容器")
     void yamlListenerSettings_areAppliedToContainer() {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
@@ -48,7 +48,7 @@ class RabbitListenerYamlBindingTest {
             assertThat(ReflectionTestUtils.getField(container, "concurrentConsumers")).isEqualTo(2);
             assertThat(ReflectionTestUtils.getField(container, "maxConcurrentConsumers")).isEqualTo(2);
             assertThat(ReflectionTestUtils.getField(container, "prefetchCount")).isEqualTo(1);
-            assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.MANUAL);
+            assertThat(container.getAcknowledgeMode()).isEqualTo(AcknowledgeMode.AUTO);
         });
     }
 

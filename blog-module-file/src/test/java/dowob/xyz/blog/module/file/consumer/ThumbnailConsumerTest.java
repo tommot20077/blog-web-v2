@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.file.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
@@ -39,6 +38,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -64,9 +64,6 @@ class ThumbnailConsumerTest {
     @Mock
     private FileMetadataRepository fileMetadataRepository;
 
-    @Mock
-    private Channel channel;
-
     /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
     @Spy
     private ConsumerExecutor consumerExecutor = new ConsumerExecutor();
@@ -84,10 +81,9 @@ class ThumbnailConsumerTest {
         ImageUploadedEvent event = new ImageUploadedEvent(
                 UUID.randomUUID(), UUID.randomUUID(), "files/test.pdf", "application/pdf");
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 1L);
+        thumbnailConsumer.handleImageUploaded(event);
 
         verify(minioClient, never()).getObject(any(GetObjectArgs.class));
-        verify(channel).basicAck(1L, false);
     }
 
     /**
@@ -104,9 +100,7 @@ class ThumbnailConsumerTest {
         when(minioClient.getObject(any(GetObjectArgs.class)))
                 .thenThrow(new RuntimeException("MinIO connection failed"));
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 42L);
-
-        verify(channel).basicNack(42L, false, false);
+        assertThatThrownBy(() -> thumbnailConsumer.handleImageUploaded(event)).isInstanceOf(RuntimeException.class);
     }
 
     /**
@@ -143,12 +137,11 @@ class ThumbnailConsumerTest {
                 .thenAnswer(inv -> bais.read());
         when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 99L);
+        thumbnailConsumer.handleImageUploaded(event);
 
         /* 只做單欄位 UPDATE，絕不 save 整個實體（否則處理期間被 bindToArticle 寫入的 article_uuid 會被蓋回舊值） */
         verify(fileMetadataRepository).markThumbnailGenerated(fileId);
         verify(fileMetadataRepository, never()).save(any());
-        verify(channel).basicAck(99L, false);
     }
 
     /**
@@ -177,31 +170,11 @@ class ThumbnailConsumerTest {
                 .thenAnswer(inv -> bais.read());
         when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 50L);
+        thumbnailConsumer.handleImageUploaded(event);
 
         verify(fileMetadataRepository, never()).save(any());
         /* 單欄位 UPDATE 對已不存在的檔案影響 0 列（mock 預設回 0），屬正常 no-op，仍 ack */
         verify(fileMetadataRepository).markThumbnailGenerated(fileId);
-        verify(channel).basicAck(50L, false);
-    }
-
-    /**
-     * 驗證處理失敗且 basicNack 也拋出 IOException 時不會拋出未處理例外
-     */
-    @Test
-    @DisplayName("handleImageUploaded_onFailure_nackAlsoFails_doesNotThrow")
-    void handleImageUploaded_onFailure_nackAlsoFails_doesNotThrow() throws Exception {
-        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
-        ImageUploadedEvent event = new ImageUploadedEvent(
-                UUID.randomUUID(), UUID.randomUUID(), "files/error.jpg", "image/jpeg");
-
-        when(minioClient.getObject(any(GetObjectArgs.class)))
-                .thenThrow(new RuntimeException("MinIO connection failed"));
-        doThrow(new IOException("channel closed")).when(channel).basicNack(eq(77L), eq(false), eq(false));
-
-        thumbnailConsumer.handleImageUploaded(event, channel, 77L);
-
-        verify(channel).basicNack(77L, false, false);
     }
 
     /**
@@ -230,9 +203,7 @@ class ThumbnailConsumerTest {
                 .thenAnswer(inv -> bais.read());
         when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 60L);
-
-        verify(channel).basicAck(60L, false);
+        thumbnailConsumer.handleImageUploaded(event);
     }
 
     /**
@@ -248,7 +219,7 @@ class ThumbnailConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            thumbnailConsumer.handleImageUploaded(event, channel, 5L);
+            thumbnailConsumer.handleImageUploaded(event);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ThumbnailConsumer.CONSUMER_NAME)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ThumbnailConsumer.CONSUMER_NAME)).isZero();
@@ -259,12 +230,12 @@ class ThumbnailConsumerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("handleImageUploaded：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("handleImageUploaded：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void handleImageUploaded_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
         UUID fileId = UUID.randomUUID();
@@ -274,10 +245,10 @@ class ThumbnailConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> thumbnailConsumer.handleImageUploaded(event, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> thumbnailConsumer.handleImageUploaded(event)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ThumbnailConsumer.CONSUMER_NAME)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ThumbnailConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ThumbnailConsumer.CONSUMER_NAME)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
@@ -308,13 +279,12 @@ class ThumbnailConsumerTest {
         metadata.setHasThumbnail(true);
         when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 11L);
+        thumbnailConsumer.handleImageUploaded(event);
 
         verify(minioClient, never()).getObject(any(GetObjectArgs.class));
         verify(minioClient, never()).putObject(any(PutObjectArgs.class));
         verify(fileMetadataRepository, never()).save(any());
         verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
-        verify(channel).basicAck(11L, false);
     }
 
     /**
@@ -340,14 +310,12 @@ class ThumbnailConsumerTest {
         });
         when(minioClient.getObject(any(GetObjectArgs.class))).thenAnswer(inv -> jpegResponse());
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 21L);
-        thumbnailConsumer.handleImageUploaded(event, channel, 22L);
+        thumbnailConsumer.handleImageUploaded(event);
+        thumbnailConsumer.handleImageUploaded(event);
 
         verify(minioClient, times(1)).getObject(any(GetObjectArgs.class));
         verify(minioClient, times(1)).putObject(any(PutObjectArgs.class));
         verify(fileMetadataRepository, times(1)).markThumbnailGenerated(fileId);
-        verify(channel).basicAck(21L, false);
-        verify(channel).basicAck(22L, false);
     }
 
     /**
@@ -368,11 +336,10 @@ class ThumbnailConsumerTest {
         when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
         when(minioClient.getObject(any(GetObjectArgs.class))).thenAnswer(inv -> jpegResponse());
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 31L);
+        thumbnailConsumer.handleImageUploaded(event);
 
         verify(minioClient).putObject(any(PutObjectArgs.class));
         verify(fileMetadataRepository).markThumbnailGenerated(fileId);
-        verify(channel).basicAck(31L, false);
     }
 
     /**
@@ -397,12 +364,10 @@ class ThumbnailConsumerTest {
         when(minioClient.getObject(any(GetObjectArgs.class)))
                 .thenThrow(new RuntimeException("MinIO connection failed"));
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 41L);
+        assertThatThrownBy(() -> thumbnailConsumer.handleImageUploaded(event)).isInstanceOf(RuntimeException.class);
 
         verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
         verify(fileMetadataRepository, never()).save(any());
-        verify(channel).basicNack(41L, false, false);
-        verify(channel, never()).basicAck(eq(41L), eq(false));
     }
 
     /**
@@ -424,11 +389,9 @@ class ThumbnailConsumerTest {
         when(minioClient.getObject(any(GetObjectArgs.class))).thenAnswer(inv -> jpegResponse());
         when(minioClient.putObject(any(PutObjectArgs.class))).thenThrow(new RuntimeException("MinIO put failed"));
 
-        thumbnailConsumer.handleImageUploaded(event, channel, 42L);
+        assertThatThrownBy(() -> thumbnailConsumer.handleImageUploaded(event)).isInstanceOf(RuntimeException.class);
 
         verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
-        verify(channel).basicNack(42L, false, false);
-        verify(channel, never()).basicAck(eq(42L), eq(false));
     }
 
     /**

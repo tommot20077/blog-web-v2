@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.article.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.idempotency.IdempotencyService;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
@@ -32,6 +31,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
@@ -63,8 +63,6 @@ class ViewCountConsumerTest {
     private IdempotencyService idempotencyService;
 
     /** RabbitMQ Channel（Mock） */
-    @Mock
-    private Channel channel;
 
     /** 交易管理員替身：用來觀察 commit／rollback（getTransaction 回傳簡易 status） */
     private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
@@ -89,24 +87,23 @@ class ViewCountConsumerTest {
      * 情境：收到 ArticleViewedEvent → 增加計數並 ACK
      */
     @Test
-    @DisplayName("handleArticleViewed：成功增加計數並發送 ACK")
+    @DisplayName("handleArticleViewed：成功增加計數並正常返回")
     void handleArticleViewed_success_incrementsAndAcks() throws IOException {
         UUID uuid = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), uuid, Instant.now());
         long deliveryTag = 42L;
         when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
 
-        viewCountConsumer.handleArticleViewed(event, channel, deliveryTag);
+        viewCountConsumer.handleArticleViewed(event);
 
         verify(viewCountService).incrementRedisViewCount(uuid);
-        verify(channel).basicAck(deliveryTag, false);
     }
 
     /**
      * 情境：處理失敗（Redis 拋出例外）→ 呼叫 basicNack
      */
     @Test
-    @DisplayName("handleArticleViewed：處理失敗時呼叫 basicNack")
+    @DisplayName("handleArticleViewed：處理失敗時讓例外往外拋")
     void handleArticleViewed_onFailure_callsBasicNack() throws IOException {
         UUID uuid = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), uuid, Instant.now());
@@ -114,9 +111,7 @@ class ViewCountConsumerTest {
         when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
         doThrow(new RuntimeException("Redis error")).when(viewCountService).incrementRedisViewCount(uuid);
 
-        viewCountConsumer.handleArticleViewed(event, channel, deliveryTag);
-
-        verify(channel).basicNack(eq(deliveryTag), eq(false), eq(false));
+        assertThatThrownBy(() -> viewCountConsumer.handleArticleViewed(event)).isInstanceOf(RuntimeException.class);
     }
 
     /**
@@ -135,12 +130,10 @@ class ViewCountConsumerTest {
         when(idempotencyService.tryMark(eventId, ViewCountConsumer.CONSUMER_NAME))
                 .thenReturn(true, false);
 
-        viewCountConsumer.handleArticleViewed(event, channel, 1L);
-        viewCountConsumer.handleArticleViewed(event, channel, 2L);
+        viewCountConsumer.handleArticleViewed(event);
+        viewCountConsumer.handleArticleViewed(event);
 
         verify(viewCountService, times(1)).incrementRedisViewCount(uuid);
-        verify(channel).basicAck(1L, false);
-        verify(channel).basicAck(2L, false);
     }
 
     /**
@@ -155,10 +148,9 @@ class ViewCountConsumerTest {
         UUID uuid = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(null, uuid, Instant.now());
 
-        viewCountConsumer.handleArticleViewed(event, channel, 7L);
+        viewCountConsumer.handleArticleViewed(event);
 
         verify(viewCountService).incrementRedisViewCount(uuid);
-        verify(channel).basicAck(7L, false);
         verify(idempotencyService, never()).tryMark(any(), any());
     }
 
@@ -175,7 +167,7 @@ class ViewCountConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            viewCountConsumer.handleArticleViewed(event, channel, 5L);
+            viewCountConsumer.handleArticleViewed(event);
 
             assertThat(count(registry, ConsumerExecutor.PROCESSED_METRIC, ViewCountConsumer.CONSUMER_NAME)).isEqualTo(1.0);
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ViewCountConsumer.CONSUMER_NAME)).isZero();
@@ -186,12 +178,12 @@ class ViewCountConsumerTest {
     }
 
     /**
-     * 情境：處理失敗 → failed／dead_lettered 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
+     * 情境：處理失敗 → failed 指標加一，且 ConsumerExecutor 的 ERROR 日誌保留業務上下文
      *
      * @throws Exception 測試過程中的例外
      */
     @Test
-    @DisplayName("handleArticleViewed：失敗時計入 failed／dead_lettered 指標，ERROR 日誌保留業務上下文")
+    @DisplayName("handleArticleViewed：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void handleArticleViewed_onFailure_recordsMetricsAndLogsContext() throws Exception {
         UUID uuid = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
@@ -201,10 +193,10 @@ class ViewCountConsumerTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
-            List<LogEvent> logs = captureExecutorLogs(() -> viewCountConsumer.handleArticleViewed(event, channel, 6L));
+            List<LogEvent> logs = captureExecutorLogs(() -> assertThatThrownBy(() -> viewCountConsumer.handleArticleViewed(event)).isInstanceOf(RuntimeException.class));
 
             assertThat(count(registry, ConsumerExecutor.FAILED_METRIC, ViewCountConsumer.CONSUMER_NAME)).isEqualTo(1.0);
-            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ViewCountConsumer.CONSUMER_NAME)).isEqualTo(1.0);
+            assertThat(count(registry, ConsumerExecutor.DEAD_LETTERED_METRIC, ViewCountConsumer.CONSUMER_NAME)).as("dead_lettered 由容器層的 DeadLetterCountingErrorHandler 計，ConsumerExecutor 不計").isZero();
             assertThat(logs).anySatisfy(e -> {
                 assertThat(e.getLevel()).isEqualTo(Level.ERROR);
                 assertThat(e.getMessage().getFormattedMessage())
@@ -223,19 +215,17 @@ class ViewCountConsumerTest {
      * @throws IOException basicNack 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handleArticleViewed：業務失敗 → 冪等標記所在交易 rollback（不 commit）並 nack")
+    @DisplayName("handleArticleViewed：業務失敗 → 冪等標記所在交易 rollback（不 commit）並往外拋例外")
     void handleArticleViewed_onBodyFailure_rollsBackMarkTransaction() throws IOException {
         UUID uuid = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), uuid, Instant.now());
         when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
         doThrow(new RuntimeException("Redis error")).when(viewCountService).incrementRedisViewCount(uuid);
 
-        viewCountConsumer.handleArticleViewed(event, channel, 3L);
+        assertThatThrownBy(() -> viewCountConsumer.handleArticleViewed(event)).isInstanceOf(RuntimeException.class);
 
         verify(txManager).rollback(any());
         verify(txManager, never()).commit(any());
-        verify(channel).basicNack(3L, false, false);
-        verify(channel, never()).basicAck(eq(3L), eq(false));
     }
 
     /**
@@ -244,19 +234,18 @@ class ViewCountConsumerTest {
      * @throws IOException basicAck 可能拋出的 IO 例外
      */
     @Test
-    @DisplayName("handleArticleViewed：成功 → tryMark、計數、commit、ack 依序發生")
+    @DisplayName("handleArticleViewed：成功 → tryMark、計數、commit 依序發生")
     void handleArticleViewed_success_marksThenCountsThenCommitsThenAcks() throws IOException {
         UUID uuid = UUID.randomUUID();
         ArticleViewedEvent event = new ArticleViewedEvent(UUID.randomUUID(), uuid, Instant.now());
         when(idempotencyService.tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME)).thenReturn(true);
 
-        viewCountConsumer.handleArticleViewed(event, channel, 4L);
+        viewCountConsumer.handleArticleViewed(event);
 
-        org.mockito.InOrder order = inOrder(idempotencyService, viewCountService, txManager, channel);
+        org.mockito.InOrder order = inOrder(idempotencyService, viewCountService, txManager);
         order.verify(idempotencyService).tryMark(event.eventId(), ViewCountConsumer.CONSUMER_NAME);
         order.verify(viewCountService).incrementRedisViewCount(uuid);
         order.verify(txManager).commit(any());
-        order.verify(channel).basicAck(4L, false);
     }
 
     /**

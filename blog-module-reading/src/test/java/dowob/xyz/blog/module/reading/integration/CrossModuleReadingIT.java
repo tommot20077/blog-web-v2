@@ -11,7 +11,6 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.reading.config.ReadingTestApplication;
 import dowob.xyz.blog.module.reading.consumer.ReadingArticleDeletedConsumer;
@@ -262,8 +261,7 @@ class CrossModuleReadingIT {
                 .as("FK 已移除（V27）：僅刪文章不會連帶刪閱讀進度，須等 consumer 處理事件").isPresent();
 
         // 處理文章刪除事件 → 四張表的資料都消失
-        Channel channel = Mockito.mock(Channel.class);
-        articleDeletedConsumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, List.of(), List.of(), Instant.now(), null, null), channel, 1L);
+        articleDeletedConsumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, List.of(), List.of(), Instant.now(), null, null));
 
         assertThat(bookmarkRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();
         assertThat(likeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid)).isEmpty();

@@ -143,6 +143,12 @@
             <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- RabbitMQ 重試／ack 模式／DLQ 的真 broker 整合測試（*IntegrationTest） -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-db-migration</artifactId>

@@ -21,7 +21,6 @@ import dowob.xyz.blog.module.comment.repository.CommentLikeRepository;
 import dowob.xyz.blog.module.comment.consumer.CommentArticleDeletedConsumer;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import dowob.xyz.blog.module.comment.support.SeededUsers;
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import org.mockito.Mockito;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -264,8 +263,7 @@ class CrossModuleCommentIT {
                 .as("FK 已移除：刪文章後 user_article_likes 仍在（清除改由 reading 的 consumer 負責）").isPresent();
 
         // 處理文章刪除事件 → 留言與留言讚消失（留言讚經模組內 FK 隨留言 CASCADE）
-        Channel channel = Mockito.mock(Channel.class);
-        consumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, List.of(), List.of(), Instant.now(), SeededUsers.USER_UUID, null), channel, 1L);
+        consumer.onArticleDeleted(new ArticleDeletedEvent(UUID.randomUUID(), articleUuid, List.of(), List.of(), Instant.now(), SeededUsers.USER_UUID, null));
 
         assertThat(commentRepo.findByUuid(savedComment.getUuid())).isEmpty();
         Integer remainingLikes = jdbc.queryForObject("SELECT COUNT(*) FROM comment_likes", Integer.class);

@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.version.consumer;
 
-import com.rabbitmq.client.Channel;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.module.article.model.Article;
@@ -16,10 +15,6 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -34,9 +29,6 @@ import static org.mockito.Mockito.verify;
  */
 @DisplayName("VersionArticleDeletedConsumer 整合測試")
 class VersionArticleDeletedConsumerIT extends VersionCleanupITSupport {
-
-    private static final long DELIVERY_TAG = 7L;
-
     @Autowired private VersionArticleDeletedConsumer consumer;
 
     private static ArticleDeletedEvent eventOf(UUID articleUuid) {
@@ -54,15 +46,12 @@ class VersionArticleDeletedConsumerIT extends VersionCleanupITSupport {
         insertVersion(other.getUuid(), "AUTO");
         jdbc.update("INSERT INTO user_preferences (user_uuid, pref_key, pref_value) VALUES (?, 'version.auto.retain', '30')",
                 SeededVersionUsers.USER1_UUID);
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(target.getUuid()), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(eventOf(target.getUuid()));
 
         assertThat(countVersions(target.getUuid())).isZero();
         assertThat(countVersions(other.getUuid())).isEqualTo(1);
         assertThat(countPreferences()).as("user_preferences 不新增連動").isEqualTo(1);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
@@ -73,29 +62,23 @@ class VersionArticleDeletedConsumerIT extends VersionCleanupITSupport {
         insertVersion(target.getUuid(), "MANUAL");
         insertVersion(other.getUuid(), "MANUAL");
         ArticleDeletedEvent event = eventOf(target.getUuid());
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(event, channel, 1L);
-        consumer.onArticleDeleted(event, channel, 2L);
+        consumer.onArticleDeleted(event);
+        consumer.onArticleDeleted(event);
 
         assertThat(countVersions(target.getUuid())).isZero();
         assertThat(countVersions(other.getUuid())).isEqualTo(1);
-        verify(channel, times(1)).basicAck(1L, false);
-        verify(channel, times(1)).basicAck(2L, false);
-        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
     }
 
     @Test
-    @DisplayName("缺 articleUuid 的舊 payload：不刪除任何資料，仍 ack")
+    @DisplayName("缺 articleUuid 的舊 payload：不刪除任何資料，仍正常返回")
     void onArticleDeleted_nullArticleUuid_removesNothingAndAcks() throws Exception {
         Article article = createArticle(ArticleStatus.DRAFT);
         insertVersion(article.getUuid(), "MANUAL");
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(null), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(eventOf(null));
 
         assertThat(countVersions(article.getUuid())).isEqualTo(1);
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 
     @Test
@@ -106,11 +89,9 @@ class VersionArticleDeletedConsumerIT extends VersionCleanupITSupport {
         insertVersion(article.getUuid(), "MANUAL");
         articleRepo.delete(article);
         assertThat(countVersions(article.getUuid())).as("FK 已移除，DB 層不再 CASCADE").isEqualTo(2);
-        Channel channel = Mockito.mock(Channel.class);
 
-        consumer.onArticleDeleted(eventOf(article.getUuid()), channel, DELIVERY_TAG);
+        consumer.onArticleDeleted(eventOf(article.getUuid()));
 
         assertThat(countVersions(article.getUuid())).isZero();
-        verify(channel, times(1)).basicAck(DELIVERY_TAG, false);
     }
 }
