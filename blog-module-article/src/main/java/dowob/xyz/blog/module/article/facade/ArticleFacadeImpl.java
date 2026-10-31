@@ -12,7 +12,6 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
@@ -51,7 +50,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -87,22 +85,22 @@ public class ArticleFacadeImpl implements ArticleFacade {
     private final ArticleRecommendMapper recommendMapper;
 
     /**
-     * 文章 Service（SP-B 新增：供 10 個新 delegate method 使用）
+     * 文章 Service（供 delegate method 使用）
      */
     private final ArticleService articleService;
 
     /**
-     * 文章 Repository（SP-D 新增：供 findContentById / applyRestoreContent 使用）
+     * 文章 Repository（供 applyRestoreContent 使用）
      */
     private final ArticleRepository articleRepository;
 
     /**
-     * 標籤 Facade（SP-D 新增：供 applyRestoreContent syncArticleTags 使用）
+     * 標籤 Facade（供 applyRestoreContent syncArticleTags 使用）
      */
     private final TagFacade tagFacade;
 
     /**
-     * 文章事件發布元件（SP-D 新增：供 applyRestoreContent publish events 使用）
+     * 文章事件發布元件（供 applyRestoreContent publish events 使用）
      */
     private final ArticleEventPublisher articleEventPublisher;
 
@@ -351,15 +349,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
                 .toList();
     }
 
-    // ─── SP-B 新增 5 read method（純 delegate + Article→ArticleData 轉換）───
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public Long findIdByUuid(UUID articleUuid) {
-        return articleService.findIdByUuid(articleUuid);
-    }
+    // ─── 不限狀態的 read（純 delegate + Article→ArticleData 轉換）───
 
     /**
      * {@inheritDoc}
@@ -371,71 +361,9 @@ public class ArticleFacadeImpl implements ArticleFacade {
 
     /**
      * {@inheritDoc}
-     */
-    @Override
-    public Optional<ArticleData> findById(Long articleId) {
-        return articleService.findById(articleId).map(articleDataAssembler::toArticleData);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public List<ArticleData> findByIds(List<Long> articleIds) {
-        return articleDataAssembler.toArticleDataList(articleService.findByIds(articleIds));
-    }
-
-    // ─── SP-B 新增 5 write method（純 delegate）───
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void incrementCommentCount(Long articleId) {
-        articleService.incrementCommentCount(articleId);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void decrementCommentCount(Long articleId) {
-        articleService.decrementCommentCount(articleId);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void incrementLikeCount(Long articleId) {
-        articleService.incrementLikeCount(articleId);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void decrementLikeCount(Long articleId) {
-        articleService.decrementLikeCount(articleId);
-    }
-
-    // ─── SP-D 新增：findContentById + applyRestoreContent ───
-
-    /**
-     * {@inheritDoc}
      *
-     * <p>純 delegate：委派 articleService.findById 查找 article entity，轉換為 ArticleContentData record。</p>
-     */
-    @Override
-    public Optional<ArticleContentData> findContentById(Long articleId) {
-        return articleService.findById(articleId).map(this::toContentData);
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * <p>M3-a 新增。純 delegate：委派 articleService.findByUuid 查找 article entity，
-     * 轉換方式與 {@link #findContentById(Long)} 相同（同一個 {@code toContentData}），不分狀態；
+     * <p>純 delegate：委派 articleService.findByUuid 查找 article entity，
+     * 轉換為 ArticleContentData record（{@code toContentData}），不分狀態；
      * {@code articleUuid} 為 null 時直接回傳 empty，不查 DB（與 UUID 版
      * {@link #applyRestoreContent(UUID, ArticleRestoreSource)} 對 null 拋 NPE 不同：查詢方法對「查無」寬容，
      * 寫入方法對呼叫端程式錯誤嚴格）。</p>
@@ -450,6 +378,15 @@ public class ArticleFacadeImpl implements ArticleFacade {
 
     /**
      * {@inheritDoc}
+     *
+     * <p>先在 article 內部以 {@link ArticleMarkdownRenderer} 渲染 {@code source.content()}，
+     * HTML 與 TOC 取自<b>同一次</b> {@link RenderResult}（只回填 HTML 會讓 {@code articles.toc} 停在還原前那版，
+     * 章節導覽指向不存在的錨點），TOC 以 {@link ArticleTocCodec} 序列化。渲染刻意放在交易之外：
+     * 純 CPU 運算，不佔用 DB 連線。</p>
+     *
+     * <p>入口以 {@link Objects#requireNonNull} 檢查 {@code articleUuid}、{@code source}、
+     * {@code source.content()}，任一為 null 即拋帶訊息的 {@link NullPointerException}（呼叫端的程式錯誤，
+     * 不是業務錯誤，故不轉為 {@link BusinessException}）；檢查在渲染與任何 DB 存取之前。</p>
      *
      * <p>flow：交易內（撈 article → mutate 內容欄位 → save → syncArticleTags）→ commit →
      * best-effort publish events。</p>
@@ -474,56 +411,23 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * <p>
      * <strong>F-H1：還原必須通過與 PUT 相同的內容凍結守衛</strong>。
      * {@code ArticleCommandSubService#updateArticle} 規定 PENDING_REVIEW / PUBLISHED / ARCHIVED
-     * 內容凍結，但還原路徑原本完全不受約束：作者把文章送審後仍能用還原把內容換成另一個版本，
-     * admin 審的是 A、通過的是 B（審核 TOCTOU）。SEC-02 之後還原不再改 status，
-     * 這個換內容的動作在狀態機上完全無痕，反而更隱蔽。
-     * </p>
-     *
-     * <p>
-     * 守衛刻意放在<b>本方法內、mutate 之前</b>，而不是要求 version 模組先問一次：
+     * 內容凍結，還原路徑若不受約束，作者把文章送審後仍能用還原把內容換成另一個版本，
+     * admin 審的是 A、通過的是 B（審核 TOCTOU）。守衛刻意放在<b>本方法內、mutate 之前</b>：
      * 凍結是 article 模組的業務規則，由擁有該資料的模組在自己的寫入點把關，
-     * 任何呼叫端（含未來新增的）都繞不過去，規則也不會洩漏到別的模組
-     * （見 {@code ai-docs/architecture.md} 跨模組邊界：業務 data 的寫必走 owner module 的 service）。
-     * 判斷共用 {@link ArticleContentFreezePolicy}，不複製第二套。
-     * </p>
-     *
-     * <p>
-     * 附帶效果：PUBLISHED 被守衛擋下後，下方
-     * {@code if (saved.getStatus() == PUBLISHED) publishUpdated} 分支已無呼叫端能到達，
-     * 作為防禦性程式碼保留（本次修復不動還原邏輯本身）。
+     * 任何呼叫端都繞不過去（見 {@code ai-docs/architecture.md} 跨模組邊界：業務 data 的寫必走 owner module 的 service）。
+     * 判斷共用 {@link ArticleContentFreezePolicy}，不複製第二套。PUBLISHED 被守衛擋下後，
+     * 下方 {@code if (saved.getStatus() == PUBLISHED) publishUpdated} 分支已無呼叫端能到達，作為防禦性程式碼保留。
      * </p>
      *
      * <p>
      * <strong>檔案綁定回填（修復：還原後圖片破圖）</strong>：DB commit 後，比照
      * {@code ArticleCommandSubService}（Task B6）另呼叫 {@link ArticleFileBinder#bindFilesToArticleSafely}，
-     * 掃描的是 {@code saved.getContent()}（DB 實際存下的那份），而非 {@code data.content()}——
-     * 避免將來若此路徑改成部分更新時，掃到不完整的內容。此呼叫與事件發送一樣是
+     * 掃描的是 {@code saved.getContent()}（DB 實際存下的那份）。此呼叫與事件發送一樣是
      * best-effort：{@code ArticleFileBinder} 內部已吞掉並記錄失敗，不會讓還原流程失敗。
-     * 呼叫時機同樣在 transactionTemplate.execute 回傳（即本方法自身交易已 commit）之後，
      * 且 {@code VersioningService.restore} 本身並非 {@code @Transactional}
      * （見 ai-docs/backlog/2026-07-14-full-review-findings.md §C2 補充），
      * 故此處確實是「外層無交易」情境下的真實 post-commit。
      * </p>
-     */
-    @Override
-    public void applyRestoreContent(Long articleId, ArticleRestoreData data) {
-        restoreContent(() -> articleRepository.findById(articleId), data);
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * <p>M3-a 新增。先在 article 內部以 {@link ArticleMarkdownRenderer} 渲染 {@code source.content()}，
-     * HTML 與 TOC 取自<b>同一次</b> {@link RenderResult}（只回填 HTML 會讓 {@code articles.toc} 停在還原前那版，
-     * 章節導覽指向不存在的錨點），TOC 以 {@link ArticleTocCodec} 序列化；組成 {@link ArticleRestoreData} 後，
-     * 與 Long 版共用同一個 {@link #restoreContent} 內部方法，交易、內容凍結守衛、tag 同步、
-     * commit 後事件、檔案重新綁定、SEC-02 全部只有一份實作。</p>
-     *
-     * <p>渲染刻意放在交易之外：純 CPU 運算，不佔用 DB 連線。</p>
-     *
-     * <p>入口以 {@link Objects#requireNonNull} 檢查 {@code articleUuid}、{@code source}、
-     * {@code source.content()}，任一為 null 即拋帶訊息的 {@link NullPointerException}（呼叫端的程式錯誤，
-     * 不是業務錯誤，故不轉為 {@link BusinessException}）；檢查在渲染與任何 DB 存取之前。</p>
      *
      * @throws NullPointerException articleUuid、source 或 source.content() 為 null
      */
@@ -533,31 +437,11 @@ public class ArticleFacadeImpl implements ArticleFacade {
         Objects.requireNonNull(source, "source 不可為 null");
         Objects.requireNonNull(source.content(), "source.content 不可為 null");
         RenderResult rendered = markdownRenderer.render(source.content());
-        ArticleRestoreData data = new ArticleRestoreData(
-                source.title(),
-                source.slug(),
-                source.content(),
-                source.summary(),
-                source.coverImageUrl(),
-                rendered.html(),
-                tocCodec.serialize(rendered.toc()),
-                source.tags()
-        );
-        restoreContent(() -> articleRepository.findByUuid(articleUuid), data);
-    }
+        String contentHtml = rendered.html();
+        String toc = tocCodec.serialize(rendered.toc());
 
-    /**
-     * Long 版與 UUID 版 {@code applyRestoreContent} 共用的還原流程（M3-a 抽出，兩個入口只差「怎麼找到文章」）。
-     *
-     * <p>flow 與原 Long 版完全相同，詳見 {@link #applyRestoreContent(Long, ArticleRestoreData)} 的說明
-     * （SEC-02、F-H1、commit 後發事件、檔案綁定回填）。</p>
-     *
-     * @param loader 在交易內查找目標文章的來源；查無須回傳 empty（本方法會拋 ARTICLE_NOT_FOUND）
-     * @param data   已含 contentHtml／toc 的完整還原資料
-     */
-    private void restoreContent(Supplier<Optional<Article>> loader, ArticleRestoreData data) {
         Article saved = transactionTemplate.execute(status -> {
-            Article article = loader.get()
+            Article article = articleRepository.findByUuid(articleUuid)
                     .orElseThrow(() -> new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
 
             /*
@@ -566,28 +450,28 @@ public class ArticleFacadeImpl implements ArticleFacade {
              */
             ArticleContentFreezePolicy.assertContentEditable(article.getStatus());
 
-            article.setTitle(data.title());
-            article.setSlug(data.slug());
-            article.setContent(data.content());
-            article.setSummary(data.summary());
-            article.setCoverImageUrl(data.coverImageUrl());
+            article.setTitle(source.title());
+            article.setSlug(source.slug());
+            article.setContent(source.content());
+            article.setSummary(source.summary());
+            article.setCoverImageUrl(source.coverImageUrl());
             /*
              * SEC-02：這裡刻意不碰 article.status。還原是「內容回溯」，不是狀態轉換；
              * 狀態一律留給 ArticleCommandSubService 的 VALID_TRANSITIONS 守衛決定。
-             * ArticleRestoreData 也已移除 status 欄位，讓這條路徑在型別上就無法改狀態。
+             * ArticleRestoreSource 也沒有 status 欄位，讓這條路徑在型別上就無法改狀態。
              */
-            article.setContentHtml(data.contentHtml());
+            article.setContentHtml(contentHtml);
             /*
              * TOC 必須與 contentHtml 一起回填：兩者出自 caller 的同一次 render。
              * 若漏掉這行，article.toc 會停在還原前那版（Spring Data JDBC 把載入時的舊值原樣寫回），
              * 章節導覽就會指向還原後 HTML 中不存在的錨點。
-             * data.toc() 為 null 時存空陣列，維持 articles.toc 恆為合法 JSON 陣列的不變量。
+             * toc 為 null 時存空陣列，維持 articles.toc 恆為合法 JSON 陣列的不變量。
              */
-            article.setToc(data.toc() != null ? data.toc() : ArticleTocCodec.EMPTY_TOC_JSON);
+            article.setToc(toc != null ? toc : ArticleTocCodec.EMPTY_TOC_JSON);
 
             /*
              * 這裡刻意不處理 rejectReason：SEC-02 之後還原完全不改 status（見上方註解與
-             * ArticleRestoreData 已無 status 欄位），故還原無法把 REJECTED 文章推進公開狀態，
+             * ArticleRestoreSource 沒有 status 欄位），故還原無法把 REJECTED 文章推進公開狀態，
              * 也就不存在「駁回理由隨文章公開而外流」的路徑。
              * 「非 REJECTED 的文章不得帶駁回理由」這條不變量由
              * ArticleCommandSubService#clearRejectReasonIfNotRejected 在各個真正的狀態轉換點維持；
@@ -599,7 +483,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
 
             /** IMPORTANT: syncArticleTags 必須在 publish events 之前發 — search index update 需拿到正確 tags */
             tagFacade.syncArticleTags(updated.getUuid(),
-                    data.tags() != null ? data.tags() : List.of());
+                    source.tags() != null ? source.tags() : List.of());
 
             return updated;
         });
@@ -620,7 +504,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
     }
 
     /**
-     * 將文章實體轉換為跨模組 ArticleContentData DTO（SP-D 新增）
+     * 將文章實體轉換為跨模組 ArticleContentData DTO
      *
      * <p>比 toArticleData 多含 title / slug / content / summary / coverImageUrl 5 個欄位，
      * 適用需要完整 article 內容的場景（version snapshot / restore）。</p>
@@ -630,7 +514,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
      */
     private ArticleContentData toContentData(Article article) {
         return new ArticleContentData(
-                article.getId(),
                 article.getUuid(),
                 article.getTitle(),
                 article.getSlug(),

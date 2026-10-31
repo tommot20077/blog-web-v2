@@ -13,7 +13,7 @@ import java.util.UUID;
  * <p>
  * 對應 {@code blog-module-article} 的 {@code ArticlePublishedEvent} JSON 結構，
  * 搜尋模組自定義反序列化 DTO，不直接依賴 article 模組的類別，
- * 以保持模組間低耦合。事件中搜尋用不到的欄位（如過渡期的 Long 作者主鍵與登入帳號名稱）
+ * 以保持模組間低耦合。事件中搜尋用不到的欄位（如舊版事件曾帶的 Long 作者主鍵與登入帳號名稱）
  * 不在此宣告，由 Jackson 忽略。
  * </p>
  *

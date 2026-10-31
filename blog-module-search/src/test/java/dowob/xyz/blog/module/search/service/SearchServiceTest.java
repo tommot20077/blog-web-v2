@@ -180,10 +180,9 @@ class SearchServiceTest {
      * @return 索引資料
      */
     private ArticleIndexData indexData(UUID uuid) {
-        return new ArticleIndexData(
-                uuid, "仍公開的文章", "still-public",
+        return new ArticleIndexData(uuid, "仍公開的文章", "still-public",
                 "summary", "content", "Yuan",
-                LocalDateTime.now(), 0L, 0L, List.of());
+                LocalDateTime.now(), 0L, 0L, List.of(), null);
     }
 
     /** 掛 appender 前的 logger level，detach 時還原 */
@@ -640,10 +639,9 @@ class SearchServiceTest {
         void reindexAll_removesGhostDocumentsMissingFromDatabase() {
             UUID liveUuid = UUID.randomUUID();
             String ghostId = UUID.randomUUID().toString();
-            ArticleIndexData live = new ArticleIndexData(
-                    liveUuid, "仍公開的文章", "still-public",
+            ArticleIndexData live = new ArticleIndexData(liveUuid, "仍公開的文章", "still-public",
                     "summary", "content", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, List.of());
+                    LocalDateTime.now(), 0L, 0L, List.of(), null);
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(live));
             SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
                     ArticleDocument.builder().id(liveUuid.toString()).build(),
@@ -663,10 +661,9 @@ class SearchServiceTest {
         @DisplayName("索引與 DB 一致時，不應刪除任何 document")
         void reindexAll_whenIndexMatchesDatabase_deletesNothing() {
             UUID liveUuid = UUID.randomUUID();
-            ArticleIndexData live = new ArticleIndexData(
-                    liveUuid, "仍公開的文章", "still-public",
+            ArticleIndexData live = new ArticleIndexData(liveUuid, "仍公開的文章", "still-public",
                     "summary", "content", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, List.of());
+                    LocalDateTime.now(), 0L, 0L, List.of(), null);
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(live));
             SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
                     ArticleDocument.builder().id(liveUuid.toString()).build()));
@@ -827,10 +824,9 @@ class SearchServiceTest {
         @Test
         @DisplayName("應從 ArticleFacade 取得文章並批次儲存")
         void reindexAll_fetchesFromFacadeAndSavesAll() {
-            ArticleIndexData data = new ArticleIndexData(
-                    UUID.randomUUID(), "Spring Boot 教學", "spring-boot-tutorial",
+            ArticleIndexData data = new ArticleIndexData(UUID.randomUUID(), "Spring Boot 教學", "spring-boot-tutorial",
                     "本文介紹 Spring Boot", "Spring Boot 是一個框架", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, List.of());
+                    LocalDateTime.now(), 0L, 0L, List.of(), null);
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
 
             searchService.reindexAll();
@@ -855,10 +851,9 @@ class SearchServiceTest {
         @Test
         @DisplayName("ArticleIndexData tags 為 null 時，轉換後 tags 為空列表")
         void reindexAll_whenTagsNull_convertsToEmptyTagList() {
-            ArticleIndexData data = new ArticleIndexData(
-                    UUID.randomUUID(), "No Tags Article", "no-tags",
+            ArticleIndexData data = new ArticleIndexData(UUID.randomUUID(), "No Tags Article", "no-tags",
                     "summary", "content", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, null);
+                    LocalDateTime.now(), 0L, 0L, null, null);
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
 
             searchService.reindexAll();
@@ -870,10 +865,9 @@ class SearchServiceTest {
         @DisplayName("ArticleIndexData 含標籤時，轉換後 tags 正確映射")
         void reindexAll_withTags_convertsTagsCorrectly() {
             ArticleIndexData.TagData tagData = new ArticleIndexData.TagData(UUID.randomUUID(), "Java", "java");
-            ArticleIndexData data = new ArticleIndexData(
-                    UUID.randomUUID(), "Tagged Article", "tagged",
+            ArticleIndexData data = new ArticleIndexData(UUID.randomUUID(), "Tagged Article", "tagged",
                     "summary", "content", "Yuan",
-                    LocalDateTime.now(), 10L, 5L, List.of(tagData));
+                    LocalDateTime.now(), 10L, 5L, List.of(tagData), null);
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
 
             searchService.reindexAll();

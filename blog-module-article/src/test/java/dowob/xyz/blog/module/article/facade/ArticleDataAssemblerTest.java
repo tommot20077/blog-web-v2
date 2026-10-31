@@ -46,7 +46,6 @@ class ArticleDataAssemblerTest {
 
         ArticleData data = assembler.toArticleData(source);
 
-        assertThat(data.id()).isEqualTo(1L);
         assertThat(data.uuid()).isEqualTo(source.getUuid());
         assertThat(data.status()).isEqualTo("PUBLISHED");
         assertThat(data.authorUuid()).isEqualTo(authorUuid);
@@ -83,7 +82,8 @@ class ArticleDataAssemblerTest {
 
         assertThat(result).extracting(ArticleData::authorUuid).containsExactly(authorA, authorA, authorB, authorB);
         assertThat(result).extracting(ArticleData::seriesUuid).containsExactly(seriesX, seriesX, seriesY, null);
-        assertThat(result).extracting(ArticleData::id).containsExactly(1L, 2L, 3L, 4L);
+        assertThat(result).extracting(ArticleData::uuid)
+                .containsExactlyElementsOf(articles.stream().map(Article::getUuid).toList());
     }
 
     @Test

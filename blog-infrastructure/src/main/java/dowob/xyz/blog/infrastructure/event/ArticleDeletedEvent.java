@@ -11,7 +11,7 @@ import java.util.UUID;
  * 升級時 in-flight 舊 message（缺少新增的 {@code authorUuid}／{@code seriesUuid}）仍可處理；
  * 新 consumer 對 null 做防禦判斷。</p>
  *
- * <p><b>Long 過渡欄位已全數移除</b>：{@code articleId}、{@code seriesId} 於 M4-b 移除，{@code authorId} 於 M6-a 移除——
+ * <p><b>舊 Long 欄位已全數移除</b>：{@code articleId}、{@code seriesId} 於 M4-b 移除，{@code authorId} 於 M6-a 移除——
  * 發送端只帶 {@code authorUuid}。升級當下佇列中仍含這些舊欄位的 in-flight 訊息可正常反序列化（多出的欄位被忽略），
  * 見 {@code ArticleDeletedEventSerializationTest}。</p>
  *

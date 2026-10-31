@@ -13,7 +13,7 @@ import java.util.UUID;
  * 僅在文章狀態為 PUBLISHED 時才發送。
  * </p>
  *
- * <p><b>M6-a：Long 過渡欄位已移除</b>。原本保留的 Long 作者主鍵與登入識別符（作者帳號名稱）
+ * <p><b>M6-a：舊 Long 欄位已移除</b>。原本保留的 Long 作者主鍵與登入識別符（作者帳號名稱）
  * 已從 record 移除——search、recommend 皆已改讀 {@code authorUuid}／{@code authorNickname}。
  * 升級當下佇列中仍含這兩個舊欄位的 in-flight 訊息可正常反序列化（多出的欄位被忽略）。</p>
  *

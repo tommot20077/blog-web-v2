@@ -89,7 +89,7 @@ class ArticleFacadeSeriesUuidTest {
 
             List<ArticleData> result = facade.findBySeriesUuidOrderByPosition(SERIES_A);
 
-            assertThat(result).extracting(ArticleData::id).containsExactly(1L, 2L, 3L);
+            assertThat(result).extracting(ArticleData::seriesPosition).containsExactly(1, 2, 3);
             assertThat(result).extracting(ArticleData::seriesUuid).containsOnly(SERIES_A);
         }
 

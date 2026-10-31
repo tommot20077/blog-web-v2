@@ -138,7 +138,6 @@ class CommentServiceTest {
 
         verify(commentRepo, never()).save(any());
         verify(articleFacade, never()).incrementCommentCount(any(UUID.class));
-        verify(articleFacade, never()).incrementCommentCount(any(Long.class));
     }
 
     @Test
@@ -418,7 +417,6 @@ class CommentServiceTest {
 
         verify(commentMapper, never()).softDelete(any(), any());
         verify(articleFacade, never()).decrementCommentCount(any(UUID.class));
-        verify(articleFacade, never()).decrementCommentCount(any(Long.class));
     }
 
     @Test
@@ -439,7 +437,6 @@ class CommentServiceTest {
 
         verify(commentMapper).softDelete(1L, "AUTHOR");
         verify(articleFacade, never()).decrementCommentCount(any(UUID.class));
-        verify(articleFacade, never()).decrementCommentCount(any(Long.class));
     }
 
     // ── listComments ──────────────────────────────────────────────────────
@@ -724,8 +721,7 @@ class CommentServiceTest {
      */
     private void stubArticle(String status, UUID ownerUuid) {
         when(articleFacade.findByUuid(articleUuid))
-                .thenReturn(Optional.of(new ArticleData(
-                        articleId, articleUuid, status, null, ownerUuid, null)));
+                .thenReturn(Optional.of(new ArticleData(articleUuid, status, null, ownerUuid, null)));
     }
 
     /**

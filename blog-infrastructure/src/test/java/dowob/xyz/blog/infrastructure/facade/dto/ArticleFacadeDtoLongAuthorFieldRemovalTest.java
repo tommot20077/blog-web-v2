@@ -11,14 +11,14 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * M6：article facade DTO 移除 Long 作者識別（{@code authorId}）、登入識別符（{@code authorUsername}）
- * 與 series 的 Long 主鍵（{@code seriesId}）的契約測試。
+ * article facade DTO 不含任何 Long 識別欄位的契約測試（M6 移除 authorId／authorUsername／seriesId，
+ * Z1 移除 article 自有主鍵 {@code id}）。
  *
- * <p>他模組已全部改讀 {@code authorUuid}／{@code seriesUuid}，owner 直接從 record 移除這些欄位，
- * 不得保留為恆 null 的欄位（會成為靜默陷阱）。{@code ArticleData.id} 是 article 自有主鍵，Z1 才移除。</p>
+ * <p>他模組已全部改讀 {@code authorUuid}／{@code seriesUuid}／{@code uuid}，owner 直接從 record 移除這些欄位，
+ * 不得保留為恆 null 的欄位或過渡用的舊建構子（會成為靜默陷阱）。</p>
  *
  * @author Yuan
- * @version 2.0（M6-b：移除 seriesId）
+ * @version 3.0（Z1：移除 id 與舊建構子）
  */
 @DisplayName("article facade DTO 移除 authorId／authorUsername／seriesId")
 class ArticleFacadeDtoLongAuthorFieldRemovalTest {
@@ -34,29 +34,32 @@ class ArticleFacadeDtoLongAuthorFieldRemovalTest {
     }
 
     @Test
-    @DisplayName("ArticleData 不含 authorId／seriesId，保留 id／uuid／authorUuid／seriesUuid／seriesPosition")
-    void articleData_hasNoAuthorIdAndNoSeriesId() {
+    @DisplayName("ArticleData 不含 id／authorId／seriesId，保留 uuid／authorUuid／seriesUuid／seriesPosition")
+    void articleData_hasNoLongIdentifiers() {
         assertThat(components(ArticleData.class))
-                .doesNotContain("authorId", "seriesId")
-                .contains("id", "uuid", "status", "authorUuid", "seriesUuid", "seriesPosition");
+                .doesNotContain("id", "authorId", "seriesId")
+                .contains("uuid", "status", "authorUuid", "seriesUuid", "seriesPosition");
     }
 
     @Test
-    @DisplayName("ArticleData 的建構子沒有第二個 Long 參數（不留 series 主鍵的舊建構子形狀）")
-    void articleData_constructorsHaveNoLongSeriesParameter() {
-        assertThat(ArticleData.class.getConstructors())
-                .allSatisfy(constructor -> assertThat(Arrays.stream(constructor.getParameterTypes())
-                        .filter(Long.class::equals).count())
-                        .as("只有 id 是 Long：%s", constructor)
-                        .isEqualTo(1L));
+    @DisplayName("Z1：ArticleData／ArticleContentData／ArticleIndexData 只有 canonical 建構子，且沒有任何 Long（識別用）參數")
+    void articleDtos_haveOnlyCanonicalConstructorWithoutLongParameters() {
+        for (Class<?> type : List.of(ArticleData.class, ArticleContentData.class, ArticleIndexData.class)) {
+            assertThat(type.getConstructors())
+                    .as("%s 的 public 建構子數量（舊的過渡建構子已移除）", type.getSimpleName())
+                    .hasSize(1);
+            assertThat(type.getConstructors()[0].getParameterTypes())
+                    .as("%s 建構子參數不得含 Long", type.getSimpleName())
+                    .doesNotContain(Long.class);
+        }
     }
 
     @Test
-    @DisplayName("ArticleContentData 不含 authorId，保留 authorUuid")
-    void articleContentData_hasNoAuthorId() {
+    @DisplayName("ArticleContentData 不含 id／authorId，保留 uuid／authorUuid")
+    void articleContentData_hasNoLongIdentifiers() {
         assertThat(components(ArticleContentData.class))
-                .doesNotContain("authorId")
-                .contains("id", "uuid", "authorUuid");
+                .doesNotContain("id", "authorId")
+                .contains("uuid", "authorUuid");
     }
 
     @Test

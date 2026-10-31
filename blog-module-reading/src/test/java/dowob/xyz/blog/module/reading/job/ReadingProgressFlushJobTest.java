@@ -430,7 +430,6 @@ class ReadingProgressFlushJobTest {
         verify(articleFacade, times(1)).filterExistingUuids(captor.capture());
         assertThat(captor.getValue()).containsExactlyInAnyOrder(shared, second, third);
         verify(articleFacade, never()).existsByUuid(any());
-        verify(articleFacade, never()).findIdByUuid(any());
         verify(progressMapper, times(4)).upsert(any(), any(), any(), any(), any());
     }
 

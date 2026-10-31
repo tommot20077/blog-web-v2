@@ -295,20 +295,6 @@ class ArticleFacadeReadingUuidIT {
     }
 
     @Test
-    @DisplayName("like count 的 UUID 版與 Long 版結果一致")
-    void likeCount_uuidVersionMatchesLongVersion() {
-        UUID viaUuid = insertArticle(author1Uuid, "PUBLISHED", 1);
-        UUID viaId = insertArticle(author1Uuid, "PUBLISHED", 1);
-
-        articleFacade.incrementLikeCount(viaUuid);
-        articleFacade.incrementLikeCount(idOf(viaId));
-        articleFacade.decrementLikeCount(viaUuid);
-        articleFacade.decrementLikeCount(idOf(viaId));
-
-        assertThat(likeCountOf(viaUuid)).isEqualTo(likeCountOf(viaId)).isEqualTo(1);
-    }
-
-    @Test
     @DisplayName("increment／decrement 對不存在的 uuid 是 no-op，不拋例外")
     void likeCountOperations_unknownUuid_areNoOps() {
         UUID unknown = UUID.randomUUID();

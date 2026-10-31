@@ -89,11 +89,12 @@ class ArticleFacadeUuidFieldsTest {
     }
 
     @Test
-    @DisplayName("findById → authorUuid 與 seriesUuid 非 null 且正確")
-    void findById_fillsAuthorUuidAndSeriesUuid() {
-        when(articleService.findById(1L)).thenReturn(Optional.of(article(1L, SERIES_UUID)));
+    @DisplayName("findByUuid → authorUuid 與 seriesUuid 非 null 且正確")
+    void findByUuid_fillsAuthorUuidAndSeriesUuid() {
+        Article a = article(1L, SERIES_UUID);
+        when(articleService.findByUuid(a.getUuid())).thenReturn(Optional.of(a));
 
-        ArticleData data = facade.findById(1L).orElseThrow();
+        ArticleData data = facade.findByUuid(a.getUuid()).orElseThrow();
 
         assertThat(data.authorUuid()).isEqualTo(AUTHOR_UUID);
         assertThat(data.seriesUuid()).isEqualTo(SERIES_UUID);
@@ -112,12 +113,12 @@ class ArticleFacadeUuidFieldsTest {
     }
 
     @Test
-    @DisplayName("findByIds → 作者 uuid 與系列 uuid 都直接取自文章（M6-b：不再經任何 facade 轉換）；不呼叫 UserFacade")
-    void findByIds_readsUuidsStraightFromArticles() {
-        when(articleService.findByIds(List.of(1L, 2L, 3L)))
+    @DisplayName("批次轉換 → 作者 uuid 與系列 uuid 都直接取自文章（不再經任何 facade 轉換）；不呼叫 UserFacade")
+    void batchConversion_readsUuidsStraightFromArticles() {
+        when(articleService.findBySeriesUuidOrderByPosition(SERIES_UUID))
                 .thenReturn(List.of(article(1L, SERIES_UUID), article(2L, SERIES_UUID), article(3L, null)));
 
-        List<ArticleData> result = facade.findByIds(List.of(1L, 2L, 3L));
+        List<ArticleData> result = facade.findBySeriesUuidOrderByPosition(SERIES_UUID);
 
         assertThat(result).extracting(ArticleData::authorUuid).containsOnly(AUTHOR_UUID);
         assertThat(result).extracting(ArticleData::seriesUuid).containsExactly(SERIES_UUID, SERIES_UUID, null);
@@ -137,11 +138,12 @@ class ArticleFacadeUuidFieldsTest {
     }
 
     @Test
-    @DisplayName("findContentById → ArticleContentData.authorUuid 非 null")
-    void findContentById_fillsAuthorUuid() {
-        when(articleService.findById(1L)).thenReturn(Optional.of(article(1L, null)));
+    @DisplayName("findContentByUuid → ArticleContentData.authorUuid 非 null")
+    void findContentByUuid_fillsAuthorUuid() {
+        Article a = article(1L, null);
+        when(articleService.findByUuid(a.getUuid())).thenReturn(Optional.of(a));
 
-        ArticleContentData data = facade.findContentById(1L).orElseThrow();
+        ArticleContentData data = facade.findContentByUuid(a.getUuid()).orElseThrow();
         assertThat(data.authorUuid()).isEqualTo(AUTHOR_UUID);
     }
 
@@ -162,11 +164,12 @@ class ArticleFacadeUuidFieldsTest {
     }
 
     @Test
-    @DisplayName("findContentById → 不查任何使用者資料（authorUuid 直接取自文章）")
-    void findContentById_doesNotQueryUsers() {
-        when(articleService.findById(1L)).thenReturn(Optional.of(article(1L, null)));
+    @DisplayName("findContentByUuid → 不查任何使用者資料（authorUuid 直接取自文章）")
+    void findContentByUuid_doesNotQueryUsers() {
+        Article a = article(1L, null);
+        when(articleService.findByUuid(a.getUuid())).thenReturn(Optional.of(a));
 
-        facade.findContentById(1L);
+        facade.findContentByUuid(a.getUuid());
 
         verifyNoInteractions(userFacade);
     }

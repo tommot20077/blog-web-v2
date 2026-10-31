@@ -21,7 +21,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.LinkedHashSet;
 import java.util.stream.Collectors;
 
 /**
@@ -34,7 +33,7 @@ import java.util.stream.Collectors;
  * 形成 DAG，無循環依賴。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0（移除 Long 主鍵方法）
  */
 @Service
 @RequiredArgsConstructor
@@ -47,8 +46,8 @@ public class SeriesFacadeImpl implements SeriesFacade {
     /**
      * {@inheritDoc}
      *
-     * <p>全程使用 {@link ArticleFacade} 的 UUID 版方法（{@code findByUuid}、{@code findPrev/NextPublishedInSeries(UUID, …)}、
-     * {@code countPublishedBySeriesUuids}），不使用任何 Long 版；series 以 {@code ArticleData.seriesUuid} 查自己的表。</p>
+     * <p>全程使用 {@link ArticleFacade} 的 UUID 方法（{@code findByUuid}、{@code findPrev/NextPublishedInSeries}、
+     * {@code countPublishedBySeriesUuids}）；series 以 {@code ArticleData.seriesUuid} 查自己的表。</p>
      */
     @Override
     public Optional<SeriesNavigation> getSeriesNavigation(UUID articleUuid) {
@@ -83,20 +82,6 @@ public class SeriesFacadeImpl implements SeriesFacade {
         next.ifPresent(n -> nav.setNext(
                 new SeriesNavigation.SeriesArticleRef(n.uuid(), n.title(), n.slug())));
         return Optional.of(nav);
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public Map<Long, SeriesBasicInfo> batchGetSeriesBasicInfo(Collection<Long> seriesIds) {
-        if (seriesIds == null || seriesIds.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        return BatchedQuery.queryInBatches(seriesIds, seriesMapper::findBasicInfoBySeriesIds).stream()
-                .collect(Collectors.toMap(
-                        SeriesMapper.SeriesBasicRow::seriesId,
-                        row -> new SeriesBasicInfo(row.seriesUuid(), row.seriesTitle())));
     }
 
     /**
@@ -138,55 +123,5 @@ public class SeriesFacadeImpl implements SeriesFacade {
         return BatchedQuery.queryInBatches(distinct, seriesMapper::findExistingUuidsIn).stream()
                 .map(UUID::fromString)
                 .collect(Collectors.toSet());
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public Optional<Long> findIdByUuid(UUID seriesUuid) {
-        if (seriesUuid == null) {
-            return Optional.empty();
-        }
-        return seriesRepo.findByUuid(seriesUuid).map(Series::getId);
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * <p>先去重並濾掉 null，再經 {@link BatchedQuery} 切批；各批 key 不重疊，屬跨批可合併形狀。</p>
-     */
-    @Override
-    public Map<Long, UUID> findUuidsByIds(Collection<Long> seriesIds) {
-        if (seriesIds == null || seriesIds.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Set<Long> distinctIds = seriesIds.stream()
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        return BatchedQuery.queryInBatches(distinctIds, seriesMapper::findUuidsByIds).stream()
-                .collect(Collectors.toMap(
-                        SeriesMapper.SeriesUuidRow::seriesId,
-                        SeriesMapper.SeriesUuidRow::seriesUuid));
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * <p>先去重並濾掉 null，再經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
-     * 各批 key 不重疊，屬跨批可合併形狀。</p>
-     */
-    @Override
-    public Map<UUID, Long> findIdsByUuids(Collection<UUID> seriesUuids) {
-        if (seriesUuids == null || seriesUuids.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Set<UUID> distinctUuids = seriesUuids.stream()
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        return BatchedQuery.queryInBatches(distinctUuids, seriesMapper::findIdsByUuids).stream()
-                .collect(Collectors.toMap(
-                        SeriesMapper.SeriesUuidRow::seriesUuid,
-                        SeriesMapper.SeriesUuidRow::seriesId));
     }
 }

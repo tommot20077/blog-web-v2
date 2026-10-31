@@ -9,7 +9,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
@@ -23,6 +23,8 @@ import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.article.service.ArticleFileBinder;
+import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
+import dowob.xyz.blog.module.article.service.ArticleTocCodec;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -94,6 +96,11 @@ class ArticleFacadeImplTest {
     @Mock
     private FileFacade fileFacade;
 
+    /** 還原流程在 article 內部渲染 Markdown：使用真實的純計算元件，才能斷言 HTML／TOC 與同一份 Markdown 的渲染結果一致 */
+    private final ArticleMarkdownRenderer renderer = new ArticleMarkdownRenderer();
+
+    private final ArticleTocCodec tocCodec = new ArticleTocCodec(new com.fasterxml.jackson.databind.ObjectMapper());
+
     private ArticleFacadeImpl facade;
 
     private static final UUID ARTICLE_UUID = UUID.randomUUID();
@@ -119,7 +126,7 @@ class ArticleFacadeImplTest {
             articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
             articleFileBinder,
             new ArticleDataAssembler(),
-            null, null, null
+            null, renderer, tocCodec
         );
 
         /** 推薦與索引查詢的作者暱稱一律經 UserFacade UUID 版批次解析（M6-a 起不再 JOIN users） */
@@ -494,27 +501,10 @@ class ArticleFacadeImplTest {
         }
     }
 
-    // ─── SP-B: 5 read method delegate + Article→ArticleData 轉換 ───
+    // ─── read method delegate + Article→ArticleData 轉換 ───
 
     @Nested
-    @DisplayName("SP-B findIdByUuid")
-    class FindIdByUuid {
-
-        @Test
-        @DisplayName("委派 articleService.findIdByUuid 並回傳結果")
-        void delegatesToArticleService() {
-            UUID uuid = UUID.randomUUID();
-            when(articleService.findIdByUuid(uuid)).thenReturn(100L);
-
-            Long result = facade.findIdByUuid(uuid);
-
-            assertThat(result).isEqualTo(100L);
-            verify(articleService).findIdByUuid(uuid);
-        }
-    }
-
-    @Nested
-    @DisplayName("SP-B findByUuid")
+    @DisplayName("findByUuid")
     class FindByUuidDelegate {
 
         @Test
@@ -528,11 +518,25 @@ class ArticleFacadeImplTest {
 
             assertThat(result).isPresent();
             ArticleData data = result.get();
-            assertThat(data.id()).isEqualTo(100L);
             assertThat(data.uuid()).isEqualTo(uuid);
             assertThat(data.status()).isEqualTo("PUBLISHED");
             assertThat(data.seriesUuid()).isEqualTo(SERIES_UUID);
             assertThat(data.seriesPosition()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("無系列的草稿 → ArticleData 的 seriesUuid / seriesPosition 為 null")
+        void draftWithoutSeries_returnsNullSeriesFields() {
+            UUID uuid = UUID.randomUUID();
+            Article a = buildArticle(100L, uuid, ArticleStatus.DRAFT, null, null);
+            when(articleService.findByUuid(uuid)).thenReturn(Optional.of(a));
+
+            Optional<ArticleData> result = facade.findByUuid(uuid);
+
+            assertThat(result).isPresent();
+            assertThat(result.get().status()).isEqualTo("DRAFT");
+            assertThat(result.get().seriesUuid()).isNull();
+            assertThat(result.get().seriesPosition()).isNull();
         }
 
         @Test
@@ -544,46 +548,6 @@ class ArticleFacadeImplTest {
             Optional<ArticleData> result = facade.findByUuid(uuid);
 
             assertThat(result).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("SP-B findById")
-    class FindByIdDelegate {
-
-        @Test
-        @DisplayName("回傳 ArticleData（null seriesUuid / seriesPosition）")
-        void returnsArticleData_convertedFromEntity() {
-            Article a = buildArticle(100L, UUID.randomUUID(), ArticleStatus.DRAFT, null, null);
-            when(articleService.findById(100L)).thenReturn(Optional.of(a));
-
-            Optional<ArticleData> result = facade.findById(100L);
-
-            assertThat(result).isPresent();
-            assertThat(result.get().status()).isEqualTo("DRAFT");
-            assertThat(result.get().seriesUuid()).isNull();
-            assertThat(result.get().seriesPosition()).isNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("SP-B findByIds")
-    class FindByIdsDelegate {
-
-        @Test
-        @DisplayName("回傳 ArticleData 列表（含 status 驗證）")
-        void returnsArticleDataList() {
-            Article a1 = buildArticle(1L, UUID.randomUUID(), ArticleStatus.PUBLISHED, null, null);
-            Article a2 = buildArticle(2L, UUID.randomUUID(), ArticleStatus.DRAFT, null, null);
-            when(articleService.findByIds(List.of(1L, 2L))).thenReturn(List.of(a1, a2));
-
-            List<ArticleData> result = facade.findByIds(List.of(1L, 2L));
-
-            assertThat(result).hasSize(2);
-            assertThat(result.get(0).id()).isEqualTo(1L);
-            assertThat(result.get(0).status()).isEqualTo("PUBLISHED");
-            assertThat(result.get(1).id()).isEqualTo(2L);
-            assertThat(result.get(1).status()).isEqualTo("DRAFT");
         }
     }
 
@@ -606,50 +570,15 @@ class ArticleFacadeImplTest {
         }
     }
 
-    // ─── SP-B: 5 write method delegate verify ───
+    // ─── findContentByUuid + applyRestoreContent ───
 
     @Nested
-    @DisplayName("SP-B write method delegates")
-    class WriteMethodDelegates {
-
-        @Test
-        @DisplayName("incrementCommentCount 委派 articleService")
-        void incrementCommentCount_delegatesToArticleService() {
-            facade.incrementCommentCount(100L);
-            verify(articleService).incrementCommentCount(100L);
-        }
-
-        @Test
-        @DisplayName("decrementCommentCount 委派 articleService")
-        void decrementCommentCount_delegatesToArticleService() {
-            facade.decrementCommentCount(100L);
-            verify(articleService).decrementCommentCount(100L);
-        }
-
-        @Test
-        @DisplayName("incrementLikeCount 委派 articleService")
-        void incrementLikeCount_delegatesToArticleService() {
-            facade.incrementLikeCount(100L);
-            verify(articleService).incrementLikeCount(100L);
-        }
-
-        @Test
-        @DisplayName("decrementLikeCount 委派 articleService")
-        void decrementLikeCount_delegatesToArticleService() {
-            facade.decrementLikeCount(100L);
-            verify(articleService).decrementLikeCount(100L);
-        }
-    }
-
-    // ─── SP-D 新增：findContentById + applyRestoreContent ───
-
-    @Nested
-    @DisplayName("findContentById（SP-D 新增）")
+    @DisplayName("findContentByUuid")
     class FindContentById {
 
         @Test
         @DisplayName("article 存在 → return Optional 含 ArticleContentData")
-        void findContentById_existing_returnsContentData() {
+        void findContentByUuid_existing_returnsContentData() {
             // given
             Long articleId = 100L;
             UUID articleUuid = UUID.randomUUID();
@@ -663,15 +592,14 @@ class ArticleFacadeImplTest {
             article.setSummary("summary");
             article.setCoverImageUrl("https://cdn.example/cover.jpg");
             article.setStatus(ArticleStatus.PUBLISHED);
-            when(articleService.findById(articleId)).thenReturn(Optional.of(article));
+            when(articleService.findByUuid(articleUuid)).thenReturn(Optional.of(article));
 
             // when
-            Optional<ArticleContentData> result = facade.findContentById(articleId);
+            Optional<ArticleContentData> result = facade.findContentByUuid(articleUuid);
 
             // then
             assertThat(result).isPresent();
             ArticleContentData data = result.get();
-            assertThat(data.id()).isEqualTo(articleId);
             assertThat(data.uuid()).isEqualTo(articleUuid);
             assertThat(data.title()).isEqualTo("Test Title");
             assertThat(data.slug()).isEqualTo("test-slug");
@@ -684,25 +612,27 @@ class ArticleFacadeImplTest {
 
         @Test
         @DisplayName("article 不存在 → return Optional.empty")
-        void findContentById_notFound_returnsEmpty() {
-            when(articleService.findById(999L)).thenReturn(Optional.empty());
+        void findContentByUuid_notFound_returnsEmpty() {
+            UUID missing = UUID.randomUUID();
+            when(articleService.findByUuid(missing)).thenReturn(Optional.empty());
 
-            Optional<ArticleContentData> result = facade.findContentById(999L);
+            Optional<ArticleContentData> result = facade.findContentByUuid(missing);
 
             assertThat(result).isEmpty();
         }
 
         @Test
         @DisplayName("article.status 為 null → ArticleContentData.status 為 null")
-        void findContentById_statusNull_statusFieldNull() {
+        void findContentByUuid_statusNull_statusFieldNull() {
             Article article = new Article();
             article.setId(100L);
-            article.setUuid(UUID.randomUUID());
+            UUID uuid = UUID.randomUUID();
+            article.setUuid(uuid);
             article.setAuthorUuid(AUTHOR_UUID);
             article.setStatus(null);
-            when(articleService.findById(100L)).thenReturn(Optional.of(article));
+            when(articleService.findByUuid(uuid)).thenReturn(Optional.of(article));
 
-            Optional<ArticleContentData> result = facade.findContentById(100L);
+            Optional<ArticleContentData> result = facade.findContentByUuid(uuid);
 
             assertThat(result).isPresent();
             assertThat(result.get().status()).isNull();
@@ -710,7 +640,7 @@ class ArticleFacadeImplTest {
     }
 
     @Nested
-    @DisplayName("applyRestoreContent atomic（SP-D 新增）")
+    @DisplayName("applyRestoreContent atomic")
     class ApplyRestoreContent {
 
         private Long articleId;
@@ -725,19 +655,20 @@ class ArticleFacadeImplTest {
             existing.setId(articleId);
             existing.setUuid(articleUuid);
             existing.setStatus(ArticleStatus.DRAFT);
-            when(articleRepository.findById(articleId)).thenReturn(Optional.of(existing));
+            when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(existing));
             when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
         }
 
         @Test
         @DisplayName("article 不存在 → throw ARTICLE_NOT_FOUND（code A0201）")
         void applyRestoreContent_articleNotFound_throws() {
-            when(articleRepository.findById(999L)).thenReturn(Optional.empty());
-            ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
+            UUID missing = UUID.randomUUID();
+            when(articleRepository.findByUuid(missing)).thenReturn(Optional.empty());
+            ArticleRestoreSource data = new ArticleRestoreSource(
+                "T", "s", "c", "sum", null, List.of()
             );
 
-            assertThatThrownBy(() -> facade.applyRestoreContent(999L, data))
+            assertThatThrownBy(() -> facade.applyRestoreContent(missing, data))
                 .isInstanceOf(BusinessException.class)
                 .extracting(t -> ((BusinessException) t).getCode())
                 .isEqualTo("A0201");
@@ -755,12 +686,9 @@ class ArticleFacadeImplTest {
              * 事件判準本身（文章現況為 PUBLISHED 才發 publishUpdated）維持不變，只是已無呼叫端能到達該分支。
              */
             existing.setStatus(ArticleStatus.DRAFT);
-            ArticleRestoreData data = new ArticleRestoreData(
-                "New Title", "new-slug", "# New", "New summary", "https://cdn/new.jpg",
-                "<p>New</p>", "[]", List.of(UUID.randomUUID(), UUID.randomUUID())
-            );
+            ArticleRestoreSource data = new ArticleRestoreSource("New Title", "new-slug", "# New", "New summary", "https://cdn/new.jpg", List.of(UUID.randomUUID(), UUID.randomUUID()));
 
-            facade.applyRestoreContent(articleId, data);
+            facade.applyRestoreContent(articleUuid, data);
 
             assertThat(existing.getTitle()).isEqualTo("New Title");
             assertThat(existing.getSlug()).isEqualTo("new-slug");
@@ -768,7 +696,9 @@ class ArticleFacadeImplTest {
             assertThat(existing.getSummary()).isEqualTo("New summary");
             assertThat(existing.getCoverImageUrl()).isEqualTo("https://cdn/new.jpg");
             assertThat(existing.getStatus()).isEqualTo(ArticleStatus.DRAFT);
-            assertThat(existing.getContentHtml()).isEqualTo("<p>New</p>");
+            assertThat(existing.getContentHtml())
+                .as("HTML 由 article 內部渲染，等於對同一份 Markdown 呼叫 renderer 的結果")
+                .isEqualTo(renderer.render("# New").html());
 
             verify(articleRepository).save(existing);
             verify(tagFacade).syncArticleTags(eq(articleUuid), eq(data.tags()));
@@ -779,11 +709,9 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("DRAFT article 還原 → 只發 publishContentChanged，不發 publishUpdated")
         void applyRestoreContent_draftArticle_publishesOnlyContentChanged() {
-            ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
-            );
+            ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
-            facade.applyRestoreContent(articleId, data);
+            facade.applyRestoreContent(articleUuid, data);
 
             assertThat(existing.getStatus()).isEqualTo(ArticleStatus.DRAFT);
             verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
@@ -794,11 +722,9 @@ class ArticleFacadeImplTest {
         @DisplayName("還原不改動 article.status（SEC-02：還原資料已不含 status）")
         void applyRestoreContent_doesNotChangeStatus() {
             ArticleStatus before = existing.getStatus();
-            ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
-            );
+            ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
-            facade.applyRestoreContent(articleId, data);
+            facade.applyRestoreContent(articleUuid, data);
 
             assertThat(existing.getStatus()).isEqualTo(before);
         }
@@ -806,7 +732,7 @@ class ArticleFacadeImplTest {
         /**
          * 版本還原曾是唯一繞過 {@code validateStatusTransition} 的狀態轉換路徑：REJECTED 的文章
          * 只要還原一份舊的 PUBLISHED 快照就會直接變成 PUBLISHED，帶著 admin 寫的內部駁回評語
-         * 進入匿名可讀的公開狀態。SEC-02 已從 {@code ArticleRestoreData} 移除 status 欄位堵住此路，
+         * 進入匿名可讀的公開狀態。SEC-02 已從 {@code ArticleRestoreSource} 沒有 status 欄位堵住此路，
          * 本測試從「內部評語不得外流」的角度把該保證釘住：還原不得改狀態，rejectReason 也不受影響。
          */
         @Test
@@ -814,11 +740,9 @@ class ArticleFacadeImplTest {
         void applyRestoreContent_rejectedArticle_keepsStatusAndRejectReason() {
             existing.setStatus(ArticleStatus.REJECTED);
             existing.setRejectReason("內部審核評語：抄襲疑慮，勿對外");
-            ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
-            );
+            ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
-            facade.applyRestoreContent(articleId, data);
+            facade.applyRestoreContent(articleUuid, data);
 
             assertThat(existing.getStatus()).isEqualTo(ArticleStatus.REJECTED);
             assertThat(existing.getRejectReason()).isEqualTo("內部審核評語：抄襲疑慮，勿對外");
@@ -828,39 +752,33 @@ class ArticleFacadeImplTest {
         @Test
         @DisplayName("tags 為 null → syncArticleTags 用空清單")
         void applyRestoreContent_tagsNull_syncWithEmptyList() {
-            ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "<p>c</p>", "[]", null
-            );
+            ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, null);
 
-            facade.applyRestoreContent(articleId, data);
+            facade.applyRestoreContent(articleUuid, data);
 
             verify(tagFacade).syncArticleTags(articleUuid, List.of());
         }
 
         @Test
-        @DisplayName("toc 一併還原：article.toc 應更新為 data.toc()，不可停留在還原前的舊 TOC")
-        void applyRestoreContent_setsTocFromRestoreData() {
+        @DisplayName("toc 一併還原：article.toc 應更新為對還原內容渲染出的 TOC，不可停留在還原前的舊 TOC")
+        void applyRestoreContent_setsTocFromRenderedContent() {
             existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
-            String restoredToc = "[{\"id\":\"heading-新章節\",\"text\":\"新章節\",\"level\":2}]";
-            ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "## 新章節", "sum", null, "<h2 id=\"heading-新章節\">新章節</h2>",
-                restoredToc, List.of()
-            );
+            String restoredToc = tocCodec.serialize(renderer.render("## 新章節").toc());
+            ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "## 新章節", "sum", null, List.of());
 
-            facade.applyRestoreContent(articleId, data);
+            facade.applyRestoreContent(articleUuid, data);
 
             assertThat(existing.getToc()).isEqualTo(restoredToc);
+            assertThat(existing.getToc()).as("渲染結果確實含新章節").contains("新章節").doesNotContain("舊章節");
         }
 
         @Test
-        @DisplayName("toc 為 null → 存空 JSON 陣列（維持 articles.toc 恆為合法陣列的不變量）")
-        void applyRestoreContent_tocNull_storesEmptyJsonArray() {
+        @DisplayName("還原內容無標題 → toc 為空 JSON 陣列，舊 TOC 被清掉（維持 articles.toc 恆為合法陣列的不變量）")
+        void applyRestoreContent_contentWithoutHeadings_storesEmptyJsonArray() {
             existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
-            ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "<p>c</p>", null, List.of()
-            );
+            ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
-            facade.applyRestoreContent(articleId, data);
+            facade.applyRestoreContent(articleUuid, data);
 
             assertThat(existing.getToc()).isEqualTo("[]");
         }
@@ -873,11 +791,9 @@ class ArticleFacadeImplTest {
              * publishUpdated 不再出現在此鏈上（該分支已無呼叫端能到達）。
              */
             existing.setStatus(ArticleStatus.DRAFT);
-            ArticleRestoreData data = new ArticleRestoreData(
-                "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of()
-            );
+            ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
-            facade.applyRestoreContent(articleId, data);
+            facade.applyRestoreContent(articleUuid, data);
 
             InOrder inOrder = inOrder(articleRepository, tagFacade, articleEventPublisher);
             inOrder.verify(articleRepository).save(existing);
@@ -911,9 +827,7 @@ class ArticleFacadeImplTest {
                 String persistedContent = "![a](/api/v1/files/" + fileId1 + "/content)\n"
                         + "![b](/api/v1/files/" + fileId2 + "/content)";
 
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "data.content() 不應被拿來掃描的內容", "sum", null,
-                        "<p>c</p>", "[]", List.of());
+                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "data.content() 不應被拿來掃描的內容", "sum", null, List.of());
 
                 /**
                  * 模擬 repository.save() 回傳的 entity 內容與 data.content() 不同：
@@ -926,7 +840,7 @@ class ArticleFacadeImplTest {
                     return a;
                 });
 
-                facade.applyRestoreContent(articleId, data);
+                facade.applyRestoreContent(articleUuid, data);
 
                 @SuppressWarnings("unchecked")
                 ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
@@ -937,11 +851,9 @@ class ArticleFacadeImplTest {
             @Test
             @DisplayName("邊界：還原內容無圖 → 以空清單呼叫綁定（解除該文章既有綁定，正確行為）")
             void applyRestoreContent_contentWithoutImages_bindsEmptyList() {
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "純文字內容，沒有任何圖片連結", "sum", null,
-                        "<p>c</p>", "[]", List.of());
+                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "純文字內容，沒有任何圖片連結", "sum", null, List.of());
 
-                facade.applyRestoreContent(articleId, data);
+                facade.applyRestoreContent(articleUuid, data);
 
                 verify(fileFacade).bindFilesToArticle(articleUuid, List.of());
             }
@@ -949,13 +861,11 @@ class ArticleFacadeImplTest {
             @Test
             @DisplayName("穩健性：檔案綁定失敗 → 還原仍成功，不往外拋")
             void applyRestoreContent_fileBindingThrows_restoreStillSucceeds() {
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "![img](/api/v1/files/" + UUID.randomUUID() + "/content)",
-                        "sum", null, "<p>c</p>", "[]", List.of());
+                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "![img](/api/v1/files/" + UUID.randomUUID() + "/content)", "sum", null, List.of());
                 doThrow(new RuntimeException("file service 掛了"))
                         .when(fileFacade).bindFilesToArticle(any(), any());
 
-                assertThatCode(() -> facade.applyRestoreContent(articleId, data))
+                assertThatCode(() -> facade.applyRestoreContent(articleUuid, data))
                         .doesNotThrowAnyException();
 
                 verify(articleRepository).save(existing);
@@ -967,10 +877,9 @@ class ArticleFacadeImplTest {
             void applyRestoreContent_invocationOrder_saveThenPublishThenBind() {
                 /* F-H1 後 PUBLISHED 已被內容凍結守衛擋下，順序驗證改以 DRAFT 為前提 */
                 existing.setStatus(ArticleStatus.DRAFT);
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
-                facade.applyRestoreContent(articleId, data);
+                facade.applyRestoreContent(articleUuid, data);
 
                 InOrder inOrder = inOrder(articleRepository, articleEventPublisher, fileFacade);
                 inOrder.verify(articleRepository).save(existing);
@@ -982,14 +891,14 @@ class ArticleFacadeImplTest {
         /**
          * SEC-02（HIGH）：版本還原路徑繞過文章狀態守衛。
          *
-         * <p><strong>攻擊面（修復前）</strong>：{@code ArticleRestoreData} 帶著快照當時的 status，
+         * <p><strong>攻擊面（修復前）</strong>：還原資料曾帶著快照當時的 status，
          * {@code applyRestoreContent} 直接 {@code setStatus} 套回去。作者拿一份舊的 PUBLISHED 快照
          * 按「還原」，就能把被 ADMIN 駁回（REJECTED）或送審中（PENDING_REVIEW）的文章直接變回
          * PUBLISHED，繞過 {@code ArticleCommandSubService.VALID_TRANSITIONS} 與
          * 「PENDING_REVIEW → PUBLISHED 僅 ADMIN」的限制。</p>
          *
          * <p><strong>修法（Yuan 拍板）</strong>：還原只還原內容，狀態一律不動——不是把還原接進守衛，
-         * 而是移除還原改動狀態的能力：{@code ArticleRestoreData} 連 status 欄位都拿掉，讓這條路徑
+         * 而是移除還原改動狀態的能力：還原資料連 status 欄位都沒有，讓這條路徑
          * 在型別上就無法改狀態。</p>
          *
          * <p><strong>F-H1 後的涵蓋範圍</strong>：PENDING_REVIEW / PUBLISHED / ARCHIVED 三種狀態
@@ -1012,10 +921,9 @@ class ArticleFacadeImplTest {
             @DisplayName("REJECTED 文章還原 → 狀態仍為 REJECTED（不得繞過審核）")
             void applyRestoreContent_rejectedArticle_keepsRejectedStatus() {
                 existing.setStatus(ArticleStatus.REJECTED);
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
-                facade.applyRestoreContent(articleId, data);
+                facade.applyRestoreContent(articleUuid, data);
 
                 assertThat(existing.getStatus())
                         .as("還原不得改動文章狀態，否則可繞過 PENDING_REVIEW → PUBLISHED 僅 ADMIN 的限制")
@@ -1029,10 +937,9 @@ class ArticleFacadeImplTest {
             @DisplayName("DRAFT 文章還原 → 狀態仍為 DRAFT，且不發 publishUpdated（非公開文章不得被重新索引）")
             void applyRestoreContent_draftArticle_keepsDraftAndDoesNotPublishUpdated() {
                 existing.setStatus(ArticleStatus.DRAFT);
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "T", "s", "c", "sum", null, "<p>c</p>", "[]", List.of());
+                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
 
-                facade.applyRestoreContent(articleId, data);
+                facade.applyRestoreContent(articleUuid, data);
 
                 assertThat(existing.getStatus()).isEqualTo(ArticleStatus.DRAFT);
                 verify(articleEventPublisher).publishContentChanged(existing,
@@ -1074,10 +981,9 @@ class ArticleFacadeImplTest {
                 existing.setStatus(frozen);
                 existing.setTitle("送審當下的內容 A");
                 existing.setContent("A");
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "偷換成的內容 B", "s", "B", "sum", null, "<p>B</p>", "[]", List.of());
+                ArticleRestoreSource data = new ArticleRestoreSource("偷換成的內容 B", "s", "B", "sum", null, List.of());
 
-                assertThatThrownBy(() -> facade.applyRestoreContent(articleId, data))
+                assertThatThrownBy(() -> facade.applyRestoreContent(articleUuid, data))
                         .isInstanceOf(BusinessException.class)
                         .extracting(t -> ((BusinessException) t).getCode())
                         .isEqualTo("A0209");
@@ -1097,10 +1003,9 @@ class ArticleFacadeImplTest {
             void applyRestoreContent_editableStatus_stillRestores(ArticleStatus editable) {
                 existing.setStatus(editable);
                 existing.setContent("舊內容");
-                ArticleRestoreData data = new ArticleRestoreData(
-                        "還原後標題", "s", "還原後內容", "sum", null, "<p>c</p>", "[]", List.of());
+                ArticleRestoreSource data = new ArticleRestoreSource("還原後標題", "s", "還原後內容", "sum", null, List.of());
 
-                facade.applyRestoreContent(articleId, data);
+                facade.applyRestoreContent(articleUuid, data);
 
                 assertThat(existing.getContent()).isEqualTo("還原後內容");
                 assertThat(existing.getTitle()).isEqualTo("還原後標題");

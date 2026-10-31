@@ -23,7 +23,7 @@ import java.util.UUID;
  * 就等於下架沒下乾淨。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0（移除 Long 版）
  */
 @UtilityClass
 public class ArticleVisibility {
@@ -31,43 +31,7 @@ public class ArticleVisibility {
     /**
      * 判斷指定檢視者是否可讀取該文章。
      *
-     * @param statusName 文章狀態名稱（跨模組以 String 流通，可為 null；null／未知字串視為不公開）
-     * @param authorId   文章作者資料庫主鍵（可為 null）
-     * @param viewerId   檢視者資料庫主鍵；匿名為 null
-     * @param isAdmin    檢視者是否為 ADMIN
-     * @return 可讀取回傳 true
-     */
-    public static boolean isReadableBy(String statusName, Long authorId, Long viewerId, boolean isAdmin) {
-        if (ArticleStatus.isPubliclyVisible(statusName)) {
-            return true;
-        }
-        if (isAdmin) {
-            return true;
-        }
-        return viewerId != null && Objects.equals(authorId, viewerId);
-    }
-
-    /**
-     * 判斷指定檢視者是否可讀取該文章（enum 版，給持有 {@link ArticleStatus} 的模組內 caller 用）。
-     *
-     * @param status   文章狀態（可為 null；視為不公開）
-     * @param authorId 文章作者資料庫主鍵（可為 null）
-     * @param viewerId 檢視者資料庫主鍵；匿名為 null
-     * @param isAdmin  檢視者是否為 ADMIN
-     * @return 可讀取回傳 true
-     */
-    public static boolean isReadableBy(ArticleStatus status, Long authorId, Long viewerId, boolean isAdmin) {
-        return isReadableBy(status == null ? null : status.name(), authorId, viewerId, isAdmin);
-    }
-
-    /**
-     * 判斷指定檢視者是否可讀取該文章（UUID 過渡版，語意與 Long 版 {@link #isReadableBy(String, Long, Long, boolean)} 完全相同）。
-     *
-     * <p>設計 §3.1「過渡 API」：跨模組識別全面改為 UUID 的各模組階段改呼叫本方法，
-     * 不必等 owner 模組改造完成。Z1 收尾階段 Long 版移除後，本方法成為唯一版本。</p>
-     *
-     * <p><b>呼叫注意</b>：若兩個識別參數都傳字面值 {@code null}，編譯器無法區分 Long 與 UUID 版而報 ambiguous；
-     * 請傳有型別的變數或加型別轉型。</p>
+     * <p>跨模組識別一律是公開 UUID：作者與檢視者都以 UUID 比對。</p>
      *
      * @param statusName 文章狀態名稱（跨模組以 String 流通，可為 null；null／未知字串視為不公開）
      * @param authorUuid 文章作者公開 UUID（可為 null）
@@ -86,7 +50,7 @@ public class ArticleVisibility {
     }
 
     /**
-     * 判斷指定檢視者是否可讀取該文章（UUID 過渡版的 enum 變體）。
+     * 判斷指定檢視者是否可讀取該文章（enum 版，給持有 {@link ArticleStatus} 的模組內 caller 用）。
      *
      * @param status     文章狀態（可為 null；視為不公開）
      * @param authorUuid 文章作者公開 UUID（可為 null）

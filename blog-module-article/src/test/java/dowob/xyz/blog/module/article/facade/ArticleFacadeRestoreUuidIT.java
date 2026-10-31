@@ -9,7 +9,6 @@ import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
 import dowob.xyz.blog.module.article.config.ArticleTestApplication;
@@ -52,9 +51,8 @@ import static org.mockito.Mockito.verify;
  * M3-a：UUID 版 {@link ArticleFacade#findContentByUuid} 與
  * {@link ArticleFacade#applyRestoreContent(UUID, ArticleRestoreSource)} 對真實 PostgreSQL 的整合測試。
  *
- * <p>驗證重點：UUID 版（article 內部渲染）與 Long 版（呼叫端自行 render 後傳入）還原出的文章
- * 在 title／slug／content／content_html／toc／summary／cover／tags 上逐欄位相同；
- * 還原不改狀態（SEC-02）；內容凍結守衛照舊；{@code findContentByUuid} 與 {@code findContentById} 結果相等。</p>
+ * <p>驗證重點：還原由 article 內部渲染，content_html／toc 等於 renderer／codec 對同一份 Markdown 的結果；
+ * 還原不改狀態（SEC-02）；內容凍結守衛（A0209）；{@code findContentByUuid} 不分狀態回傳。</p>
  *
  * <p>文章直接以 SQL 寫入，避免耦合 article 模組的建立流程。tag／file／user 等跨模組 facade 與 RabbitMQ 以 mock 取代，
  * tags 以 {@code TagFacade.syncArticleTags} 收到的參數作為比對對象。</p>
@@ -131,10 +129,6 @@ class ArticleFacadeRestoreUuidIT {
         return uuid;
     }
 
-    private long idOf(UUID uuid) {
-        return jdbcTemplate.queryForObject("SELECT id FROM articles WHERE uuid = ?", Long.class, uuid);
-    }
-
     private Map<String, Object> rowOf(UUID uuid) {
         return jdbcTemplate.queryForMap(
                 "SELECT title, slug, summary, content_md, content_html, toc, cover_image_url, status, reject_reason "
@@ -152,37 +146,7 @@ class ArticleFacadeRestoreUuidIT {
         return captor.getValue();
     }
 
-    // ─── 還原：UUID 版 vs Long 版 ───
-
-    @Test
-    @DisplayName("同一份快照內容：UUID 版與 Long 版還原後，title／slug／content／html／toc／summary／cover／tags 逐欄位相同")
-    void applyRestoreContent_uuidVersionAndLongVersion_produceIdenticalArticles() {
-        UUID viaLong = insertArticle("DRAFT");
-        UUID viaUuid = insertArticle("DRAFT");
-        String slug = "parity-" + UUID.randomUUID();
-        List<UUID> tags = List.of(UUID.randomUUID(), UUID.randomUUID());
-
-        /* Long 版：呼叫端（測試）自行 render 後傳入 */
-        RenderResult rendered = renderer.render(MARKDOWN);
-        articleFacade.applyRestoreContent(idOf(viaLong), new ArticleRestoreData(
-                "新標題", slug, MARKDOWN, "新摘要", "https://cdn/new.jpg",
-                rendered.html(), tocCodec.serialize(rendered.toc()), tags));
-        Map<String, Object> longRow = rowOf(viaLong);
-        List<UUID> longTags = capturedTags(viaLong);
-        /* slug 有 UNIQUE 約束：把 Long 版那篇的 slug 挪開，UUID 版才能還原成同一個 slug */
-        jdbcTemplate.update("UPDATE articles SET slug = ? WHERE uuid = ?", "moved-" + viaLong, viaLong);
-
-        /* UUID 版：由 article 內部渲染 */
-        articleFacade.applyRestoreContent(viaUuid, source(slug, tags));
-        Map<String, Object> uuidRow = rowOf(viaUuid);
-        List<UUID> uuidTags = capturedTags(viaUuid);
-
-        assertThat(longRow.get("slug")).isEqualTo(slug);
-        assertThat(longRow.get("content_html")).asString().contains("heading-");
-        assertThat(longRow.get("toc")).asString().isNotEqualTo("[]");
-        assertThat(uuidRow).isEqualTo(longRow);
-        assertThat(uuidTags).isEqualTo(longTags).isEqualTo(tags);
-    }
+    // ─── 還原 ───
 
     @Test
     @DisplayName("UUID 版還原：content_html 與 toc 等於 renderer／codec 對同一份 Markdown 的結果")
@@ -224,7 +188,7 @@ class ArticleFacadeRestoreUuidIT {
     }
 
     @Test
-    @DisplayName("UUID 版還原：內容凍結狀態拒絕（A0209）且內容不變；與 Long 版一致")
+    @DisplayName("UUID 版還原：內容凍結狀態拒絕（A0209）且內容不變")
     void applyRestoreContent_uuidVersion_frozenStatusRejected() {
         for (String frozen : List.of("PENDING_REVIEW", "PUBLISHED", "ARCHIVED")) {
             UUID uuid = insertArticle(frozen);
@@ -239,14 +203,9 @@ class ArticleFacadeRestoreUuidIT {
     }
 
     @Test
-    @DisplayName("UUID 版還原：文章不存在 → A0201，與 Long 版相同")
+    @DisplayName("UUID 版還原：文章不存在 → A0201")
     void applyRestoreContent_uuidVersion_articleNotFound() {
         assertThatThrownBy(() -> articleFacade.applyRestoreContent(UUID.randomUUID(), source("nf", List.of())))
-                .isInstanceOf(BusinessException.class)
-                .extracting(t -> ((BusinessException) t).getCode())
-                .isEqualTo("A0201");
-        assertThatThrownBy(() -> articleFacade.applyRestoreContent(-1L,
-                new ArticleRestoreData("T", "nf", "c", "s", null, "<p>c</p>", "[]", List.of())))
                 .isInstanceOf(BusinessException.class)
                 .extracting(t -> ((BusinessException) t).getCode())
                 .isEqualTo("A0201");
@@ -255,16 +214,14 @@ class ArticleFacadeRestoreUuidIT {
     // ─── findContentByUuid ───
 
     @Test
-    @DisplayName("findContentByUuid 與 findContentById 對同一篇文章（各種狀態）結果相等，authorUuid 非 null")
-    void findContentByUuid_equalsFindContentById_forEveryStatus() {
+    @DisplayName("findContentByUuid：各種狀態的文章皆回傳，status 與 uuid 正確，authorUuid 非 null")
+    void findContentByUuid_returnsEveryStatus() {
         for (String status : List.of("DRAFT", "PENDING_REVIEW", "PUBLISHED", "REJECTED", "ARCHIVED")) {
             UUID uuid = insertArticle(status);
 
             Optional<ArticleContentData> byUuid = articleFacade.findContentByUuid(uuid);
-            Optional<ArticleContentData> byId = articleFacade.findContentById(idOf(uuid));
 
             assertThat(byUuid).as("status=%s", status).isPresent();
-            assertThat(byUuid).isEqualTo(byId);
             assertThat(byUuid.get().authorUuid()).isNotNull();
             assertThat(byUuid.get().uuid()).isEqualTo(uuid);
             assertThat(byUuid.get().status()).isEqualTo(status);
