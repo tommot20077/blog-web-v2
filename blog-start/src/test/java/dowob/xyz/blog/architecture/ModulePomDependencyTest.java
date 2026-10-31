@@ -59,6 +59,9 @@ class ModulePomDependencyTest {
     /** Maven 未寫 scope 時的預設值 */
     private static final String DEFAULT_SCOPE = "compile";
 
+    /** 反向驗證 fixture：宣告與實際不一致的根目錄（classpath 資源） */
+    private static final String BROKEN_FIXTURE_ROOT_RESOURCE = "/archunit-fixture/modulepom-broken";
+
     /** 反向驗證 fixture 的根目錄（classpath 資源） */
     private static final String FIXTURE_ROOT_RESOURCE = "/archunit-fixture/modulepom";
 
@@ -103,29 +106,41 @@ class ModulePomDependencyTest {
     }
 
     @Test
-    @DisplayName("防假陰性：掃到的模組 pom 數必須等於根 pom <modules> 中 blog-module-* 的數量")
+    @DisplayName("防假陰性：實際解析到的模組 pom、磁碟上的 blog-module-* 目錄、根 pom <modules> 宣告三者必須一致且非空")
     void productionScanMustCoverEveryModuleDeclaredInRootPom() {
         Path root = repositoryRoot();
-        List<String> declared = declaredModules(root);
-        List<String> onDisk = moduleDirectoriesOnDisk(root);
 
-        assertThat(declared)
+        assertThat(declaredModules(root))
                 .as("根 pom 至少要宣告一個業務模組，否則守衛空轉")
                 .isNotEmpty();
+        assertThat(findCoverageGaps(root))
+                .as("掃描覆蓋缺口：根 pom 宣告的模組必須都有可解析的 pom，磁碟上的 blog-module-* 目錄也必須都登記在根 pom"
+                  + "（否則該模組根本不在 reactor，也不會被建置守衛）")
+                .isEmpty();
         assertThat(scannedModulePoms(root))
-                .as("掃到的模組 pom 數必須 == 根 pom <modules> 的 blog-module-* 數量")
-                .hasSameSizeAs(declared)
-                .containsExactlyInAnyOrderElementsOf(declared);
-        assertThat(onDisk)
-                .as("磁碟上的 blog-module-* 目錄必須都登記在根 pom（否則該模組根本不在 reactor，也不會被建置守衛）")
-                .containsExactlyInAnyOrderElementsOf(declared);
+                .as("實際解析到的模組 pom 數 == 根 pom <modules> 的 blog-module-* 數量 == 磁碟目錄數")
+                .hasSameSizeAs(declaredModules(root))
+                .hasSameSizeAs(moduleDirectoriesOnDisk(root));
+    }
+
+    @Test
+    @DisplayName("反向驗證：宣告了卻不存在／無法解析的模組 pom，以及磁碟上有卻沒宣告的模組，都被覆蓋率檢查抓到")
+    void coverageCheckDetectsMissingUnparseableAndUndeclaredModules() {
+        assertThat(findCoverageGaps(brokenFixtureRoot()))
+                .containsExactlyInAnyOrder(
+                        "declared but pom missing or unparseable: blog-module-bad",
+                        "declared but pom missing or unparseable: blog-module-ghost",
+                        "on disk but not declared in root pom: blog-module-orphan");
+        assertThat(findCoverageGaps(fixtureRoot()))
+                .as("完整的 fixture 樹沒有缺口，不得誤報")
+                .isEmpty();
     }
 
     @Test
     @DisplayName("防假陰性：正式碼掃描必須實際解析到依賴（含非模組依賴），否則 XPath 失效時守衛恆綠")
     void productionScanMustActuallyParseDependencies() {
         Path root = repositoryRoot();
-        long totalDependencyElements = declaredModules(root).stream()
+        long totalDependencyElements = scannedModulePoms(root).stream()
                 .mapToLong(module -> countDependencyElements(root.resolve(module).resolve("pom.xml")))
                 .sum();
 
@@ -192,7 +207,7 @@ class ModulePomDependencyTest {
      */
     private static List<ModuleDependency> scanDependencies(Path root) {
         List<ModuleDependency> result = new ArrayList<>();
-        for (String module : declaredModules(root)) {
+        for (String module : scannedModulePoms(root)) {
             Document pom = parse(root.resolve(module).resolve("pom.xml"));
             NodeList dependencies = evaluate(pom,
                     "/project/dependencies/dependency | /project/profiles/profile/dependencies/dependency");
@@ -221,12 +236,45 @@ class ModulePomDependencyTest {
         return result.stream().sorted().toList();
     }
 
-    /** 實際被解析到 pom 的模組名（目錄下 pom.xml 存在且可解析者）。 */
+    /**
+     * 實際被解析到 pom 的模組名：根 pom 宣告的模組中，{@code pom.xml} 真的存在且是合法 XML 者。
+     * 依賴掃描只走這個集合，所以「掃到的」就是「真的讀進來的」，而不是宣告清單的複本。
+     */
     private static List<String> scannedModulePoms(Path root) {
         return declaredModules(root).stream()
-                .filter(module -> parse(root.resolve(module).resolve("pom.xml")) != null)
+                .filter(module -> isParseable(root.resolve(module).resolve("pom.xml")))
                 .sorted()
                 .toList();
+    }
+
+    /**
+     * 找出掃描覆蓋缺口：宣告了卻沒讀到 pom 的模組，以及磁碟上存在卻沒宣告的模組。
+     *
+     * @param root repo（或 fixture）根目錄
+     * @return 缺口描述；空表示三者一致
+     */
+    private static List<String> findCoverageGaps(Path root) {
+        List<String> declared = declaredModules(root);
+        List<String> scanned = scannedModulePoms(root);
+        List<String> onDisk = moduleDirectoriesOnDisk(root);
+        List<String> gaps = new ArrayList<>();
+        declared.stream().filter(m -> !scanned.contains(m))
+                .forEach(m -> gaps.add("declared but pom missing or unparseable: " + m));
+        onDisk.stream().filter(m -> !declared.contains(m))
+                .forEach(m -> gaps.add("on disk but not declared in root pom: " + m));
+        return gaps;
+    }
+
+    private static boolean isParseable(Path pomFile) {
+        if (!Files.isRegularFile(pomFile)) {
+            return false;
+        }
+        try {
+            parse(pomFile);
+            return true;
+        } catch (IllegalStateException e) {
+            return false;
+        }
     }
 
     private static List<String> moduleDirectoriesOnDisk(Path root) {
@@ -291,9 +339,17 @@ class ModulePomDependencyTest {
     }
 
     private static Path fixtureRoot() {
-        URL url = ModulePomDependencyTest.class.getResource(FIXTURE_ROOT_RESOURCE);
+        return resourceRoot(FIXTURE_ROOT_RESOURCE);
+    }
+
+    private static Path brokenFixtureRoot() {
+        return resourceRoot(BROKEN_FIXTURE_ROOT_RESOURCE);
+    }
+
+    private static Path resourceRoot(String resource) {
+        URL url = ModulePomDependencyTest.class.getResource(resource);
         if (url == null) {
-            throw new IllegalStateException("找不到 fixture 資源 " + FIXTURE_ROOT_RESOURCE);
+            throw new IllegalStateException("找不到 fixture 資源 " + resource);
         }
         try {
             return Path.of(url.toURI());
