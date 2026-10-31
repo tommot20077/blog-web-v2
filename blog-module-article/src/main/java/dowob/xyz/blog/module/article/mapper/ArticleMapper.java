@@ -265,42 +265,6 @@ public interface ArticleMapper {
     List<TagWithArticleUuid> findTagsByArticleUuids(@Param("list") List<UUID> articleUuids);
 
     /**
-     * 原子性遞增文章留言計數
-     *
-     * @param id 文章資料庫主鍵
-     * @return 受影響列數
-     */
-    @Update("UPDATE articles SET comment_count = comment_count + 1 WHERE id = #{id}")
-    int incrementCommentCount(@Param("id") Long id);
-
-    /**
-     * 原子性遞減文章留言計數（守衛 > 0，防 underflow）
-     *
-     * @param id 文章資料庫主鍵
-     * @return 受影響列數
-     */
-    @Update("UPDATE articles SET comment_count = comment_count - 1 WHERE id = #{id} AND comment_count > 0")
-    int decrementCommentCount(@Param("id") Long id);
-
-    /**
-     * 原子性遞增文章按讚計數
-     *
-     * @param id 文章資料庫主鍵
-     * @return 受影響列數
-     */
-    @Update("UPDATE articles SET like_count = like_count + 1 WHERE id = #{id}")
-    int incrementLikeCount(@Param("id") Long id);
-
-    /**
-     * 原子性遞減文章按讚計數（守衛 > 0，防 underflow）
-     *
-     * @param id 文章資料庫主鍵
-     * @return 受影響列數
-     */
-    @Update("UPDATE articles SET like_count = like_count - 1 WHERE id = #{id} AND like_count > 0")
-    int decrementLikeCount(@Param("id") Long id);
-
-    /**
      * 根據文章公開 UUID 查詢資料庫主鍵
      *
      * <p>
@@ -492,7 +456,7 @@ public interface ArticleMapper {
     List<ArticleUuidVisibilityRow> findVisibilityRowsByUuids(@Param("articleUuids") Collection<UUID> articleUuids);
 
     /**
-     * 以公開 UUID 原子性遞增文章按讚計數（{@link #incrementLikeCount(Long)} 的 UUID 版）。
+     * 以公開 UUID 原子性遞增文章按讚計數。
      *
      * @param uuid 文章公開 UUID
      * @return 受影響列數（文章不存在為 0）
@@ -623,7 +587,7 @@ public interface ArticleMapper {
     boolean existsByUuid(@Param("uuid") UUID uuid);
 
     /**
-     * 以公開 UUID 原子性遞增文章留言計數（{@link #incrementCommentCount(Long)} 的 UUID 版）。
+     * 以公開 UUID 原子性遞增文章留言計數。
      *
      * @param uuid 文章公開 UUID
      * @return 受影響列數（文章不存在為 0）
@@ -632,8 +596,7 @@ public interface ArticleMapper {
     int incrementCommentCountByUuid(@Param("uuid") UUID uuid);
 
     /**
-     * 以公開 UUID 原子性遞減文章留言計數，守衛 {@code > 0} 防 underflow
-     * （{@link #decrementCommentCount(Long)} 的 UUID 版）。
+     * 以公開 UUID 原子性遞減文章留言計數，守衛 {@code > 0} 防 underflow。
      *
      * @param uuid 文章公開 UUID
      * @return 受影響列數（文章不存在或計數已為 0 時為 0）
