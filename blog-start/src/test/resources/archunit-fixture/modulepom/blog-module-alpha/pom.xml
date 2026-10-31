@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ModulePomDependencyTest 的反向驗證 fixture —— 故意違規，不得被當成範例。
+  alpha 以 compile（未寫 scope）、runtime、provided、profile 內 compile 依賴其他業務模組；
+  另有 test scope 依賴（允許，但要列出）。dependencyManagement 內的條目不是實際依賴，必須被忽略。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>fixture</groupId>
+    <artifactId>blog-module-alpha</artifactId>
+    <version>1.0</version>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>fixture</groupId>
+                <artifactId>blog-module-epsilon</artifactId>
+                <version>1.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>fixture</groupId>
+            <artifactId>blog-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fixture</groupId>
+            <artifactId>blog-module-beta</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>fixture</groupId>
+            <artifactId>blog-module-gamma</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>fixture</groupId>
+            <artifactId>blog-module-delta</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>fixture</groupId>
+            <artifactId>blog-module-epsilon</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <profiles>
+        <profile>
+            <id>extra</id>
+            <dependencies>
+                <dependency>
+                    <groupId>fixture</groupId>
+                    <artifactId>blog-module-gamma</artifactId>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
+</project>
