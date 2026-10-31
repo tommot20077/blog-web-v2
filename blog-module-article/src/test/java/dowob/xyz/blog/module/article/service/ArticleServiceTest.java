@@ -342,37 +342,5 @@ class ArticleServiceTest {
             assertThat(actual).isSameAs(expected);
             verify(commandSubService).withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
         }
-
-        @Test
-        @DisplayName("incrementCommentCount delegates to commandSubService")
-        void incrementCommentCount_delegatesToCommandSubService() {
-            articleService.incrementCommentCount(ARTICLE_ID);
-
-            verify(commandSubService).incrementCommentCount(ARTICLE_ID);
-        }
-
-        @Test
-        @DisplayName("decrementCommentCount delegates to commandSubService")
-        void decrementCommentCount_delegatesToCommandSubService() {
-            articleService.decrementCommentCount(ARTICLE_ID);
-
-            verify(commandSubService).decrementCommentCount(ARTICLE_ID);
-        }
-
-        @Test
-        @DisplayName("incrementLikeCount delegates to commandSubService")
-        void incrementLikeCount_delegatesToCommandSubService() {
-            articleService.incrementLikeCount(ARTICLE_ID);
-
-            verify(commandSubService).incrementLikeCount(ARTICLE_ID);
-        }
-
-        @Test
-        @DisplayName("decrementLikeCount delegates to commandSubService")
-        void decrementLikeCount_delegatesToCommandSubService() {
-            articleService.decrementLikeCount(ARTICLE_ID);
-
-            verify(commandSubService).decrementLikeCount(ARTICLE_ID);
-        }
     }
 }

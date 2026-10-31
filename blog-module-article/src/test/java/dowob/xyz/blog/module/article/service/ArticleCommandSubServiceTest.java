@@ -2097,58 +2097,6 @@ class ArticleCommandSubServiceTest {
         }
     }
 
-    @Nested
-    @DisplayName("incrementCommentCount")
-    class IncrementCommentCountTests {
-
-        @Test
-        @DisplayName("delegates to ArticleMapper.incrementCommentCount")
-        void incrementCommentCount_delegatesToMapper() {
-            commandSubService.incrementCommentCount(1L);
-
-            verify(articleMapper).incrementCommentCount(1L);
-        }
-    }
-
-    @Nested
-    @DisplayName("decrementCommentCount")
-    class DecrementCommentCountTests {
-
-        @Test
-        @DisplayName("delegates to ArticleMapper.decrementCommentCount")
-        void decrementCommentCount_delegatesToMapper() {
-            commandSubService.decrementCommentCount(1L);
-
-            verify(articleMapper).decrementCommentCount(1L);
-        }
-    }
-
-    @Nested
-    @DisplayName("incrementLikeCount")
-    class IncrementLikeCountTests {
-
-        @Test
-        @DisplayName("delegates to ArticleMapper.incrementLikeCount")
-        void incrementLikeCount_delegatesToMapper() {
-            commandSubService.incrementLikeCount(1L);
-
-            verify(articleMapper).incrementLikeCount(1L);
-        }
-    }
-
-    @Nested
-    @DisplayName("decrementLikeCount")
-    class DecrementLikeCountTests {
-
-        @Test
-        @DisplayName("delegates to ArticleMapper.decrementLikeCount")
-        void decrementLikeCount_delegatesToMapper() {
-            commandSubService.decrementLikeCount(1L);
-
-            verify(articleMapper).decrementLikeCount(1L);
-        }
-    }
-
     /**
      * 檔案綁定回填測試（Task B6）
      *

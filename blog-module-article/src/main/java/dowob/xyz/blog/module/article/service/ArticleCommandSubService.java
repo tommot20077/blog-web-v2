@@ -741,40 +741,4 @@ class ArticleCommandSubService {
             }
         }
     }
-
-    /**
-     * 原子性遞增文章留言計數
-     *
-     * @param articleId 文章資料庫主鍵
-     */
-    public void incrementCommentCount(Long articleId) {
-        articleMapper.incrementCommentCount(articleId);
-    }
-
-    /**
-     * 原子性遞減文章留言計數（守衛 > 0，防 underflow）
-     *
-     * @param articleId 文章資料庫主鍵
-     */
-    public void decrementCommentCount(Long articleId) {
-        articleMapper.decrementCommentCount(articleId);
-    }
-
-    /**
-     * 原子性遞增文章按讚計數
-     *
-     * @param articleId 文章資料庫主鍵
-     */
-    public void incrementLikeCount(Long articleId) {
-        articleMapper.incrementLikeCount(articleId);
-    }
-
-    /**
-     * 原子性遞減文章按讚計數（守衛 > 0，防 underflow）
-     *
-     * @param articleId 文章資料庫主鍵
-     */
-    public void decrementLikeCount(Long articleId) {
-        articleMapper.decrementLikeCount(articleId);
-    }
 }
