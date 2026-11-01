@@ -2,6 +2,8 @@ package dowob.xyz.blog.config;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.env.YamlPropertySourceLoader;
@@ -16,6 +18,7 @@ import org.springframework.mock.env.MockEnvironment;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,15 +100,49 @@ class BaseApplicationYamlSecretsTest {
                 .hasStackTraceContaining("MINIO_SECRET_KEY");
     }
 
+    @ParameterizedTest(name = "SPRING_PROFILES_ACTIVE={0}")
+    @ValueSource(strings = {"prod,demo", "demo,prod", "prod,dev", "prod,e2e", "prod,test"})
+    @DisplayName("prod 與非正式 profile 並存、未給任何 secret → 啟動失敗（不得被 demo／dev yaml 補上的弱憑證放行）")
+    void startingWithProdAndNonProductionProfilesFailsEvenThoughYamlSuppliesCredentials(String profiles) {
+        SpringApplication app = new SpringApplication(EmptyConfig.class);
+        app.setWebApplicationType(WebApplicationType.NONE);
+        app.setEnvironment(new IsolatedEnvironment(Map.of("SPRING_PROFILES_ACTIVE", profiles)));
+
+        assertThatThrownBy(app::run)
+                .hasStackTraceContaining("prod 不可與 dev/demo/e2e/test 同時啟用");
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class EmptyConfig {
     }
 
-    /** 不帶系統屬性與環境變數的 Environment，避免測試機器上的環境變數影響結果。 */
+    /** 不帶系統屬性與環境變數的 Environment（可注入指定的模擬環境變數），避免測試機器上的環境變數影響結果。 */
     private static final class IsolatedEnvironment extends StandardEnvironment {
+        private final Map<String, Object> fakeSystemEnvironment;
+
+        IsolatedEnvironment() {
+            this(Map.of());
+        }
+
+        IsolatedEnvironment(Map<String, Object> fakeSystemEnvironment) {
+            this.fakeSystemEnvironment = fakeSystemEnvironment;
+        }
+
         @Override
         protected void customizePropertySources(org.springframework.core.env.MutablePropertySources propertySources) {
-            propertySources.addLast(new MapPropertySource("isolated-empty", java.util.Map.of()));
+            // 父類別建構子會先呼叫本方法，此時子類別欄位尚未初始化，故這裡不能依賴欄位；改於建構後補上。
+            propertySources.addLast(new MapPropertySource("isolated-empty", Map.of()));
+        }
+
+        @Override
+        public org.springframework.core.env.MutablePropertySources getPropertySources() {
+            org.springframework.core.env.MutablePropertySources sources = super.getPropertySources();
+            if (fakeSystemEnvironment != null && !fakeSystemEnvironment.isEmpty()
+                    && !sources.contains("fake-system-environment")) {
+                sources.addLast(new org.springframework.core.env.SystemEnvironmentPropertySource(
+                        "fake-system-environment", fakeSystemEnvironment));
+            }
+            return sources;
         }
     }
 }

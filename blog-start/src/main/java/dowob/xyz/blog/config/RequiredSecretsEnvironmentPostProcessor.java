@@ -48,12 +48,14 @@ public class RequiredSecretsEnvironmentPostProcessor implements EnvironmentPostP
     }
 
     /**
-     * 驗證必要憑證；非正式環境略過。
+     * 驗證必要憑證；非正式環境略過。prod 與 dev／demo／e2e／test 並存時一律失敗
+     * （非正式 profile 的 yaml 會補上弱憑證，值檢查會被繞過）。
      *
      * @param environment Spring Environment（需已載入 yaml 與環境變數）
-     * @throws IllegalStateException 正式環境缺少任一必要憑證時，訊息列出缺漏的環境變數名稱
+     * @throws IllegalStateException prod 與非正式 profile 並存；或正式環境缺少任一必要憑證（訊息列出缺漏的環境變數名稱）
      */
     public static void validate(Environment environment) {
+        RuntimeProfiles.requireNoProductionConflict(environment);
         if (RuntimeProfiles.isNonProduction(environment)) {
             return;
         }

@@ -191,4 +191,27 @@ class JwtServiceKeyInitTest {
             return warns;
         }
     }
+
+    @ParameterizedTest(name = "profiles={0}")
+    @ValueSource(strings = {"prod,demo", "demo,prod", "prod,dev", "prod,e2e", "prod,test"})
+    @DisplayName("prod 與非正式 profile 並存且未設私鑰 → 啟動失敗，訊息說明衝突並列出 profiles（不得自動產生金鑰）")
+    void whenProdConflictsWithNonProductionAndNoKey_initFailsWithConflictMessage(String profiles) {
+        JwtService svc = newService(envWith(profiles.split(",")), "");
+
+        assertThatThrownBy(svc::init)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("prod 不可與 dev/demo/e2e/test 同時啟用")
+                .hasMessageContaining(profiles.split(",")[0])
+                .hasMessageContaining(profiles.split(",")[1]);
+    }
+
+    @Test
+    @DisplayName("prod,demo 並存即使已設私鑰 → 仍啟動失敗（衝突本身即為錯誤設定）")
+    void whenProdConflictsWithNonProductionEvenWithKey_initFails() throws Exception {
+        JwtService svc = newService(envWith("prod", "demo"), toPem(newKeyPair()));
+
+        assertThatThrownBy(svc::init)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("prod 不可與 dev/demo/e2e/test 同時啟用");
+    }
 }

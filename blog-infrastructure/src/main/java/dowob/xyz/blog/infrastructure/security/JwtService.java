@@ -91,10 +91,11 @@ public class JwtService {
      * 否則僅在明確的非正式 profile 下動態生成新的 256-bit EC 金鑰對並記 WARN，其餘情況啟動失敗。
      * </p>
      *
-     * @throws IllegalStateException 未設定私鑰且不是非正式 profile 時，訊息說明需設定 {@code JWT_PRIVATE_KEY}
+     * @throws IllegalStateException prod 與非正式 profile 並存（即使已設私鑰）；或未設定私鑰且不是非正式 profile 時，訊息說明需設定 {@code JWT_PRIVATE_KEY}
      */
     @PostConstruct
     public void init() {
+        RuntimeProfiles.requireNoProductionConflict(environment);
         if (StringUtils.isBlank(privateKeyPem) && !RuntimeProfiles.isNonProduction(environment)) {
             throw new IllegalStateException(
                     "未設定 JWT 私鑰：請設定環境變數 JWT_PRIVATE_KEY（對應屬性 jwt.private-key，PKCS8 PEM 格式的 EC P-256 私鑰）。"

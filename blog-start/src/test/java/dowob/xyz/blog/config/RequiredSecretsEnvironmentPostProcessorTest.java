@@ -4,6 +4,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.boot.env.EnvironmentPostProcessor;
+import org.springframework.core.io.support.SpringFactoriesLoader;
 import org.springframework.mock.env.MockEnvironment;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -99,11 +101,33 @@ class RequiredSecretsEnvironmentPostProcessorTest {
                 .doesNotThrowAnyException();
     }
 
-    @Test
-    @DisplayName("prod,dev 並存 → 仍視為正式環境，缺憑證即失敗")
-    void whenProdAndDevBothActive_stillRequiresSecrets() {
-        assertThatThrownBy(() -> RequiredSecretsEnvironmentPostProcessor.validate(envWith("prod", "dev")))
+    @ParameterizedTest(name = "profiles={0}")
+    @ValueSource(strings = {"prod,dev", "dev,prod", "prod,demo", "demo,prod", "prod,e2e", "prod,test"})
+    @DisplayName("prod 與非正式 profile 並存且缺憑證 → 失敗，訊息說明 prod 不可與 dev/demo/e2e/test 同時啟用")
+    void whenProdConflictsWithNonProductionAndNoSecrets_failsWithConflictMessage(String profiles) {
+        assertThatThrownBy(() -> RequiredSecretsEnvironmentPostProcessor.validate(envWith(profiles.split(","))))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("DATABASE_PASSWORD");
+                .hasMessageContaining("prod 不可與 dev/demo/e2e/test 同時啟用")
+                .hasMessageContaining(profiles.split(",")[0])
+                .hasMessageContaining(profiles.split(",")[1]);
+    }
+
+    @ParameterizedTest(name = "profiles={0}")
+    @ValueSource(strings = {"prod,demo", "demo,prod", "prod,dev", "prod,test"})
+    @DisplayName("prod 與非正式 profile 並存，即使憑證齊全（例如 demo yaml 補上的弱憑證）→ 仍失敗")
+    void whenProdConflictsWithNonProductionEvenWithAllSecrets_stillFails(String profiles) {
+        assertThatThrownBy(() -> RequiredSecretsEnvironmentPostProcessor.validate(allSecretsSet(profiles.split(","))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("prod 不可與 dev/demo/e2e/test 同時啟用");
+    }
+
+    @Test
+    @DisplayName("META-INF/spring.factories 確實註冊了本 EnvironmentPostProcessor（漏註冊會讓 fail-fast 靜默失效）")
+    void springFactoriesRegistersThisEnvironmentPostProcessor() {
+        var registeredNames = SpringFactoriesLoader.loadFactoryNames(EnvironmentPostProcessor.class, getClass().getClassLoader());
+
+        assertThat(registeredNames)
+                .as("spring.factories 必須註冊 RequiredSecretsEnvironmentPostProcessor")
+                .contains(RequiredSecretsEnvironmentPostProcessor.class.getName());
     }
 }
