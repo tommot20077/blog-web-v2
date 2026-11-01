@@ -6,6 +6,7 @@ import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.infrastructure.web.ClientIpResolver;
 import dowob.xyz.blog.module.article.config.ArticleWebTestConfiguration;
 import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
@@ -46,7 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(ArticleController.class)
 @ContextConfiguration(classes = ArticleWebTestConfiguration.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, ClientIpResolver.class})
 @DisplayName("ArticleController 公開列表端點單元測試")
 class ArticleControllerListTest {
 
