@@ -18,7 +18,11 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.SearchHits;
+import org.springframework.data.elasticsearch.core.query.ByQueryResponse;
+import org.springframework.data.elasticsearch.core.query.ScriptType;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -218,6 +222,28 @@ public class SearchServiceImpl implements SearchService {
     public void deleteIndex(String articleUuid) {
         articleSearchRepository.deleteById(articleUuid);
         log.info("文章已從 Elasticsearch 移除：uuid={}", articleUuid);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public long updateAuthorNickname(UUID authorUuid, String nickname) {
+        org.springframework.data.elasticsearch.core.query.Query matchAuthor = NativeQuery.builder()
+                .withQuery(Query.of(q -> q.term(t -> t.field("author.uuid").value(authorUuid.toString()))))
+                .build();
+        UpdateQuery updateQuery = UpdateQuery.builder(matchAuthor)
+                .withScriptType(ScriptType.INLINE)
+                .withLang("painless")
+                .withScript("ctx._source.author.nickname = params.nickname")
+                .withParams(Map.of("nickname", nickname))
+                .withAbortOnVersionConflict(false)
+                .withRefreshPolicy(RefreshPolicy.IMMEDIATE)
+                .build();
+        ByQueryResponse response = elasticsearchOperations.updateByQuery(
+                updateQuery, elasticsearchOperations.getIndexCoordinatesFor(ArticleDocument.class));
+        log.info("已改寫索引內作者暱稱：authorUuid={}, updated={}", authorUuid, response.getUpdated());
+        return response.getUpdated();
     }
 
     /**
