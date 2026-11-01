@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
@@ -124,6 +125,129 @@ class UserServiceTest {
         verify(userRepository).save(captor.capture());
         assertThat(captor.getValue().getAvatarUrl()).isEqualTo("https://cdn.example.com/avatar.png");
         assertThat(captor.getValue().getLocation()).isEqualTo("Kaohsiung");
+    }
+
+    /* =========================================================================
+       updateProfile — SEC-10 防禦縱深（不依賴 controller 的 @Valid）
+       ========================================================================= */
+
+    /**
+     * 驗證：website 為惡意協定時直接呼叫 service 也應被拒絕，且在碰 DB 之前拒絕。
+     */
+    @Test
+    @DisplayName("updateProfile → website 為 javascript: → 拒絕且不碰 DB（SEC-10）")
+    void updateProfile_javascriptWebsite_shouldRejectBeforeAnyDbAccess() {
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null,
+                "javascript:alert(1)", null, null, null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(CommonErrorCode.PARAM_VALID_ERROR));
+
+        verifyNoInteractions(userRepository);
+    }
+
+    /**
+     * 驗證：avatarUrl 為 data: 時應被拒絕。
+     */
+    @Test
+    @DisplayName("updateProfile → avatarUrl 為 data: → 拒絕且不儲存（SEC-10）")
+    void updateProfile_dataAvatarUrl_shouldReject() {
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null,
+                null, null, "data:image/svg+xml;base64,PHN2Zz4=", null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(CommonErrorCode.PARAM_VALID_ERROR));
+
+        verifyNoInteractions(userRepository);
+    }
+
+    /**
+     * 驗證：avatarUrl 為非檔案路徑的相對 URL 應被拒絕。
+     */
+    @Test
+    @DisplayName("updateProfile → avatarUrl 為 //evil.com → 拒絕（SEC-10）")
+    void updateProfile_protocolRelativeAvatarUrl_shouldReject() {
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null,
+                null, null, "//evil.com/a.png", null))
+                .isInstanceOf(BusinessException.class);
+
+        verifyNoInteractions(userRepository);
+    }
+
+    /**
+     * 驗證：socialLinks 的 value 含 scheme 時應被拒絕。
+     */
+    @Test
+    @DisplayName("updateProfile → socialLinks value 為 javascript: → 拒絕（SEC-10）")
+    void updateProfile_javascriptSocialLink_shouldReject() {
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null,
+                null, "{\"github\":\"javascript:alert(1)\"}", null, null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(CommonErrorCode.PARAM_VALID_ERROR));
+
+        verifyNoInteractions(userRepository);
+    }
+
+    /**
+     * 驗證：socialLinks 不是合法 JSON object 時應被拒絕。
+     */
+    @Test
+    @DisplayName("updateProfile → socialLinks 不是 JSON object → 拒絕（SEC-10）")
+    void updateProfile_malformedSocialLinks_shouldReject() {
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null,
+                null, "[\"a\"]", null, null))
+                .isInstanceOf(BusinessException.class);
+
+        verifyNoInteractions(userRepository);
+    }
+
+    /**
+     * 驗證：頭貼為檔案上傳 API 回傳的本站路徑時應成功儲存。
+     */
+    @Test
+    @DisplayName("updateProfile → avatarUrl 為本站檔案內容路徑 → 成功儲存（SEC-10 不破壞頭貼上傳）")
+    void updateProfile_fileContentPathAvatar_shouldPersist() {
+        User mockUser = buildActiveUser();
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
+        String path = "/api/v1/files/11111111-2222-3333-4444-555555555555/content";
+
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null, null, null, path, null);
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        assertThat(captor.getValue().getAvatarUrl()).isEqualTo(path);
+    }
+
+    /**
+     * 驗證：前端設定頁實際送出的 socialLinks（E2E 的 myhandle 等 handle 格式）可成功儲存。
+     */
+    @Test
+    @DisplayName("updateProfile → 前端實際 socialLinks（myhandle 等）→ 成功儲存（SEC-10）")
+    void updateProfile_frontendSocialLinks_shouldPersist() {
+        User mockUser = buildActiveUser();
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
+        String social = "{\"github\":\"myhandle\",\"twitter\":\"mytwitter\",\"linkedin\":\"mylinkedin\"}";
+
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null, null, social, null, null);
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        assertThat(captor.getValue().getSocialLinks()).isEqualTo(social);
+    }
+
+    /**
+     * 驗證：URL 欄位為空字串（清除）時應通過並原樣儲存。
+     */
+    @Test
+    @DisplayName("updateProfile → URL 欄位為空字串 → 通過（清除）")
+    void updateProfile_emptyUrlFields_shouldPersist() {
+        User mockUser = buildActiveUser();
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
+
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null, "", "", "", null);
+
+        verify(userRepository).save(any(User.class));
     }
 
     /* =========================================================================
