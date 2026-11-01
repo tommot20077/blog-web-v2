@@ -133,13 +133,15 @@ public void changePassword(...) {
 > 直接取第一節或讓 Spring 無條件用 XFF 覆寫 remoteAddr,會使登入/註冊 IP 限流、瀏覽數去重整層可繞過。
 
 *   正式拓撲:Client → Cloudflare → nginx → k3s Ingress → app。第 1 層(origin 只放行 Cloudflare)、第 2 層(nginx `realip` 並以 `$remote_addr` **覆寫** XFF)在 infrastructure repo;本 repo 負責第 3 層。
-*   **唯一入口**:`dowob.xyz.blog.infrastructure.web.ClientIpResolver#resolve(HttpServletRequest)`。controller 注入它,不得自行讀 `X-Forwarded-For`/`X-Real-IP`/`CF-Connecting-IP`/`True-Client-IP`,也不得呼叫 `getRemoteAddr()`/`getRemoteHost()`(守衛:`ClientIpAccessGuardTest`)。
+*   **唯一入口**:`dowob.xyz.blog.infrastructure.web.ClientIpResolver#resolve(HttpServletRequest)`。controller 注入它,不得自行讀 `X-Forwarded-For`/`Forwarded`/`X-Real-IP`/`X-Client-IP`/`CF-Connecting-IP`/`True-Client-IP`,也不得呼叫 `getRemoteAddr()`/`getRemoteHost()`/`getRemoteAddress()`(守衛:`ClientIpAccessGuardTest`)。
 *   **信任層數** `app.http.trusted-proxy-count`(環境變數 `APP_HTTP_TRUSTED_PROXY_COUNT`,**預設 0**):取 XFF **由右數第 N 節**。
     *   `0`:完全不信任 XFF,回傳 `getRemoteAddr()`(本機 docker、CI、任何無 proxy 的部署)。
     *   `>= 1`:取右數第 N 節;XFF 缺漏/空白、項目數少於 N、被選中的節點不是合法 IPv4/IPv6 字面值時,**退回 `getRemoteAddr()`**(方向是「多人共用一個限流桶」而非「被繞過」)。IPv6 正規化為與 Tomcat 相同的完整展開小寫形式。
     *   prod 依第 2 層(nginx 覆寫 XFF)的結果設 `1`;nginx 若仍是追加模式則需設更大值。**設太大 → 取到攻擊者可控節點(等於無防護);設太小 → 全站共用限流桶(退化但不被繞過)。拿不準時寧可設小。** 部署後以 `curl -H "X-Forwarded-For: 6.6.6.6" …` 實測:`6.6.6.6` 必須落在鏈頭,且算出的節點不得指到它。
 *   **禁止**設定 `server.forward-headers-strategy`(`framework`/`native`)與 `server.tomcat.remoteip.*`:它們讓 XFF 無條件改寫 `remoteAddr`,使 `ClientIpResolver` 的退路失效(守衛:`ClientIpTrustConfigTest`)。
-*   此設定只影響 client IP;Cookie 的 Secure 旗標由 `app.cookie.secure` 控制,程式不依 request scheme/host 組絕對 URL。
+*   **count = 0 的啟動警示**:`ClientIpResolver` 在 count = 0 時於啟動記一行 WARN(所有請求以 `remoteAddr` 計;若部署在 proxy 後請設 `APP_HTTP_TRUSTED_PROXY_COUNT`)。prod 忘了設會讓全站共用 Ingress IP 當限流 key(任一攻擊者即可鎖死全站登入)且無其他徵兆,故只警示、不讓啟動失敗(dev/CI 本來就是 0)。
+*   **scheme/host/port 的信任來源**:Cookie 的 Secure 旗標由 `app.cookie.secure` 控制,程式不依 request scheme/host 組絕對 URL。但 TLS 在 proxy 終結時 app 看到 `scheme=http`、`port=80`,Spring 的 `CorsUtils.isCorsRequest`(scheme+host+port 比對 `Origin`)會把同網域請求誤判為跨域而回 403。因此 `TrustedForwardedRequestFilter`(`@Order(HIGHEST_PRECEDENCE + 10)`,早於 Spring Security 過濾器鏈的 `CorsFilter`)**只在 `app.http.trusted-proxy-count > 0` 時**採用 `X-Forwarded-Proto`/`X-Forwarded-Host`/`X-Forwarded-Port`,以 `HttpServletRequestWrapper` 還原 `getScheme()`/`isSecure()`/`getServerName()`/`getServerPort()`;count = 0 完全忽略。規則與 client IP 一致:各 header 取**由右數第 N 個**值(多行視同逗號串接、項目數不足 N 則不採用),值做白名單驗證(proto 只接受 `http`/`https`;host 為 RFC 1123 主機名稱或 IPv4 加可選 port;port 為 1–65535),非法值忽略。**不處理任何 IP**:不讀 `X-Forwarded-For`/`Forwarded`,不改 `getRemoteAddr()`。部署要求:proxy 鏈上由 app 往外數第 N 層必須讓 `X-Forwarded-Proto` 的右數第 N 個值是 client 看到的 scheme(`https`);部署後以 `curl -H "Origin: https://<網域>" -H "X-Forwarded-Proto: https" …/api/v1/auth/login` 實測不得回 403 Invalid CORS request。
+*   守衛:`ClientIpAccessGuardTest` 除 `X-Forwarded-For` 外,亦禁止 `Forwarded`/`X-Client-IP`/`X-Original-Forwarded-For` 等 header 字面值,以及 `ServerHttpRequest#getRemoteAddress`、`WebAuthenticationDetails#getRemoteAddress`;`X-Forwarded-Proto/Host/Port` 字面值只允許出現在 `TrustedForwardedRequestFilter`、`X-Forwarded-For` 只允許出現在 `ClientIpResolver`。字串拼接等動態組名無法靜態完全擋住(見該測試的類別 JavaDoc),由 code review 把關。
 
 ---
 

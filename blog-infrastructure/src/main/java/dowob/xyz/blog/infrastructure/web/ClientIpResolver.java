@@ -1,6 +1,7 @@
 package dowob.xyz.blog.infrastructure.web;
 
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -43,9 +44,16 @@ import java.util.regex.Pattern;
  * 本機與 CI 用 0；prod 在 nginx 以 realip 覆寫 XFF 後設 1。
  * </p>
  *
+ * <p>
+ * <b>啟動警示</b>：N = 0 時啟動記一行 WARN。若 prod 忘了設 {@code APP_HTTP_TRUSTED_PROXY_COUNT}，
+ * 所有請求的 remoteAddr 都是 Ingress 的 IP，IP 限流等於全站共用一個桶（任一攻擊者即可鎖死全站登入），
+ * 且沒有其他徵兆；dev／CI 本來就是 0，所以只警示、不讓啟動失敗。
+ * </p>
+ *
  * @author Yuan
  * @version 1.0
  */
+@Slf4j
 @Component
 public class ClientIpResolver {
 
@@ -74,6 +82,11 @@ public class ClientIpResolver {
                     "app.http.trusted-proxy-count 不可為負數，實際值：" + trustedProxyCount);
         }
         this.trustedProxyCount = trustedProxyCount;
+        if (trustedProxyCount == 0) {
+            log.warn("app.http.trusted-proxy-count=0：所有請求的 client IP 一律以 remoteAddr 計（不信任 X-Forwarded-For）。"
+                    + "若部署在反向代理（Cloudflare／nginx／Ingress）後方，remoteAddr 會是 proxy 的 IP，"
+                    + "IP 限流將全站共用同一個桶；請設定 APP_HTTP_TRUSTED_PROXY_COUNT（prod 通常為 1）。");
+        }
     }
 
     /**
