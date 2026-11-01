@@ -107,7 +107,7 @@ class P0AuthLifecycleRedE2E extends AbstractE2ETest {
     }
 
     @Test
-    @DisplayName("重複註冊 錯密碼 無 refresh cookie 應回傳穩定錯誤契約")
+    @DisplayName("重複註冊（username 重複） 錯密碼 無 refresh cookie 應回傳穩定錯誤契約")
     void authNegativeCasesShouldUseStableErrorEnvelope() throws Exception {
         String email = "p0-auth-negative-red@test.local";
         String password = "AuthRed123!";
@@ -121,7 +121,8 @@ class P0AuthLifecycleRedE2E extends AbstractE2ETest {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
-                                DataBuilder.register(email, password, "p0authneg2", "P0 Auth Negative 2"))))
+                                DataBuilder.register("p0-auth-negative-red-2@test.local", password,
+                                        "p0authneg", "P0 Auth Negative 2"))))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").isNotEmpty())
                 .andExpect(jsonPath("$.message").isNotEmpty());

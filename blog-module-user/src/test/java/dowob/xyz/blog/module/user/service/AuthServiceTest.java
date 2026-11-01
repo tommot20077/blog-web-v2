@@ -9,6 +9,8 @@ import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
+import dowob.xyz.blog.module.user.config.UserRabbitMqConfig;
+import dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent;
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
@@ -39,6 +41,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -162,17 +165,19 @@ class AuthServiceTest {
     }
 
     /**
-     * 驗證：使用已存在的 email 註冊，應拋出 BusinessException。
+     * 驗證（SEC-14／Q8）：使用已存在的 email 註冊，對外與新註冊完全相同——正常返回、不拋錯、不建立帳號。
      */
     @Test
-    @DisplayName("register → 重複 email → 應拋出 BusinessException")
-    void register_withDuplicateEmail_shouldThrowBusinessException() {
-        when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(true);
+    @DisplayName("register → 重複 email → 正常返回（與新註冊相同的成功），不建立帳號也不寫 token")
+    void register_withDuplicateEmail_returnsNormallyWithoutCreatingAccount() {
+        stubExistingEmailOwner();
 
-        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
-                .isInstanceOf(BusinessException.class);
+        assertThatCode(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .doesNotThrowAnyException();
 
         verify(userRepository, never()).save(any());
+        verify(transactionTemplate, never()).execute(any());
+        verifyNoInteractions(verificationTokenRepository);
     }
 
     /**
@@ -231,17 +236,57 @@ class AuthServiceTest {
     }
 
     /**
-     * 驗證：先查通過、寫入時撞到 email 唯一約束 → EMAIL_DUPLICATED，且不發任何事件。
+     * 驗證（RACE-03 + Q8）：先查通過、寫入時撞到 email 唯一約束（併發落敗）→ 與依序第二次註冊一致：
+     * 靜默成功，並通知原信箱主人（贏的那一方）；不發驗證信事件。
      */
     @Test
-    @DisplayName("register → 寫入撞 users_email_key（併發落敗）→ 拋 EMAIL_DUPLICATED，不發事件")
-    void register_emailUniqueViolationOnInsert_throwsEmailDuplicated() {
+    @DisplayName("register → 寫入撞 users_email_key（併發落敗）→ 靜默成功並通知原信箱主人，不發驗證信事件")
+    void register_emailUniqueViolationOnInsert_returnsNormallyAndNotifiesOwner() {
         when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty(), Optional.of(buildEmailOwner()));
+        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        failTransactionWith(uniqueViolationOn("users_email_key"));
+
+        assertThatCode(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .doesNotThrowAnyException();
+
+        verify(rabbitTemplate, never()).convertAndSend(anyString(), eq(UserRabbitMqConfig.ROUTING_KEY_REGISTERED),
+                any(UserRegisteredEvent.class));
+        RegistrationAttemptOnExistingEmailEvent event = captureSingleRegistrationAttemptEvent();
+        assertThat(event.userUuid()).isEqualTo(OWNER_UUID);
+        assertThat(event.email()).isEqualTo(OWNER_EMAIL);
+    }
+
+    /**
+     * 驗證：併發落敗於 email 約束時，若 username／nickname 在這段期間也已被佔用，
+     * 結果應與依序註冊（先查 username、nickname）一致——回明確的重複錯誤，而不是靜默成功。
+     */
+    @Test
+    @DisplayName("register → 撞 users_email_key 且 username 同時已被佔用 → 回 USERNAME_DUPLICATED（與依序註冊的檢查順序一致）")
+    void register_emailUniqueViolationAndUsernameNowTaken_throwsUsernameDuplicated() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        when(userRepository.existsByUsername(TEST_USERNAME)).thenReturn(false, true);
         failTransactionWith(uniqueViolationOn("users_email_key"));
 
         assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
                 .isInstanceOfSatisfying(BusinessException.class,
-                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.EMAIL_DUPLICATED.getCode()));
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.USERNAME_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：撞 email 約束後查不到原帳號（極端情況：剛好被硬刪除）→ 仍靜默成功，不發任何事件、不拋錯。
+     */
+    @Test
+    @DisplayName("register → 撞 users_email_key 但查不到原帳號 → 仍正常返回，不發任何事件")
+    void register_emailUniqueViolationButOwnerGone_returnsNormallyWithoutEvent() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+        failTransactionWith(uniqueViolationOn("users_email_key"));
+
+        assertThatCode(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .doesNotThrowAnyException();
 
         verifyNoInteractions(rabbitTemplate);
     }
@@ -286,11 +331,29 @@ class AuthServiceTest {
     void register_wrappedUniqueViolation_stillTranslated() {
         when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
         failTransactionWith(new RuntimeException("Failed to execute DbAction.InsertRoot",
-                uniqueViolationOn("users_email_key")));
+                uniqueViolationOn("users_username_key")));
 
         assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
                 .isInstanceOfSatisfying(BusinessException.class,
-                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.EMAIL_DUPLICATED.getCode()));
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.USERNAME_DUPLICATED.getCode()));
+    }
+
+    /**
+     * 驗證：email 約束例外被包在其他例外內也能判讀為「email 重複」→ 靜默成功（Q8）。
+     */
+    @Test
+    @DisplayName("register → email 唯一約束例外被包在一般 RuntimeException 內也能判讀為重複 email（靜默成功）")
+    void register_wrappedEmailUniqueViolation_stillTreatedAsDuplicateEmail() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty(), Optional.of(buildEmailOwner()));
+        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        failTransactionWith(new RuntimeException("Failed to execute DbAction.InsertRoot",
+                uniqueViolationOn("users_email_key")));
+
+        assertThatCode(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .doesNotThrowAnyException();
+
+        assertThat(captureSingleRegistrationAttemptEvent().userUuid()).isEqualTo(OWNER_UUID);
     }
 
     /**
@@ -311,6 +374,222 @@ class AuthServiceTest {
 
         assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
                 .isSameAs(other);
+    }
+
+    /* ---- SEC-14／Q8：email 重複一律回成功並通知原信箱主人 ---- */
+
+    /** 原信箱主人（既有帳號）的 uuid，刻意與 USER_UUID 不同，也與任何 id 不同構 */
+    private static final UUID OWNER_UUID = UUID.fromString("aaaaaaaa-1111-4222-8333-444444444444");
+
+    /** 原信箱主人在資料庫中儲存的 email（與請求輸入的字面值不同，驗證通知用的是儲存值） */
+    private static final String OWNER_EMAIL = "Stored.Owner@example.com";
+
+    private User buildEmailOwner() {
+        User owner = new User();
+        owner.setId(900L);
+        owner.setUuid(OWNER_UUID);
+        owner.setEmail(OWNER_EMAIL);
+        owner.setUsername("owneruser");
+        owner.setNickname("OwnerNick");
+        owner.setStatus(UserStatus.ACTIVE);
+        return owner;
+    }
+
+    /** 讓 TEST_EMAIL 已存在（先查階段就命中），且通知限流可取得名額。 */
+    private void stubExistingEmailOwner() {
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(buildEmailOwner()));
+        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+    }
+
+    /** 斷言只發出一個「重複信箱註冊」事件並回傳之；路由必須是專屬 routing key。 */
+    private RegistrationAttemptOnExistingEmailEvent captureSingleRegistrationAttemptEvent() {
+        ArgumentCaptor<RegistrationAttemptOnExistingEmailEvent> captor =
+                ArgumentCaptor.forClass(RegistrationAttemptOnExistingEmailEvent.class);
+        verify(rabbitTemplate, times(1)).convertAndSend(
+                eq(UserRabbitMqConfig.EXCHANGE), eq(UserRabbitMqConfig.ROUTING_KEY_REGISTRATION_ATTEMPT),
+                captor.capture());
+        return captor.getValue();
+    }
+
+    /**
+     * 驗證：email 重複 → 發布 RegistrationAttemptOnExistingEmailEvent，內容是原信箱主人的資料
+     * （儲存的 email／nickname／uuid），不含嘗試者提交的 username、nickname、密碼。
+     */
+    @Test
+    @DisplayName("register → 重複 email → 發布通知事件，內容為原信箱主人資料（uuid／儲存的 email／暱稱），eventId 非 null")
+    void register_withDuplicateEmail_publishesNoticeEventAboutOwner() {
+        stubExistingEmailOwner();
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        RegistrationAttemptOnExistingEmailEvent event = captureSingleRegistrationAttemptEvent();
+        assertThat(event.eventId()).isNotNull();
+        assertThat(event.userUuid()).isEqualTo(OWNER_UUID);
+        assertThat(event.email()).as("寄給資料庫儲存的信箱，而非請求輸入").isEqualTo(OWNER_EMAIL);
+        assertThat(event.nickname()).isEqualTo("OwnerNick");
+        assertThat(event.toString()).doesNotContain(TEST_USERNAME).doesNotContain(TEST_NICKNAME)
+                .doesNotContain(TEST_PASSWORD);
+        verify(rabbitTemplate, never()).convertAndSend(anyString(), eq(UserRabbitMqConfig.ROUTING_KEY_REGISTERED),
+                any(UserRegisteredEvent.class));
+    }
+
+    /**
+     * 驗證：通知限流——以「原信箱主人儲存的 email」為鍵，24 小時窗口，原子地 SET NX EX。
+     */
+    @Test
+    @DisplayName("register → 重複 email → 以 setIfAbsent(rate:register-dup-notice:{儲存的email}, 1440 分鐘) 取得通知名額")
+    void register_withDuplicateEmail_acquiresPerEmailNoticeSlot() {
+        stubExistingEmailOwner();
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        verify(valueOperations).setIfAbsent(
+                eq(RedisKeyConstant.getRegisterDuplicateNoticeKey(OWNER_EMAIL)), anyString(),
+                eq(RedisKeyConstant.REGISTER_DUP_NOTICE_TTL_MINUTES), eq(TimeUnit.MINUTES));
+    }
+
+    /**
+     * 驗證：窗口內已寄過（名額被占）→ 仍回成功（不洩漏限流狀態），但不再發事件。
+     */
+    @Test
+    @DisplayName("register → 重複 email 且窗口內已通知過 → 仍正常返回但不再發通知事件（防灌信）")
+    void register_withDuplicateEmail_noticeAlreadySentInWindow_returnsNormallyWithoutEvent() {
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(buildEmailOwner()));
+        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class))).thenReturn(false);
+
+        assertThatCode(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .doesNotThrowAnyException();
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：限流用的 Redis 失效 → 保守起見不寄（fail closed，避免 Redis 故障時變成灌信管道），
+     * 但註冊回應仍與成功一致。
+     */
+    @Test
+    @DisplayName("register → 重複 email 且 Redis 限流故障 → 不發通知事件（fail closed），仍正常返回")
+    void register_withDuplicateEmail_redisFailure_failsClosedWithoutEvent() {
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(buildEmailOwner()));
+        when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"));
+
+        assertThatCode(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .doesNotThrowAnyException();
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：MQ 發送失敗是 best-effort，不影響註冊回應；並歸還通知名額，讓下一次嘗試仍有機會通知。
+     */
+    @Test
+    @DisplayName("register → 重複 email 且 MQ 發送失敗 → 仍正常返回，並釋放通知名額")
+    void register_withDuplicateEmail_mqFailure_returnsNormallyAndReleasesSlot() {
+        stubExistingEmailOwner();
+        doThrow(new RuntimeException("mq down")).when(rabbitTemplate)
+                .convertAndSend(anyString(), anyString(), any(RegistrationAttemptOnExistingEmailEvent.class));
+
+        assertThatCode(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .doesNotThrowAnyException();
+
+        verify(redisTemplate).delete(RedisKeyConstant.getRegisterDuplicateNoticeKey(OWNER_EMAIL));
+    }
+
+    /**
+     * 驗證（時間側通道）：新註冊與重複 email 兩條路徑都呼叫 passwordEncoder.encode，
+     * 避免「重複路徑省掉 bcrypt」讓回應時間洩漏 email 是否存在。
+     */
+    @Test
+    @DisplayName("register → 新註冊與重複 email 兩條路徑都恰好呼叫一次 passwordEncoder.encode（等時，防時間側通道列舉）")
+    void register_bothPathsEncodePassword_toEqualizeTiming() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        when(userRepository.save(any(User.class))).thenReturn(buildActiveUser());
+        when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
+
+        authService.register("brand-new@example.com", TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+        verify(passwordEncoder, times(1)).encode(TEST_PASSWORD);
+
+        reset(passwordEncoder);
+        stubExistingEmailOwner();
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+        verify(passwordEncoder, times(1)).encode(TEST_PASSWORD);
+    }
+
+    /**
+     * 驗證：hash 在任何「是否存在」判斷之前完成——所以重複 username／nickname 的拒絕路徑也不會比其他路徑快，
+     * 不會因為提早返回而形成另一個可量測的時間差。
+     */
+    @Test
+    @DisplayName("register → passwordEncoder.encode 發生在 email／username／nickname 存在性檢查之前")
+    void register_encodesPasswordBeforeAnyExistenceCheck() {
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        stubExistingEmailOwner();
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        org.mockito.InOrder order = inOrder(passwordEncoder, userRepository);
+        order.verify(passwordEncoder).encode(TEST_PASSWORD);
+        order.verify(userRepository).existsByUsername(TEST_USERNAME);
+        order.verify(userRepository).findByEmail(TEST_EMAIL);
+    }
+
+    /**
+     * 驗證檢查順序（防洩漏 email 存在性）：email 重複且 username 也重複 → 回 USERNAME_DUPLICATED，
+     * 不發任何通知。
+     *
+     * <p>判定：若先查 email，攻擊者拿一個已佔用的 username 搭配目標 email——email 存在回「成功」、
+     * 不存在回 USERNAME_DUPLICATED，回應差異就成了 email 存在性的 oracle。先查 username／nickname，
+     * 帶著已佔用 username 的請求結果與 email 是否存在無關，不洩漏。</p>
+     */
+    @Test
+    @DisplayName("register → email 重複且 username 也重複 → 回 USERNAME_DUPLICATED（username 先查，不洩漏 email 存在性），不通知")
+    void register_duplicateEmailAndDuplicateUsername_throwsUsernameDuplicatedWithoutNotice() {
+        stubExistingEmailOwner();
+        when(userRepository.existsByUsername(TEST_USERNAME)).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.USERNAME_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+        verify(valueOperations, never()).setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class));
+    }
+
+    /**
+     * 驗證檢查順序：email 重複且 nickname 也重複 → NICKNAME_DUPLICATED，不通知（理由同上）。
+     */
+    @Test
+    @DisplayName("register → email 重複且 nickname 也重複 → 回 NICKNAME_DUPLICATED，不通知")
+    void register_duplicateEmailAndDuplicateNickname_throwsNicknameDuplicatedWithoutNotice() {
+        stubExistingEmailOwner();
+        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.NICKNAME_DUPLICATED.getCode()));
+
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：IP 限流仍在最前面生效——超過上限時，重複 email 與新 email 同樣被 RATE_LIMIT_EXCEEDED 擋下，
+     * 不會因為 email 是否存在而不同。
+     */
+    @Test
+    @DisplayName("register → 重複 email 仍受 IP 限流約束（超限拋 RATE_LIMIT_EXCEEDED，不查 email）")
+    void register_withDuplicateEmail_stillSubjectToIpRateLimit() {
+        stubExistingEmailOwner();
+        when(valueOperations.increment(RedisKeyConstant.getRegisterIpKey("203.0.113.9")))
+                .thenReturn((long) RedisKeyConstant.REGISTER_IP_MAX + 1);
+
+        assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME,
+                "203.0.113.9"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+
+        verify(userRepository, never()).findByEmail(anyString());
+        verifyNoInteractions(rabbitTemplate);
     }
 
     /**

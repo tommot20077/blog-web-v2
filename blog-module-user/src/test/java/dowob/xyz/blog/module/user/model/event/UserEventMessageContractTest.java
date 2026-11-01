@@ -103,6 +103,27 @@ class UserEventMessageContractTest {
     }
 
     @Test
+    @DisplayName("RegistrationAttemptOnExistingEmailEvent：序列化含 eventId／userUuid，不含 userId 與任何請求端欄位，並能無損還原")
+    void registrationAttemptEvent_hasUuidFieldsOnly_andRoundTrips() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        UUID userUuid = UUID.randomUUID();
+        RegistrationAttemptOnExistingEmailEvent event =
+                new RegistrationAttemptOnExistingEmailEvent(eventId, userUuid, "owner@example.com", "Owner");
+
+        Message message = CONVERTER.toMessage(event, new MessageProperties());
+        JsonNode json = MAPPER.readTree(message.getBody());
+
+        assertThat(json.has("userId")).as("不得再帶 Long 主鍵").isFalse();
+        assertThat(json.get("eventId").asText()).isEqualTo(eventId.toString());
+        assertThat(json.get("userUuid").asText()).isEqualTo(userUuid.toString());
+        assertThat(json.fieldNames()).toIterable()
+                .as("事件只帶原信箱主人的資料，不帶嘗試者提交的 username／nickname／password／ip")
+                .containsExactlyInAnyOrder("eventId", "userUuid", "email", "nickname");
+        message.getMessageProperties().setInferredArgumentType(RegistrationAttemptOnExistingEmailEvent.class);
+        assertThat(CONVERTER.fromMessage(message)).isEqualTo(event);
+    }
+
+    @Test
     @DisplayName("舊格式註冊訊息（含 userId、無 eventId）仍可反序列化，信件欄位正確、eventId／userUuid 為 null")
     void legacyRegisteredMessage_stillDeserializes() {
         Object restored = CONVERTER.fromMessage(messageOf(LEGACY_REGISTERED, UserRegisteredEvent.class));

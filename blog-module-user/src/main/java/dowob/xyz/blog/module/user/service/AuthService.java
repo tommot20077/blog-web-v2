@@ -11,6 +11,7 @@ import dowob.xyz.blog.module.user.config.UserRabbitMqConfig;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
+import dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent;
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
@@ -27,6 +28,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -71,8 +73,10 @@ public class AuthService {
     /**
      * 用戶註冊
      *
-     * <p>驗證信箱、用戶名與暱稱唯一性後建立帳號（PENDING_VERIFICATION 狀態），
-     * 並發布 {@link UserRegisteredEvent} 至 RabbitMQ 以觸發驗證信發送。</p>
+     * <p>驗證用戶名與暱稱唯一性後建立帳號（PENDING_VERIFICATION 狀態），
+     * 並發布 {@link UserRegisteredEvent} 至 RabbitMQ 以觸發驗證信發送。
+     * 信箱已被註冊時一律回成功並通知原信箱主人，詳見
+     * {@link #register(String, String, String, String, String)}。</p>
      *
      * @param email    電子信箱
      * @param password 明文密碼
@@ -91,19 +95,42 @@ public class AuthService {
      * {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。此限流與信箱/用戶名唯一性檢查獨立，
      * 用於抑制單一 IP 大量建立假帳號。{@code clientIp} 為 null 時跳過 IP 限流。</p>
      *
-     * <p><b>併發註冊（RACE-02／RACE-03）</b>：{@code exists*} 先查只是快速路徑；兩個併發請求可能都先通過先查，
-     * 此時由 DB 唯一約束兜底——寫入撞到 {@code users_email_key}／{@code users_username_key}／
-     * {@code uq_users_nickname} 時，依約束名稱轉成 {@link UserErrorCode#EMAIL_DUPLICATED}／
-     * {@link UserErrorCode#USERNAME_DUPLICATED}／{@link UserErrorCode#NICKNAME_DUPLICATED}，
-     * 對外行為（狀態碼、錯誤碼）與「依序第二次註冊」完全一致，不再是 500。
-     * <b>已知限制</b>：若多條約束同時違反（例如 email 與暱稱同時撞到），回哪一個錯誤碼取決於
-     * PostgreSQL 檢查唯一索引的順序。該順序不是契約：通常依索引建立先後（email、username、nickname），
-     * 但 {@code pg_dump} 還原等操作重建索引後順序可能改變，因此併發下同時違反多條約束時的錯誤碼不保證，
-     * 且不保證與依序註冊（先查順序固定為 email、username、nickname）相同；本行為只保證
-     * 「單一約束違反」時與依序註冊一致；撞到這三條約束的任何組合都不會回 500。</p>
+     * <h4>email 重複一律回成功（SEC-14／Q8，Yuan 2026-10-24 定案 (a)）</h4>
+     * <p>email 已被註冊時，<b>不建立帳號、不回錯誤</b>，對外回與新註冊完全相同的成功（controller 回
+     * {@code ApiResponse<Void>}），避免註冊端點成為帳號枚舉 oracle；並在回應之前（無交易）發布
+     * {@link RegistrationAttemptOnExistingEmailEvent}，由 consumer 寄通知信給<b>原信箱主人</b>
+     * （「有人嘗試用你的信箱註冊；若是你本人，請直接登入或使用忘記密碼」）。通知有 per-email 限流：
+     * 同一信箱 {@link RedisKeyConstant#REGISTER_DUP_NOTICE_TTL_MINUTES} 分鐘（24 小時）內最多一封，
+     * 名額以 Redis {@code SET NX EX} 原子取得，避免有人拿註冊端點對受害者灌信；限流狀態與 Redis 故障
+     * 都不會影響回應（fail closed：取不到名額就不寄）。</p>
      *
-     * <p>註：Q8（email 重複一律回成功並寄通知信，避免帳號枚舉）不在此處理；
-     * 之後另案改寫時，{@code EMAIL_DUPLICATED} 的轉換須一併調整。</p>
+     * <p>username／nickname 重複<b>維持明確錯誤碼</b>（{@link UserErrorCode#USERNAME_DUPLICATED}、
+     * {@link UserErrorCode#NICKNAME_DUPLICATED}），產品上需要讓使用者換一個名稱。</p>
+     *
+     * <h4>檢查順序（防洩漏 email 存在性）</h4>
+     * <p>固定為 IP 限流 → 密碼雜湊 → username → nickname → email。username／nickname <b>必須先於</b> email：
+     * 若先查 email，攻擊者帶一個已被佔用的 username 搭配目標 email——email 存在回「成功」、不存在回
+     * {@code USERNAME_DUPLICATED}，回應差異就是 email 存在性的 oracle。先查 username／nickname 時，
+     * 帶已佔用名稱的請求，結果與 email 是否存在無關。因此「email 與 username 都重複」回
+     * {@code USERNAME_DUPLICATED} 且<b>不</b>寄通知信。</p>
+     *
+     * <h4>防時間側通道列舉</h4>
+     * <p>新註冊會做 bcrypt 雜湊（約數十到數百毫秒），若 email 已存在的路徑省掉雜湊，回應時間就會洩漏
+     * email 是否存在。因此密碼雜湊（{@link PasswordEncoder#encode}）放在所有存在性檢查<b>之前</b>：新註冊、
+     * email 重複、username／nickname 重複三條路徑都付出同量的雜湊成本，bcrypt 主導耗時。
+     * <b>已知殘餘差異</b>：新註冊路徑多一次 DB 寫入交易（毫秒級），重複路徑多一次 Redis 與 MQ 呼叫；
+     * 這些相對 bcrypt 都是次要項，不另做人工延遲。</p>
+     *
+     * <h4>併發註冊（RACE-02／RACE-03）</h4>
+     * <p>{@code exists*}／{@code findByEmail} 先查只是快速路徑；兩個併發請求可能都先通過先查，
+     * 此時由 DB 唯一約束兜底。寫入撞到 {@code uq_users_nickname}／{@code users_username_key}
+     * 時依約束名稱轉成 {@link UserErrorCode#NICKNAME_DUPLICATED}／{@link UserErrorCode#USERNAME_DUPLICATED}；
+     * 撞到 {@code users_email_key}（併發落敗）時與「依序第二次註冊」一致——靜默成功並通知贏家
+     * （先重查 username／nickname，維持與依序註冊相同的檢查順序）。不認得的約束或非約束錯誤原樣往外拋，
+     * 不會把真正的系統錯誤誤標成使用者可修正的重複。
+     * <b>已知限制</b>：若多條約束同時違反（例如 email 與暱稱同時撞到），PostgreSQL 只回報其中一條，
+     * 順序不是契約（通常依索引建立先後，{@code pg_dump} 還原等操作後可能改變），因此併發下同時違反多條約束時的
+     * 結果不保證與依序註冊相同；只保證「單一約束違反」時一致，且任何組合都不會回 500。</p>
      *
      * @param email    電子信箱
      * @param password 明文密碼
@@ -117,14 +144,16 @@ public class AuthService {
                 RedisKeyConstant.REGISTER_IP_MAX,
                 RedisKeyConstant.REGISTER_IP_TTL_MINUTES);
 
-        if (userRepository.existsByEmail(email)) {
-            throw new BusinessException(UserErrorCode.EMAIL_DUPLICATED);
-        }
-        if (userRepository.existsByUsername(username)) {
-            throw new BusinessException(UserErrorCode.USERNAME_DUPLICATED);
-        }
-        if (userRepository.existsByNickname(nickname)) {
-            throw new BusinessException(UserErrorCode.NICKNAME_DUPLICATED);
+        /** 雜湊先於任何存在性檢查：所有路徑付出同量成本，防時間側通道列舉（見方法 JavaDoc） */
+        String passwordHash = passwordEncoder.encode(password);
+
+        /** username／nickname 必須先於 email 檢查，否則回應差異會洩漏 email 存在性（見方法 JavaDoc） */
+        requireUsernameAndNicknameAvailable(username, nickname);
+
+        Optional<User> existingOwner = userRepository.findByEmail(email);
+        if (existingOwner.isPresent()) {
+            notifyOwnerOfRegistrationAttempt(existingOwner.get());
+            return;
         }
 
         User user = new User();
@@ -132,7 +161,7 @@ public class AuthService {
         user.setEmail(email);
         user.setUsername(username);
         user.setNickname(nickname);
-        user.setPasswordHash(passwordEncoder.encode(password));
+        user.setPasswordHash(passwordHash);
         user.setRole(Role.USER);
         user.setStatus(UserStatus.PENDING_VERIFICATION);
         user.setTokenVersion("v1");
@@ -140,7 +169,7 @@ public class AuthService {
         /**
          * DB 操作（save user + save verificationToken）在同一個 transaction 內。
          * users 的 INSERT 是交易內第一個寫入：撞到唯一約束時例外立即中止交易（之後不再執行任何 SQL），
-         * 在交易之外轉成業務錯誤碼（RACE-02／RACE-03）。
+         * 在交易之外轉成業務結果（RACE-02／RACE-03／Q8）。
          */
         String tokenValue = UUID.randomUUID().toString();
         String verificationCode = generateVerificationCode();
@@ -160,6 +189,15 @@ public class AuthService {
                 return saved;
             });
         } catch (RuntimeException e) {
+            if (isEmailConflict(e)) {
+                log.info("註冊併發落敗：寫入撞到 {}，改走重複 email 路徑（靜默成功並通知原信箱主人）",
+                        UniqueConstraintViolations.USERS_EMAIL);
+                requireUsernameAndNicknameAvailable(username, nickname);
+                userRepository.findByEmail(email).ifPresentOrElse(
+                        this::notifyOwnerOfRegistrationAttempt,
+                        () -> log.warn("註冊撞 email 約束但查無原帳號（可能剛被刪除），不發通知"));
+                return;
+            }
             throw translateRegistrationConflict(e);
         }
 
@@ -177,12 +215,81 @@ public class AuthService {
     }
 
     /**
+     * 確認 username 與 nickname 皆未被使用，否則拋出明確的重複錯誤（先 username 後 nickname）。
+     *
+     * @param username 用戶名
+     * @param nickname 暱稱
+     * @throws BusinessException username 或 nickname 已被使用
+     */
+    private void requireUsernameAndNicknameAvailable(String username, String nickname) {
+        if (userRepository.existsByUsername(username)) {
+            throw new BusinessException(UserErrorCode.USERNAME_DUPLICATED);
+        }
+        if (userRepository.existsByNickname(nickname)) {
+            throw new BusinessException(UserErrorCode.NICKNAME_DUPLICATED);
+        }
+    }
+
+    /**
+     * 通知原信箱主人「有人嘗試用你的信箱註冊」（best-effort，絕不影響註冊回應）。
+     *
+     * <p>先以 Redis {@code SET NX EX} 取得該信箱的通知名額（{@link RedisKeyConstant#REGISTER_DUP_NOTICE_TTL_MINUTES}
+     * 分鐘內一次）；取不到名額（窗口內已通知過）或 Redis 故障時不寄（fail closed，避免變成灌信管道）。
+     * 取得名額後發布 {@link RegistrationAttemptOnExistingEmailEvent}；MQ 發送失敗則釋放名額，讓之後的嘗試仍有機會通知。
+     * 限流以<b>資料庫儲存的 email</b>為鍵，不受請求輸入的大小寫差異影響。事件只帶原帳號資料，
+     * 不帶嘗試者提交的任何欄位。日誌不記錄 email，只記 userUuid。</p>
+     *
+     * @param owner 已佔用該 email 的既有帳號
+     */
+    private void notifyOwnerOfRegistrationAttempt(User owner) {
+        String noticeKey = RedisKeyConstant.getRegisterDuplicateNoticeKey(owner.getEmail());
+        boolean acquired;
+        try {
+            acquired = Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(
+                    noticeKey, "1", RedisKeyConstant.REGISTER_DUP_NOTICE_TTL_MINUTES, TimeUnit.MINUTES));
+        } catch (Exception e) {
+            log.warn("重複 email 註冊通知限流檢查失敗，為避免灌信不寄通知（fail closed）: {}", e.getMessage(), e);
+            return;
+        }
+        if (!acquired) {
+            log.info("重複 email 註冊通知已在窗口內寄過，略過 - userUuid={}", owner.getUuid());
+            return;
+        }
+        try {
+            rabbitTemplate.convertAndSend(
+                    UserRabbitMqConfig.EXCHANGE,
+                    UserRabbitMqConfig.ROUTING_KEY_REGISTRATION_ATTEMPT,
+                    new RegistrationAttemptOnExistingEmailEvent(UUID.randomUUID(), owner.getUuid(),
+                            owner.getEmail(), owner.getNickname()));
+        } catch (Exception e) {
+            log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+            try {
+                redisTemplate.delete(noticeKey);
+            } catch (Exception releaseFailure) {
+                log.warn("釋放重複 email 註冊通知名額失敗（best-effort）: {}", releaseFailure.getMessage(), releaseFailure);
+            }
+        }
+    }
+
+    /**
+     * 判斷寫入失敗是否為 users 的 email 唯一約束違反（併發註冊落敗）。
+     *
+     * @param failure 交易內拋出的例外
+     * @return 撞到 {@code users_email_key} 為 true
+     */
+    private boolean isEmailConflict(RuntimeException failure) {
+        return UniqueConstraintViolations.constraintNameOf(failure)
+                .filter(UniqueConstraintViolations.USERS_EMAIL::equals)
+                .isPresent();
+    }
+
+    /**
      * 將註冊寫入時的例外轉成業務例外。
      *
-     * <p>只轉換「users 的 email／username／nickname 唯一約束」；撞到其他約束（例如
-     * {@code verification_tokens} 的 token 唯一約束）或非約束錯誤時原樣回傳，維持原本的錯誤處理（500），
-     * 不把真正的系統錯誤誤標成使用者可修正的重複。多條約束同時違反時只會看到 PostgreSQL 回報的那一條，
-     * 順序見 {@link #register(String, String, String, String, String)} 的「已知限制」。</p>
+     * <p>只轉換「users 的 username／nickname 唯一約束」；email 唯一約束由 {@code register} 另走靜默成功路徑
+     * （Q8），不經此處。撞到其他約束（例如 {@code verification_tokens} 的 token 唯一約束）或非約束錯誤時
+     * 原樣回傳，維持原本的錯誤處理（500），不把真正的系統錯誤誤標成使用者可修正的重複。多條約束同時違反時
+     * 只會看到 PostgreSQL 回報的那一條，順序見 {@link #register(String, String, String, String, String)} 的「已知限制」。</p>
      *
      * @param failure 交易內拋出的例外
      * @return 對應的 {@link BusinessException}；不認得的例外則原樣回傳
@@ -190,7 +297,6 @@ public class AuthService {
     private RuntimeException translateRegistrationConflict(RuntimeException failure) {
         String constraint = UniqueConstraintViolations.constraintNameOf(failure).orElse("");
         UserErrorCode errorCode = switch (constraint) {
-            case UniqueConstraintViolations.USERS_EMAIL -> UserErrorCode.EMAIL_DUPLICATED;
             case UniqueConstraintViolations.USERS_USERNAME -> UserErrorCode.USERNAME_DUPLICATED;
             case UniqueConstraintViolations.USERS_NICKNAME -> UserErrorCode.NICKNAME_DUPLICATED;
             default -> null;

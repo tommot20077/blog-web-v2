@@ -253,6 +253,31 @@ public class RedisKeyConstant {
         return REGISTER_IP_PREFIX + ip;
     }
 
+    /**
+     * 重複信箱註冊通知限流 Key 前綴 (String)
+     * Key: rate:register-dup-notice:{email}
+     * <p>SEC-14／Q8：註冊時 email 已存在會寄通知信給原信箱主人；以此 key 限制同一信箱在
+     * {@link #REGISTER_DUP_NOTICE_TTL_MINUTES} 窗口內最多一封，避免註冊端點被拿來對受害者灌信。</p>
+     */
+    public static final String REGISTER_DUP_NOTICE_PREFIX = "rate:register-dup-notice:";
+
+    /**
+     * 重複信箱註冊通知限流窗口（分鐘）：24 小時。
+     * <p>通知信內容固定、只用來提醒「有人用你的信箱註冊」，窗口取長以壓低灌信上限（每信箱每天最多一封）；
+     * 真正忘記密碼的使用者可走忘記密碼流程。</p>
+     */
+    public static final long REGISTER_DUP_NOTICE_TTL_MINUTES = 1440L;
+
+    /**
+     * 生成重複信箱註冊通知限流 Redis Key
+     *
+     * @param email 原信箱主人的電子信箱（資料庫儲存值）
+     * @return Redis Key
+     */
+    public static String getRegisterDuplicateNoticeKey(String email) {
+        return REGISTER_DUP_NOTICE_PREFIX + email;
+    }
+
     /** ===================== Tag ===================== */
 
     /**

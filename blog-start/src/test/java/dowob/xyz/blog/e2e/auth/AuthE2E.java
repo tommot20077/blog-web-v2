@@ -65,24 +65,61 @@ class AuthE2E extends AbstractE2ETest {
     }
 
     @Test
-    @DisplayName("重複信箱註冊 — 回傳錯誤碼 A0106")
-    void register_duplicateEmail_returnsError() throws Exception {
-        // Arrange — 先註冊一次
+    @DisplayName("重複信箱註冊 — 回與新註冊相同的成功回應，且不建立第二個帳號（SEC-14／Q8）")
+    void register_duplicateEmail_returnsSameSuccessAsNewRegistration() throws Exception {
+        // Arrange — 先註冊一次，記下新註冊的完整回應
         String body = objectMapper.writeValueAsString(
                 DataBuilder.register("dup@test.com", "Password123!", "dupuser1", "DupUser1"));
+        String firstResponse = mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Act — 以相同信箱再次註冊（username／nickname 為新）
+        String duplicateBody = objectMapper.writeValueAsString(
+                DataBuilder.register("dup@test.com", "Password123!", "dupuser2", "DupUser2"));
+        String secondResponse = mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(duplicateBody))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess())
+                .andReturn().getResponse().getContentAsString();
+
+        // Assert — 回應內容相同（排除每次不同的 timestamp；無法由回應分辨 email 是否已存在），DB 仍只有一個帳號
+        com.fasterxml.jackson.databind.node.ObjectNode first =
+                (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(firstResponse);
+        com.fasterxml.jackson.databind.node.ObjectNode second =
+                (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(secondResponse);
+        first.remove("timestamp");
+        second.remove("timestamp");
+        assertThat(second).isEqualTo(first);
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE email = ?", Integer.class, "dup@test.com");
+        assertThat(count).isEqualTo(1);
+        Integer attackerRows = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE username = ?", Integer.class, "dupuser2");
+        assertThat(attackerRows).isZero();
+    }
+
+    @Test
+    @DisplayName("重複 username 註冊 — 維持明確的 USERNAME_DUPLICATED 錯誤碼（HTTP 400）")
+    void register_duplicateUsername_returnsExplicitError() throws Exception {
+        String body = objectMapper.writeValueAsString(
+                DataBuilder.register("dupname1@test.com", "Password123!", "dupname", "DupName1"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isOk());
 
-        // Act — 以相同信箱再次註冊
         String duplicateBody = objectMapper.writeValueAsString(
-                DataBuilder.register("dup@test.com", "Password123!", "dupuser2", "DupUser2"));
+                DataBuilder.register("dupname2@test.com", "Password123!", "dupname", "DupName2"));
         mockMvc.perform(post(BASE_URL + "/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(duplicateBody))
                 .andExpect(status().isBadRequest())
-                .andExpect(E2EAssertions.apiError("A0106"));
+                .andExpect(E2EAssertions.apiError(
+                        dowob.xyz.blog.common.api.errorcode.UserErrorCode.USERNAME_DUPLICATED.getCode()));
     }
 
     @Test

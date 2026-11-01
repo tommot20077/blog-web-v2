@@ -198,6 +198,25 @@ class RedisKeyConstantTest {
     }
 
     @Test
+    @DisplayName("REGISTER_DUP_NOTICE_PREFIX 應為 rate:register-dup-notice:")
+    void registerDupNoticePrefix_hasExpectedValue() {
+        assertThat(RedisKeyConstant.REGISTER_DUP_NOTICE_PREFIX).isEqualTo("rate:register-dup-notice:");
+    }
+
+    @Test
+    @DisplayName("getRegisterDuplicateNoticeKey 應回傳 rate:register-dup-notice:{email}")
+    void getRegisterDuplicateNoticeKey_returnsPerEmailRateLimitKey() {
+        assertThat(RedisKeyConstant.getRegisterDuplicateNoticeKey("owner@example.com"))
+                .isEqualTo("rate:register-dup-notice:owner@example.com");
+    }
+
+    @Test
+    @DisplayName("REGISTER_DUP_NOTICE_TTL_MINUTES 應為 1440（同一信箱 24 小時最多一封通知信）")
+    void registerDupNoticeTtlMinutes_hasExpectedValue() {
+        assertThat(RedisKeyConstant.REGISTER_DUP_NOTICE_TTL_MINUTES).isEqualTo(1440L);
+    }
+
+    @Test
     @DisplayName("getReconciliationLockKey 應回傳 lock:reconciliation:{module}:{table}")
     void getReconciliationLockKey_containsModuleAndTable() {
         assertThat(RedisKeyConstant.getReconciliationLockKey("article", "articles"))
