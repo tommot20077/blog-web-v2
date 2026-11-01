@@ -21,7 +21,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
+import dowob.xyz.blog.common.exception.GlobalExceptionHandler;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -46,6 +53,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -59,7 +67,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <b>繞過 service 攔截</b>的真實約束衝突與樂觀鎖失敗，證明回應是 409 而非 500，
  * 且 body 不含約束名、SQL 與欄位值。涵蓋三種真實例外形態：
  * JdbcTemplate 直接拋出的 {@code DuplicateKeyException}、Spring Data JDBC {@code save} 拋出的包裝例外、
- * 以及 {@code @Version} 的樂觀鎖失敗。</p>
+ * 以及 {@code @Version} 的樂觀鎖失敗（直接拋出，未包裝）。唯一鍵衝突回 409；
+ * 其餘完整性違反（NOT NULL）是程式缺陷，回 500 並記 ERROR。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -181,21 +190,33 @@ class DataConflictFallbackIT {
     }
 
     /**
-     * 驗證：NOT NULL 違反（真實 Postgres 約束）→ 409 + DATA_CONFLICT。
+     * 驗證：NOT NULL 違反（真實 Postgres 約束）是程式缺陷、重試無效 → 500（沿用系統錯誤訊息）並以 ERROR 記錄完整例外，
+     * 而不是被誤報成「資料衝突」409；body 不含欄位名／SQL。
      */
     @Test
-    @DisplayName("NOT NULL 違反 → 409，body 不含欄位名／SQL")
-    void notNullViolation_returns409() throws Exception {
-        String body = mockMvc.perform(post("/api/v1/it/arch11/not-null").with(asUser()))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value(CommonErrorCode.DATA_CONFLICT.getCode()))
-                .andReturn().getResponse().getContentAsString();
+    @DisplayName("NOT NULL 違反 → 500 + ERROR log，body 不含欄位名／SQL")
+    void notNullViolation_returns500_logsError() throws Exception {
+        LogCaptor captor = LogCaptor.attach(GlobalExceptionHandler.class);
+        try {
+            String body = mockMvc.perform(post("/api/v1/it/arch11/not-null").with(asUser()))
+                    .andExpect(status().isInternalServerError())
+                    .andExpect(jsonPath("$.code").value("500"))
+                    .andExpect(jsonPath("$.message").value("系統內部錯誤"))
+                    .andReturn().getResponse().getContentAsString();
 
-        assertThat(body).doesNotContain("article_uuid", "user_bookmarks", "null value", "violates");
+            assertThat(body).doesNotContain("article_uuid", "user_bookmarks", "null value", "violates");
+            assertThat(captor.events()).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(event.getThrown()).isInstanceOf(DataIntegrityViolationException.class);
+            });
+        } finally {
+            captor.detach();
+        }
     }
 
     /**
-     * 驗證：@Version 樂觀鎖失敗（過期版本 save）→ 409 + OPTIMISTIC_LOCK_CONFLICT。
+     * 驗證：@Version 樂觀鎖失敗（過期版本 save；Spring Data JDBC 直接拋出未包裝的
+     * {@code OptimisticLockingFailureException}）→ 409 + OPTIMISTIC_LOCK_CONFLICT。
      */
     @Test
     @DisplayName("@Version 過期版本 save → 409 + OPTIMISTIC_LOCK_CONFLICT")
@@ -257,6 +278,47 @@ class DataConflictFallbackIT {
             second.setTitle("second writer（持有過期版本）");
             articleRepository.save(second);
             return ApiResponse.success();
+        }
+    }
+
+    /**
+     * 擷取指定類別 logger 輸出的 log4j2 appender（僅供斷言 log 等級與例外）。
+     */
+    private static final class LogCaptor extends AbstractAppender {
+
+        private final List<LogEvent> captured = new CopyOnWriteArrayList<>();
+        private final org.apache.logging.log4j.core.Logger logger;
+        private final Level originalLevel;
+
+        private LogCaptor(org.apache.logging.log4j.core.Logger logger) {
+            super("conflict-it-captor-" + System.nanoTime(), null, null, true, Property.EMPTY_ARRAY);
+            this.logger = logger;
+            this.originalLevel = logger.getLevel();
+        }
+
+        static LogCaptor attach(Class<?> target) {
+            LoggerContext context = (LoggerContext) org.apache.logging.log4j.LogManager.getContext(false);
+            org.apache.logging.log4j.core.Logger logger = context.getLogger(target.getName());
+            LogCaptor captor = new LogCaptor(logger);
+            captor.start();
+            logger.addAppender(captor);
+            logger.setLevel(Level.WARN);
+            return captor;
+        }
+
+        void detach() {
+            logger.removeAppender(this);
+            logger.setLevel(originalLevel);
+            stop();
+        }
+
+        List<LogEvent> events() {
+            return new ArrayList<>(captured);
+        }
+
+        @Override
+        public void append(LogEvent event) {
+            captured.add(event.toImmutable());
         }
     }
 }

@@ -94,31 +94,58 @@ class GlobalExceptionHandlerConflictTest {
     }
 
     /**
-     * 驗證：DataIntegrityViolationException（模擬 NOT NULL／FK 違反）回 409 與 DATA_CONFLICT，不洩漏細節。
+     * 驗證：非唯一鍵的資料完整性違反（NOT NULL）是程式缺陷，重試無效，回 500 而非 409，
+     * 以 ERROR 記錄完整例外供監控，且 body 不洩漏 SQL／欄位值。
      */
     @Test
-    @DisplayName("DataIntegrityViolationException（NOT NULL）應回 409 + DATA_CONFLICT，body 不含 SQL／欄位值")
-    void dataIntegrityViolation_notNull_returns409_withoutLeakingDetails() throws Exception {
+    @DisplayName("DataIntegrityViolationException（NOT NULL）應回 500 + ERROR log，body 不含 SQL／欄位值")
+    void dataIntegrityViolation_notNull_returns500_logsError() throws Exception {
         String body = mockMvc.perform(get("/not-null"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value(CommonErrorCode.DATA_CONFLICT.getCode()))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("500"))
+                .andExpect(jsonPath("$.message").value("系統內部錯誤"))
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(body).doesNotContain("title", "articles", "secret-row-value", "not-null");
+        assertThat(logCaptor.events()).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getThrown()).isNotNull();
+            assertThat(event.getThrown().getMessage()).contains("secret-row-value");
+        });
     }
 
     /**
-     * 驗證：外鍵違反同樣走 409。
+     * 驗證：外鍵違反同樣是 500 + ERROR（重試無效）。
      */
     @Test
-    @DisplayName("DataIntegrityViolationException（FK）應回 409 + DATA_CONFLICT")
-    void dataIntegrityViolation_foreignKey_returns409() throws Exception {
+    @DisplayName("DataIntegrityViolationException（FK）應回 500 + ERROR log，body 不含約束名")
+    void dataIntegrityViolation_foreignKey_returns500_logsError() throws Exception {
         String body = mockMvc.perform(get("/foreign-key"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value(CommonErrorCode.DATA_CONFLICT.getCode()))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("500"))
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(body).doesNotContain("fk_comments_parent", "comments");
+        assertThat(logCaptor.events()).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(event.getThrown()).isNotNull();
+        });
+    }
+
+    /**
+     * 驗證：被包在一般 RuntimeException 內的非唯一鍵完整性違反，行為與直接拋出一致（500 + ERROR）。
+     */
+    @Test
+    @DisplayName("被包裝的 NOT NULL 違反與直接拋出一致：500 + ERROR log")
+    void wrappedNotNull_returns500_logsError() throws Exception {
+        String body = mockMvc.perform(get("/wrapped-not-null"))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("500"))
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).doesNotContain("title", "articles", "secret-row-value");
+        assertThat(logCaptor.events()).anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
+        assertThat(logCaptor.events()).noneMatch(event -> event.getLevel() == Level.WARN);
     }
 
     /**
@@ -183,6 +210,37 @@ class GlobalExceptionHandlerConflictTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertNoLeak(body);
+    }
+
+    /**
+     * 驗證：cause 鏈路徑的 WARN log 帶真實請求 URI（而非占位字串），且記的是外層包裝例外（內層作為 cause 帶出）。
+     */
+    @Test
+    @DisplayName("包裝路徑的 WARN log 含請求 URI，且記外層例外（內層為 cause）")
+    void wrappedDuplicateKey_logsRequestUriAndOuterException() throws Exception {
+        mockMvc.perform(get("/wrapped-duplicate")).andExpect(status().isConflict());
+
+        assertThat(logCaptor.events()).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getMessage().getFormattedMessage()).contains("/wrapped-duplicate");
+            assertThat(event.getMessage().getFormattedMessage()).doesNotContain("(wrapped exception)");
+            assertThat(event.getThrown()).isInstanceOf(IllegalStateException.class);
+            assertThat(event.getThrown().getCause()).isInstanceOf(DuplicateKeyException.class);
+        });
+    }
+
+    /**
+     * 驗證：包裝的樂觀鎖失敗，WARN log 同樣帶真實請求 URI。
+     */
+    @Test
+    @DisplayName("包裝的樂觀鎖失敗，WARN log 含請求 URI")
+    void wrappedOptimisticLock_logsRequestUri() throws Exception {
+        mockMvc.perform(get("/wrapped-optimistic-lock")).andExpect(status().isConflict());
+
+        assertThat(logCaptor.events()).anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getMessage().getFormattedMessage()).contains("/wrapped-optimistic-lock");
+        });
     }
 
     /**
@@ -293,6 +351,12 @@ class GlobalExceptionHandlerConflictTest {
         String wrappedOptimisticLock() {
             throw new IllegalStateException("Failed to execute DbAction.UpdateRoot",
                     new OptimisticLockingFailureException("version mismatch"));
+        }
+
+        @GetMapping("/wrapped-not-null")
+        String wrappedNotNull() {
+            throw new IllegalStateException("Failed to execute DbAction.InsertRoot",
+                    new DataIntegrityViolationException(LEAKY_NOT_NULL_MESSAGE));
         }
 
         @GetMapping("/wrapped-unrelated")

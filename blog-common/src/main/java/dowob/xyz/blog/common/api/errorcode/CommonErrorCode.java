@@ -49,10 +49,10 @@ public enum CommonErrorCode implements IErrorCode {
     FORBIDDEN("A0006", "權限不足"),
 
     /**
-     * 資料衝突（唯一約束、外鍵、非空等資料完整性違反的通用兜底；對應 HTTP 409）
+     * 資料衝突（唯一鍵衝突的通用兜底；對應 HTTP 409）
      *
      * <p>訊息刻意不含 SQL、約束名或欄位值。業務上能明確辨識的衝突（如 slug 已被使用）
-     * 應由 service 層轉成更具體的業務錯誤碼，本碼只在未被攔下時兜底。</p>
+     * 應由 service 層轉成更具體的業務錯誤碼，本碼只在未被攔下時兜底。NOT NULL、外鍵等非唯一鍵的完整性違反是程式缺陷，不使用本碼（回 500 並記 ERROR）。</p>
      */
     DATA_CONFLICT("A0007", "資料衝突，請確認後再試"),
 
