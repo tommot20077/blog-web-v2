@@ -54,7 +54,7 @@ public interface ArticleTagRepository extends Repository<ArticleTag, UUID> {
     void save(@Param("articleId") UUID articleId, @Param("tagId") UUID tagId);
 
     /**
-     * 計算指定標籤被文章使用的次數（用於刪除前 FK 檢查）
+     * 計算指定標籤被文章使用的次數（含草稿等未發布文章；刪除標籤的守衛用）
      *
      * @param tagId 標籤 ID
      * @return 關聯的文章數量
@@ -119,4 +119,22 @@ public interface ArticleTagRepository extends Repository<ArticleTag, UUID> {
     @Modifying
     @Query("DELETE FROM article_tags WHERE article_id IN (:articleIds)")
     int deleteByArticleIds(@Param("articleIds") Collection<UUID> articleIds);
+
+    /**
+     * 取得掛在指定標籤下的所有文章 UUID（不分文章狀態；使用計數重算用）。
+     *
+     * @param tagId 標籤 UUID
+     * @return 文章 UUID（{@code (article_id, tag_id)} 為主鍵，不會重複）
+     */
+    @Query("SELECT article_id FROM article_tags WHERE tag_id = :tagId")
+    List<UUID> findArticleIdsByTagId(@Param("tagId") UUID tagId);
+
+    /**
+     * 取得指定文章目前掛的所有標籤 UUID。
+     *
+     * @param articleId 文章 UUID
+     * @return 標籤 UUID
+     */
+    @Query("SELECT tag_id FROM article_tags WHERE article_id = :articleId")
+    List<UUID> findTagIdsByArticleId(@Param("articleId") UUID articleId);
 }

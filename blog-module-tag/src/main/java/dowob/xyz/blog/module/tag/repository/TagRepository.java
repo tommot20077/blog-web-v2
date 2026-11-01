@@ -7,6 +7,7 @@ import org.springframework.data.repository.CrudRepository;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -82,4 +83,37 @@ public interface TagRepository extends CrudRepository<Tag, UUID> {
     @Query("INSERT INTO tags (id, name, slug, created_at) VALUES (:id, :name, :slug, :createdAt) ON CONFLICT DO NOTHING")
     int insertIfAbsent(@Param("id") UUID id, @Param("name") String name, @Param("slug") String slug,
                        @Param("createdAt") LocalDateTime createdAt);
+
+    /**
+     * 以列鎖（{@code FOR UPDATE}）取出指定標籤，供使用計數重算序列化使用（RACE-07）。
+     *
+     * <p>依 id 升冪鎖定，多個標籤時所有交易以相同順序取鎖，不會形成死結環。查無的 id 不在結果中。
+     * 呼叫端須在交易內呼叫，鎖隨交易結束釋放。</p>
+     *
+     * @param ids 標籤 UUID，至少一筆（呼叫端須保證非空，避免產生 {@code IN ()} 語法錯誤）
+     * @return 存在的標籤（含目前的 {@code usage_count}），依 id 升冪
+     */
+    @Query("SELECT * FROM tags WHERE id IN (:ids) ORDER BY id FOR UPDATE")
+    List<Tag> findAllByIdInForUpdate(@Param("ids") Collection<UUID> ids);
+
+    /**
+     * 直接寫入標籤的使用計數（絕對值，非遞增）。
+     *
+     * @param id         標籤 UUID
+     * @param usageCount 新的使用計數
+     * @return 更新的列數
+     */
+    @Modifying
+    @Query("UPDATE tags SET usage_count = :usageCount WHERE id = :id")
+    int updateUsageCount(@Param("id") UUID id, @Param("usageCount") int usageCount);
+
+    /**
+     * 以 keyset 分頁取得標籤 UUID（每日校正掃描用；排序由資料庫的 uuid 型別決定）。
+     *
+     * @param after 游標（不含）；從頭開始請傳 nil UUID（{@code 00000000-0000-0000-0000-000000000000}）
+     * @param limit 本頁筆數上限
+     * @return 升冪的標籤 UUID
+     */
+    @Query("SELECT id FROM tags WHERE id > :after ORDER BY id LIMIT :limit")
+    List<UUID> findIdsAfter(@Param("after") UUID after, @Param("limit") int limit);
 }
