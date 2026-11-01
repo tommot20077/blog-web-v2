@@ -85,15 +85,21 @@ public interface TagRepository extends CrudRepository<Tag, UUID> {
                        @Param("createdAt") LocalDateTime createdAt);
 
     /**
-     * 以列鎖（{@code FOR UPDATE}）取出指定標籤，供使用計數重算序列化使用（RACE-07）。
+     * 以列鎖（{@code FOR NO KEY UPDATE}）取出指定標籤，供使用計數重算序列化使用（RACE-07）。
      *
-     * <p>依 id 升冪鎖定，多個標籤時所有交易以相同順序取鎖，不會形成死結環。查無的 id 不在結果中。
+     * <p><b>必須是 {@code FOR NO KEY UPDATE}，不可用 {@code FOR UPDATE}</b>：{@code article_tags.tag_id} 的 FK 檢查
+     * 會對 {@code tags} 列取 {@code FOR KEY SHARE}，{@code FOR UPDATE} 與之衝突——文章儲存交易依 tagNames 順序插入
+     * article_tags（持有 KEY SHARE）時，重算依 id 升冪鎖定會與之互等而死結，被中止的是使用者的文章儲存。
+     * 重算只改非 key 欄位 {@code usage_count}，{@code FOR NO KEY UPDATE} 與 KEY SHARE 相容，
+     * 而重算彼此之間仍然互斥（序列化的目的不變）。</p>
+     *
+     * <p>依 id 升冪鎖定，多個標籤時所有重算交易以相同順序取鎖，重算之間不會形成死結環。查無的 id 不在結果中。
      * 呼叫端須在交易內呼叫，鎖隨交易結束釋放。</p>
      *
      * @param ids 標籤 UUID，至少一筆（呼叫端須保證非空，避免產生 {@code IN ()} 語法錯誤）
      * @return 存在的標籤（含目前的 {@code usage_count}），依 id 升冪
      */
-    @Query("SELECT * FROM tags WHERE id IN (:ids) ORDER BY id FOR UPDATE")
+    @Query("SELECT * FROM tags WHERE id IN (:ids) ORDER BY id FOR NO KEY UPDATE")
     List<Tag> findAllByIdInForUpdate(@Param("ids") Collection<UUID> ids);
 
     /**

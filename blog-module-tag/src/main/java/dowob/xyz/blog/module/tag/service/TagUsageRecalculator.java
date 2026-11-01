@@ -8,6 +8,7 @@ import dowob.xyz.blog.module.tag.repository.TagRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
@@ -37,6 +38,21 @@ import java.util.UUID;
  *       （Redis 無法隨交易 rollback，先 DB 後 Redis；任何失敗都往外拋，由呼叫端重試，重算天然冪等）。</li>
  * </ol>
  * 因為第 1 步先鎖再讀，後到的重算一定讀到先到者 commit 之後的狀態，不會被舊快照覆寫。
+ * 鎖模式是 {@code FOR NO KEY UPDATE}（不是 {@code FOR UPDATE}），否則會與 article_tags FK 檢查的
+ * {@code FOR KEY SHARE} 衝突而與文章儲存交易死結，見 {@link TagRepository#findAllByIdInForUpdate}。
+ *
+ * <p><b>哪些情況由事件收斂、哪些靠每日校正</b>（誠實的邊界）：</p>
+ * <ul>
+ *   <li>事件收斂（best-effort，MQ 發送失敗或進 DLQ 就漏）：文章發布、更新（含 PUT 直轉 PUBLISHED）、下架、刪除，
+ *       以及標籤集合變更時「目前掛的標籤」；</li>
+ *   <li>文章更新時<b>被移除的標籤</b>沒有任何事件會帶它：由 {@code TagFacadeImpl.syncArticleTags}／
+ *       {@code deleteArticleTags} 在外層交易 commit 後呼叫 {@link #recalculateInNewTransaction}；
+ *       該重算失敗只記 WARN，不影響已 commit 的文章，計數會短暫偏高；</li>
+ *   <li>article 模組目前在 PUT status=ARCHIVED 時不發任何事件（article 模組的問題，非本模組可修）：
+ *       該標籤計數偏高，要等每日校正；</li>
+ *   <li>任何事件／回呼遺失的最終兜底：{@code TagUsageReconciliationJob} 每日 04:11 全量重算，
+ *       偏差最長存在約一天。</li>
+ * </ul>
  *
  * <p><b>規模界限</b>：重算要把單一標籤的所有文章 UUID 載入記憶體並經 facade 分批查詢，成本隨該標籤的文章數線性成長。
  * 設計假設單一標籤的文章數在約 1 萬篇以內；超過時應改為<b>增量計數＋定期校正</b>
@@ -123,6 +139,20 @@ public class TagUsageRecalculator {
                     .add(RedisKeyConstant.TAG_HOT_KEY, tags.get(i).getId().toString(), counts.get(i));
         }
         return corrected;
+    }
+
+    /**
+     * 在<b>全新的交易</b>內重算（{@code REQUIRES_NEW}）。
+     *
+     * <p>給 {@code afterCommit} 回呼使用：此時外層交易雖已 commit，其連線與交易資源仍綁在執行緒上，
+     * 用 REQUIRED 會「加入」那個已結束的交易，寫入不會被提交；必須另開新交易。</p>
+     *
+     * @param tagIds 受影響的標籤 UUID
+     * @return 計數被修正的標籤數
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int recalculateInNewTransaction(Collection<UUID> tagIds) {
+        return recalculate(tagIds);
     }
 
     /**
