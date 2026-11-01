@@ -10,6 +10,8 @@ import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.PublishedArticleCriteria;
 import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
+import dowob.xyz.blog.module.article.model.ArticleArchiveRow;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
@@ -664,6 +666,65 @@ class ArticleQuerySubServiceTest {
             assertThat(querySubService.getArticleSummariesByIds(null)).isEmpty();
             assertThat(querySubService.getArticleSummariesByIds(List.of())).isEmpty();
             verify(articleRepository, never()).findAllById(anyList());
+        }
+    }
+
+    @Nested
+    @DisplayName("getArchive — 歸檔投影（PERF-04）")
+    class GetArchiveTests {
+
+        private ArticleArchiveRow row(UUID uuid, String title, LocalDateTime publishedAt) {
+            ArticleArchiveRow row = new ArticleArchiveRow();
+            row.setUuid(uuid);
+            row.setTitle(title);
+            row.setSlug("slug-" + title);
+            row.setPublishedAt(publishedAt);
+            return row;
+        }
+
+        @Test
+        @DisplayName("只走投影查詢 findArchiveRows，絕不呼叫會撈正文欄位的 findAllPublished")
+        void getArchive_usesProjectionQuery_neverFindAllPublished() {
+            when(articleMapper.findArchiveRows()).thenReturn(List.of());
+
+            querySubService.getArchive();
+
+            verify(articleMapper).findArchiveRows();
+            verify(articleMapper, never()).findAllPublished();
+        }
+
+        @Test
+        @DisplayName("無已發布文章：回空清單，且不查標籤")
+        void getArchive_empty_returnsEmptyWithoutTagQuery() {
+            when(articleMapper.findArchiveRows()).thenReturn(List.of());
+
+            assertThat(querySubService.getArchive()).isEmpty();
+
+            verifyNoInteractions(responseMapper);
+        }
+
+        @Test
+        @DisplayName("組裝：保留 SQL 給的順序；標籤名稱來自整批標籤查詢（一次），無標籤者為空清單")
+        void getArchive_assemblesRowsInOrderWithBatchedTags() {
+            UUID newer = UUID.randomUUID();
+            UUID older = UUID.randomUUID();
+            LocalDateTime t1 = LocalDateTime.of(2026, 6, 1, 10, 0);
+            LocalDateTime t2 = LocalDateTime.of(2025, 1, 1, 10, 0);
+            when(articleMapper.findArchiveRows()).thenReturn(List.of(row(newer, "新", t1), row(older, "舊", t2)));
+            when(responseMapper.batchToTagResponsesMap(List.of(newer, older))).thenReturn(Map.of(
+                    newer, List.of(
+                            TagSummaryResponse.builder().id(UUID.randomUUID()).name("Java").slug("java").build(),
+                            TagSummaryResponse.builder().id(UUID.randomUUID()).name("Spring").slug("spring").build())));
+
+            var result = querySubService.getArchive();
+
+            assertThat(result).extracting(ArticleArchiveResponse::getUuid).containsExactly(newer, older);
+            assertThat(result).extracting(ArticleArchiveResponse::getTitle).containsExactly("新", "舊");
+            assertThat(result).extracting(ArticleArchiveResponse::getSlug).containsExactly("slug-新", "slug-舊");
+            assertThat(result).extracting(ArticleArchiveResponse::getPublishedAt).containsExactly(t1, t2);
+            assertThat(result.get(0).getTags()).containsExactly("Java", "Spring");
+            assertThat(result.get(1).getTags()).isEmpty();
+            verify(responseMapper, times(1)).batchToTagResponsesMap(anyList());
         }
     }
 }

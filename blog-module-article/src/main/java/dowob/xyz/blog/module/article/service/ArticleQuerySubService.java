@@ -9,6 +9,7 @@ import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.ArticleArchiveRow;
 import dowob.xyz.blog.module.article.model.PublishedArticleCriteria;
 import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
@@ -103,21 +104,31 @@ class ArticleQuerySubService {
         return PageResult.of(page, size, total, list);
     }
 
+    /**
+     * 組裝歸檔頁清單：全部已發布文章的 uuid／title／slug／publishedAt／標籤名稱，依發布時間由新到舊。
+     *
+     * <p>以 {@link ArticleMapper#findArchiveRows()} 的四欄投影取代 {@code findAllPublished()} 的 {@code SELECT *}，
+     * 正文欄位不進 JVM；標籤整批查詢，且 {@code batchToTagResponsesMap} 內部經 {@code BatchedQuery} 切批，
+     * 不會組出含全部文章 UUID 的單一 {@code IN (...)}。結果的快取在 {@code ArticleQueryService}（本方法不碰 Redis，
+     * 保持單純的 DB 讀取）。</p>
+     *
+     * @return 歸檔投影列表；無已發布文章時為空清單
+     */
     @Transactional(readOnly = true)
     List<ArticleArchiveResponse> getArchive() {
-        List<Article> articles = articleMapper.findAllPublished();
-        if (articles.isEmpty()) {
+        List<ArticleArchiveRow> rows = articleMapper.findArchiveRows();
+        if (rows.isEmpty()) {
             return List.of();
         }
-        List<UUID> uuids = articles.stream().map(Article::getUuid).collect(Collectors.toList());
+        List<UUID> uuids = rows.stream().map(ArticleArchiveRow::getUuid).collect(Collectors.toList());
         Map<UUID, List<TagSummaryResponse>> tagMap = responseMapper.batchToTagResponsesMap(uuids);
-        return articles.stream()
-                .map(article -> ArticleArchiveResponse.builder()
-                        .uuid(article.getUuid())
-                        .title(article.getTitle())
-                        .slug(article.getSlug())
-                        .publishedAt(article.getPublishedAt())
-                        .tags(tagMap.getOrDefault(article.getUuid(), List.of()).stream()
+        return rows.stream()
+                .map(row -> ArticleArchiveResponse.builder()
+                        .uuid(row.getUuid())
+                        .title(row.getTitle())
+                        .slug(row.getSlug())
+                        .publishedAt(row.getPublishedAt())
+                        .tags(tagMap.getOrDefault(row.getUuid(), List.of()).stream()
                                 .map(TagSummaryResponse::getName)
                                 .collect(Collectors.toList()))
                         .build())
