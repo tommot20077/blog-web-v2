@@ -9,6 +9,7 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.repository.UserRepository;
+import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
 import dowob.xyz.blog.module.user.validation.ProfileFieldLimits;
 import dowob.xyz.blog.module.user.validation.SafeHttpUrlValidator;
 import dowob.xyz.blog.module.user.validation.SafeSocialLinksValidator;
@@ -16,8 +17,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.UUID;
+import java.util.function.Predicate;
 
 /**
  * 用戶自助服務
@@ -32,6 +35,12 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class UserService {
 
+    /** 已刪除使用者的暱稱前綴（後接 uuid 片段以維持 {@code uq_users_nickname} 唯一） */
+    private static final String DELETED_NICKNAME_PREFIX = "已刪除使用者#";
+
+    /** 已刪除使用者的 email 墓碑網域：{@code .invalid} 為 RFC 2606 保留 TLD，永不可投遞 */
+    private static final String DELETED_EMAIL_DOMAIN = "@invalid.invalid";
+
     /** 用戶資料存取 */
     private final UserRepository userRepository;
 
@@ -40,6 +49,15 @@ public class UserService {
 
     /** Session 撤銷服務，用於改密碼／刪帳號後撤銷所有既有 session */
     private final SessionRevoker sessionRevoker;
+
+    /** 驗證 Token 存取，刪除帳號時清空該使用者的 token */
+    private final VerificationTokenRepository verificationTokenRepository;
+
+    /** 交易範本：刪除帳號的 DB 寫入收斂在交易內，commit 後才發送事件 */
+    private final TransactionTemplate transactionTemplate;
+
+    /** 使用者事件發布元件 */
+    private final UserEventPublisher userEventPublisher;
 
     /**
      * 取得使用者個人資料
@@ -198,15 +216,32 @@ public class UserService {
     }
 
     /**
-     * 刪除帳號
+     * 刪除帳號（匿名化，DATA-02）
      *
-     * <p>驗證密碼正確後將帳號狀態設為 DELETED，並清除 Redis 中的所有快取，
-     * 使所有現有 Token 立即失效。</p>
+     * <p>驗證密碼正確後，在<b>同一個交易</b>內：把 {@code users} 列匿名化、將狀態設為 DELETED、遞增 tokenVersion、
+     * 刪除該使用者的所有驗證 Token，並撤銷所有 session。交易 <b>commit 之後</b>才發送 {@code UserDeletedEvent}
+     * （best-effort，見 {@link UserEventPublisher}），由其他模組清理各自持有的個人資料。</p>
+     *
+     * <p><b>為何匿名化而非只改狀態</b>：公開讀取路徑（文章作者、留言者顯示）經 {@code UserFacade.getDisplayInfoByUuids}
+     * 讀取 {@code users} 列且<b>不依 status 過濾</b>；洗掉這一列的 PII 後，所有既有讀取路徑自動匿名，不必逐路徑改動。
+     * 保留已發布文章與留言（Q2 定案）。</p>
+     *
+     * <p><b>匿名化內容</b>（皆受 {@code users} 的 UNIQUE 約束，不能全部設成同一字串）：</p>
+     * <ul>
+     *   <li>{@code nickname} → {@code 已刪除使用者#<uuid 前 8 碼>}：可讀、可區分不同的已刪除使用者；</li>
+     *   <li>{@code username} → {@code deleted_<uuid>}、{@code email} → {@code deleted+<uuid>@invalid.invalid}
+     *       （{@code .invalid} 為 RFC 2606 保留 TLD，永不可投遞）；</li>
+     *   <li>頭貼、簡介、網站、社群連結、所在地 → {@code null}；信箱驗證旗標與 5 個通知偏好 → {@code false}；</li>
+     *   <li>{@code password_hash} → 由隨機祕密產生、沒有人知道明文的 bcrypt 雜湊，任何舊登入路徑都不可能再通過。</li>
+     * </ul>
+     * <p>墓碑值若剛好被他人先註冊占用（卡位），依序退回較長的格式與隨機值，刪帳不會因 UNIQUE 約束失敗。</p>
+     *
+     * <p><b>Session 撤銷</b>：{@link SessionRevoker#revokeAllSessions} 在交易同步進行中會延後到
+     * {@code afterCommit} 才清除 Redis（security.md §10）；交易 rollback 則完全不清除。</p>
      *
      * @param userUuid 用戶 UUID
      * @param password 當前密碼（明文），用於二次確認身份
      */
-    @Transactional
     public void deleteAccount(UUID userUuid, String password) {
         User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
@@ -215,9 +250,69 @@ public class UserService {
             throw new BusinessException(UserErrorCode.USER_PASSWORD_ERROR);
         }
 
-        user.setStatus(UserStatus.DELETED);
-        userRepository.save(user);
+        /* bcrypt 雜湊耗時，放在交易之外計算，不佔用資料庫連線 */
+        String unusablePasswordHash = passwordEncoder.encode(UUID.randomUUID() + UUID.randomUUID().toString());
 
-        sessionRevoker.revokeAllSessions(user.getUuid());
+        transactionTemplate.executeWithoutResult(status -> {
+            anonymize(user, unusablePasswordHash);
+            userRepository.save(user);
+            verificationTokenRepository.deleteByUserId(user.getId());
+            sessionRevoker.revokeAllSessions(user.getUuid());
+        });
+
+        /* 匿名化已 commit，才通知其他模組連動清理（best-effort） */
+        userEventPublisher.publishDeleted(user.getUuid());
+    }
+
+    /**
+     * 就地匿名化使用者列（不儲存，由呼叫端 save）。
+     *
+     * @param user                 要匿名化的使用者
+     * @param unusablePasswordHash 無人知道明文的密碼雜湊
+     */
+    private void anonymize(User user, String unusablePasswordHash) {
+        UUID uuid = user.getUuid();
+        UUID randomSeed = UUID.randomUUID();
+
+        user.setNickname(firstUnused(userRepository::existsByNickname,
+                DELETED_NICKNAME_PREFIX + uuid.toString().substring(0, 8),
+                DELETED_NICKNAME_PREFIX + uuid.toString().replace("-", ""),
+                DELETED_NICKNAME_PREFIX + randomSeed.toString().replace("-", "")));
+        user.setUsername(firstUnused(userRepository::existsByUsername,
+                "deleted_" + uuid, "deleted_" + randomSeed));
+        user.setEmail(firstUnused(userRepository::existsByEmail,
+                "deleted+" + uuid + DELETED_EMAIL_DOMAIN, "deleted+" + randomSeed + DELETED_EMAIL_DOMAIN));
+
+        user.setAvatarUrl(null);
+        user.setBio(null);
+        user.setWebsite(null);
+        user.setSocialLinks(null);
+        user.setLocation(null);
+        user.setEmailVerified(false);
+        user.setNotificationComment(false);
+        user.setNotificationLike(false);
+        user.setNotificationReview(false);
+        user.setNotificationFollow(false);
+        user.setNotificationNewsletter(false);
+
+        user.setPasswordHash(unusablePasswordHash);
+        user.setTokenVersion(TokenVersionUtils.incrementVersion(user.getTokenVersion()));
+        user.setStatus(UserStatus.DELETED);
+    }
+
+    /**
+     * 依序挑出第一個尚未被占用的候選值；全部都被占用時回傳最後一個，交由資料庫 UNIQUE 約束把關。
+     *
+     * @param taken      判斷候選值是否已被占用
+     * @param candidates 候選值，依優先順序排列，至少一個
+     * @return 第一個未被占用的候選值
+     */
+    private static String firstUnused(Predicate<String> taken, String... candidates) {
+        for (String candidate : candidates) {
+            if (!taken.test(candidate)) {
+                return candidate;
+            }
+        }
+        return candidates[candidates.length - 1];
     }
 }

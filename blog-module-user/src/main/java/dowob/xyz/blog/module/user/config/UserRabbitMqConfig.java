@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.user.config;
 
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -22,9 +23,10 @@ import java.util.Map;
 public class UserRabbitMqConfig {
 
     /**
-     * 用戶事件 Exchange 名稱
+     * 用戶事件 Exchange 名稱（取自共用事件契約 {@link UserEventContract#EXCHANGE}；
+     * 同一個 exchange 也承載跨模組的 {@code user.deleted}）
      */
-    public static final String EXCHANGE = "user.events";
+    public static final String EXCHANGE = UserEventContract.EXCHANGE;
 
     /**
      * 電子信箱驗證 Queue 名稱
