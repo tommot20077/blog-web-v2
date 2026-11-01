@@ -6,6 +6,9 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -21,6 +24,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -32,6 +36,9 @@ import java.util.stream.Collectors;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    /** 沿 cause 鏈尋找資料衝突例外的最大深度，防止異常的循環引用 */
+    private static final int MAX_CAUSE_DEPTH = 16;
 
     /**
      * 處理業務異常，回傳 HTTP 400 與結構化錯誤碼
@@ -231,18 +238,95 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 處理資料完整性違反：只有唯一鍵衝突回 HTTP 409，其餘視為程式缺陷回 HTTP 500
+     *
+     * <p>
+     * 這是兜底：service 層能明確辨識的衝突（如 slug 已被使用）應自行轉成更具體的業務錯誤碼，
+     * 到這裡的都是未被攔下者。
+     * </p>
+     * <ul>
+     *   <li>{@link DuplicateKeyException}（PostgreSQL 23505，直接或位於 cause 鏈中）：使用者可處理的衝突，
+     *       回 409 {@link CommonErrorCode#DATA_CONFLICT}，以 WARN 記錄。</li>
+     *   <li>其餘（NOT NULL、外鍵、CHECK、欄位超長等）：重試無效，多半是程式漏設欄位或驗證缺口，
+     *       回 500 通用系統錯誤並以 <b>ERROR</b> 記錄完整例外，讓只看 ERROR 的監控抓得到。</li>
+     * </ul>
+     * <p>兩者回應都不含 SQL、約束名與欄位值；完整例外只進 log。</p>
+     *
+     * @param e       資料完整性違反例外
+     * @param request 當前 HTTP 請求
+     * @return HTTP 409（唯一鍵衝突）或 HTTP 500 回應
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataIntegrityViolation(
+            DataIntegrityViolationException e, HttpServletRequest request) {
+        return resolveDataConflict(e, request.getRequestURI())
+                .orElseGet(() -> internalServerError(e, request.getRequestURI()));
+    }
+
+    /**
+     * 處理樂觀鎖衝突（{@code @Version} 不符），回傳 HTTP 409 與「資料已被他人修改」錯誤碼
+     *
+     * @param e       樂觀鎖衝突例外
+     * @param request 當前 HTTP 請求
+     * @return HTTP 409 回應，body 含 {@link CommonErrorCode#OPTIMISTIC_LOCK_CONFLICT}
+     */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLockingFailure(
+            OptimisticLockingFailureException e, HttpServletRequest request) {
+        return resolveDataConflict(e, request.getRequestURI())
+                .orElseGet(() -> internalServerError(e, request.getRequestURI()));
+    }
+
+    /**
      * 處理其他未預期例外，回傳 HTTP 500 與通用錯誤訊息
      *
      * <p>
-     * 以 ERROR 級別記錄完整 stack trace，並回傳 HTTP 500。
+     * Spring Data JDBC 的 {@code save} 會把約束違反包在一般 {@code RuntimeException}
+     * （{@code DbActionExecutionException}）內，型別比對只會落到這裡；因此先沿 cause 鏈尋找
+     * 唯一鍵衝突或樂觀鎖失敗，找到就與直接拋出時回相同的 409（log 帶真實 URI 並記外層例外，內層作為 cause）。
+     * 其餘（含非唯一鍵的完整性違反）以 ERROR 級別記錄完整 stack trace，並回傳 HTTP 500。
      * </p>
      *
-     * @param e 未預期例外
-     * @return HTTP 500 回應，body 含系統錯誤訊息
+     * @param e       未預期例外
+     * @param request 當前 HTTP 請求
+     * @return HTTP 409（cause 鏈含唯一鍵衝突／樂觀鎖失敗）或 HTTP 500 回應
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleException(Exception e) {
-        log.error("Unhandled Exception", e);
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception e, HttpServletRequest request) {
+        return resolveDataConflict(e, request.getRequestURI())
+                .orElseGet(() -> internalServerError(e, request.getRequestURI()));
+    }
+
+    /**
+     * 沿例外本身與 cause 鏈尋找「使用者可處理的資料衝突」：樂觀鎖失敗或唯一鍵衝突。
+     *
+     * @param e   最外層例外（log 記這個，內層自然作為 cause 帶出）
+     * @param uri 請求 URI
+     * @return 找到時為 409 回應（已記 WARN）；找不到為 empty
+     */
+    private Optional<ResponseEntity<ApiResponse<Void>>> resolveDataConflict(Throwable e, String uri) {
+        Throwable cause = e;
+        for (int depth = 0; cause != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            if (cause instanceof OptimisticLockingFailureException) {
+                log.warn("Optimistic Locking Failure at {}: {}", uri, e.toString(), e);
+                return Optional.of(ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(ApiResponse.failed(CommonErrorCode.OPTIMISTIC_LOCK_CONFLICT)));
+            }
+            if (cause instanceof DuplicateKeyException) {
+                log.warn("Duplicate Key at {}: {}", uri, e.toString(), e);
+                return Optional.of(ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(ApiResponse.failed(CommonErrorCode.DATA_CONFLICT)));
+            }
+            cause = cause.getCause() == cause ? null : cause.getCause();
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * 組出通用 500 回應，完整例外以 ERROR 記錄。
+     */
+    private ResponseEntity<ApiResponse<Void>> internalServerError(Throwable e, String uri) {
+        log.error("Unhandled Exception at {}", uri, e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.failed("500", "系統內部錯誤"));
     }

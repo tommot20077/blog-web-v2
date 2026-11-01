@@ -53,7 +53,7 @@ public class TagServiceImpl implements TagService {
     private final RedisTemplate<String, String> stringRedisTemplate;
 
     /**
-     * 文章標籤關聯資料存取物件（用於刪除前 FK 檢查）
+     * 文章標籤關聯資料存取物件（用於刪除前檢查標籤是否仍被任何文章掛著）
      */
     private final ArticleTagRepository articleTagRepository;
 
@@ -229,9 +229,8 @@ public class TagServiceImpl implements TagService {
     public void adminDeleteTag(UUID id) {
         Tag tag = tagRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(TagErrorCode.TAG_NOT_FOUND));
-        if (tag.getUsageCount() > 0) {
-            throw new BusinessException(TagErrorCode.TAG_IN_USE);
-        }
+        /* 守衛看 article_tags 是否有任何列（含草稿等未發布文章），不依賴 usage_count：
+         * usage_count 是「已發布文章數」的衍生計數，可能落後於事件或殘留舊值（DATA-01） */
         if (articleTagRepository.countByTagId(id) > 0) {
             throw new BusinessException(TagErrorCode.TAG_IN_USE);
         }

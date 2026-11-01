@@ -1,5 +1,12 @@
-server:
-  forward-headers-strategy: framework
+# 注意：刻意不設定 server.forward-headers-strategy（framework／native 皆會讓 X-Forwarded-For 無條件覆寫 remoteAddr，
+# 等於信任 client 偽造的 IP，SEC-01）。client IP 一律經 ClientIpResolver，由 app.http.trusted-proxy-count 控制信任層數。
+# 副作用評估：
+#   - Cookie 的 Secure 旗標由 app.cookie.secure 控制、不看 request scheme；程式未依 request 組絕對 URL
+#     （無 ServletUriComponentsBuilder／getRequestURL）。
+#   - 但 TLS 在 proxy 終結時 app 看到 scheme=http、port=80，Spring 的 CorsUtils.isCorsRequest 會把同網域請求
+#     （Origin: https://90030.xyz）誤判為跨域 → 403 Invalid CORS request。故由 TrustedForwardedRequestFilter
+#     （先於 Spring Security 過濾器鏈）在 trusted-proxy-count > 0 時採用 X-Forwarded-Proto／Host／Port 還原
+#     scheme／host／port；count = 0 時完全忽略這些 header。該 filter 不處理任何 IP（IP 只由 ClientIpResolver 決定）。
 
 spring:
   application:
@@ -15,11 +22,14 @@ spring:
       pool:
         size: 4
 
+  # 憑證類屬性（帳號／密碼／金鑰）一律不給預設值（SEC-12）：未設環境變數時解析為空，
+  # 正式環境由 RequiredSecretsEnvironmentPostProcessor 在啟動時 fail-fast；
+  # 開發用值只放在 application-dev／demo／e2e（或測試資源）。host／port 等非憑證可保留預設。
   # Database
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/blogv2}
-    username: ${DATABASE_USERNAME:postgres}
-    password: ${DATABASE_PASSWORD:password}
+    username: ${DATABASE_USERNAME:}
+    password: ${DATABASE_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     hikari:
       # 連線池預算（Z3-b，與下方 spring.rabbitmq.listener.simple 綁定）：
@@ -37,8 +47,8 @@ spring:
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:guest}
-    password: ${RABBITMQ_PASSWORD:guest}
+    username: ${RABBITMQ_USERNAME:}
+    password: ${RABBITMQ_PASSWORD:}
     virtual-host: ${RABBITMQ_VHOST:blog}
     publisher-confirm-type: correlated
     publisher-returns: true
@@ -99,8 +109,8 @@ mybatis:
 # MinIO Config
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
-  access-key: ${MINIO_ACCESS_KEY:minioadmin}
-  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  access-key: ${MINIO_ACCESS_KEY:}
+  secret-key: ${MINIO_SECRET_KEY:}
   bucket-name: ${MINIO_BUCKET:blog-files}
 
 # 檔案模組設定
@@ -131,8 +141,20 @@ management:
       probes:
         enabled: true
 
-# CORS 配置（生產環境同域部署時不觸發，此為開發環境預設）
+# CORS 配置：此為開發環境預設白名單。
+# 生產環境同域部署（前端與 /api 同網域）時，「同域請求不觸發 CORS」的前提是 app 還原得出 client 看到的
+# scheme／host／port：即 APP_HTTP_TRUSTED_PROXY_COUNT >= 1 且 proxy 鏈正確帶出 X-Forwarded-Proto
+# （見 TrustedForwardedRequestFilter）。count = 0 又在 TLS 終結 proxy 後方時，https 的同網域 Origin 會被視為跨域，
+# 若 APP_CORS_ALLOWED_ORIGINS 未列該網域就回 403 Invalid CORS request。
 app:
+  http:
+    # 受信任的反向代理層數（SEC-01）：ClientIpResolver 取 X-Forwarded-For 由右數第 N 節；
+    # TrustedForwardedRequestFilter 對 X-Forwarded-Proto／Host／Port 也用同一個 N 取右數第 N 個值。
+    #   0 = 完全不信任 XFF／X-Forwarded-*、使用 remoteAddr（預設；本機 docker、CI、無 proxy 的部署）。
+    #       啟動時會記一行 WARN（prod 若忘了設，所有請求共用 proxy IP 當限流 key）
+    #   1 = prod：Client → Cloudflare → nginx（realip 覆寫 XFF）→ Ingress → app，依 nginx 設定結果設 1
+    # 設太大 → 取到攻擊者可控節點（等於無防護）；設太小 → 全站共用一個限流桶（退化但不被繞過）。拿不準時寧可設小。
+    trusted-proxy-count: ${APP_HTTP_TRUSTED_PROXY_COUNT:0}
   frontend-base-url: ${APP_FRONTEND_BASE_URL:http://localhost:3000}
   mail:
     default-from:

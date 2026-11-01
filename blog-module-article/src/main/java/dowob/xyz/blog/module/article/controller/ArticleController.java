@@ -14,6 +14,7 @@ import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
 import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.web.ClientIpResolver;
 import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
@@ -61,6 +62,11 @@ public class ArticleController {
      * 文章查詢服務（Read，CQRS 分層）
      */
     private final ArticleQueryService articleQueryService;
+
+    /**
+     * Client IP 解析器（瀏覽數去重用；信任鏈由 app.http.trusted-proxy-count 控制）
+     */
+    private final ClientIpResolver clientIpResolver;
 
     /**
      * 分頁取得已發布文章列表（公開）
@@ -117,7 +123,7 @@ public class ArticleController {
                                                           @AuthenticationPrincipal AuthUser user,
                                                           Authentication authentication) {
         Role viewerRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleQueryService.getArticleBySlug(slug, (user == null ? null : user.uuid()), viewerRole, getClientIp(request)));
+        return ApiResponse.success(articleQueryService.getArticleBySlug(slug, (user == null ? null : user.uuid()), viewerRole, clientIpResolver.resolve(request)));
     }
 
     /**
@@ -145,7 +151,7 @@ public class ArticleController {
                                                     @AuthenticationPrincipal AuthUser user,
                                                     Authentication authentication) {
         Role viewerRole = SecurityUtils.resolveRole(authentication);
-        return ApiResponse.success(articleQueryService.getArticleByUuid(uuid, (user == null ? null : user.uuid()), viewerRole, getClientIp(request)));
+        return ApiResponse.success(articleQueryService.getArticleByUuid(uuid, (user == null ? null : user.uuid()), viewerRole, clientIpResolver.resolve(request)));
     }
 
     /**
@@ -312,23 +318,6 @@ public class ArticleController {
             Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);
         return ApiResponse.success(articleService.rejectArticle(user.uuid(), operatorRole, uuid, request.getReason()));
-    }
-
-
-    /**
-     * 取得客戶端真實 IP
-     *
-     * <p>
-     * 搭配 {@code server.forward-headers-strategy=framework} 設定，
-     * Spring 框架會自動解析 X-Forwarded-For 並更新 RemoteAddr，
-     * 此處直接使用 RemoteAddr 可避免手動解析 header 被偽造的安全風險。
-     * </p>
-     *
-     * @param request HTTP 請求
-     * @return 客戶端 IP 字串
-     */
-    private String getClientIp(HttpServletRequest request) {
-        return request.getRemoteAddr();
     }
 
 }

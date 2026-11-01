@@ -198,6 +198,170 @@ class UserControllerTest {
     }
 
     // =========================================================================
+    // PATCH /api/v1/users/me/profile — SEC-10 URL 欄位協定白名單
+    // =========================================================================
+
+    /**
+     * 送出指定欄位值的 profile PATCH 請求。
+     */
+    private org.springframework.test.web.servlet.ResultActions patchProfile(UpdateProfileRequest request)
+            throws Exception {
+        return mockMvc.perform(patch("/api/v1/users/me/profile")
+                .with(authentication(USER_AUTH))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)));
+    }
+
+    /**
+     * 驗證：website 為 javascript: URL 時回傳 400，格式與既有參數驗證錯誤一致（code=400，訊息含欄位名），且不呼叫 service。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → website 為 javascript: → 400 且 service 不被呼叫（SEC-10）")
+    void updateProfile_javascriptWebsite_shouldReturn400() throws Exception {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setWebsite("javascript:alert(1)");
+
+        patchProfile(request)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("website")));
+
+        verifyNoInteractions(userService);
+    }
+
+    /**
+     * 驗證：avatarUrl 為 data: URL 時回傳 400。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → avatarUrl 為 data: → 400 且 service 不被呼叫（SEC-10）")
+    void updateProfile_dataAvatarUrl_shouldReturn400() throws Exception {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setAvatarUrl("data:text/html,<script>alert(1)</script>");
+
+        patchProfile(request)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("avatarUrl")));
+
+        verifyNoInteractions(userService);
+    }
+
+    /**
+     * 驗證：website 為 protocol-relative URL 時回傳 400。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → website 為 //evil.com → 400（SEC-10）")
+    void updateProfile_protocolRelativeWebsite_shouldReturn400() throws Exception {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setWebsite("//evil.com");
+
+        patchProfile(request).andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("400"));
+
+        verifyNoInteractions(userService);
+    }
+
+    /**
+     * 驗證：avatarUrl 接受檔案上傳 API 回傳的本站相對路徑（頭貼上傳流程不可被擋）。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → avatarUrl 為本站檔案內容路徑 → 200（SEC-10 不破壞頭貼上傳）")
+    void updateProfile_fileContentPathAvatar_shouldReturn200() throws Exception {
+        String path = "/api/v1/files/11111111-2222-3333-4444-555555555555/content";
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setAvatarUrl(path);
+
+        doNothing().when(userService).updateProfile(any(UUID.class), anyString(), nullable(String.class),
+                nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
+
+        patchProfile(request).andExpect(status().isOk()).andExpect(jsonPath("$.code").value("00000"));
+
+        verify(userService).updateProfile(eq(USER_UUID), eq("newNickname"), nullable(String.class),
+                nullable(String.class), nullable(String.class), eq(path), nullable(String.class));
+    }
+
+    /**
+     * 驗證：socialLinks 的 value 為網址（含 scheme）時回傳 400。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → socialLinks value 為 javascript: → 400 且訊息含欄位名（SEC-10）")
+    void updateProfile_javascriptSocialLink_shouldReturn400() throws Exception {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setSocialLinks("{\"github\":\"javascript:alert(1)\"}");
+
+        patchProfile(request)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("socialLinks")));
+
+        verifyNoInteractions(userService);
+    }
+
+    /**
+     * 驗證：socialLinks 項目數超過上限時回傳 400。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → socialLinks 超過 10 個項目 → 400（SEC-10）")
+    void updateProfile_tooManySocialLinks_shouldReturn400() throws Exception {
+        StringBuilder json = new StringBuilder("{");
+        for (int i = 0; i < 11; i++) {
+            json.append(i == 0 ? "" : ",").append("\"k").append(i).append("\":\"v\"");
+        }
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setSocialLinks(json.append("}").toString());
+
+        patchProfile(request).andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("400"));
+
+        verifyNoInteractions(userService);
+    }
+
+    /**
+     * 驗證：前端設定頁實際送出的 payload（handle 格式，E2E 的 myhandle 等）可通過驗證並傳遞至 service。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → 前端實際 payload（handle 與合法網址）→ 200 並傳遞至 service（SEC-10）")
+    void updateProfile_frontendPayload_shouldReturn200() throws Exception {
+        String social = "{\"github\":\"myhandle\",\"twitter\":\"mytwitter\",\"linkedin\":\"mylinkedin\"}";
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setWebsite("https://myblog.com/about?x=1");
+        request.setSocialLinks(social);
+        request.setAvatarUrl("https://cdn.example.com/avatar.png");
+
+        doNothing().when(userService).updateProfile(any(UUID.class), anyString(), nullable(String.class),
+                nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
+
+        patchProfile(request).andExpect(status().isOk()).andExpect(jsonPath("$.code").value("00000"));
+
+        verify(userService).updateProfile(eq(USER_UUID), eq("newNickname"), nullable(String.class),
+                eq("https://myblog.com/about?x=1"), eq(social),
+                eq("https://cdn.example.com/avatar.png"), nullable(String.class));
+    }
+
+    /**
+     * 驗證：URL 欄位為空字串（清除）時通過驗證。
+     */
+    @Test
+    @DisplayName("PATCH /users/me/profile → website／avatarUrl／socialLinks 為空字串 → 200（清除）")
+    void updateProfile_emptyUrlFields_shouldReturn200() throws Exception {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setNickname("newNickname");
+        request.setWebsite("");
+        request.setAvatarUrl("");
+        request.setSocialLinks("");
+
+        doNothing().when(userService).updateProfile(any(UUID.class), anyString(), nullable(String.class),
+                nullable(String.class), nullable(String.class), nullable(String.class), nullable(String.class));
+
+        patchProfile(request).andExpect(status().isOk());
+    }
+
+    // =========================================================================
     // PATCH /api/v1/users/me/notifications 測試
     // =========================================================================
 

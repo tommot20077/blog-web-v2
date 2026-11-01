@@ -250,18 +250,19 @@ class TagServiceTest {
     }
 
     @Test
-    @DisplayName("adminDeleteTag: usage count > 0 throws TAG_IN_USE")
-    void adminDeleteTag_withUsageCount_throwsBusinessException() {
+    @DisplayName("adminDeleteTag: usage_count > 0 但 article_tags 已無任何列 → 允許刪除（守衛看關聯列，不看計數器）")
+    void adminDeleteTag_staleUsageCountButNoArticleTags_deletes() {
         UUID id = UUID.randomUUID();
         Tag tag = new Tag();
         tag.setId(id);
         tag.setSlug("java");
         tag.setUsageCount(5);
         when(tagRepository.findById(id)).thenReturn(Optional.of(tag));
+        when(articleTagRepository.countByTagId(id)).thenReturn(0);
 
-        assertThatThrownBy(() -> tagService.adminDeleteTag(id))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(TagErrorCode.TAG_IN_USE.getMessage());
+        tagService.adminDeleteTag(id);
+
+        verify(tagRepository).deleteById(id);
     }
 
     @Test
@@ -281,7 +282,7 @@ class TagServiceTest {
     }
 
     @Test
-    @DisplayName("adminDeleteTag: usageCount=0 但 article_tags 有關聯 → throws TAG_IN_USE")
+    @DisplayName("adminDeleteTag: usageCount=0（只掛草稿，不計入已發布數）但 article_tags 有關聯 → throws TAG_IN_USE")
     void adminDeleteTag_zeroUsageButHasArticleTags_throwsBusinessException() {
         UUID id = UUID.randomUUID();
         Tag tag = new Tag();

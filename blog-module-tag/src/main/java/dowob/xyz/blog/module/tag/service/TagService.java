@@ -93,6 +93,9 @@ public interface TagService {
     /**
      * 管理員刪除標籤
      *
+     * <p>守衛：{@code article_tags} 只要還有任何一列（含草稿等未發布文章）就拒絕（{@code TAG_IN_USE}），
+     * 不看 {@code usage_count}（它只計已發布文章）。</p>
+     *
      * @param id 標籤 ID
      */
     void adminDeleteTag(UUID id);
