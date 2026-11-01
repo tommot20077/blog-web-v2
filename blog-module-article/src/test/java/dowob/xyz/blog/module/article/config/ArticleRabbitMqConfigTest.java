@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.config;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Binding;
@@ -107,6 +108,40 @@ class ArticleRabbitMqConfigTest {
         assertThat(binding.getExchange()).isEqualTo(SeriesEventContract.EXCHANGE);
         assertThat(binding.getRoutingKey()).isEqualTo(SeriesEventContract.ROUTING_KEY_DELETED);
         assertThat(binding.getDestination()).isEqualTo("article.series-deleted");
+    }
+
+    @Test
+    @DisplayName("user.events exchange：Topic、durable、不自動刪除；名稱取自 user 事件契約（與 user 模組宣告的參數相同，重複宣告不衝突）")
+    void userEventsExchange_matchesContractAndIsDurableTopic() {
+        TopicExchange exchange = config.articleUserEventsExchange();
+
+        assertThat(exchange.getName()).isEqualTo(UserEventContract.EXCHANGE).isEqualTo("user.events");
+        assertThat(exchange.getType()).isEqualTo("topic");
+        assertThat(exchange.isDurable()).isTrue();
+        assertThat(exchange.isAutoDelete()).isFalse();
+    }
+
+    @Test
+    @DisplayName("queue：article.user-deleted、durable，並帶 DLQ 參數")
+    void userDeletedQueue_isDurableWithDlqArgs() {
+        Queue queue = config.articleUserDeletedQueue();
+
+        assertThat(queue.getName()).isEqualTo("article.user-deleted").isEqualTo(ArticleRabbitMqConfig.QUEUE_USER_DELETED);
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+                .containsEntry("x-dead-letter-exchange", "blog.dlq")
+                .containsEntry("x-dead-letter-routing-key", "dead-letter");
+    }
+
+    @Test
+    @DisplayName("binding：綁定 user.events exchange 與 user.deleted routing key（取自契約常數）")
+    void bindUserDeleted_bindsUserContract() {
+        Binding binding = config.articleUserDeletedBinding(
+                config.articleUserDeletedQueue(), config.articleUserEventsExchange());
+
+        assertThat(binding.getExchange()).isEqualTo(UserEventContract.EXCHANGE);
+        assertThat(binding.getRoutingKey()).isEqualTo(UserEventContract.ROUTING_KEY_DELETED);
+        assertThat(binding.getDestination()).isEqualTo("article.user-deleted");
     }
 
     @Test

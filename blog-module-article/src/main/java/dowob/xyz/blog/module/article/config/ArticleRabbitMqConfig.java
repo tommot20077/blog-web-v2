@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.config;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -20,6 +21,7 @@ import java.util.Map;
  * （{@link SeriesEventContract#ROUTING_KEY_DELETED}，M6-b）的 Queue 與 Binding。
  * 文章發布事件（{@link ArticleEventContract#ROUTING_KEY_PUBLISHED}）本模組只負責發布，
  * 實際消費由 search／recommend 模組各自宣告的 Queue 承接，不在本模組宣告。
+ * 另訂閱使用者帳號刪除事件（{@link UserEventContract#ROUTING_KEY_DELETED}，DATA-02）。
  * 所有 Queue 均配置死信交換器（DLQ），以保障消息可靠性。
  * </p>
  *
@@ -130,6 +132,54 @@ public class ArticleRabbitMqConfig {
                 .bind(articleSeriesDeletedQueue)
                 .to(articleSeriesEventsExchange)
                 .with(SeriesEventContract.ROUTING_KEY_DELETED);
+    }
+
+    /**
+     * 使用者帳號已刪除事件的 Queue 名稱（DATA-02：作者刪帳後清除其草稿／待審／被駁回文章）
+     */
+    public static final String QUEUE_USER_DELETED = "article.user-deleted";
+
+    /**
+     * 建立使用者事件 Topic Exchange 的宣告（與 user 模組宣告的 {@code user.events} 參數相同）。
+     *
+     * <p>exchange 由 producer（user 模組的 {@code UserRabbitMqConfig}）宣告；本模組<b>不依賴 user 模組</b>，
+     * 故不能以 {@code @Qualifier} 引用其 bean，改為以事件契約常數 {@link UserEventContract#EXCHANGE} 自行宣告同名 exchange。
+     * RabbitMQ 對參數完全相同的重複宣告是冪等的（durable、不自動刪除）；bean 名稱刻意與 user 端的
+     * {@code userEventsExchange} 不同，避免同名衝突。</p>
+     *
+     * @return TopicExchange 實例
+     */
+    @Bean
+    public TopicExchange articleUserEventsExchange() {
+        return new TopicExchange(UserEventContract.EXCHANGE);
+    }
+
+    /**
+     * 建立使用者帳號刪除事件 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue articleUserDeletedQueue() {
+        return new Queue(QUEUE_USER_DELETED, true, false, false, dlqArgs());
+    }
+
+    /**
+     * 將使用者帳號刪除事件 Queue 綁定到 {@code user.events} 的 {@code user.deleted} routing key
+     * （exchange 與 routing key 取自 {@link UserEventContract}）
+     *
+     * @param articleUserDeletedQueue   本模組的 queue
+     * @param articleUserEventsExchange 使用者事件 exchange 的宣告
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding articleUserDeletedBinding(
+            Queue articleUserDeletedQueue,
+            @Qualifier("articleUserEventsExchange") TopicExchange articleUserEventsExchange) {
+        return BindingBuilder
+                .bind(articleUserDeletedQueue)
+                .to(articleUserEventsExchange)
+                .with(UserEventContract.ROUTING_KEY_DELETED);
     }
 
 }
