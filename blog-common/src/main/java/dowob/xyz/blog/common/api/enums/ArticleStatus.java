@@ -66,4 +66,43 @@ public enum ArticleStatus {
             return false;
         }
     }
+
+    /**
+     * 作者刪除帳號（匿名化，DATA-02）時，處於此狀態的文章是否隨之移除。
+     *
+     * <p>Q2 定案：保留已發布文章（作者顯示因 users 列匿名化而自動變成匿名暱稱）、刪除草稿與待審。
+     * 本方法是「去留」的唯一真相，article 模組（決定刪哪些文章）與 file 模組（決定哪些上傳檔案仍被保留文章引用）
+     * 共用，避免兩邊各自硬寫狀態集合而漂移：</p>
+     * <ul>
+     *   <li>{@link #DRAFT}、{@link #PENDING_REVIEW}、{@link #REJECTED}：未公開、沒有保留理由 → 移除；</li>
+     *   <li>{@link #PUBLISHED}：公開內容 → 保留；</li>
+     *   <li>{@link #ARCHIVED}：已下架，保留。下架用於法務／侵權撤下，內容可能需要留存，
+     *       不應由使用者刪帳連動銷毀；它不公開，保留不構成對外暴露。</li>
+     * </ul>
+     *
+     * @return DRAFT、PENDING_REVIEW、REJECTED 回傳 true
+     */
+    public boolean isRemovedWithAuthorAccount() {
+        return this == DRAFT || this == PENDING_REVIEW || this == REJECTED;
+    }
+
+    /**
+     * 以 status name（String）判斷作者刪帳時是否移除該狀態的文章（見 {@link #isRemovedWithAuthorAccount()}）。
+     *
+     * <p>跨模組傳遞時 status 常以 String 形式流通（例如 {@code ArticleData.status()}）。
+     * null 或無法對應到列舉的字串一律視為<b>不移除</b>：無法確認時寧可保留，也不銷毀資料。</p>
+     *
+     * @param statusName 文章狀態名稱（可為 null）
+     * @return 對應狀態應移除時回傳 true；null／未知字串回傳 false
+     */
+    public static boolean isRemovedWithAuthorAccount(String statusName) {
+        if (statusName == null) {
+            return false;
+        }
+        try {
+            return valueOf(statusName).isRemovedWithAuthorAccount();
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
 }
