@@ -45,7 +45,9 @@
     *   `BusinessException` → **HTTP 400** (`HttpStatus.BAD_REQUEST`)
     *   `MethodArgumentNotValidException` / `BindException` → **HTTP 400** (`HttpStatus.BAD_REQUEST`)
     *   `SystemException` → **HTTP 500** (`HttpStatus.INTERNAL_SERVER_ERROR`)
-    *   Catch-all `Exception` → **HTTP 500** (`HttpStatus.INTERNAL_SERVER_ERROR`)
+    *   `DataIntegrityViolationException`（含 `DuplicateKeyException`）→ **HTTP 409**，`CommonErrorCode.DATA_CONFLICT`（`A0007`）。兜底用：service 層能辨識的衝突仍須自行轉成更具體的業務錯誤碼；回應不得含 SQL／約束名／欄位值，完整例外只進 WARN log
+    *   `OptimisticLockingFailureException`（`@Version` 衝突）→ **HTTP 409**，`CommonErrorCode.OPTIMISTIC_LOCK_CONFLICT`（`A0008`）
+    *   Catch-all `Exception` → **HTTP 500** (`HttpStatus.INTERNAL_SERVER_ERROR`)；但 cause 鏈含上述兩類例外者（Spring Data JDBC `save` 的 `DbActionExecutionException` 包裝形態）改回 409
     *   `ResponseStatusException` → preserve original status code via `e.getStatusCode()`
     *   `AccessDeniedException` → re-throw to let Spring Security handle (returns HTTP 403)
 *   **Forbidden pattern**: `return ApiResponse.failed(...)` in an `@ExceptionHandler` — this is always HTTP 200.
