@@ -47,4 +47,33 @@ class TagRabbitMqConfigTest {
         assertThat(config.tagArticleTaggedQueue().getName()).isEqualTo("tag.article.tagged");
         assertThat(config.tagArticleTaggedBinding().getRoutingKey()).isEqualTo(ArticleEventContract.ROUTING_KEY_TAGGED);
     }
+
+    @Test
+    @DisplayName("DATA-01：發布／更新／下架三個 usage queue 皆 durable、帶 DLQ 參數，且各綁對應 routing key")
+    void usageLifecycleQueues_areDurableWithDlqArgsAndBoundToContractKeys() {
+        assertQueue(config.tagUsageArticlePublishedQueue(), "tag.usage.article-published");
+        assertQueue(config.tagUsageArticleUpdatedQueue(), "tag.usage.article-updated");
+        assertQueue(config.tagUsageArticleArchivedQueue(), "tag.usage.article-archived");
+
+        assertBinding(config.bindTagUsageArticlePublished(), "tag.usage.article-published",
+                ArticleEventContract.ROUTING_KEY_PUBLISHED);
+        assertBinding(config.bindTagUsageArticleUpdated(), "tag.usage.article-updated",
+                ArticleEventContract.ROUTING_KEY_UPDATED);
+        assertBinding(config.bindTagUsageArticleArchived(), "tag.usage.article-archived",
+                ArticleEventContract.ROUTING_KEY_ARCHIVED);
+    }
+
+    private static void assertQueue(Queue queue, String name) {
+        assertThat(queue.getName()).isEqualTo(name);
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+                .containsEntry("x-dead-letter-exchange", "blog.dlq")
+                .containsEntry("x-dead-letter-routing-key", "dead-letter");
+    }
+
+    private static void assertBinding(Binding binding, String destination, String routingKey) {
+        assertThat(binding.getExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
+        assertThat(binding.getRoutingKey()).isEqualTo(routingKey);
+        assertThat(binding.getDestination()).isEqualTo(destination);
+    }
 }

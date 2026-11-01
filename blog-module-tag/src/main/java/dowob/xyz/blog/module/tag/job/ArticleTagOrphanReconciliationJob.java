@@ -22,7 +22,8 @@ import java.util.UUID;
  * <ul>
  *   <li>存在性委派 {@link ArticleFacade#filterExistingUuids}（<b>不分狀態</b>；草稿、待審等文章的標籤關聯不是孤兒）</li>
  *   <li>孤兒處理是「刪除該列」（關聯的存在以文章為前提）；<b>只刪 {@code article_tags}，不動 {@code tags}</b>，
- *       也不調整 {@code tags.usage_count}——原 FK CASCADE 同樣不動它，使用計數重算為 DATA-01，另案處理</li>
+ *       也不調整 {@code tags.usage_count}——孤兒指向的文章已不存在、本來就不在「已發布文章數」內；
+ *       使用計數由 {@code TagUsageReconciliationJob}（每日 04:11，排在本排程之後）全量重算</li>
  *   <li>不覆寫中止門檻，沿用框架預設</li>
  * </ul>
  *
