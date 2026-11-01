@@ -59,4 +59,16 @@ public interface UserTagFollowRepository extends Repository<UserTagFollow, UUID>
     @Modifying
     @Query("DELETE FROM user_tag_follows WHERE tag_id = :tagId")
     void deleteByTagId(@Param("tagId") UUID tagId);
+
+    /**
+     * 刪除指定使用者的所有標籤追蹤記錄（使用者刪除帳號時清理，DATA-02）
+     *
+     * <p>單一 SQL 敘述，天然冪等；{@code user_id} 為複合主鍵的前導欄位，可走主鍵索引。</p>
+     *
+     * @param userId 使用者公開 UUID
+     * @return 刪除的追蹤記錄筆數
+     */
+    @Modifying
+    @Query("DELETE FROM user_tag_follows WHERE user_id = :userId")
+    int deleteByUserId(@Param("userId") UUID userId);
 }
