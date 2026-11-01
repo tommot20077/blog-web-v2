@@ -138,26 +138,6 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     @Override
-    public void incrementCommentCount(Long articleId) {
-        commandSubService.incrementCommentCount(articleId);
-    }
-
-    @Override
-    public void decrementCommentCount(Long articleId) {
-        commandSubService.decrementCommentCount(articleId);
-    }
-
-    @Override
-    public void incrementLikeCount(Long articleId) {
-        commandSubService.incrementLikeCount(articleId);
-    }
-
-    @Override
-    public void decrementLikeCount(Long articleId) {
-        commandSubService.decrementLikeCount(articleId);
-    }
-
-    @Override
     public Long findIdByUuid(UUID uuid) {
         return querySubService.findIdByUuid(uuid);
     }

@@ -1,7 +1,7 @@
 # architecture.md 修訂提案：跨模組 UUID 重構完成後的邊界規則
 
 - 日期：2026-10-31
-- 狀態：**提案，待 Yuan 簽核**（architecture.md 為提案制規範文件；簽核前不改原檔）
+- 狀態：**已簽核並套用**（Yuan 2026-10-31：同意全文替換；FK 理由維持三點；UserFacade 不依狀態過濾寫進規範）
 - 依據：`docs/plans/2026-10-24-cross-module-uuid-design.md` §6「規範文件」列；Yuan 2026-10-31 決定 tags／article_tags 維持 reference data
 - 範圍：只改 `ai-docs/architecture.md` 的「Cross-Module Boundary Rules」一節（第 19～115 行）；其他章節不動
 
