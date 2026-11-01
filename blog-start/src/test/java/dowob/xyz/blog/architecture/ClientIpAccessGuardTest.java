@@ -241,6 +241,20 @@ class ClientIpAccessGuardTest {
     }
 
     @Test
+    @DisplayName("目錄掃描略過隱藏目錄（.worktrees、.git 等），只看本 repo 的原始碼")
+    void directoryScanSkipsHiddenDirectories(@TempDir Path tmp) throws IOException {
+        // 本機以 git worktree 平行開發時，.worktrees/ 底下是其他分支的舊程式碼；
+        // 若一併掃描，守衛會因別的 worktree 尚未合併的程式而誤報（CI 沒有 .worktrees，不會發生）。
+        write(tmp, "blog-module-x/src/main/java/a/Bad.java", "class Bad { String s = \"X-Forwarded-For\"; }");
+        write(tmp, ".worktrees/W1/blog-module-x/src/main/java/a/Old.java", "class Old { String s = \"X-Forwarded-For\"; }");
+        write(tmp, ".git/stuff/src/main/java/a/Junk.java", "class Junk { String s = \"X-Forwarded-For\"; }");
+
+        List<String> flagged = findHeaderLiteralFiles(tmp, ALLOWED_TOKENS_BY_FILE);
+
+        assertThat(flagged).hasSize(1).allMatch(p -> p.endsWith("Bad.java"));
+    }
+
+    @Test
     @DisplayName("F3 反向驗證 (b)：新增的 header 名稱（Forwarded／X-Client-IP／X-Original-Forwarded-For 等）被抓到")
     void literalGuardDetectsExtendedHeaderNames() {
         assertThat(containsHeaderLiteral("String h = r.getHeader(\"Forwarded\");")).isTrue();
@@ -384,6 +398,24 @@ class ClientIpAccessGuardTest {
     }
 
     /**
+     * 判斷檔案是否位於 repo 根目錄下的隱藏目錄（{@code .worktrees}、{@code .git} 等）。
+     *
+     * <p>本機以 git worktree 平行開發時，{@code .worktrees/} 內是其他分支的程式碼，不屬於本 repo 目前的原始碼。</p>
+     *
+     * @param root repo 根目錄
+     * @param file 候選檔案
+     * @return 相對於 root 的任一路徑段以 {@code .} 開頭時為 {@code true}
+     */
+    private static boolean isUnderHiddenDirectory(Path root, Path file) {
+        for (Path segment : root.relativize(file)) {
+            if (segment.toString().startsWith(".")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 規則 (b)：掃描各模組 {@code src/main/java}，回傳白名單檔名以外、程式碼（非註解）含 client IP header 字面值的檔案。
      *
      * @param root            repo 根目錄
@@ -396,6 +428,7 @@ class ClientIpAccessGuardTest {
                     .filter(p -> p.toString().endsWith(".java"))
                     .filter(p -> p.toString().replace('\\', '/').contains("/src/main/java/"))
                     .filter(p -> !p.toString().replace('\\', '/').contains("/target/"))
+                    .filter(p -> !isUnderHiddenDirectory(root, p))
                     .filter(p -> hasDisallowedToken(read(p),
                             allowedTokensByFile.getOrDefault(p.getFileName().toString(), Set.of())))
                     .map(Path::toString)
