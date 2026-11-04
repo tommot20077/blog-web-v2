@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.reading.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.reading.model.dto.request.CreateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.request.UpdateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.response.HighlightResponse;
@@ -45,7 +46,7 @@ public class HighlightController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateHighlightRequest req) {
-        return ApiResponse.success(highlightService.create(articleUuid, user.uuid(), req));
+        return ApiResponse.success(highlightService.create(articleUuid, user.uuid(), SecurityUtils.isAdmin(), req));
     }
 
     @GetMapping("/articles/{articleUuid}/highlights")
@@ -64,7 +65,7 @@ public class HighlightController {
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdateHighlightRequest req) {
-        return ApiResponse.success(highlightService.update(uuid, user.uuid(), req));
+        return ApiResponse.success(highlightService.update(uuid, user.uuid(), SecurityUtils.isAdmin(), req));
     }
 
     @DeleteMapping("/highlights/{uuid}")

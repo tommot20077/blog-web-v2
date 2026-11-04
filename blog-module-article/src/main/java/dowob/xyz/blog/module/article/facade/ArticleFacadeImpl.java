@@ -559,6 +559,20 @@ public class ArticleFacadeImpl implements ArticleFacade {
 
     /**
      * {@inheritDoc}
+     *
+     * <p>直接委派 {@link #filterReadableUuids}（單筆候選），可見性政策只有 {@link ArticleVisibility} 一份真相；
+     * 查無此文章時候選被濾掉，與「不可讀」走同一條路徑。</p>
+     */
+    @Override
+    public boolean isReadableBy(UUID articleUuid, UUID viewerUuid, boolean isAdmin) {
+        if (articleUuid == null) {
+            return false;
+        }
+        return !filterReadableUuids(List.of(articleUuid), viewerUuid, isAdmin).isEmpty();
+    }
+
+    /**
+     * {@inheritDoc}
      */
     @Override
     public void incrementCommentCount(UUID articleUuid) {

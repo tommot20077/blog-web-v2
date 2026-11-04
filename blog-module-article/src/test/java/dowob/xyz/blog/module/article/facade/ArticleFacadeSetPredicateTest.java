@@ -47,6 +47,57 @@ class ArticleFacadeSetPredicateTest {
     }
 
     @Nested
+    class IsReadableBy {
+
+        private final UUID articleUuid = UUID.randomUUID();
+        private final UUID authorUuid = UUID.randomUUID();
+        private final UUID viewerUuid = UUID.randomUUID();
+
+        private void stubRow(String status) {
+            when(articleMapper.findVisibilityRowsByUuids(anyCollection())).thenReturn(
+                    List.of(new ArticleMapper.ArticleUuidVisibilityRow(articleUuid, status, authorUuid)));
+        }
+
+        @Test
+        @DisplayName("PUBLISHED：匿名、他人皆可讀")
+        void published_readableByAnyone() {
+            stubRow("PUBLISHED");
+            assertThat(facade.isReadableBy(articleUuid, null, false)).isTrue();
+            assertThat(facade.isReadableBy(articleUuid, viewerUuid, false)).isTrue();
+        }
+
+        @Test
+        @DisplayName("非 PUBLISHED：他人與匿名不可讀")
+        void draft_notReadableByOthers() {
+            stubRow("DRAFT");
+            assertThat(facade.isReadableBy(articleUuid, viewerUuid, false)).isFalse();
+            assertThat(facade.isReadableBy(articleUuid, null, false)).isFalse();
+        }
+
+        @Test
+        @DisplayName("非 PUBLISHED（含 ARCHIVED）：作者本人與 ADMIN 可讀")
+        void nonPublished_readableByAuthorAndAdmin() {
+            stubRow("ARCHIVED");
+            assertThat(facade.isReadableBy(articleUuid, authorUuid, false)).isTrue();
+            assertThat(facade.isReadableBy(articleUuid, viewerUuid, true)).isTrue();
+        }
+
+        @Test
+        @DisplayName("查無此文章（含已硬刪）：不可讀，連 ADMIN 也 false（與「不存在」同一條路徑）")
+        void missingArticle_notReadable() {
+            when(articleMapper.findVisibilityRowsByUuids(anyCollection())).thenReturn(List.of());
+            assertThat(facade.isReadableBy(articleUuid, viewerUuid, true)).isFalse();
+        }
+
+        @Test
+        @DisplayName("articleUuid 為 null：回 false，不查 DB")
+        void nullUuid_false_noQuery() {
+            assertThat(facade.isReadableBy(null, viewerUuid, true)).isFalse();
+            org.mockito.Mockito.verifyNoInteractions(articleMapper);
+        }
+    }
+
+    @Nested
     class AssemblerWiring {
 
         @Test

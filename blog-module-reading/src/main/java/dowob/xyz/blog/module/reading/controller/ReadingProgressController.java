@@ -2,6 +2,8 @@ package dowob.xyz.blog.module.reading.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.reading.model.dto.request.UpdateProgressRequest;
 import dowob.xyz.blog.module.reading.model.dto.response.ProgressResponse;
 import dowob.xyz.blog.module.reading.service.ReadingProgressService;
@@ -33,6 +35,7 @@ import java.util.UUID;
 public class ReadingProgressController {
 
     private final ReadingProgressService progressService;
+    private final ArticleFacade articleFacade;
 
     @PutMapping
     @PreAuthorize("isAuthenticated()")
@@ -41,6 +44,11 @@ public class ReadingProgressController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdateProgressRequest req) {
+        // SEC-16「可讀才可互動」：不可讀與「文章不存在」同一條路徑——既有契約是 200 靜默略過（不寫 Redis／DB），
+        // 因此回應與副作用都與不存在完全相同，不形成草稿存在性 oracle
+        if (!articleFacade.isReadableBy(articleUuid, user.uuid(), SecurityUtils.isAdmin())) {
+            return ApiResponse.success();
+        }
         progressService.update(user.uuid(), articleUuid, req.getProgress(), req.getLastHeading());
         return ApiResponse.success();
     }
