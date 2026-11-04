@@ -107,6 +107,8 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         // 靜態資源與 Swagger
+                        // SEC-21：springdoc 預設關閉（僅 dev／demo／SPRINGDOC_ENABLED=true 才存在端點），
+                        // 關閉時這些路徑回 404；放行規則保留，讓啟用的環境無需登入即可瀏覽。
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/favicon.ico", "/error").permitAll()
 
