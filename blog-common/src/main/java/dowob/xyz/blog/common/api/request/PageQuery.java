@@ -12,8 +12,9 @@ package dowob.xyz.blog.common.api.request;
  *
  * <p><b>超出範圍一律拒絕，不靜默修正</b>（SEC-04，Yuan 2026-09-27 決定）：
  * 原本 {@code size} 超過上限會被夾成上限、{@code page} / {@code size} 小於 1 會被改成 1。
- * 靜默夾界的風險在於 client 以為拿到了全部——前端文章列表即以 {@code size=1000}
- * 取全量，上限一旦調低就會無聲地少資料。改為拒絕後，錯誤在第一次呼叫就浮現。</p>
+ * 靜默夾界的風險在於 client 以為拿到了全部——前端文章列表曾以 {@code size=1000}
+ * 取全量，若當時上限被靜默調低就會無聲地少資料（2026-11-04 前端改為伺服器端分頁後，上限才降為 100）。
+ * 改為拒絕後，錯誤在第一次呼叫就浮現。</p>
  *
  * <p><b>HTTP 層如何回 400</b>：compact constructor 丟出的例外若發生在 Spring 的
  * record 建構子綁定中，會被包成 {@code BeanInstantiationException} 而成為 500。

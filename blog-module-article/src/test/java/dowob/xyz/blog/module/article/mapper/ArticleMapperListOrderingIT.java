@@ -84,6 +84,10 @@ class ArticleMapperListOrderingIT extends ArticleSeriesITSupport {
     void findPendingReviewPage_sameCreatedAt_orderedByIdAscAcrossPages() {
         UUID author = UUID.randomUUID();
         List<Long> ascIds = insertSameInstant(author, "PENDING_REVIEW", 5);
+        // 期望順序（id ASC）恰好等於插入順序，沒有 tie-breaker 時 PostgreSQL 常照 heap 順序回傳而偶然通過。
+        // 先 UPDATE 前三筆讓它們的新 tuple 落到 heap 尾端，使 heap 順序（4,5,1,2,3）≠ id 順序。
+        jdbc.update("UPDATE articles SET title = title || '' WHERE id IN (?, ?, ?)",
+                ascIds.get(0), ascIds.get(1), ascIds.get(2));
 
         List<Long> collected = new ArrayList<>();
         for (int page = 0; page < 3; page++) {
