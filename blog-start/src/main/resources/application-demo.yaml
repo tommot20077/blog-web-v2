@@ -40,3 +40,10 @@ minio:
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin}
   bucket-name: ${MINIO_BUCKET:blog-files}
+
+# SEC-21：非正式環境開啟 Swagger UI 與 /v3/api-docs（基底 yaml 預設關閉）
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

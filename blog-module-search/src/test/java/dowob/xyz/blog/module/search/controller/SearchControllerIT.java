@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -173,6 +174,20 @@ class SearchControllerIT {
             mockMvc.perform(get("/api/v1/search"))
                     .andExpect(status().isOk());
         }
+
+        @Test
+        @DisplayName("SEC-05：search 的 q 恰 100 字 → 200；101 字 → 400 PARAM_VALID_ERROR 且不呼叫 service")
+        void search_queryLengthLimit() throws Exception {
+            when(searchService.search(eq("a".repeat(100)), any(), anyString(), anyInt(), anyInt(), isNull()))
+                    .thenReturn(PageResult.of(1, 10, 0L, List.of()));
+
+            mockMvc.perform(get("/api/v1/search").param("q", "a".repeat(100)))
+                    .andExpect(status().isOk());
+            mockMvc.perform(get("/api/v1/search").param("q", "a".repeat(101)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0001"));
+            verify(searchService, never()).search(eq("a".repeat(101)), any(), anyString(), anyInt(), anyInt(), any());
+        }
     }
 
     /**
@@ -207,6 +222,19 @@ class SearchControllerIT {
             mockMvc.perform(get("/api/v1/search/suggest"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data").isArray());
+        }
+
+        @Test
+        @DisplayName("SEC-05：suggest 的 q 恰 100 字 → 200；101 字 → 400 PARAM_VALID_ERROR")
+        void suggest_queryLengthLimit() throws Exception {
+            when(searchService.suggest("a".repeat(100))).thenReturn(List.of());
+
+            mockMvc.perform(get("/api/v1/search/suggest").param("q", "a".repeat(100)))
+                    .andExpect(status().isOk());
+            mockMvc.perform(get("/api/v1/search/suggest").param("q", "a".repeat(101)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0001"));
+            verify(searchService, never()).suggest("a".repeat(101));
         }
     }
 

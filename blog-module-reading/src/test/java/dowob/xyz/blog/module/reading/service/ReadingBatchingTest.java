@@ -28,7 +28,8 @@ import static org.mockito.Mockito.when;
  * <p>
  * 驗證 {@code batchIsBookmarked} / {@code batchIsLiked} 的 {@code IN (...)}
  * 經 {@link BatchedQuery} 切批。這兩處的輸入為「一頁文章的 uuid」，其上界即
- * {@link PageQuery#MAX_SIZE}——大於 {@link BatchedQuery#BATCH_SIZE}，故必須切批。
+ * {@link PageQuery#MAX_SIZE}（SEC-04 第 3 段後為 100，已小於 {@link BatchedQuery#BATCH_SIZE}）；
+ * 但 facade 方法本身接受任意大小的輸入，批次守衛仍須保留。
  * </p>
  *
  * @author Yuan

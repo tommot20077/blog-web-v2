@@ -304,7 +304,7 @@ class SearchServiceTest {
         @Test
         @DisplayName("有關鍵字且已登入，應記錄熱門搜尋與個人歷史")
         void search_withKeywordAndUserId_recordsToRedis() {
-            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(buildTestDocument()));
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
             when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
 
@@ -321,7 +321,7 @@ class SearchServiceTest {
         @Test
         @DisplayName("匿名使用者搜尋，應只記錄熱門搜尋，不記錄個人歷史")
         void search_withKeywordAndNullUserId_doesNotRecordHistory() {
-            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(buildTestDocument()));
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
             when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
 
@@ -479,7 +479,7 @@ class SearchServiceTest {
         @Test
         @DisplayName("同時指定關鍵字與標籤時，應同時應用 MultiMatch 與 Nested Query")
         void search_withKeywordAndTag_appliesBothFilters() {
-            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(buildTestDocument()));
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
             when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
 
@@ -488,6 +488,72 @@ class SearchServiceTest {
             assertThat(result).isNotNull();
             verify(zSetOperations).incrementScore("search:hot", "spring", 1.0);
             verify(listOperations).leftPush("search:history:" + USER_UUID, "spring");
+        }
+
+        @Test
+        @DisplayName("SEC-05：搜尋無結果（total=0）→ 不寫入熱門詞")
+        void search_withNoResults_doesNotRecordHotTerm() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            searchService.search("zzz-no-such-term", null, "relevance", 1, 10, null);
+
+            verify(zSetOperations, never()).incrementScore(anyString(), anyString(), anyDouble());
+        }
+
+        @Test
+        @DisplayName("SEC-05：搜尋有結果 → 寫入熱門詞（正規化：小寫、trim、合併連續空白）")
+        void search_withResults_recordsNormalizedHotTerm() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(buildTestDocument()));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+            when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
+
+            searchService.search("  Spring \t  Boot  ", null, "relevance", 1, 10, null);
+
+            verify(zSetOperations).incrementScore("search:hot", "spring boot", 1.0);
+        }
+
+        @Test
+        @DisplayName("SEC-05：正規化後恰 50 字 → 寫入；51 字 → 不寫入但搜尋照常回傳結果")
+        void search_hotTermLengthLimit_fiftyRecorded_fiftyOneNotRecordedButSearchWorks() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(buildTestDocument()));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+            when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
+            String fifty = "a".repeat(50);
+            String fiftyOne = "b".repeat(51);
+
+            searchService.search(fifty, null, "relevance", 1, 10, null);
+            PageResult<SearchResultResponse> result =
+                    searchService.search(fiftyOne, null, "relevance", 1, 10, null);
+
+            verify(zSetOperations).incrementScore("search:hot", fifty, 1.0);
+            verify(zSetOperations, never()).incrementScore(eq("search:hot"), eq(fiftyOne), anyDouble());
+            assertThat(result.getRecords()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("SEC-05：匿名搜尋有結果 → 仍計入熱門詞，且不寫個人歷史")
+        void search_anonymousWithResults_stillRecordsHotTerm() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(buildTestDocument()));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+            when(zSetOperations.incrementScore(anyString(), anyString(), anyDouble())).thenReturn(1.0);
+
+            searchService.search("kafka", null, "relevance", 1, 10, null);
+
+            verify(zSetOperations).incrementScore("search:hot", "kafka", 1.0);
+            verify(listOperations, never()).leftPush(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("SEC-05：登入使用者搜尋無結果 → 熱門詞不計，個人歷史照舊記錄")
+        void search_loggedInWithNoResults_recordsHistoryButNotHotTerm() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            searchService.search("nothing", null, "relevance", 1, 10, USER_UUID);
+
+            verify(zSetOperations, never()).incrementScore(anyString(), anyString(), anyDouble());
+            verify(listOperations).leftPush("search:history:" + USER_UUID, "nothing");
         }
     }
 

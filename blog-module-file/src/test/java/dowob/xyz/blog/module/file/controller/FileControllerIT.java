@@ -116,6 +116,8 @@ class FileControllerIT {
         registry.add("minio.access-key", s3Storage::getAccessKey);
         registry.add("minio.secret-key", s3Storage::getSecretKey);
         registry.add("minio.bucket-name", () -> "blog-files");
+        // SEC-21：SecurityConfig 只在 springdoc 啟用時才放行 /v3/api-docs；本類別的 OpenAPI 斷言需明確開啟
+        registry.add("springdoc.api-docs.enabled", () -> "true");
     }
 
     /**

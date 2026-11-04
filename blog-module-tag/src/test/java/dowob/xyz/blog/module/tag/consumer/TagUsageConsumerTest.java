@@ -31,6 +31,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.core.ZSetOperations;
 
 import java.io.IOException;
@@ -46,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -150,7 +152,7 @@ class TagUsageConsumerTest {
         tagUsageConsumer.handleArticleTagged(new ArticleTagEvent(UUID.randomUUID(), p1, List.of(tagId)));
 
         verify(tagRepository).updateUsageCount(tagId, 2);
-        verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 2.0);
+        verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(tagId.toString()), eq("2"));
         verify(zSetOps, never()).incrementScore(any(), any(), anyDouble());
     }
 
@@ -164,7 +166,7 @@ class TagUsageConsumerTest {
         tagUsageConsumer.handleArticleTagged(new ArticleTagEvent(UUID.randomUUID(), p1, List.of(tagId)));
 
         verify(tagRepository).updateUsageCount(tagId, 1);
-        verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 1.0);
+        verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(tagId.toString()), eq("1"));
     }
 
     @Test
@@ -177,7 +179,7 @@ class TagUsageConsumerTest {
         tagUsageConsumer.handleArticleTagged(event);
 
         verify(tagRepository, never()).updateUsageCount(any(), anyInt());
-        verify(zSetOps, never()).add(any(), any(), anyDouble());
+        verify(stringRedisTemplate, never()).execute(any(RedisScript.class), anyList(), any(Object[].class));
     }
 
     @Test
@@ -209,7 +211,7 @@ class TagUsageConsumerTest {
         tagUsageConsumer.handleArticleTagged(event);
 
         verify(tagRepository, times(1)).updateUsageCount(tagId, 1);
-        verify(zSetOps, times(1)).add(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 1.0);
+        verify(stringRedisTemplate, times(1)).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(tagId.toString()), eq("1"));
     }
 
     /**
@@ -227,7 +229,7 @@ class TagUsageConsumerTest {
         tagUsageConsumer.handleArticleTagged(new ArticleTagEvent(null, p1, List.of(tagId)));
 
         verify(tagRepository, never()).updateUsageCount(any(), anyInt());
-        verify(zSetOps, times(2)).add(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 1.0);
+        verify(stringRedisTemplate, times(2)).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(tagId.toString()), eq("1"));
     }
 
     /**
@@ -306,7 +308,7 @@ class TagUsageConsumerTest {
         UUID tagId = UUID.randomUUID();
         UUID p1 = UUID.randomUUID();
         givenTagWithArticles(tagId, 0, List.of(p1), Set.of(p1));
-        when(zSetOps.add(eq(RedisKeyConstant.TAG_HOT_KEY), eq(tagId.toString()), anyDouble()))
+        when(stringRedisTemplate.execute(any(RedisScript.class), anyList(), any(Object[].class)))
                 .thenThrow(new RuntimeException("Redis down"));
         ArticleTagEvent event = new ArticleTagEvent(UUID.randomUUID(), p1, List.of(tagId));
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -391,8 +393,8 @@ class TagUsageConsumerTest {
 
         assertThatThrownBy(() -> tagUsageConsumer.handleArticleTagged(event)).isInstanceOf(RuntimeException.class);
 
-        verify(stringRedisTemplate, never()).opsForZSet();
-        verify(zSetOps, never()).add(any(), any(), anyDouble());
+        verify(stringRedisTemplate, never()).execute(any(RedisScript.class), anyList(), any(Object[].class));
+        verify(stringRedisTemplate, never()).execute(any(RedisScript.class), anyList(), any(Object[].class));
         verify(txManager).rollback(any());
     }
 
@@ -415,10 +417,10 @@ class TagUsageConsumerTest {
 
         tagUsageConsumer.handleArticleTagged(event);
 
-        org.mockito.InOrder order = org.mockito.Mockito.inOrder(tagRepository, zSetOps);
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(tagRepository, stringRedisTemplate);
         order.verify(tagRepository).updateUsageCount(secondId, 1);
-        order.verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, firstId.toString(), 1.0);
-        order.verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, secondId.toString(), 1.0);
+        order.verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(firstId.toString()), eq("1"));
+        order.verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(secondId.toString()), eq("1"));
     }
 
     /**

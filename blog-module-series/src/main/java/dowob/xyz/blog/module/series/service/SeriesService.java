@@ -80,9 +80,6 @@ public class SeriesService {
     /** 事件發布元件（best-effort，commit 後呼叫） */
     private final SeriesEventPublisher eventPublisher;
 
-    /** 公開列表每頁筆數上界，避免未認證請求觸發無上界查詢。 */
-    private static final int MAX_PAGE_SIZE = 100;
-
     /** 閱讀進度達到此值視為已讀完 */
     private static final BigDecimal READ_THRESHOLD = new BigDecimal("0.95");
 
@@ -98,7 +95,8 @@ public class SeriesService {
     /**
      * 列出公開的 Series 列表（至少含一篇 PUBLISHED 文章），支援分頁。
      *
-     * <p>page 最小 1、size 夾在 [1, {@value #MAX_PAGE_SIZE}]，避免匿名端點被超大 size 放大查詢。</p>
+     * <p>page、size 最小夾為 1；size 上界由 controller 層的 {@code PageQuery.MAX_SIZE}（100，超出回 400）保證，
+     * service 不再自設上界（SEC-04 第 3 段：兩者數值相同，自夾成為死碼）。</p>
      *
      * <p>
      * 三段式流程（消除最後 3 處直讀 articles，ARCH-13）：
@@ -122,7 +120,7 @@ public class SeriesService {
     @Transactional(readOnly = true)
     public PageResult<SeriesSummaryResponse> listPublic(int page, int size) {
         page = Math.max(page, 1);
-        size = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        size = Math.max(size, 1);
 
         List<UUID> allUuids = mapper.findAllUuidsOrderByCreatedAtDesc();
         if (allUuids.isEmpty()) {
@@ -149,9 +147,9 @@ public class SeriesService {
         List<UUID> pageUuids = visibleUuids.subList(from, Math.min(from + size, visibleUuids.size()));
 
         /*
-         * pageUuids 的大小以本方法開頭的 MAX_PAGE_SIZE 為界（100），低於
+         * pageUuids 的大小以 PageQuery.MAX_SIZE（100，controller 層保證）為界，低於
          * BatchedQuery.BATCH_SIZE（500），故此處的 IN (...) 不需切批——
-         * 界限由該常數保證，不是靠呼叫端自律。
+         * 界限由型別保證，不是靠呼叫端自律。
          */
         Map<UUID, Series> rowByUuid = mapper.findByUuids(pageUuids).stream()
                 .collect(Collectors.toMap(Series::getUuid, r -> r));

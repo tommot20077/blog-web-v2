@@ -66,7 +66,18 @@ class TagUsageRecalculationIT extends TagCleanupITSupport {
             result.retainAll(publishedArticles);
             return result;
         });
+        seedHotKeyWithTtl();
+    }
+
+    /**
+     * 模擬「熱門榜單已由 {@code getHotTags} 重建過」的狀態：key 存在且帶 TTL。
+     *
+     * <p>PERF-18 之後，重算只會更新<b>已存在</b>的榜單；需要驗證分數寫入的測試必須先有榜單。</p>
+     */
+    private void seedHotKeyWithTtl() {
         redis.delete(RedisKeyConstant.TAG_HOT_KEY);
+        redis.opsForZSet().add(RedisKeyConstant.TAG_HOT_KEY, UUID.randomUUID().toString(), 0.0);
+        redis.expire(RedisKeyConstant.TAG_HOT_KEY, 1, TimeUnit.HOURS);
     }
 
     private UUID publishedArticle() {
@@ -208,5 +219,47 @@ class TagUsageRecalculationIT extends TagCleanupITSupport {
 
         assertThat(usageCountOf(tag)).as("最終以較新的狀態為準").isEqualTo(1);
         assertThat(hotScore(tag)).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("PERF-18：榜單 TTL 到期（key 不存在）後重算，不得建出無 TTL 的殘缺 tag:hot；DB 計數仍正確")
+    void recalculate_afterHotKeyExpired_doesNotCreateTtlLessPartialKey() {
+        UUID tag = insertTag("java", 0);
+        UUID a = publishedArticle();
+        insertArticleTag(a, tag);
+        redis.delete(RedisKeyConstant.TAG_HOT_KEY);
+
+        recalculator.recalculate(List.of(tag));
+
+        assertThat(usageCountOf(tag)).isEqualTo(1);
+        assertThat(redis.hasKey(RedisKeyConstant.TAG_HOT_KEY)).as("key 不存在時不建立殘缺榜單").isFalse();
+    }
+
+    @Test
+    @DisplayName("PERF-18：榜單 TTL 到期後走事件路徑（handleArticleTagged）同樣不建出無 TTL 的殘缺 key")
+    void handleArticleTagged_afterHotKeyExpired_doesNotCreateTtlLessPartialKey() {
+        UUID tag = insertTag("java", 0);
+        UUID a = publishedArticle();
+        insertArticleTag(a, tag);
+        redis.delete(RedisKeyConstant.TAG_HOT_KEY);
+
+        usageConsumer.handleArticleTagged(new ArticleTagEvent(UUID.randomUUID(), a, List.of(tag)));
+
+        assertThat(redis.hasKey(RedisKeyConstant.TAG_HOT_KEY)).isFalse();
+    }
+
+    @Test
+    @DisplayName("PERF-18：榜單仍存在時照常更新分數，且不改動既有 TTL")
+    void recalculate_whenHotKeyExists_updatesScoreAndKeepsTtl() {
+        UUID tag = insertTag("java", 0);
+        UUID a = publishedArticle();
+        insertArticleTag(a, tag);
+        Long ttlBefore = redis.getExpire(RedisKeyConstant.TAG_HOT_KEY, TimeUnit.SECONDS);
+
+        recalculator.recalculate(List.of(tag));
+
+        assertThat(hotScore(tag)).isEqualTo(1.0);
+        Long ttlAfter = redis.getExpire(RedisKeyConstant.TAG_HOT_KEY, TimeUnit.SECONDS);
+        assertThat(ttlAfter).isPositive().isLessThanOrEqualTo(ttlBefore);
     }
 }

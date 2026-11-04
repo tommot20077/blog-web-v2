@@ -175,12 +175,16 @@ version:
     diff-chars: 50
 
 # SpringDoc OpenAPI 配置
+# SEC-21（Yuan 2026-11-04 決定）：預設關閉 Swagger UI 與 /v3/api-docs；dev／demo 於各自 yaml 開啟，
+# 其他環境（例如前端同步 openapi 快照的 e2e 堆疊）以 SPRINGDOC_ENABLED=true 明確開啟，兩個開關共用同一變數。
 springdoc:
   swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:false}
     path: /swagger-ui.html
     operations-sorter: method
     display-request-duration: true
   api-docs:
+    enabled: ${SPRINGDOC_ENABLED:false}
     path: /v3/api-docs
   packages-to-scan: dowob.xyz.blog
   default-flat-param-object: true

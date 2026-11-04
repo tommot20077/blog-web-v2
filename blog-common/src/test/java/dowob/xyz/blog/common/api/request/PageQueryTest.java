@@ -100,9 +100,16 @@ class PageQueryTest {
         }
 
         @Test
-        @DisplayName("上限值為 1000，與 ArticleList 前端現行傳值對齊")
-        void maxSizeIsOneThousand() {
-            assertThat(PageQuery.MAX_SIZE).isEqualTo(1000);
+        @DisplayName("上限值為 100（SEC-04 第 3 段：前端已改伺服器端分頁，由 1000 降為 100）")
+        void maxSizeIsOneHundred() {
+            assertThat(PageQuery.MAX_SIZE).isEqualTo(100);
+        }
+
+        @Test
+        @DisplayName("size=100 通過、size=101 拒絕（字面值，不經 MAX_SIZE 常數）")
+        void sizeBoundaryIs100Literal() {
+            assertThat(new PageQuery(1, 100).size()).isEqualTo(100);
+            assertThatThrownBy(() -> new PageQuery(1, 101)).isInstanceOf(IllegalArgumentException.class);
         }
     }
 
