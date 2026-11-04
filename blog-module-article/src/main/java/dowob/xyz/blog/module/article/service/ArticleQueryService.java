@@ -52,6 +52,7 @@ public class ArticleQueryService {
     private final ArticleMapper articleMapper;
     private final ReadingFacade readingFacade;
     private final SeriesFacade seriesFacade;
+    private final ArticleArchiveCache archiveCache;
 
     // ─── 列表查詢（帶 liked 填充）───
 
@@ -102,14 +103,24 @@ public class ArticleQueryService {
     /**
      * 取得全部已發布文章的歸檔精簡投影（供前端年度歸檔頁使用）。
      *
-     * <p>唯讀查詢、無分頁：直接委派 {@link ArticleService#getArchive()}。
-     * 歸檔投影僅含 uuid / title / slug / publishedAt / tags，無使用者個人化狀態（liked/bookmarked/progress），
-     * 故不經 enrich 處理，原樣回傳。結果依 publishedAt 由新到舊排序，無已發布文章時回傳空清單。</p>
+     * <p>先讀 {@link ArticleArchiveCache}（Redis）：命中時直接回傳，不委派 {@link ArticleService}，
+     * 也就不會開啟交易、不查 DB。未命中才委派 {@link ArticleService#getArchive()} 並回填快取
+     * （空清單也回填）。快取的失效時機與 TTL 兜底見 {@link ArticleArchiveCache}。
+     * 快取放在這一層而非 {@code ArticleServiceImpl}，是因為後者標了 {@code @Transactional(readOnly = true)}，
+     * 在那裡命中快取仍會白白借出一條 DB 連線。</p>
+     *
+     * <p>歸檔投影僅含 uuid / title / slug / publishedAt / tags，無使用者個人化狀態（liked/bookmarked/progress），
+     * 故不經 enrich 處理，原樣回傳（也因此可以整份共用快取）。結果依 publishedAt 由新到舊排序，
+     * 無已發布文章時回傳空清單。</p>
      *
      * @return 歸檔文章投影列表（依 publishedAt 由新到舊排序，無資料回傳空清單）
      */
     public List<ArticleArchiveResponse> getArchive() {
-        return articleService.getArchive();
+        return archiveCache.get().orElseGet(() -> {
+            List<ArticleArchiveResponse> archive = articleService.getArchive();
+            archiveCache.put(archive);
+            return archive;
+        });
     }
 
     // ─── 單篇查詢（帶 liked 填充）───

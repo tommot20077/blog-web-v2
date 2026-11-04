@@ -95,6 +95,17 @@ public class RedisKeyConstant {
     public static final String ARTICLE_VIEWS_PREFIX = "article:views:";
 
     /**
+     * 文章歸檔頁回應快取 Key (String，整份 JSON)
+     * Key: article:archive
+     * <p>{@code GET /api/v1/articles/archive} 的整份回應；文章發布／下架／刪除時由 article 模組主動刪除，
+     * {@link #ARTICLE_ARCHIVE_TTL_MINUTES} 為失效遺漏時的兜底。</p>
+     */
+    public static final String ARTICLE_ARCHIVE_KEY = "article:archive";
+
+    /** 文章歸檔頁快取 TTL（分鐘）：主動失效遺漏（Redis 當下不可達、標籤改名等不經 article 模組的變更）時的陳舊上限 */
+    public static final long ARTICLE_ARCHIVE_TTL_MINUTES = 10L;
+
+    /**
      * 登入失敗計數 Key 前綴 (String)
      * Key: login:fail:{userUuid}
      */
@@ -251,6 +262,31 @@ public class RedisKeyConstant {
      */
     public static String getRegisterIpKey(String ip) {
         return REGISTER_IP_PREFIX + ip;
+    }
+
+    /**
+     * 重複信箱註冊通知限流 Key 前綴 (String)
+     * Key: rate:register-dup-notice:{email}
+     * <p>SEC-14／Q8：註冊時 email 已存在會寄通知信給原信箱主人；以此 key 限制同一信箱在
+     * {@link #REGISTER_DUP_NOTICE_TTL_MINUTES} 窗口內最多一封，避免註冊端點被拿來對受害者灌信。</p>
+     */
+    public static final String REGISTER_DUP_NOTICE_PREFIX = "rate:register-dup-notice:";
+
+    /**
+     * 重複信箱註冊通知限流窗口（分鐘）：24 小時。
+     * <p>通知信內容固定、只用來提醒「有人用你的信箱註冊」，窗口取長以壓低灌信上限（每信箱每天最多一封）；
+     * 真正忘記密碼的使用者可走忘記密碼流程。</p>
+     */
+    public static final long REGISTER_DUP_NOTICE_TTL_MINUTES = 1440L;
+
+    /**
+     * 生成重複信箱註冊通知限流 Redis Key
+     *
+     * @param email 原信箱主人的電子信箱（資料庫儲存值）
+     * @return Redis Key
+     */
+    public static String getRegisterDuplicateNoticeKey(String email) {
+        return REGISTER_DUP_NOTICE_PREFIX + email;
     }
 
     /** ===================== Tag ===================== */

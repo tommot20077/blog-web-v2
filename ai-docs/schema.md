@@ -48,9 +48,11 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `users_uuid_key`（auto, UNIQUE）on uuid
 - `users_email_key`（auto, UNIQUE）on email
 - `users_username_key`（auto, UNIQUE）on username
-- `uq_users_nickname`（UNIQUE constraint，V34, RACE-02）on nickname — 兜底併發註冊／改名產生的重複暱稱；寫入撞此約束時應用層轉成 `NICKNAME_DUPLICATED`。`users_email_key`／`users_username_key` 同樣在併發註冊時由應用層依約束名稱轉成 `EMAIL_DUPLICATED`／`USERNAME_DUPLICATED`（RACE-03）
+- `uq_users_nickname`（UNIQUE constraint，V34, RACE-02）on nickname — 兜底併發註冊／改名產生的重複暱稱；寫入撞此約束時應用層轉成 `NICKNAME_DUPLICATED`。`users_email_key`／`users_username_key` 在併發註冊時由應用層依約束名稱處理：`users_username_key` 轉成 `USERNAME_DUPLICATED`；`users_email_key` 自 Q8（SEC-14）起不再轉錯誤碼，改為靜默成功並通知原信箱主人（RACE-03）
 
 **Foreign keys:** 無（被其他表參照）
+
+**刪除帳號＝匿名化（DATA-02，Q2 定案）**：`UserService.deleteAccount` 不刪除 `users` 列，而是在同一交易內就地洗掉 PII——`nickname` → `已刪除使用者#<uuid 前 8 碼>`（被他人卡位時退回 `已刪除使用者#<uuid 去除連字號>` 或隨機值，因 `uq_users_nickname` 含 DELETED 使用者故不能共用同一字串）、`username` → `deleted_<uuid>`、`email` → `deleted+<uuid>@invalid.invalid`（`.invalid` 為 RFC 2606 保留 TLD，永不可投遞）；`avatar_url`／`bio`／`website`／`social_links`／`location` → NULL；`email_verified` 與 5 個 `notification_*` → FALSE；`password_hash` → 由隨機祕密產生、無人知道明文的 bcrypt 雜湊；`token_version` 遞增；`status` → `DELETED`；同時刪除該使用者的 `verification_tokens`。`uuid`、`role`、`created_at` 保留。因 `UserFacade.getDisplayInfoByUuids` 不依 status 過濾，所有既有讀取路徑（文章作者、留言者）自動顯示匿名暱稱。交易 commit 後發送 `UserDeletedEvent`（`user.events`／`user.deleted`），由各模組清理自己的使用者資料（見下列各表）。無 migration：墓碑值都在既有欄位長度（nickname 50、username 50、email 255）與 UNIQUE 約束內。
 
 ---
 
@@ -70,7 +72,9 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `verification_tokens_token_key`（auto, UNIQUE）on token
 
 **Foreign keys:**
-- `user_id` → `users(id)`（NO ACTION）
+- `user_id` → `users(id)`（NO ACTION；同模組內部關聯）
+
+> 使用者刪除帳號（匿名化）時，該使用者的所有 token 一併刪除（避免舊 token 事後重新啟用或重設 DELETED 帳號）。
 
 ---
 
@@ -109,10 +113,10 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `idx_articles_created_at`（V2）on created_at DESC
 - ~~`idx_articles_uuid`~~ V13 已 DROP（與 UNIQUE constraint 重複）
 - `idx_articles_series_position`（V15, partial；V32 起以同名重建於 `series_uuid`）on (series_uuid, series_position) WHERE series_uuid IS NOT NULL
-- `idx_articles_published_latest`（V22, partial）on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'——公開列表預設排序；`view_count` / `comment_count` 刻意不建排序索引（頻繁回寫，避免失去 HOT update）
+- `idx_articles_published_latest`（V22, partial）on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'——公開列表預設排序；同一索引也服務歸檔頁 `GET /api/v1/articles/archive` 的 `ArticleMapper.findArchiveRows`（排序子句 `published_at DESC NULLS LAST, id DESC` 須與此索引逐字一致，免 Sort；PERF-04 因此**不需要**另建 `(published_at DESC)` 索引，見 `ArticleArchiveMapperIT` 的 EXPLAIN 斷言）與 `TrendingRefreshJob` 的範圍掃描；`view_count` / `comment_count` 刻意不建排序索引（頻繁回寫，避免失去 HOT update）
 
 **Foreign keys:**
-- **無任何外向 FK（M6 完成）**：V31 已移除 `author_id` → `users(id)`（使用者只做軟刪除，不新增連動，匿名化另案 DATA-02）；V32 已移除 `series_id` → `series(id)`（ON DELETE SET NULL）。「series 刪除 → 文章脫離系列」改由 `SeriesDeletedEvent` consumer＋每日校正負責：只清空 `series_uuid`／`series_position`，**文章留存**。與原 FK 的 SET NULL 的差異皆為有意：`series_position` 一併清空（系列已不存在）；`version` 遞增（過期的整筆 save 會撞樂觀鎖，不會把 ghost 歸屬寫回）；`updated_at` 不動（與改造前相同）
+- **無任何外向 FK（M6 完成）**：V31 已移除 `author_id` → `users(id)`（使用者只做軟刪除；刪帳匿名化〔DATA-02〕時由 article 模組的 `ArticleUserDeletedConsumer` 訂閱 `UserDeletedEvent`，走既有刪除流程移除該作者的 DRAFT／PENDING_REVIEW／REJECTED 文章，PUBLISHED 與 ARCHIVED 保留）；V32 已移除 `series_id` → `series(id)`（ON DELETE SET NULL）。「series 刪除 → 文章脫離系列」改由 `SeriesDeletedEvent` consumer＋每日校正負責：只清空 `series_uuid`／`series_position`，**文章留存**。與原 FK 的 SET NULL 的差異皆為有意：`series_position` 一併清空（系列已不存在）；`version` 遞增（過期的整筆 save 會撞樂觀鎖，不會把 ghost 歸屬寫回）；`updated_at` 不動（與改造前相同）
 
 ---
 
@@ -224,7 +228,7 @@ PRIMARY KEY (user_id, tag_id)
 **Foreign keys:**
 - `tag_id` → `tags(id)`（NO ACTION；模組內部關聯）
 
-> `user_id` 依設計（docs/plans/2026-10-24-cross-module-uuid-design.md §0）不建指向 `users` 的跨模組 FK：模組之間沒有資料庫 FK，使用者只做軟刪除，不新增連動。
+> `user_id` 依設計（docs/plans/2026-10-24-cross-module-uuid-design.md §0）不建指向 `users` 的跨模組 FK：模組之間沒有資料庫 FK，使用者只做軟刪除。使用者刪除帳號（匿名化，DATA-02）時，由 `TagUserDeletedConsumer` 訂閱 `UserDeletedEvent` 刪除該使用者的追蹤列（無計數欄位需調整）。
 
 ---
 
@@ -275,7 +279,7 @@ PRIMARY KEY (user_id, tag_id)
 - `uq_user_article_likes_user_article`（auto, UNIQUE constraint）on (user_uuid, article_uuid)
 - `idx_user_article_likes_article_uuid` on (article_uuid)（V26 新增；文章刪除連動與每日孤兒校正以 `article_uuid` 查詢，UNIQUE 以 `user_uuid` 開頭無法支援）
 
-**Foreign keys:** 無（V26 已移除 `article_id` → `articles(id)` ON DELETE CASCADE 與 `user_id` → `users(id)`）。文章刪除 → 按讚刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `ArticleLikeOrphanReconciliationJob`（每日校正）負責。
+**Foreign keys:** 無（V26 已移除 `article_id` → `articles(id)` ON DELETE CASCADE 與 `user_id` → `users(id)`）。文章刪除 → 按讚刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `ArticleLikeOrphanReconciliationJob`（每日校正）負責。**使用者刪除帳號（DATA-02）時按讚紀錄保留**：已無個資，且刪除會讓 `articles.like_count` 與實際按讚數不符。
 
 ---
 
@@ -363,6 +367,8 @@ PRIMARY KEY (user_id, tag_id)
 
 **Foreign keys:** 無（uploader_id 為 UUID，邏輯上對應 users.uuid，但無 FK constraint；article_uuid 同理，邏輯上對應 articles.uuid，亦無 FK constraint）
 
+> 使用者刪除帳號（匿名化，DATA-02）時，`FileUserDeletedConsumer` 刪除該使用者上傳、且**未被保留文章引用**的檔案（metadata 列與 MinIO 物件）：頭像、`article_uuid IS NULL`、綁定的文章已不存在或屬 DRAFT／PENDING_REVIEW／REJECTED 者刪除；綁定 PUBLISHED／ARCHIVED 文章者保留（圖片不能破）。
+
 ---
 
 ### user_bookmarks
@@ -384,7 +390,7 @@ PRIMARY KEY (user_id, tag_id)
 - `uq_user_bookmarks_user_article`（UNIQUE constraint）on (user_uuid, article_uuid)
 - `idx_user_bookmarks_article_uuid` on (article_uuid)（V26 新增；文章刪除連動與每日孤兒校正以 `article_uuid` 查詢）
 
-**Foreign keys:** 無（V26 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 收藏刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `BookmarkOrphanReconciliationJob`（每日校正）負責。
+**Foreign keys:** 無（V26 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 收藏刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `BookmarkOrphanReconciliationJob`（每日校正）負責；使用者刪除帳號（DATA-02）→ 由 `ReadingUserDeletedConsumer` 刪除該使用者的收藏。
 
 ---
 
@@ -416,7 +422,7 @@ PRIMARY KEY (user_id, tag_id)
 - `idx_user_highlights_user_recent`（V14；V27 以 uuid 重建，名稱不變）on (user_uuid, created_at DESC)
 - `idx_user_highlights_article_uuid` on (article_uuid)（V27 新增；文章刪除連動與每日孤兒校正以 `article_uuid` 查詢，上列索引都以 `user_uuid` 開頭無法支援）
 
-**Foreign keys:** 無（V27 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 劃線刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `HighlightOrphanReconciliationJob`（每日校正）負責。
+**Foreign keys:** 無（V27 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 劃線刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `HighlightOrphanReconciliationJob`（每日校正）負責；使用者刪除帳號（DATA-02）→ 由 `ReadingUserDeletedConsumer` 刪除該使用者的劃線。
 
 ---
 
@@ -443,7 +449,7 @@ PRIMARY KEY (user_id, tag_id)
 - `idx_user_reading_progress_user_recent`（V14；V27 以 uuid 重建，名稱不變）on (user_uuid, updated_at DESC)
 - `idx_user_reading_progress_article_uuid` on (article_uuid)（V27 新增；文章刪除連動與每日孤兒校正以 `article_uuid` 查詢）
 
-**Foreign keys:** 無（V27 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 閱讀進度刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `ReadingProgressOrphanReconciliationJob`（每日校正）負責；Redis 端殘留的 hash 由 `ReadingProgressFlushJob` 在確認文章已不存在時清除。
+**Foreign keys:** 無（V27 已移除 `user_id` → `users(id)` 與 `article_id` → `articles(id)` ON DELETE CASCADE）。文章刪除 → 閱讀進度刪除改由 `ReadingArticleDeletedConsumer`（事件）＋ `ReadingProgressOrphanReconciliationJob`（每日校正）負責；Redis 端殘留的 hash 由 `ReadingProgressFlushJob` 在確認文章已不存在時清除。；使用者刪除帳號（DATA-02）→ 由 `ReadingUserDeletedConsumer` 刪除該使用者的閱讀進度，並清除 Redis 的 `reading:progress:{userUuid}:*` hash 與 `reading:dirty` 內屬於該使用者的成員
 
 ---
 
@@ -488,7 +494,7 @@ PRIMARY KEY (user_id, tag_id)
 | Column | Type | Constraints | Notes |
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
-| user_uuid | UUID | NOT NULL | V28 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK**；使用者只軟刪除，不需連動 |
+| user_uuid | UUID | NOT NULL | V28 新增（取代已 DROP 的 `user_id`，由 `users.uuid` 回填）。**無 FK**；使用者刪帳（DATA-02）時由 `VersionUserDeletedConsumer` 刪除 |
 | pref_key | VARCHAR(100) | NOT NULL | 偏好鍵（如 `draft.auto_save_interval`） |
 | pref_value | TEXT | NOT NULL | 偏好值（序列化為字串） |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
@@ -501,7 +507,7 @@ PRIMARY KEY (user_id, tag_id)
 - `user_preferences_pkey`（auto）on id
 - `uq_user_preferences_user_key`（auto, UNIQUE constraint）on (user_uuid, pref_key)
 
-**Foreign keys:** 無（V28 已移除 `user_id` → `users(id)` ON DELETE CASCADE）。使用者只做軟刪除，原 CASCADE 從未觸發，拿掉後行為不變，故不新增連動。
+**Foreign keys:** 無（V28 已移除 `user_id` → `users(id)` ON DELETE CASCADE）。使用者只做軟刪除，原 CASCADE 從未觸發；使用者刪除帳號（匿名化，DATA-02）時改由 `VersionUserDeletedConsumer` 訂閱 `UserDeletedEvent` 刪除該使用者的偏好。
 
 ---
 
@@ -565,7 +571,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V31** | 跨模組識別全面改 UUID（article 模組，作者維度）：`articles` 新增 `author_uuid UUID`，由 `users.uuid` 回填後 `SET NOT NULL`（找不到作者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `author_id`（連帶移除 `articles_author_id_fkey` → `users(id)` 與 `idx_articles_author_id` (author_id)）；以同名在 `author_uuid` 上重建 `idx_articles_author_id`。新 uuid 欄位不建 FK；`articles.series_id` → `series(id)` ON DELETE SET NULL 是系列維度，到 M6-b 才動。使用者只做軟刪除，不新增連動 |
 | **V32** | 跨模組識別全面改 UUID（article 模組，系列維度，M6 完成）：`articles` 新增 `series_uuid UUID`，由 `series.uuid` 回填（`series_id` 為 NULL 者維持 NULL；`series_id` 非 NULL 卻找不到系列時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `series_id`（連帶移除 `articles_series_id_fkey` → `series(id)` ON DELETE SET NULL 與 partial index `idx_articles_series_position` (series_id, series_position)）；以同名在 (series_uuid, series_position) 上重建 partial index（WHERE series_uuid IS NOT NULL）。`series_uuid` 維持可 NULL、**不建 FK**；`series_position` 不動。刪除連動改由 article 訂閱 `SeriesDeletedEvent`（queue `article.series-deleted`）清空 `series_uuid`／`series_position`，並以每日校正排程兜底。至此 `articles` 沒有任何跨模組 FK |
 | **V33** | 跨模組識別全面改 UUID（tag 模組，M7-tag）：DROP `article_tags_article_id_fkey`（`article_tags.article_id` → `articles(uuid)` ON DELETE CASCADE，最後一條跨模組 FK；欄位名稱不改、不新增 FK）；`tag_id` → `tags(id)` 模組內 FK 與 PK 不動。PERF-07：新增 `idx_article_tags_tag_id` on `article_tags (tag_id)`、`idx_user_tag_follows_tag_id` on `user_tag_follows (tag_id)`。刪除連動改由 tag 訂閱 `ArticleDeletedEvent`（queue `tag.article-deleted`）刪除 `article_tags` 列，並以每日校正排程 `ArticleTagOrphanReconciliationJob`（03:59）兜底；`tags.usage_count` 不動（DATA-01 另案）。RACE-08 無 schema 變動（`tags` 的 name／slug UNIQUE 不變，程式改以 `INSERT ... ON CONFLICT DO NOTHING` 建立） |
-| **V34** | RACE-02（M8，user 階段）：`users` 新增 UNIQUE 約束 `uq_users_nickname` (nickname)。比對語意與應用層 `existsByNickname` 一致（精確比對、含軟刪除者，不加 lower()／不排除 DELETED）。遷移前先檢查既有重複：有重複 → `RAISE EXCEPTION` 列出重複的暱稱與筆數、**不修改任何資料**（需人工處理後再遷移）。應用層保留 `existsByNickname` 先查作為快速路徑，註冊與改名寫入時撞到 `uq_users_nickname` 轉成 `NICKNAME_DUPLICATED`；註冊撞 `users_email_key`／`users_username_key` 轉成 `EMAIL_DUPLICATED`／`USERNAME_DUPLICATED`（RACE-03，無 schema 變動） |
+| **V34** | RACE-02（M8，user 階段）：`users` 新增 UNIQUE 約束 `uq_users_nickname` (nickname)。比對語意與應用層 `existsByNickname` 一致（精確比對、含軟刪除者，不加 lower()／不排除 DELETED）。遷移前先檢查既有重複：有重複 → `RAISE EXCEPTION` 列出重複的暱稱與筆數、**不修改任何資料**（需人工處理後再遷移）。應用層保留 `existsByNickname` 先查作為快速路徑，註冊與改名寫入時撞到 `uq_users_nickname` 轉成 `NICKNAME_DUPLICATED`；註冊撞 `users_username_key` 轉成 `USERNAME_DUPLICATED`；撞 `users_email_key` 原轉 `EMAIL_DUPLICATED`，Q8（SEC-14）起改為靜默成功並通知原信箱主人（RACE-03，無 schema 變動） |
 
 ---
 

@@ -35,6 +35,11 @@ import java.util.UUID;
 public class ArticleDocument {
 
     /**
+     * 作者已刪除（或查無此人）時索引內使用的通用匿名暱稱。
+     */
+    public static final String ANONYMOUS_NICKNAME = "已刪除使用者";
+
+    /**
      * Elasticsearch 文件 ID（使用文章 UUID 字串）
      */
     @Id

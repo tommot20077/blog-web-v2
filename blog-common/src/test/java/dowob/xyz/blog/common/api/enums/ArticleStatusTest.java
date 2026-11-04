@@ -84,4 +84,39 @@ class ArticleStatusTest {
         assertThat(ArticleStatus.isPubliclyVisible("NOT_A_STATUS")).isFalse();
         assertThat(ArticleStatus.isPubliclyVisible("")).isFalse();
     }
+
+    // ── 作者刪除帳號時的去留（DATA-02，Q2 定案：保留已發布、刪除草稿／待審）──
+
+    @Test
+    @DisplayName("DRAFT、PENDING_REVIEW、REJECTED 隨作者刪帳一併移除")
+    void isRemovedWithAuthorAccount_unpublishedStates_returnTrue() {
+        assertThat(ArticleStatus.DRAFT.isRemovedWithAuthorAccount()).isTrue();
+        assertThat(ArticleStatus.PENDING_REVIEW.isRemovedWithAuthorAccount()).isTrue();
+        assertThat(ArticleStatus.REJECTED.isRemovedWithAuthorAccount()).isTrue();
+    }
+
+    @Test
+    @DisplayName("PUBLISHED 保留（作者顯示自動變成匿名暱稱）；ARCHIVED 保留（下架可能涉及法務留存，不由刪帳連動銷毀）")
+    void isRemovedWithAuthorAccount_publishedAndArchived_returnFalse() {
+        assertThat(ArticleStatus.PUBLISHED.isRemovedWithAuthorAccount()).isFalse();
+        assertThat(ArticleStatus.ARCHIVED.isRemovedWithAuthorAccount()).isFalse();
+    }
+
+    @Test
+    @DisplayName("removedWithAuthorAccount String overload 與 enum instance 方法對每個狀態結果一致")
+    void isRemovedWithAuthorAccount_byName_matchesInstanceMethod() {
+        for (ArticleStatus status : ArticleStatus.values()) {
+            assertThat(ArticleStatus.isRemovedWithAuthorAccount(status.name()))
+                    .as("狀態 %s 的 String overload 應與 instance 方法一致", status)
+                    .isEqualTo(status.isRemovedWithAuthorAccount());
+        }
+    }
+
+    @Test
+    @DisplayName("null 或未知 status name 視為「不移除」（保守：無法確認就不銷毀資料，不拋例外）")
+    void isRemovedWithAuthorAccount_nullOrUnknownName_returnsFalse() {
+        assertThat(ArticleStatus.isRemovedWithAuthorAccount(null)).isFalse();
+        assertThat(ArticleStatus.isRemovedWithAuthorAccount("NOT_A_STATUS")).isFalse();
+        assertThat(ArticleStatus.isRemovedWithAuthorAccount("")).isFalse();
+    }
 }

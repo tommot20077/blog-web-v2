@@ -53,6 +53,9 @@ class ArticleCommandSubService {
      */
     private final ArticleTocCodec articleTocCodec;
 
+    /** 歸檔頁快取：改變「已發布集合」的寫入路徑在 commit 後經它失效（PERF-04） */
+    private final ArticleArchiveCache archiveCache;
+
     /**
      * 文章狀態機的<b>唯一真相</b>：每個狀態允許轉往哪些狀態。
      *
@@ -169,6 +172,8 @@ class ArticleCommandSubService {
          * 就會再造出 SEC-02 剛收斂掉的「多套真相」。
          */
         ArticleContentFreezePolicy.assertContentEditable(article.getStatus());
+        /** 狀態轉換前先記下：判斷這次 PUT 是否進出「已發布集合」（歸檔頁快取失效依據） */
+        ArticleStatus previousStatus = article.getStatus();
 
         if (request.getTitle() != null) {
             article.setTitle(request.getTitle());
@@ -253,6 +258,15 @@ class ArticleCommandSubService {
         @SuppressWarnings("unchecked")
         List<TagInfo> tagInfos = (List<TagInfo>) txResult[1];
 
+        /**
+         * DB 已 commit，歸檔頁快取失效：進入（DRAFT → PUBLISHED）或離開 PUBLISHED，或在 PUBLISHED 狀態下被改寫
+         * （標題／slug 會出現在歸檔頁），都會改變歸檔內容。今日內容凍結守衛讓後兩者走不到，
+         * 條件仍以「前後任一為 PUBLISHED」表達，守衛日後放寬時快取不會悄悄漏失效。
+         */
+        if (previousStatus == ArticleStatus.PUBLISHED || updated.getStatus() == ArticleStatus.PUBLISHED) {
+            archiveCache.evict();
+        }
+
         /** DB 已 commit，best-effort 發送更新事件 MQ */
         if (updated.getStatus() == ArticleStatus.PUBLISHED) {
             articleEventPublisher.publishUpdated(updated);
@@ -303,6 +317,11 @@ class ArticleCommandSubService {
              */
         });
 
+        /* DB 已 commit：被刪的是已發布文章才會改變歸檔頁，失效快取（草稿等本來就不在歸檔中，不必打掉快取） */
+        if (article.getStatus() == ArticleStatus.PUBLISHED) {
+            archiveCache.evict();
+        }
+
         /* DB 已 commit，best-effort 發送 ArticleDeletedEvent（rich payload）*/
         articleEventPublisher.publishDeleted(article, seriesUuid, categoryIds, tagIds);
     }
@@ -341,6 +360,9 @@ class ArticleCommandSubService {
         Article saved = (Article) txResult[0];
         @SuppressWarnings("unchecked")
         List<TagInfo> tags = (List<TagInfo>) txResult[1];
+
+        /** DB 已 commit，歸檔頁多了這篇文章：失效快取（先於 MQ，失效不受訊息發送快慢影響） */
+        archiveCache.evict();
 
         /** DB 已 commit，best-effort 發送發布事件 MQ（失敗不影響發布結果） */
         articleEventPublisher.publishPublished(saved, tags);
@@ -488,8 +510,10 @@ class ArticleCommandSubService {
      * 否則搜尋結果仍會曝光已下架文章的標題與內文摘要。此處以
      * {@link ArticleEventPublisher#publishArchived} 發出 {@code article.archived}，
      * 由 search 模組的 consumer 刪除該 document。其餘公開讀取路徑
-     * （文章列表 / 分類列表 / 歸檔投影 / series 詳情與列表 / 熱門排行回填）
+     * （文章列表 / 分類列表 / series 詳情與列表 / 熱門排行回填）
      * 一律以 {@code status = 'PUBLISHED'} 為條件即時查詢，改狀態即自動排除，無需額外連動。
+     * 唯一的例外是歸檔投影：它有 Redis 快取（PERF-04），故下架 commit 後須主動失效
+     * {@link ArticleArchiveCache#evict()}，否則已下架文章的標題與 slug 會在歸檔頁多留至 TTL 到期。
      * </p>
      *
      * <p>
@@ -523,6 +547,9 @@ class ArticleCommandSubService {
 
         /** DB 寫入收斂在 transaction 內，確保發事件時已 commit */
         Article updated = transactionTemplate.execute(status -> articleRepository.save(article));
+
+        /** DB 已 commit，歸檔頁不得再列出已下架文章：失效快取（先於 MQ；下架用於撤下，失效不等訊息） */
+        archiveCache.evict();
 
         /** DB 已 commit，best-effort 發送下架事件 MQ（供 search 模組移除 ES 索引） */
         articleEventPublisher.publishArchived(updated);

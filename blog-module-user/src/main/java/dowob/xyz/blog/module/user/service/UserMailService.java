@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.user.service;
 
+import dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent;
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import jakarta.mail.MessagingException;
@@ -81,6 +82,39 @@ public class UserMailService {
                 """.formatted(resetUrl);
 
         sendSecurityMail(event.email(), "Reset your password", body);
+    }
+
+    /**
+     * 寄送「有人嘗試用你的信箱註冊」通知信給原信箱主人（SEC-14／Q8）
+     *
+     * <p>信箱已被註冊時，註冊端點回應與新註冊相同的成功（消除直接回錯誤碼的零成本列舉；副作用列舉殘餘見 findings SEC-14），因此由這封信告知原主人。
+     * 內容只含固定文字、原主人的暱稱與前端登入／忘記密碼連結：<b>不含</b>任何驗證或重設 token，
+     * 也不含嘗試者提交的資料，攻擊者無法藉由註冊請求在這封信裡注入文字或連結。</p>
+     *
+     * @param event 重複信箱註冊事件
+     */
+    public void sendRegistrationAttemptNotice(RegistrationAttemptOnExistingEmailEvent event) {
+        String base = frontendBaseUrl.replaceAll("/+$", "");
+        String body = """
+                Hi %s,
+
+                Someone tried to create a new account using this email address.
+                Because an account with this email already exists, no new account was created
+                and nothing about your account has changed.
+
+                If this was you, you can sign in here:
+                %s
+
+                If you have forgotten your password, you can reset it here:
+                %s
+
+                If you have not verified this email address yet, request a new verification email from the
+                sign-in page.
+
+                If this was not you, you can safely ignore this email.
+                """.formatted(event.nickname(), base + "/login", base + "/forgot-password");
+
+        sendSecurityMail(event.email(), "Someone tried to register with your email address", body);
     }
 
     private void sendSecurityMail(String to, String subject, String body) {

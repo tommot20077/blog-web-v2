@@ -5,28 +5,39 @@ import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
+import dowob.xyz.blog.infrastructure.event.UserDeletedEvent;
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
 import dowob.xyz.blog.module.article.consumer.ArticleSeriesDeletedConsumer;
+import dowob.xyz.blog.module.article.consumer.ArticleUserDeletedConsumer;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.comment.config.CommentRabbitMqConfig;
 import dowob.xyz.blog.module.comment.consumer.CommentArticleDeletedConsumer;
+import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
+import dowob.xyz.blog.module.file.consumer.FileUserDeletedConsumer;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.reading.config.ReadingRabbitMqConfig;
 import dowob.xyz.blog.module.reading.consumer.ReadingArticleDeletedConsumer;
+import dowob.xyz.blog.module.reading.consumer.ReadingUserDeletedConsumer;
 import dowob.xyz.blog.module.search.config.SearchRabbitMqConfig;
 import dowob.xyz.blog.module.search.listener.ArticleSearchListener;
+import dowob.xyz.blog.module.search.listener.UserDeletedSearchListener;
 import dowob.xyz.blog.module.series.config.SeriesRabbitMqConfig;
 import dowob.xyz.blog.module.series.consumer.SeriesArticleDeletedConsumer;
 import dowob.xyz.blog.module.series.service.SeriesEventPublisher;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
 import dowob.xyz.blog.module.tag.consumer.TagArticleDeletedConsumer;
+import dowob.xyz.blog.module.tag.consumer.TagUserDeletedConsumer;
+import dowob.xyz.blog.module.user.config.UserRabbitMqConfig;
+import dowob.xyz.blog.module.user.service.UserEventPublisher;
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.version.config.VersionRabbitMqConfig;
 import dowob.xyz.blog.module.version.consumer.VersionArticleDeletedConsumer;
+import dowob.xyz.blog.module.version.consumer.VersionUserDeletedConsumer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -69,6 +80,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>article 刪除 → {@code comment.article-deleted}、{@code reading.article-deleted}、{@code series.article-deleted}、
  *       {@code tag.article-deleted}、{@code version.article-deleted}、{@code search.index.delete} 各收到一則</li>
  *   <li>series 刪除 → {@code article.series-deleted} 收到一則</li>
+ *   <li>user 刪除帳號（DATA-02）→ {@code article.user-deleted}、{@code reading.user-deleted}、{@code version.user-deleted}、
+ *       {@code tag.user-deleted}、{@code file.user-deleted}、{@code search.user-deleted} 各收到一則</li>
  *   <li>該 queue 在正式程式碼裡<b>真的有 {@code @RabbitListener} consumer 訂閱</b>（以反射找出對應方法），
  *       且收到的訊息能被轉成該 consumer 的參數型別、欄位正確</li>
  *   <li>AMQP messageId 等於事件的 eventId（有狀態重試的追蹤依據）</li>
@@ -99,6 +112,15 @@ class DeleteCascadeQueueBindingIT {
             VersionRabbitMqConfig.QUEUE_VERSION_ARTICLE_DELETED, VersionArticleDeletedConsumer.class,
             SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_DELETE, ArticleSearchListener.class);
 
+    /** 每個「使用者刪帳」queue 與其 consumer 類別（DATA-02） */
+    private static final Map<String, Class<?>> USER_DELETED_QUEUES = Map.of(
+            ArticleRabbitMqConfig.QUEUE_USER_DELETED, ArticleUserDeletedConsumer.class,
+            ReadingRabbitMqConfig.QUEUE_READING_USER_DELETED, ReadingUserDeletedConsumer.class,
+            VersionRabbitMqConfig.QUEUE_VERSION_USER_DELETED, VersionUserDeletedConsumer.class,
+            TagRabbitMqConfig.QUEUE_TAG_USER_DELETED, TagUserDeletedConsumer.class,
+            FileRabbitMqConfig.QUEUE_USER_DELETED, FileUserDeletedConsumer.class,
+            SearchRabbitMqConfig.QUEUE_SEARCH_USER_DELETED, UserDeletedSearchListener.class);
+
     private static AnnotationConfigApplicationContext context;
     private static RabbitTemplate rabbitTemplate;
     private static MessageConverter converter;
@@ -107,7 +129,8 @@ class DeleteCascadeQueueBindingIT {
     @Configuration
     @Import({RabbitMqConfig.class, ArticleRabbitMqConfig.class, CommentRabbitMqConfig.class,
             ReadingRabbitMqConfig.class, SeriesRabbitMqConfig.class, TagRabbitMqConfig.class,
-            VersionRabbitMqConfig.class, SearchRabbitMqConfig.class})
+            VersionRabbitMqConfig.class, SearchRabbitMqConfig.class, FileRabbitMqConfig.class,
+            UserRabbitMqConfig.class})
     static class Topology {
 
         @Bean
@@ -246,6 +269,36 @@ class DeleteCascadeQueueBindingIT {
         assertThat(event.seriesUuid()).isEqualTo(seriesUuid);
         assertThat(raw[0].getMessageProperties().getMessageId()).isEqualTo(event.eventId().toString());
         assertThat(raw[0].getMessageProperties().getReceivedExchange()).isEqualTo(SeriesEventContract.EXCHANGE);
+    }
+
+    @Test
+    @DisplayName("user 刪帳事件（DATA-02）：article／reading／version／tag／file／search 的 user-deleted queue 都收到，且對應 consumer 存在、能還原事件，messageId 等於 eventId")
+    void userDeleted_reachesEveryCascadeQueue() {
+        UUID userUuid = UUID.randomUUID();
+        UserEventPublisher publisher = new UserEventPublisher(rabbitTemplate);
+        USER_DELETED_QUEUES.keySet().forEach(q -> context.getBean(RabbitAdmin.class).purgeQueue(q, false));
+
+        publisher.publishDeleted(userUuid);
+
+        Map<String, String> messageIds = new HashMap<>();
+        for (Map.Entry<String, Class<?>> entry : USER_DELETED_QUEUES.entrySet()) {
+            String queue = entry.getKey();
+            Method listener = listenerMethodFor(entry.getValue(), queue);
+            assertThat(listener).as("%s 在 %s 應有 @RabbitListener 訂閱", queue, entry.getValue().getSimpleName()).isNotNull();
+            Message[] raw = new Message[1];
+
+            Object restored = receiveAs(queue, listener.getParameterTypes()[0], raw);
+
+            assertThat(restored).as("%s 的 consumer 參數型別應為 UserDeletedEvent", queue).isInstanceOf(UserDeletedEvent.class);
+            assertThat(((UserDeletedEvent) restored).userUuid()).as("%s 還原後的 userUuid", queue).isEqualTo(userUuid);
+            assertThat(raw[0].getMessageProperties().getReceivedExchange()).isEqualTo(UserEventContract.EXCHANGE);
+            assertThat(raw[0].getMessageProperties().getReceivedRoutingKey()).isEqualTo(UserEventContract.ROUTING_KEY_DELETED);
+            assertThat(raw[0].getMessageProperties().getMessageId())
+                    .isEqualTo(((UserDeletedEvent) restored).eventId().toString());
+            messageIds.put(queue, raw[0].getMessageProperties().getMessageId());
+        }
+        assertThat(messageIds.values()).as("同一事件扇出到各 queue，messageId 都等於 eventId").hasSize(USER_DELETED_QUEUES.size())
+                .containsOnly(messageIds.values().iterator().next());
     }
 
     @Test

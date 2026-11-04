@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.version.config;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
@@ -63,5 +64,40 @@ class VersionRabbitMqConfigTest {
         assertThat(binding.getExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
         assertThat(binding.getRoutingKey()).isEqualTo(ArticleEventContract.ROUTING_KEY_DELETED);
         assertThat(binding.getDestination()).isEqualTo("version.article-deleted");
+    }
+
+    @Test
+    @DisplayName("user.events exchange：Topic、durable、不自動刪除；名稱取自 user 事件契約")
+    void userEventsExchange_matchesContractAndIsDurableTopic() {
+        TopicExchange exchange = config.versionUserEventsExchange();
+
+        assertThat(exchange.getName()).isEqualTo(UserEventContract.EXCHANGE).isEqualTo("user.events");
+        assertThat(exchange.getType()).isEqualTo("topic");
+        assertThat(exchange.isDurable()).isTrue();
+        assertThat(exchange.isAutoDelete()).isFalse();
+    }
+
+    @Test
+    @DisplayName("versionUserDeletedQueue：名稱為 version.user-deleted、durable，並帶 DLQ 參數")
+    void versionUserDeletedQueue_isDurableWithDlqArgs() {
+        Queue queue = config.versionUserDeletedQueue();
+
+        assertThat(VersionRabbitMqConfig.QUEUE_VERSION_USER_DELETED).isEqualTo("version.user-deleted");
+        assertThat(queue.getName()).isEqualTo("version.user-deleted");
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+                .containsEntry("x-dead-letter-exchange", "blog.dlq")
+                .containsEntry("x-dead-letter-routing-key", "dead-letter");
+    }
+
+    @Test
+    @DisplayName("bindVersionUserDeleted：綁定 user.events exchange 與 user.deleted routing key（取自契約常數）")
+    void bindVersionUserDeleted_bindsUserContract() {
+        Binding binding = config.bindVersionUserDeleted(
+                config.versionUserDeletedQueue(), config.versionUserEventsExchange());
+
+        assertThat(binding.getExchange()).isEqualTo(UserEventContract.EXCHANGE);
+        assertThat(binding.getRoutingKey()).isEqualTo(UserEventContract.ROUTING_KEY_DELETED);
+        assertThat(binding.getDestination()).isEqualTo("version.user-deleted");
     }
 }

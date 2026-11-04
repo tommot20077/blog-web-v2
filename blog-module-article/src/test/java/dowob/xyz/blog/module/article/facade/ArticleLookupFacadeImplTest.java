@@ -50,6 +50,10 @@ class ArticleLookupFacadeImplTest {
     @Mock
     private ArticleMapper articleMapper;
 
+    /** Mock：作者名下文章查詢 mapper */
+    @Mock
+    private dowob.xyz.blog.module.article.mapper.ArticleAuthorCleanupMapper articleAuthorCleanupMapper;
+
     /** 受測物件 */
     private ArticleLookupFacadeImpl articleLookupFacadeImpl;
 
@@ -59,7 +63,7 @@ class ArticleLookupFacadeImplTest {
      */
     @BeforeEach
     void setUp() {
-        articleLookupFacadeImpl = new ArticleLookupFacadeImpl(articleRepository, new ArticleDataAssembler());
+        articleLookupFacadeImpl = new ArticleLookupFacadeImpl(articleRepository, new ArticleDataAssembler(), articleAuthorCleanupMapper);
     }
 
     /**
@@ -178,5 +182,34 @@ class ArticleLookupFacadeImplTest {
         ArticleData data = articleLookupFacadeImpl.findByUuid(articleUuid).orElseThrow();
 
         assertThat(data.seriesUuid()).isNull();
+    }
+
+    /**
+     * 驗證（M4）：只以「保留」狀態（PUBLISHED／ARCHIVED，由 ArticleStatus 政策推得）查詢，並把結果轉成 UUID 集合。
+     */
+    @Test
+    @DisplayName("findFileUuidsReferencedByRetainedArticles → 以保留狀態查詢並轉成 UUID 集合")
+    void findFileUuidsReferencedByRetainedArticles_queriesRetainedStatusesOnly() {
+        UUID author = UUID.randomUUID();
+        UUID f1 = UUID.randomUUID();
+        UUID f2 = UUID.randomUUID();
+        when(articleAuthorCleanupMapper.findReferencedFileUuidsByAuthorAndStatuses(
+                org.mockito.ArgumentMatchers.eq(author), org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(java.util.List.of(f1.toString(), f2.toString()));
+
+        java.util.Set<UUID> result = articleLookupFacadeImpl.findFileUuidsReferencedByRetainedArticles(author);
+
+        assertThat(result).containsExactlyInAnyOrder(f1, f2);
+        org.mockito.ArgumentCaptor<java.util.List<String>> statuses = org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        org.mockito.Mockito.verify(articleAuthorCleanupMapper)
+                .findReferencedFileUuidsByAuthorAndStatuses(org.mockito.ArgumentMatchers.eq(author), statuses.capture());
+        assertThat(statuses.getValue()).containsExactlyInAnyOrder("PUBLISHED", "ARCHIVED");
+    }
+
+    @Test
+    @DisplayName("findFileUuidsReferencedByRetainedArticles → authorUuid 為 null → 空集合且不查詢")
+    void findFileUuidsReferencedByRetainedArticles_nullAuthor_returnsEmptyWithoutQuery() {
+        assertThat(articleLookupFacadeImpl.findFileUuidsReferencedByRetainedArticles(null)).isEmpty();
+        verifyNoInteractions(articleAuthorCleanupMapper);
     }
 }

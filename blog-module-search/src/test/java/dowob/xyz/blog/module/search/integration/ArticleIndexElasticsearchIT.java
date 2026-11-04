@@ -67,6 +67,7 @@ class ArticleIndexElasticsearchIT {
     private final ArticleFacade articleFacade = mock(ArticleFacade.class);
     private SearchIndexInitializer initializer;
     private SearchServiceImpl searchService;
+    private dowob.xyz.blog.infrastructure.facade.UserFacade userFacade;
 
     @BeforeAll
     static void startElasticsearch() {
@@ -93,6 +94,7 @@ class ArticleIndexElasticsearchIT {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void resetIndex() {
+        userFacade = mock(dowob.xyz.blog.infrastructure.facade.UserFacade.class);
         IndexOperations indexOps = template.indexOps(ArticleDocument.class);
         if (indexOps.exists()) {
             indexOps.delete();
@@ -102,7 +104,7 @@ class ArticleIndexElasticsearchIT {
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
         when(redis.opsForZSet()).thenReturn(mock(ZSetOperations.class));
-        searchService = new SearchServiceImpl(template, repository, redis, articleFacade);
+        searchService = new SearchServiceImpl(template, repository, redis, articleFacade, userFacade);
     }
 
     @SuppressWarnings("unchecked")
@@ -196,6 +198,9 @@ class ArticleIndexElasticsearchIT {
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));
+        /* M3：作者暱稱取自 UserFacade 當下值 */
+        when(userFacade.getDisplayInfoByUuids(org.mockito.ArgumentMatchers.any())).thenReturn(java.util.Map.of(
+                authorUuid, new dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo(authorUuid, "愛麗絲", null)));
 
         searchService.reindexAll();
         template.indexOps(ArticleDocument.class).refresh();
@@ -212,5 +217,58 @@ class ArticleIndexElasticsearchIT {
             assertThat(r.getArticleUuid()).isEqualTo(articleUuid);
             assertThat(r.getAuthorNickname()).isEqualTo("愛麗絲");
         });
+    }
+
+    /**
+     * 直接寫入一份已發布文件（作者暱稱為原值）。
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param title      標題
+     * @return 文章公開 UUID
+     */
+    private UUID saveDocumentOf(UUID authorUuid, String title) {
+        UUID articleUuid = UUID.randomUUID();
+        repository.save(ArticleDocument.builder().id(articleUuid.toString()).title(title).slug("slug-" + articleUuid)
+                .status("PUBLISHED").publishedAt(LocalDateTime.of(2026, 10, 24, 12, 0))
+                .author(new ArticleDocument.AuthorInfo(authorUuid.toString(), "愛麗絲")).build());
+        return articleUuid;
+    }
+
+    @Test
+    @DisplayName("updateAuthorNickname（DATA-02）：該作者所有索引文件的 author.nickname 被改寫、搜尋結果顯示匿名暱稱；其他作者的文件不動")
+    void updateAuthorNickname_rewritesOnlyThatAuthorsDocuments() throws Exception {
+        initializer.ensureCorrectMapping();
+        UUID deletedAuthor = UUID.randomUUID();
+        UUID otherAuthor = UUID.randomUUID();
+        UUID doc1 = saveDocumentOf(deletedAuthor, "Elasticsearch one");
+        UUID doc2 = saveDocumentOf(deletedAuthor, "Elasticsearch two");
+        UUID othersDoc = saveDocumentOf(otherAuthor, "Elasticsearch three");
+        template.indexOps(ArticleDocument.class).refresh();
+
+        long updated = searchService.updateAuthorNickname(deletedAuthor, "已刪除使用者#abcd1234");
+
+        assertThat(updated).isEqualTo(2);
+        assertThat(rawAuthorSource(doc1).get("nickname")).isEqualTo("已刪除使用者#abcd1234");
+        assertThat(rawAuthorSource(doc2).get("nickname")).isEqualTo("已刪除使用者#abcd1234");
+        assertThat(rawAuthorSource(doc1).get("uuid")).as("uuid 不變").isEqualTo(deletedAuthor.toString());
+        assertThat(rawAuthorSource(othersDoc).get("nickname")).isEqualTo("愛麗絲");
+        PageResult<SearchResultResponse> result = searchService.search("Elasticsearch", null, "relevance", 1, 10, null);
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getAuthorNickname)
+                .containsExactlyInAnyOrder("已刪除使用者#abcd1234", "已刪除使用者#abcd1234", "愛麗絲");
+    }
+
+    @Test
+    @DisplayName("updateAuthorNickname：作者沒有任何索引文件（沒有已發布文章）→ 回傳 0、不出錯；重送同一更新為冪等")
+    void updateAuthorNickname_noDocumentsOrReplay_isHarmless() throws Exception {
+        initializer.ensureCorrectMapping();
+        UUID author = UUID.randomUUID();
+        UUID doc = saveDocumentOf(author, "Elasticsearch one");
+        template.indexOps(ArticleDocument.class).refresh();
+
+        assertThat(searchService.updateAuthorNickname(UUID.randomUUID(), "已刪除使用者#00000000")).isZero();
+        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234");
+        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234");
+
+        assertThat(rawAuthorSource(doc).get("nickname")).isEqualTo("已刪除使用者#abcd1234");
     }
 }

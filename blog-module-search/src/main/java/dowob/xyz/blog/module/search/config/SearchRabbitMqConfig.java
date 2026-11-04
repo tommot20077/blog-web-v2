@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.search.config;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -16,7 +17,8 @@ import java.util.Map;
  * <p>
  * 宣告搜尋索引 Queue，並綁定至文章事件 Exchange，
  * 接收 {@code article.published} / {@code article.updated} / {@code article.deleted} /
- * {@code article.archived} 路由鍵的訊息，觸發 Elasticsearch 索引更新或移除。
+ * {@code article.archived} 路由鍵的訊息，觸發 Elasticsearch 索引更新或移除；另訂閱 {@code user.events} 的
+ * {@code user.deleted}，於使用者刪除帳號後改寫索引內的作者暱稱並清除搜尋歷史（DATA-02）。
  * </p>
  *
  * @author Yuan
@@ -193,5 +195,44 @@ public class SearchRabbitMqConfig {
                 .bind(searchIndexArchiveQueue())
                 .to(searchArticleEventsExchange())
                 .with(ROUTING_KEY_ARCHIVED);
+    }
+
+    /** 使用者帳號刪除事件 Queue 名稱 */
+    public static final String QUEUE_SEARCH_USER_DELETED = "search.user-deleted";
+
+    /**
+     * 宣告使用者事件 Exchange（與 user 模組宣告的 {@code user.events} 參數相同，重複宣告冪等）。
+     *
+     * <p>exchange 由 producer（user 模組）宣告；本模組不依賴 user 模組，故以事件契約常數
+     * {@link UserEventContract#EXCHANGE} 自行宣告同名 exchange，bean 名稱與 user 端不同以避免衝突。</p>
+     *
+     * @return TopicExchange 實例
+     */
+    @Bean
+    public TopicExchange searchUserEventsExchange() {
+        return new TopicExchange(UserEventContract.EXCHANGE);
+    }
+
+    /**
+     * 宣告使用者帳號刪除 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue searchUserDeletedQueue() {
+        return new Queue(QUEUE_SEARCH_USER_DELETED, true, false, false, dlqArgs());
+    }
+
+    /**
+     * 將使用者帳號刪除 Queue 綁定至使用者事件 Exchange（{@code user.deleted}）
+     *
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding searchUserDeletedBinding() {
+        return BindingBuilder
+                .bind(searchUserDeletedQueue())
+                .to(searchUserEventsExchange())
+                .with(UserEventContract.ROUTING_KEY_DELETED);
     }
 }

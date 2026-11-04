@@ -120,4 +120,17 @@ public interface SearchService {
      * @return 搜尋索引狀態
      */
     SearchIndexStatusResponse getIndexStatus();
+
+    /**
+     * 把某位作者所有索引文件的 {@code author.nickname} 改寫為指定暱稱（DATA-02：作者刪帳匿名化後同步索引內的冗餘暱稱）。
+     *
+     * <p>以 {@code update_by_query}（條件為 {@code author.uuid}）只改寫該欄位，不需要取回文章內容；
+     * 該作者沒有任何索引文件時回傳 0。改寫是「設定為某值」，重複執行結果相同（冪等）。
+     * 版本衝突（與同時進行的 reindex 競爭）不中止，繼續處理其餘文件。</p>
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param nickname   新的作者暱稱（匿名暱稱）
+     * @return 被更新的文件數
+     */
+    long updateAuthorNickname(UUID authorUuid, String nickname);
 }

@@ -71,6 +71,9 @@ class ArticleQueryServiceTest {
     @Mock
     private SeriesFacade seriesFacade;
 
+    @Mock
+    private ArticleArchiveCache archiveCache;
+
     @InjectMocks
     private ArticleQueryService articleQueryService;
 
@@ -474,6 +477,45 @@ class ArticleQueryServiceTest {
             List<ArticleArchiveResponse> result = articleQueryService.getArchive();
 
             assertThat(result).isSameAs(expected);
+        }
+
+        @Test
+        @DisplayName("PERF-04 快取命中：直接回傳快取內容，完全不呼叫 ArticleService（不打 DB）也不回寫快取")
+        void getArchive_cacheHit_doesNotTouchServiceNorRewriteCache() {
+            List<ArticleArchiveResponse> cached =
+                    List.of(buildArchive("快取文章", "cached", LocalDateTime.of(2026, 1, 1, 0, 0)));
+            when(archiveCache.get()).thenReturn(java.util.Optional.of(cached));
+
+            List<ArticleArchiveResponse> result = articleQueryService.getArchive();
+
+            assertThat(result).isSameAs(cached);
+            verify(articleService, never()).getArchive();
+            verify(archiveCache, never()).put(any());
+        }
+
+        @Test
+        @DisplayName("PERF-04 快取未命中：查詢 ArticleService 後把結果寫入快取")
+        void getArchive_cacheMiss_loadsFromServiceAndPopulatesCache() {
+            when(archiveCache.get()).thenReturn(java.util.Optional.empty());
+            List<ArticleArchiveResponse> fromDb =
+                    List.of(buildArchive("DB 文章", "db", LocalDateTime.of(2026, 2, 2, 0, 0)));
+            when(articleService.getArchive()).thenReturn(fromDb);
+
+            List<ArticleArchiveResponse> result = articleQueryService.getArchive();
+
+            assertThat(result).isSameAs(fromDb);
+            verify(archiveCache).put(fromDb);
+        }
+
+        @Test
+        @DisplayName("PERF-04 快取未命中且 DB 無文章：空清單同樣寫入快取（避免空站台每次都打 DB）")
+        void getArchive_cacheMiss_emptyResultIsCachedToo() {
+            when(archiveCache.get()).thenReturn(java.util.Optional.empty());
+            when(articleService.getArchive()).thenReturn(List.of());
+
+            assertThat(articleQueryService.getArchive()).isEmpty();
+
+            verify(archiveCache).put(List.of());
         }
     }
 

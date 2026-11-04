@@ -8,6 +8,8 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
+import dowob.xyz.blog.module.user.config.UserRabbitMqConfig;
+import dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.service.AbstractIntegrationTest;
@@ -36,6 +38,7 @@ import java.util.function.IntFunction;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -49,7 +52,8 @@ import static org.mockito.Mockito.verify;
  *       {@code NICKNAME_DUPLICATED}。</li>
  *   <li><b>RACE-03</b>：註冊以 {@code existsByEmail}／{@code existsByUsername} 先查再寫，併發撞到
  *       {@code users} 的 email／username UNIQUE 時無人接住 → 500。改為依約束名稱轉成現行的
- *       {@code EMAIL_DUPLICATED}／{@code USERNAME_DUPLICATED}，與「依序第二次註冊」行為完全一致。</li>
+ *       {@code EMAIL_DUPLICATED}／{@code USERNAME_DUPLICATED}，與「依序第二次註冊」行為完全一致；
+ *       Q8（SEC-14）起 email 重複不再回錯誤，改為靜默成功＋通知原信箱主人，併發落敗者同樣如此。</li>
  * </ul>
  *
  * <p><b>讓競態穩定重現</b>：在 {@code users} 上安裝 {@code BEFORE INSERT OR UPDATE} 觸發器睡 0.3 秒。
@@ -94,6 +98,11 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
         jdbc.execute("DROP TRIGGER IF EXISTS race_test_slow_users ON users");
         jdbc.execute("DROP FUNCTION IF EXISTS race_test_slow_users_write()");
         jdbc.update("DELETE FROM users WHERE email LIKE ?", EMAIL_PREFIX + "%");
+        java.util.Set<String> noticeKeys =
+                redis.keys(RedisKeyConstant.REGISTER_DUP_NOTICE_PREFIX + EMAIL_PREFIX + "*");
+        if (noticeKeys != null && !noticeKeys.isEmpty()) {
+            redis.delete(noticeKeys);
+        }
     }
 
     /** 在 users 上安裝寫入時睡 0.3 秒的觸發器，讓兩條執行緒都先通過先查再進入寫入。 */
@@ -206,14 +215,19 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
     // ─── 依序（基準行為：併發修正後對外行為必須與此一致）───────────────────────
 
     @Test
-    @DisplayName("依序以相同 email 註冊第二次 → EMAIL_DUPLICATED（併發落敗者必須得到同樣的結果）")
-    void registerSameEmailSequentially_secondGetsEmailDuplicated() {
+    @DisplayName("依序以相同 email 註冊第二次 → 靜默成功並通知原信箱主人（Q8；併發落敗者必須得到同樣的結果）")
+    void registerSameEmailSequentially_secondSucceedsSilentlyAndNotifiesOwner() {
         authService.register(EMAIL_PREFIX + "seq-e@example.com", PASSWORD, EMAIL_PREFIX + "seq-e1", "SeqNickE1");
+        reset(rabbitTemplate);
 
-        assertThatThrownBy(() -> authService.register(
-                EMAIL_PREFIX + "seq-e@example.com", PASSWORD, EMAIL_PREFIX + "seq-e2", "SeqNickE2"))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.EMAIL_DUPLICATED.getCode()));
+        authService.register(EMAIL_PREFIX + "seq-e@example.com", PASSWORD, EMAIL_PREFIX + "seq-e2", "SeqNickE2");
+
+        assertThat(countWhere("email", EMAIL_PREFIX + "seq-e@example.com")).isEqualTo(1L);
+        assertThat(countWhere("username", EMAIL_PREFIX + "seq-e2")).as("第二次不建立帳號").isZero();
+        ArgumentCaptor<RegistrationAttemptOnExistingEmailEvent> notice =
+                ArgumentCaptor.forClass(RegistrationAttemptOnExistingEmailEvent.class);
+        verify(rabbitTemplate, times(1)).convertAndSend(anyString(), anyString(), notice.capture());
+        assertThat(notice.getValue().email()).isEqualTo(EMAIL_PREFIX + "seq-e@example.com");
     }
 
     @Test
@@ -246,8 +260,8 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
     // ─── RACE-03：註冊撞 email／username ───────────────────────────────────────
 
     @Test
-    @DisplayName("RACE-03：兩條執行緒同時以相同 email 註冊（重複多輪）→ 一個成功、另一個 EMAIL_DUPLICATED，絕不 500")
-    void registerSameEmailConcurrently_oneWins_otherEmailDuplicated() throws Exception {
+    @DisplayName("RACE-03＋Q8：兩條執行緒同時以相同 email 註冊（重複多輪）→ 一個建立帳號、另一個靜默成功並通知原信箱主人，絕不 500")
+    void registerSameEmailConcurrently_oneCreatesAccount_otherSilentlySucceedsAndNotifies() throws Exception {
         installSlowWriteTrigger();
         for (int round = 0; round < ROUNDS; round++) {
             String email = EMAIL_PREFIX + "email-" + round + "@example.com";
@@ -258,10 +272,21 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
             List<String> outcomes = runConcurrently(i -> () -> outcomeOf(() -> authService.register(
                     email, PASSWORD, usernames[i], "EmailRaceNick" + r + "x" + i)));
 
-            assertThat(outcomes).as("第 %d 輪", round)
-                    .containsExactlyInAnyOrder(OK, UserErrorCode.EMAIL_DUPLICATED.getCode());
+            assertThat(outcomes).as("第 %d 輪：兩者都成功（輸家靜默成功），絕不 500", round)
+                    .containsExactly(OK, OK);
             assertThat(countWhere("email", email)).as("第 %d 輪的使用者列數", round).isEqualTo(1L);
-            assertLoserLeftNoTraces(outcomes, new String[]{email, email}, "username", usernames);
+            int winner = countWhere("username", usernames[0]) == 1L ? 0 : 1;
+            assertLoserLeftNoTraces(List.of(winner == 0 ? OK : "LOSER", winner == 1 ? OK : "LOSER"),
+                    new String[]{email, email}, "username", usernames);
+
+            ArgumentCaptor<RegistrationAttemptOnExistingEmailEvent> notice =
+                    ArgumentCaptor.forClass(RegistrationAttemptOnExistingEmailEvent.class);
+            verify(rabbitTemplate, times(1)).convertAndSend(
+                    eq(UserRabbitMqConfig.EXCHANGE), eq(UserRabbitMqConfig.ROUTING_KEY_REGISTRATION_ATTEMPT),
+                    notice.capture());
+            assertThat(notice.getValue().email()).as("第 %d 輪：通知寄給贏家（原信箱主人）", round).isEqualTo(email);
+            assertThat(notice.getValue().userUuid()).isEqualTo(
+                    jdbc.queryForObject("SELECT uuid FROM users WHERE email = ?", UUID.class, email));
         }
     }
 

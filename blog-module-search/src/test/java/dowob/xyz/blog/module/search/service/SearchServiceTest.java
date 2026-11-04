@@ -2,6 +2,8 @@ package dowob.xyz.blog.module.search.service;
 
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
@@ -39,6 +41,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -97,6 +100,12 @@ class SearchServiceTest {
      */
     @Mock
     private ArticleFacade articleFacade;
+
+    /**
+     * 使用者 Facade（Mock，重建索引時批次取得作者當下暱稱）
+     */
+    @Mock
+    private UserFacade userFacade;
 
     /**
      * 待測服務（自動注入上述 Mock）
@@ -635,6 +644,34 @@ class SearchServiceTest {
          * （見 ai-docs/backlog/2026-07-29-index-cache-rebuild-completeness.md）。</p>
          */
         @Test
+        @DisplayName("M3：重建時作者暱稱以一次批次 UserFacade 查詢取當下值，不用 DB 快照內的舊暱稱")
+        void reindexAll_usesCurrentNicknamesFromUserFacadeInOneBatchCall() {
+            UUID authorA = UUID.randomUUID();
+            UUID authorB = UUID.randomUUID();
+            ArticleIndexData a1 = new ArticleIndexData(UUID.randomUUID(), "t1", "s1", "sum", "c", "舊暱稱A",
+                    LocalDateTime.now(), 0L, 0L, List.of(), authorA);
+            ArticleIndexData a2 = new ArticleIndexData(UUID.randomUUID(), "t2", "s2", "sum", "c", "舊暱稱A",
+                    LocalDateTime.now(), 0L, 0L, List.of(), authorA);
+            ArticleIndexData b1 = new ArticleIndexData(UUID.randomUUID(), "t3", "s3", "sum", "c", "舊暱稱B",
+                    LocalDateTime.now(), 0L, 0L, List.of(), authorB);
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(a1, a2, b1));
+            when(userFacade.getDisplayInfoByUuids(any())).thenReturn(Map.of(
+                    authorA, new UserDisplayInfo(authorA, "已刪除使用者#aaaa", null)));
+            SearchHits<ArticleDocument> emptyHits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
+                    .thenReturn(emptyHits);
+
+            searchService.reindexAll();
+
+            verify(userFacade, org.mockito.Mockito.times(1)).getDisplayInfoByUuids(any());
+            org.mockito.ArgumentCaptor<Iterable<ArticleDocument>> saved = org.mockito.ArgumentCaptor.forClass(Iterable.class);
+            verify(articleSearchRepository).saveAll(saved.capture());
+            List<String> nicknames = new ArrayList<>();
+            saved.getValue().forEach(d -> nicknames.add(d.getAuthor().getNickname()));
+            assertThat(nicknames).containsExactly("已刪除使用者#aaaa", "已刪除使用者#aaaa", ArticleDocument.ANONYMOUS_NICKNAME);
+        }
+
+        @Test
         @DisplayName("重建後應刪除「ES 有但 DB 已非 PUBLISHED」的幽靈 document")
         void reindexAll_removesGhostDocumentsMissingFromDatabase() {
             UUID liveUuid = UUID.randomUUID();
@@ -889,6 +926,9 @@ class SearchServiceTest {
                     UUID.randomUUID(), "標題", "slug", "summary", "content", "暱稱",
                     LocalDateTime.now(), 0L, 0L, List.of(), authorUuid);
             when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
+            /* M3：暱稱改取自 UserFacade 當下值（不再用快照內冗餘的暱稱） */
+            when(userFacade.getDisplayInfoByUuids(any()))
+                    .thenReturn(Map.of(authorUuid, new UserDisplayInfo(authorUuid, "暱稱", null)));
 
             searchService.reindexAll();
 

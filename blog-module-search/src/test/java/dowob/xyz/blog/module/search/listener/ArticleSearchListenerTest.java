@@ -2,6 +2,8 @@ package dowob.xyz.blog.module.search.listener;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
@@ -33,6 +35,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * ArticleSearchListener 單元測試
@@ -60,12 +64,26 @@ class ArticleSearchListenerTest {
     @Mock
     private SearchService searchService;
 
+    /** 使用者 Facade：作者暱稱一律取當下值，不信任事件 payload（M3） */
+    @Mock
+    private UserFacade userFacade;
+
     /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
     @Spy
     private ConsumerExecutor consumerExecutor = new ConsumerExecutor();
 
     @InjectMocks
     private ArticleSearchListener listener;
+
+    /**
+     * 讓 UserFacade 對 {@link #AUTHOR_UUID} 回傳指定的當下暱稱。
+     *
+     * @param nickname 當下暱稱
+     */
+    private void stubCurrentNickname(String nickname) {
+        when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID)))
+                .thenReturn(Map.of(AUTHOR_UUID, new UserDisplayInfo(AUTHOR_UUID, nickname, null)));
+    }
 
     /**
      * 建立完整 ArticlePublishedMessage 測試資料
@@ -106,6 +124,7 @@ class ArticleSearchListenerTest {
         @DisplayName("正常：ES 文件的 author 應只含訊息的 authorUuid 與 authorNickname（不含 id／username）")
         void onArticlePublished_shouldBuildAuthorFromUuidAndNicknameOnly() throws Exception {
             ArticlePublishedMessage message = buildPublishedMessage();
+            stubCurrentNickname("Yuan");
 
             listener.onArticlePublished(message);
 
@@ -171,6 +190,7 @@ class ArticleSearchListenerTest {
         @DisplayName("正常：更新事件也應只以 authorUuid 與 authorNickname 組 ES 文件的 author")
         void onArticleUpdated_shouldBuildAuthorFromUuidAndNicknameOnly() throws Exception {
             ArticlePublishedMessage message = buildPublishedMessage();
+            stubCurrentNickname("Yuan");
 
             listener.onArticleUpdated(message);
 
@@ -181,6 +201,48 @@ class ArticleSearchListenerTest {
             assertThat(author.getNickname()).isEqualTo("Yuan");
             JsonNode authorJson = new ObjectMapper().valueToTree(author);
             assertThat(authorJson.fieldNames()).toIterable().containsExactlyInAnyOrder("uuid", "nickname");
+        }
+
+        @Test
+        @DisplayName("M3：發布事件 payload 帶舊暱稱、UserFacade 回匿名暱稱 → 索引文件用匿名暱稱")
+        void onArticlePublished_payloadHasStaleNickname_usesCurrentNicknameFromFacade() throws Exception {
+            ArticlePublishedMessage message = buildPublishedMessage();
+            message.setAuthorNickname("舊暱稱-PII");
+            stubCurrentNickname("已刪除使用者#aaaaaaaa");
+
+            listener.onArticlePublished(message);
+
+            ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
+            verify(searchService).indexArticle(captor.capture());
+            assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo("已刪除使用者#aaaaaaaa");
+        }
+
+        @Test
+        @DisplayName("M3：更新事件 payload 帶舊暱稱、UserFacade 回匿名暱稱 → 索引文件用匿名暱稱")
+        void onArticleUpdated_payloadHasStaleNickname_usesCurrentNicknameFromFacade() throws Exception {
+            ArticlePublishedMessage message = buildPublishedMessage();
+            message.setAuthorNickname("舊暱稱-PII");
+            stubCurrentNickname("已刪除使用者#aaaaaaaa");
+
+            listener.onArticleUpdated(message);
+
+            ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
+            verify(searchService).indexArticle(captor.capture());
+            assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo("已刪除使用者#aaaaaaaa");
+        }
+
+        @Test
+        @DisplayName("M3：UserFacade 查無此作者 → 用通用匿名暱稱，絕不回退到 payload 的舊暱稱")
+        void onArticlePublished_facadeHasNoUser_usesAnonymousNotPayloadNickname() throws Exception {
+            ArticlePublishedMessage message = buildPublishedMessage();
+            message.setAuthorNickname("舊暱稱-PII");
+            when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(Map.of());
+
+            listener.onArticlePublished(message);
+
+            ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
+            verify(searchService).indexArticle(captor.capture());
+            assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo(ArticleDocument.ANONYMOUS_NICKNAME);
         }
 
         @Test

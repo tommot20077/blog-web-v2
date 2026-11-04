@@ -5,6 +5,7 @@ import dowob.xyz.blog.infrastructure.config.UUIDTypeHandler;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.ArticleArchiveRow;
 import dowob.xyz.blog.module.article.model.PublishedArticleCriteria;
 import dowob.xyz.blog.module.article.model.TagWithArticleUuid;
 import org.apache.ibatis.annotations.Arg;
@@ -219,6 +220,28 @@ public interface ArticleMapper {
      */
     @Select("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC")
     List<Article> findAllPublished();
+
+    /**
+     * 歸檔頁用的輕量投影：全部已發布文章的 uuid／title／slug／published_at。
+     *
+     * <p>與 {@link #findAllPublished()} 刻意分開：後者 {@code SELECT *} 會把 {@code content_md}／{@code content_html}／
+     * {@code toc} 一併撈出（供 ES 全量重建索引使用，需要正文）；歸檔頁只要四個欄位，沿用它等於每次請求把全站語料
+     * 搬進 JVM 堆（PERF-04）。</p>
+     *
+     * <p>排序 {@code published_at DESC NULLS LAST, id DESC} 與 V22 的 partial index
+     * {@code idx_articles_published_latest} <b>逐字一致</b>（欄位、方向、NULLS 位置、{@code WHERE status = 'PUBLISHED'}），
+     * planner 可直接依索引順序讀取而省掉 Sort；缺 {@code NULLS LAST} 時 {@code DESC} 預設 NULLS FIRST，
+     * 與索引順序不符，索引就派不上用場（EXPLAIN 證據見 {@code ArticleArchiveMapperIT}）。
+     * {@code id DESC} 同時讓同一發布時間的文章輸出順序固定。</p>
+     *
+     * <p><b>無 LIMIT 是刻意的</b>：前端年度歸檔頁需要全量並自行依年份分組、統計總篇數；量級假設與保護見
+     * {@code ArticleController#getArchive()}。</p>
+     *
+     * @return 已發布文章的歸檔列，依發布時間由新到舊
+     */
+    @Select("SELECT uuid, title, slug, published_at FROM articles WHERE status = 'PUBLISHED' "
+            + "ORDER BY published_at DESC NULLS LAST, id DESC")
+    List<ArticleArchiveRow> findArchiveRows();
 
     /**
      * 根據文章公開 UUID 查詢 DB 中儲存的瀏覽計數
