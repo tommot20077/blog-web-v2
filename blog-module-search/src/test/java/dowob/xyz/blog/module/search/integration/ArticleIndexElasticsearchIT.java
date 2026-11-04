@@ -67,6 +67,7 @@ class ArticleIndexElasticsearchIT {
     private final ArticleFacade articleFacade = mock(ArticleFacade.class);
     private SearchIndexInitializer initializer;
     private SearchServiceImpl searchService;
+    private dowob.xyz.blog.infrastructure.facade.UserFacade userFacade;
 
     @BeforeAll
     static void startElasticsearch() {
@@ -93,6 +94,7 @@ class ArticleIndexElasticsearchIT {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void resetIndex() {
+        userFacade = mock(dowob.xyz.blog.infrastructure.facade.UserFacade.class);
         IndexOperations indexOps = template.indexOps(ArticleDocument.class);
         if (indexOps.exists()) {
             indexOps.delete();
@@ -102,7 +104,7 @@ class ArticleIndexElasticsearchIT {
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
         when(redis.opsForZSet()).thenReturn(mock(ZSetOperations.class));
-        searchService = new SearchServiceImpl(template, repository, redis, articleFacade);
+        searchService = new SearchServiceImpl(template, repository, redis, articleFacade, userFacade);
     }
 
     @SuppressWarnings("unchecked")
@@ -196,6 +198,9 @@ class ArticleIndexElasticsearchIT {
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));
+        /* M3：作者暱稱取自 UserFacade 當下值 */
+        when(userFacade.getDisplayInfoByUuids(org.mockito.ArgumentMatchers.any())).thenReturn(java.util.Map.of(
+                authorUuid, new dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo(authorUuid, "愛麗絲", null)));
 
         searchService.reindexAll();
         template.indexOps(ArticleDocument.class).refresh();

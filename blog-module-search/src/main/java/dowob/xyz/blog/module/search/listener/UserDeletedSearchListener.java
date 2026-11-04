@@ -42,7 +42,7 @@ public class UserDeletedSearchListener {
     public static final String CONSUMER_NAME = "search.user-deleted";
 
     /** UserFacade 查不到使用者時使用的匿名暱稱 */
-    static final String FALLBACK_NICKNAME = "已刪除使用者";
+    static final String FALLBACK_NICKNAME = dowob.xyz.blog.module.search.document.ArticleDocument.ANONYMOUS_NICKNAME;
 
     /** 搜尋服務 */
     private final SearchService searchService;

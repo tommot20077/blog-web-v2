@@ -1,5 +1,7 @@
 package dowob.xyz.blog.module.search.listener;
 
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.search.config.SearchRabbitMqConfig;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
@@ -48,6 +50,11 @@ public class ArticleSearchListener {
      * 搜尋服務
      */
     private final SearchService searchService;
+
+    /**
+     * 使用者 Facade（取得作者當下暱稱）
+     */
+    private final UserFacade userFacade;
 
     /**
      * MQ consumer 共用執行包裝（失敗日誌、計數、冪等）
@@ -160,12 +167,33 @@ public class ArticleSearchListener {
                 .slug(message.getSlug())
                 .author(new ArticleDocument.AuthorInfo(
                         message.getAuthorUuid() == null ? null : message.getAuthorUuid().toString(),
-                        message.getAuthorNickname()))
+                        resolveCurrentNickname(message)))
                 .tags(tags)
                 .publishedAt(message.getPublishedAt())
                 .viewCount(0L)
                 .likeCount(0L)
                 .status("PUBLISHED")
                 .build();
+    }
+
+    /**
+     * 取得作者<b>當下</b>的暱稱，不信任事件 payload 內的 {@code authorNickname}。
+     *
+     * <p>payload 的暱稱是發布／編輯當下的舊值；而 {@code article.published/updated} 與 {@code user.deleted}
+     * 在不同 queue，無順序保證——作者發布後立刻刪帳時，若 {@code update_by_query} 先於建立索引文件，
+     * 之後才以舊暱稱建索引，PII 就會重回 ES 且無人修補。故每次建立／更新文件都以 {@link UserFacade} 查現值
+     * （單篇索引僅一次查詢）。查無此使用者視為已刪除，使用通用匿名暱稱，<b>絕不回退到 payload 的暱稱</b>。
+     * 唯一例外：舊格式訊息沒有 authorUuid，無從查詢，沿用 payload 值（該路徑不會有刪帳競態）。</p>
+     *
+     * @param message 文章發布／更新訊息
+     * @return 作者當下暱稱
+     */
+    private String resolveCurrentNickname(ArticlePublishedMessage message) {
+        if (message.getAuthorUuid() == null) {
+            return message.getAuthorNickname();
+        }
+        UserDisplayInfo info = userFacade.getDisplayInfoByUuids(List.of(message.getAuthorUuid()))
+                .get(message.getAuthorUuid());
+        return info != null && info.nickname() != null ? info.nickname() : ArticleDocument.ANONYMOUS_NICKNAME;
     }
 }
