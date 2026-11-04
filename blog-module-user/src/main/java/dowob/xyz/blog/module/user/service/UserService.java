@@ -14,6 +14,7 @@ import dowob.xyz.blog.module.user.validation.ProfileFieldLimits;
 import dowob.xyz.blog.module.user.validation.SafeHttpUrlValidator;
 import dowob.xyz.blog.module.user.validation.SafeSocialLinksValidator;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +32,7 @@ import java.util.function.Predicate;
  * @author Yuan
  * @version 1.0
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserService {
@@ -257,11 +259,21 @@ public class UserService {
             anonymize(user, unusablePasswordHash);
             userRepository.save(user);
             verificationTokenRepository.deleteByUserId(user.getId());
-            sessionRevoker.revokeAllSessions(user.getUuid());
         });
 
-        /* 匿名化已 commit，才通知其他模組連動清理（best-effort） */
+        /* 匿名化已 commit，先通知其他模組連動清理（best-effort，不往外拋） */
         userEventPublisher.publishDeleted(user.getUuid());
+
+        /* 再撤銷 session：此時已在交易之外（commit 之後），SessionRevoker 會立即執行。
+         * Redis 故障只記 ERROR、不往外拋——DB 已 commit，不能讓使用者看到 500 而誤以為刪帳失敗（且無法重試）；
+         * 撤銷失敗的殘餘風險：舊 token 在 auth hash 快取 TTL 到期前仍可能通過，但帳號已 DELETED、tokenVersion 已遞增，
+         * 快取重建後即全數失效。 */
+        try {
+            sessionRevoker.revokeAllSessions(user.getUuid());
+        } catch (RuntimeException e) {
+            log.error("刪除帳號後撤銷 session 失敗（帳號已匿名化並 commit，事件已發送）：userUuid={}, error={}",
+                    user.getUuid(), e.getMessage(), e);
+        }
     }
 
     /**

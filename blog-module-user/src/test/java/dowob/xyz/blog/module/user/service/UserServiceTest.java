@@ -27,6 +27,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -656,6 +657,23 @@ class UserServiceTest {
                 .isInstanceOf(BusinessException.class);
 
         verifyNoInteractions(userEventPublisher);
+    }
+
+    /**
+     * 驗證（M1）：Redis 撤銷 session 失敗不得吞掉 UserDeletedEvent，也不得讓已 commit 的刪帳回錯誤。
+     */
+    @Test
+    @DisplayName("deleteAccount → session 撤銷（Redis）拋例外 → 事件仍發送、方法正常返回")
+    void deleteAccount_whenSessionRevokeFails_shouldStillPublishEventAndReturnNormally() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+        when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
+        doThrow(new IllegalStateException("redis down")).when(sessionRevoker).revokeAllSessions(TEST_USER_UUID);
+
+        assertThatCode(() -> userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD)).doesNotThrowAnyException();
+
+        verify(transactionManager).commit(transactionStatus);
+        verify(userEventPublisher).publishDeleted(TEST_USER_UUID);
     }
 
     /**
