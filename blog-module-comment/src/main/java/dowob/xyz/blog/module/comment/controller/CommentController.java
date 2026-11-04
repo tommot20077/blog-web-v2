@@ -94,7 +94,7 @@ public class CommentController {
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateCommentRequest req) {
-        return ApiResponse.success(commentService.createComment(articleUuid, user.uuid(), req));
+        return ApiResponse.success(commentService.createComment(articleUuid, user.uuid(), SecurityUtils.isAdmin(), req));
     }
 
     @PutMapping("/comments/{uuid}")

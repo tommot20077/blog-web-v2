@@ -42,7 +42,7 @@ public class BookmarkController {
     @Operation(summary = "收藏文章（idempotent）")
     public ApiResponse<Void> bookmark(@AuthenticationPrincipal AuthUser user,
                                         @PathVariable UUID articleUuid) {
-        requireArticleExists(articleUuid);
+        requireReadable(articleUuid, user);
         bookmarkService.bookmark(user.uuid(), articleUuid);
         return ApiResponse.success();
     }
@@ -82,9 +82,26 @@ public class BookmarkController {
     }
 
     /**
+     * 確認文章對操作者可讀（PUBLISHED，或作者本人，或 ADMIN），不可讀時以 {@code A0201} 回應（HTTP 400）。
+     *
+     * <p>「可讀才可互動」（SEC-16）：不可讀的回應與文章不存在完全相同。僅用於建立類（加入收藏）；
+     * 移除收藏屬移除類，改用 {@link #requireArticleExists}。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param user        當前登入者
+     * @throws BusinessException {@code ARTICLE_NOT_FOUND} 若文章不存在或不可讀
+     */
+    private void requireReadable(UUID articleUuid, AuthUser user) {
+        if (!articleFacade.isReadableBy(articleUuid, user.uuid(), SecurityUtils.isAdmin())) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
+        }
+    }
+
+    /**
      * 確認文章存在（不分狀態），不存在時以 {@code A0201} 回應（HTTP 400，與解耦前相同）。
      *
-     * <p>與 {@code ArticleLikeController.requireArticleExists} 同一套 idiom：必須在寫入前呼叫，
+     * <p>用於移除類（移除收藏）：已下架的文章仍允許使用者清理自己的資料。
+     * 與 {@code ArticleLikeController.requireArticleExists} 同一套 idiom：必須在寫入前呼叫，
      * 不存在的文章不得落任何列（AUTH-08：避免未預期的 500）。</p>
      *
      * @param articleUuid 文章公開 UUID

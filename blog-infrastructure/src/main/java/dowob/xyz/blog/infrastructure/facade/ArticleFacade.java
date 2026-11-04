@@ -164,6 +164,24 @@ public interface ArticleFacade {
     boolean existsByUuid(UUID articleUuid);
 
     /**
+     * 單筆可讀性述詞：這篇文章對指定檢視者是否「可讀」，供互動寫入路徑（留言、按讚、收藏、劃線、閱讀進度）
+     * 在寫入前做「可讀才可互動」檢查（SEC-16 ＝ AUTH-05／DATA-12）。
+     *
+     * <p>語意與 {@link #filterReadableUuids} 完全相同（委派 {@code ArticleVisibility} 單一真相）：
+     * PUBLISHED 全公開；非 PUBLISHED（DRAFT／PENDING_REVIEW／REJECTED／ARCHIVED）僅作者本人與 ADMIN；
+     * <b>查無此文章（含已硬刪）也回 false</b>。因此 caller 對「不可讀」與「不存在」可以給出完全相同的回應，
+     * 不會產生草稿存在性 oracle。簽章帶 viewer 身分（architecture.md：Readable 類方法必帶 viewer）。</p>
+     *
+     * <p>只用於建立／更新類互動；移除類互動（取消按讚、移除收藏、刪除自己的資料）不受文章可讀性影響。</p>
+     *
+     * @param articleUuid 文章公開 UUID；{@code null} 回傳 false
+     * @param viewerUuid  操作者公開 UUID；匿名為 null
+     * @param isAdmin     操作者是否為 ADMIN
+     * @return 文章存在且對該操作者可讀為 true
+     */
+    boolean isReadableBy(UUID articleUuid, UUID viewerUuid, boolean isAdmin);
+
+    /**
      * comment 模組創建 comment 時連動 article.comment_count + 1。
      *
      * <p>原子 +1；文章不存在時不影響任何列（no-op）。</p>

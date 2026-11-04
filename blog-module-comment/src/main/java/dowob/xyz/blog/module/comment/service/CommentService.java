@@ -41,7 +41,7 @@ import java.util.stream.Collectors;
  *
  * <p>處理留言的建立、編輯、刪除、查詢。
  * 跨模組一律以 UUID 識別，且只經由 facade 溝通（不直接依賴他模組的類別、不 JOIN 他模組的表）：
- * 文章存在性與留言計數走 {@link ArticleFacade}，列表的作者資訊走 {@link UserFacade}。</p>
+ * 文章可讀性（含存在性）與留言計數走 {@link ArticleFacade}，列表的作者資訊走 {@link UserFacade}。</p>
  *
  * @author Yuan
  * @version 2.0
@@ -61,18 +61,21 @@ public class CommentService {
     /**
      * 建立留言（top-level 或 reply）。
      *
-     * <p>文章存在性以 {@link ArticleFacade#existsByUuid(UUID)}（不分狀態）檢查：{@code comments} 已沒有指向
-     * {@code articles} 的 FK，這個檢查是「不對不存在的文章寫入留言」的唯一防線。
+     * <p>「可讀才可互動」（SEC-16）：文章必須對留言者可讀，以 {@link ArticleFacade#isReadableBy} 檢查
+     * （PUBLISHED，或作者本人，或 ADMIN；查無此文章亦為不可讀）。不可讀時一律拋
+     * {@code ARTICLE_NOT_FOUND}，與文章不存在同一個回應，不形成草稿存在性 oracle，也不污染 comment_count。
+     * {@code comments} 已沒有指向 {@code articles} 的 FK，這個檢查同時是「不對不存在的文章寫入留言」的唯一防線。
      * 父留言是否屬於同一篇文章，比對的是 {@code article_uuid}。</p>
      *
      * @param articleUuid 目標文章 UUID
      * @param userUuid    留言者 UUID
+     * @param isAdmin     留言者是否為 ADMIN（可讀性判斷輸入）
      * @param req         留言請求（含 content + 可選 parentUuid）
      * @return 建立後的 CommentResponse（簡化版，列表 / 詳情走 listComments）
      */
     @Transactional
-    public CommentResponse createComment(UUID articleUuid, UUID userUuid, CreateCommentRequest req) {
-        if (!articleFacade.existsByUuid(articleUuid)) {
+    public CommentResponse createComment(UUID articleUuid, UUID userUuid, boolean isAdmin, CreateCommentRequest req) {
+        if (!articleFacade.isReadableBy(articleUuid, userUuid, isAdmin)) {
             throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
         }
 

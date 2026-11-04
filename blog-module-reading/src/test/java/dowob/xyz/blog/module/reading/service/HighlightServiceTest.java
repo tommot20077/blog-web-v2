@@ -41,7 +41,7 @@ class HighlightServiceTest {
 
     @Test
     void createHighlight_savesWithUuidAndAllFields() {
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(repo.save(any(UserHighlight.class))).thenAnswer(inv -> {
             UserHighlight h = inv.getArgument(0);
             h.setId(1L);
@@ -55,7 +55,7 @@ class HighlightServiceTest {
         req.setColor("#FFEB3B");
         req.setNote("important");
 
-        service.create(articleUuid, userUuid, req);
+        service.create(articleUuid, userUuid, false, req);
 
         ArgumentCaptor<UserHighlight> captor = ArgumentCaptor.forClass(UserHighlight.class);
         verify(repo).save(captor.capture());
@@ -70,7 +70,7 @@ class HighlightServiceTest {
 
     @Test
     void createHighlight_emptyNote_savesAsNull() {
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         CreateHighlightRequest req = new CreateHighlightRequest();
@@ -78,7 +78,7 @@ class HighlightServiceTest {
         req.setColor("#FFEB3B");
         req.setNote(null);
 
-        service.create(articleUuid, userUuid, req);
+        service.create(articleUuid, userUuid, false, req);
 
         ArgumentCaptor<UserHighlight> captor = ArgumentCaptor.forClass(UserHighlight.class);
         verify(repo).save(captor.capture());
@@ -102,16 +102,17 @@ class HighlightServiceTest {
     @Test
     void updateHighlight_byOwner_updatesColorAndNote() {
         UserHighlight h = new UserHighlight();
-        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid);
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid); h.setArticleUuid(articleUuid);
         h.setColor("#FFEB3B"); h.setNote("old");
         when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         UpdateHighlightRequest req = new UpdateHighlightRequest();
         req.setColor("#00FF00");
         req.setNote("new");
 
-        service.update(highlightUuid, userUuid, req);
+        service.update(highlightUuid, userUuid, false, req);
 
         ArgumentCaptor<UserHighlight> captor = ArgumentCaptor.forClass(UserHighlight.class);
         verify(repo).save(captor.capture());
@@ -122,20 +123,52 @@ class HighlightServiceTest {
     @Test
     void updateHighlight_partialUpdate_keepsUntouched() {
         UserHighlight h = new UserHighlight();
-        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid);
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid); h.setArticleUuid(articleUuid);
         h.setColor("#FFEB3B"); h.setNote("kept");
         when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         UpdateHighlightRequest req = new UpdateHighlightRequest();
         req.setColor("#00FF00");
 
-        service.update(highlightUuid, userUuid, req);
+        service.update(highlightUuid, userUuid, false, req);
 
         ArgumentCaptor<UserHighlight> captor = ArgumentCaptor.forClass(UserHighlight.class);
         verify(repo).save(captor.capture());
         assertThat(captor.getValue().getColor()).isEqualTo("#00FF00");
         assertThat(captor.getValue().getNote()).isEqualTo("kept");
+    }
+
+    @Test
+    @DisplayName("SEC-16：更新劃線時文章對操作者不可讀 → ARTICLE_NOT_FOUND，不存檔")
+    void updateHighlight_articleUnreadable_throwsArticleNotFound() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid); h.setArticleUuid(articleUuid);
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(false);
+
+        UpdateHighlightRequest req = new UpdateHighlightRequest();
+        req.setColor("#00FF00");
+
+        assertThatThrownBy(() -> service.update(highlightUuid, userUuid, false, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("SEC-16：刪除自己的劃線屬移除類，不檢查文章可讀性")
+    void deleteHighlight_doesNotConsultArticleReadability() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid); h.setArticleUuid(articleUuid);
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+
+        service.delete(highlightUuid, userUuid);
+
+        verify(repo).deleteById(1L);
+        org.mockito.Mockito.verifyNoInteractions(articleFacade);
     }
 
     @Test
@@ -147,7 +180,7 @@ class HighlightServiceTest {
         UpdateHighlightRequest req = new UpdateHighlightRequest();
         req.setColor("#00FF00");
 
-        assertThatThrownBy(() -> service.update(highlightUuid, userUuid, req))
+        assertThatThrownBy(() -> service.update(highlightUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(ReadingErrorCode.HIGHLIGHT_ACCESS_DENIED.getMessage());
         verify(repo, never()).save(any());
@@ -186,16 +219,16 @@ class HighlightServiceTest {
     }
 
     @Test
-    @DisplayName("create：article 不存在 → throw ARTICLE_NOT_FOUND")
+    @DisplayName("create：article 不存在或不可讀 → throw ARTICLE_NOT_FOUND")
     void create_articleNotFound_throwsArticleNotFound() {
         UUID articleUuid = UUID.randomUUID();
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(false);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(false);
 
         CreateHighlightRequest req = new CreateHighlightRequest();
         req.setSnippet("text");
         req.setColor("yellow");
 
-        assertThatThrownBy(() -> service.create(articleUuid, userUuid, req))
+        assertThatThrownBy(() -> service.create(articleUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .extracting(t -> ((BusinessException) t).getCode())
                 .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());

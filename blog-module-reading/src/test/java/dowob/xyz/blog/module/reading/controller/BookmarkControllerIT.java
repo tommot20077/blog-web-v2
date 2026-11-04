@@ -279,9 +279,12 @@ class BookmarkControllerIT {
     @Test
     @DisplayName("GET /me/bookmarks - 收藏他人 DRAFT 文章同樣不出現在收藏列表")
     void myBookmarks_draftArticleOfOtherAuthor_isExcluded() throws Exception {
-        Article draft = createArticle(OTHER_AUTHOR_ID, ArticleStatus.DRAFT);
+        // SEC-16 後無法對他人 DRAFT 加收藏：先在公開時收藏，之後文章退回 DRAFT（模擬既有的歷史收藏列）
+        Article draft = createArticle(OTHER_AUTHOR_ID, ArticleStatus.PUBLISHED);
         mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", draft.getUuid())
                 .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
+        draft.setStatus(ArticleStatus.DRAFT);
+        articleRepo.save(draft);
 
         mockMvc.perform(get("/api/v1/users/me/bookmarks")
                 .with(asUser(USER_ID, Role.USER)))
@@ -390,11 +393,14 @@ class BookmarkControllerIT {
     @DisplayName("GET /me/bookmarks - 分頁：第 2 頁取到最舊的一筆，total／pages 以可見收藏數計")
     void myBookmarks_secondPage_returnsOldestWithCorrectTotals() throws Exception {
         Article older = createArticle(OTHER_AUTHOR_ID, ArticleStatus.PUBLISHED, "older article");
-        Article draft = createArticle(OTHER_AUTHOR_ID, ArticleStatus.DRAFT, "someone's draft");
+        Article draft = createArticle(OTHER_AUTHOR_ID, ArticleStatus.PUBLISHED, "someone's draft");
         for (UUID uuid : List.of(older.getUuid(), draft.getUuid(), articleUuid)) {
             mockMvc.perform(post("/api/v1/articles/{uuid}/bookmark", uuid)
                     .with(asUser(USER_ID, Role.USER))).andExpect(status().isOk());
         }
+        // SEC-16 後無法對他人 DRAFT 加收藏：收藏後才退回 DRAFT，維持「列表需濾掉不可見收藏」的情境
+        draft.setStatus(ArticleStatus.DRAFT);
+        articleRepo.save(draft);
 
         mockMvc.perform(get("/api/v1/users/me/bookmarks")
                 .param("page", "2").param("size", "1")

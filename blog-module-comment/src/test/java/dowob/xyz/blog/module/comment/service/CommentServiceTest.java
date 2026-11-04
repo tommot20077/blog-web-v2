@@ -61,7 +61,7 @@ class CommentServiceTest {
 
     @Test
     void createComment_topLevel_savesWithUuidAndDefaults() {
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(renderer.render("hello")).thenReturn("<p>hello</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> {
             Comment c = inv.getArgument(0);
@@ -72,7 +72,7 @@ class CommentServiceTest {
         CreateCommentRequest req = new CreateCommentRequest();
         req.setContent("hello");
 
-        service.createComment(articleUuid, userUuid, req);
+        service.createComment(articleUuid, userUuid, false, req);
 
         ArgumentCaptor<Comment> captor = ArgumentCaptor.forClass(Comment.class);
         verify(commentRepo).save(captor.capture());
@@ -88,27 +88,60 @@ class CommentServiceTest {
     }
 
     @Test
-    @DisplayName("建立留言以 article_uuid／user_uuid 識別，並以不分狀態的 existsByUuid 檢查文章存在")
+    @DisplayName("建立留言以 article_uuid／user_uuid 識別，並以 isReadableBy（可讀才可互動）檢查文章")
     void createComment_identifiesArticleAndUserByUuid() {
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(renderer.render(any())).thenReturn("<p>x</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
 
         CreateCommentRequest req = new CreateCommentRequest();
         req.setContent("x");
 
-        service.createComment(articleUuid, userUuid, req);
+        service.createComment(articleUuid, userUuid, false, req);
 
         ArgumentCaptor<Comment> captor = ArgumentCaptor.forClass(Comment.class);
         verify(commentRepo).save(captor.capture());
         assertThat(captor.getValue().getArticleUuid()).isEqualTo(articleUuid);
         assertThat(captor.getValue().getUserUuid()).isEqualTo(userUuid);
-        verify(articleFacade).existsByUuid(articleUuid);
+        verify(articleFacade).isReadableBy(articleUuid, userUuid, false);
+    }
+
+    @Test
+    @DisplayName("SEC-16：isAdmin 原樣傳給 isReadableBy（ADMIN 對他人草稿可留言）")
+    void createComment_forwardsAdminFlagToReadabilityCheck() {
+        when(articleFacade.isReadableBy(articleUuid, userUuid, true)).thenReturn(true);
+        when(renderer.render(any())).thenReturn("<p>x</p>");
+        when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
+        CreateCommentRequest req = new CreateCommentRequest();
+        req.setContent("x");
+
+        service.createComment(articleUuid, userUuid, true, req);
+
+        verify(articleFacade).isReadableBy(articleUuid, userUuid, true);
+        verify(articleFacade).incrementCommentCount(articleUuid);
+    }
+
+    @Test
+    @DisplayName("SEC-16：文章不可讀 → 與不存在相同的 ARTICLE_NOT_FOUND，不查父留言、不存檔、不動計數")
+    void createComment_articleUnreadable_throwsNotFound_beforeAnyOtherLookup() {
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(false);
+        CreateCommentRequest req = new CreateCommentRequest();
+        req.setContent("x");
+        req.setParentUuid(UUID.randomUUID());
+
+        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, false, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+
+        verify(commentRepo, never()).findByUuid(any());
+        verify(commentRepo, never()).save(any());
+        verify(articleFacade, never()).incrementCommentCount(any(UUID.class));
     }
 
     @Test
     void createComment_topLevel_incrementsArticleCommentCount() {
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(renderer.render(any())).thenReturn("<p>x</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> {
             Comment c = inv.getArgument(0);
@@ -119,20 +152,20 @@ class CommentServiceTest {
         CreateCommentRequest req = new CreateCommentRequest();
         req.setContent("x");
 
-        service.createComment(articleUuid, userUuid, req);
+        service.createComment(articleUuid, userUuid, false, req);
 
         verify(articleFacade).incrementCommentCount(articleUuid);
     }
 
     @Test
-    @DisplayName("文章不存在時回 ARTICLE_NOT_FOUND，不寫入任何留言、不動計數（FK 已移除，這是唯一防線）")
+    @DisplayName("文章不存在（或對留言者不可讀）時回 ARTICLE_NOT_FOUND，不寫入任何留言、不動計數（FK 已移除，這是唯一防線）")
     void createComment_articleNotFound_throwsAndWritesNothing() {
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(false);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(false);
 
         CreateCommentRequest req = new CreateCommentRequest();
         req.setContent("x");
 
-        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, req))
+        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
 
@@ -149,7 +182,7 @@ class CommentServiceTest {
         parent.setArticleUuid(articleUuid);
         parent.setParentId(null);  // top-level
 
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(commentRepo.findByUuid(parentUuid)).thenReturn(Optional.of(parent));
         when(renderer.render(any())).thenReturn("<p>reply</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> {
@@ -162,7 +195,7 @@ class CommentServiceTest {
         req.setContent("reply");
         req.setParentUuid(parentUuid);
 
-        service.createComment(articleUuid, userUuid, req);
+        service.createComment(articleUuid, userUuid, false, req);
 
         ArgumentCaptor<Comment> captor = ArgumentCaptor.forClass(Comment.class);
         verify(commentRepo).save(captor.capture());
@@ -178,14 +211,14 @@ class CommentServiceTest {
         reply.setArticleUuid(articleUuid);
         reply.setParentId(40L);   // 已是 reply
 
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(commentRepo.findByUuid(parentUuid)).thenReturn(Optional.of(reply));
 
         CreateCommentRequest req = new CreateCommentRequest();
         req.setContent("nested");
         req.setParentUuid(parentUuid);
 
-        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, req))
+        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(CommentErrorCode.NESTING_TOO_DEEP.getMessage());
     }
@@ -200,14 +233,14 @@ class CommentServiceTest {
         parent.setArticleUuid(UUID.randomUUID());    // 不同文章
         parent.setParentId(null);
 
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(commentRepo.findByUuid(parentUuid)).thenReturn(Optional.of(parent));
 
         CreateCommentRequest req = new CreateCommentRequest();
         req.setContent("x");
         req.setParentUuid(parentUuid);
 
-        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, req))
+        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(CommentErrorCode.PARENT_NOT_IN_ARTICLE.getMessage());
         verify(commentRepo, never()).save(any());
@@ -223,14 +256,14 @@ class CommentServiceTest {
         parent.setParentId(null);
         parent.setDeletedAt(LocalDateTime.now());     // 軟刪除
 
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
         when(commentRepo.findByUuid(parentUuid)).thenReturn(Optional.of(parent));
 
         CreateCommentRequest req = new CreateCommentRequest();
         req.setContent("x");
         req.setParentUuid(parentUuid);
 
-        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, req))
+        assertThatThrownBy(() -> service.createComment(articleUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(CommentErrorCode.PARENT_FROZEN.getMessage());
     }
