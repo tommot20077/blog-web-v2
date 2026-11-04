@@ -3,6 +3,7 @@ package dowob.xyz.blog.infrastructure.facade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -59,4 +60,17 @@ public interface ArticleLookupFacade {
      * @return 文章元資料 Optional；查無文章時為 empty
      */
     Optional<ArticleData> findByUuid(UUID articleUuid);
+
+    /**
+     * 查出某作者所有<b>保留文章</b>（依 {@code ArticleStatus#isRemovedWithAuthorAccount} 判斷：PUBLISHED／ARCHIVED）
+     * 內文與封面中引用的檔案 UUID。
+     *
+     * <p>用途：作者刪帳清檔（DATA-02／DATA-07）時，凡在此集合內的檔案一律保留，不論其 {@code file_metadata.article_uuid}
+     * 綁到哪裡——封面圖不會被 {@code ArticleFileBinder} 綁定（只掃內文），同一張圖同時用在草稿與已發布文章時
+     * 也可能只綁到草稿那篇。引用格式為 {@code /api/v1/files/{uuid}/content}（內文與 {@code coverImageUrl} 皆掃描）。</p>
+     *
+     * @param authorUuid 作者公開 UUID；為 null 時回傳空集合
+     * @return 被保留文章引用的檔案 UUID（去重、小寫正規化後解析）；無則為空集合
+     */
+    Set<UUID> findFileUuidsReferencedByRetainedArticles(UUID authorUuid);
 }

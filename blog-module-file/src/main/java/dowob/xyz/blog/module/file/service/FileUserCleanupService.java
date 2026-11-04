@@ -28,6 +28,10 @@ import java.util.UUID;
  *       文章已不存在，或屬 DRAFT／PENDING_REVIEW／REJECTED（隨作者刪帳移除）→ 不算被引用，檔案刪除；
  *       PUBLISHED／ARCHIVED（保留）→ 檔案保留。</li>
  * </ul>
+ * <p><b>綁定欄位不足以判斷</b>：{@code ArticleFileBinder} 只掃內文、不掃 {@code coverImageUrl}，且重新綁定時會把不在
+ * 內文清單的既有綁定改成 NULL，所以已發布文章的封面檔 {@code article_uuid} 常為 NULL；同一張圖同時用在草稿與已發布文章
+ * 時也可能只綁到草稿那篇。因此另以 {@link ArticleLookupFacade#findFileUuidsReferencedByRetainedArticles} 取得保留文章
+ * 內文與封面實際引用的檔案集合，凡在集合內一律保留（不論 article_uuid）。</p>
  * <p>頭像（{@link UsageType#AVATAR}）是使用者個資，一律刪除。每個不同的文章只查一次狀態，不逐檔查詢。</p>
  *
  * <p>實際刪除委派既有的 {@link FileService#deleteFile}（以上傳者本人身分）：metadata 列與 MinIO 物件
@@ -65,11 +69,13 @@ public class FileUserCleanupService {
             return 0;
         }
         Set<UUID> retainedArticles = findRetainedArticleUuids(files);
+        /* 保留文章內文／封面實際引用的檔案：不論 article_uuid 綁到哪（封面不會被 binder 綁定；同圖可能只綁到草稿） */
+        Set<UUID> referencedFileIds = articleLookupFacade.findFileUuidsReferencedByRetainedArticles(uploaderId);
 
         int deleted = 0;
         List<RuntimeException> failures = new ArrayList<>();
         for (FileMetadata file : files) {
-            if (isReferencedByRetainedArticle(file, retainedArticles)) {
+            if (isReferencedByRetainedArticle(file, retainedArticles, referencedFileIds)) {
                 continue;
             }
             try {
@@ -120,11 +126,15 @@ public class FileUserCleanupService {
      *
      * @param file             檔案 metadata
      * @param retainedArticles 仍被保留的文章 UUID
-     * @return 非頭像、已綁定且該文章被保留時為 true
+     * @param referencedFileIds 保留文章內文／封面引用的檔案 UUID（article facade 提供）
+     * @return 非頭像，且（綁定的文章被保留，或被任一保留文章的內文／封面引用）時為 true
      */
-    private boolean isReferencedByRetainedArticle(FileMetadata file, Set<UUID> retainedArticles) {
-        return file.getUsageType() != UsageType.AVATAR
-                && file.getArticleUuid() != null
-                && retainedArticles.contains(file.getArticleUuid());
+    private boolean isReferencedByRetainedArticle(FileMetadata file, Set<UUID> retainedArticles,
+                                                  Set<UUID> referencedFileIds) {
+        if (file.getUsageType() == UsageType.AVATAR) {
+            return false;
+        }
+        return (file.getArticleUuid() != null && retainedArticles.contains(file.getArticleUuid()))
+                || referencedFileIds.contains(file.getId());
     }
 }

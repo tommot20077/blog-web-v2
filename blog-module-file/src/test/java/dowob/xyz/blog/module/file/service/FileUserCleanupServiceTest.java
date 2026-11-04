@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,6 +81,46 @@ class FileUserCleanupServiceTest {
 
         assertThat(deleted).isEqualTo(1);
         verify(fileService).deleteFile(unbound.getId(), uploader, false);
+    }
+
+    @Test
+    @DisplayName("M4：封面檔 article_uuid 為 NULL，但被已發布文章的 coverImageUrl 引用 → 保留")
+    void unboundCoverFile_referencedByRetainedArticle_isKept() {
+        FileMetadata cover = file(UsageType.ARTICLE_COVER, null);
+        FileMetadata unreferenced = file(UsageType.ARTICLE_CONTENT, null);
+        stubFiles(cover, unreferenced);
+        when(articleLookupFacade.findFileUuidsReferencedByRetainedArticles(uploader)).thenReturn(Set.of(cover.getId()));
+
+        int deleted = service.deleteFilesNotReferencedByRetainedArticles(uploader);
+
+        assertThat(deleted).isEqualTo(1);
+        verify(fileService, never()).deleteFile(cover.getId(), uploader, false);
+        verify(fileService).deleteFile(unreferenced.getId(), uploader, false);
+    }
+
+    @Test
+    @DisplayName("M4：檔案綁在草稿，但同時被已發布文章內文引用 → 保留（不論 article_uuid 綁到哪）")
+    void fileBoundToDraft_butReferencedByRetainedArticle_isKept() {
+        UUID draft = UUID.randomUUID();
+        FileMetadata shared = file(UsageType.ARTICLE_CONTENT, draft);
+        stubFiles(shared);
+        stubArticle(draft, "DRAFT");
+        when(articleLookupFacade.findFileUuidsReferencedByRetainedArticles(uploader)).thenReturn(Set.of(shared.getId()));
+
+        assertThat(service.deleteFilesNotReferencedByRetainedArticles(uploader)).isZero();
+        verify(fileService, never()).deleteFile(any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    @Test
+    @DisplayName("M4：查詢保留文章引用失敗 → 整體往外拋、不刪任何檔案")
+    void retainedReferenceLookupFails_deletesNothingAndThrows() {
+        stubFiles(file(UsageType.ARTICLE_CONTENT, null));
+        when(articleLookupFacade.findFileUuidsReferencedByRetainedArticles(uploader))
+                .thenThrow(new IllegalStateException("db down"));
+
+        assertThatThrownBy(() -> service.deleteFilesNotReferencedByRetainedArticles(uploader))
+                .isInstanceOf(IllegalStateException.class);
+        verify(fileService, never()).deleteFile(any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 
     @Test

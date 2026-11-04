@@ -40,4 +40,26 @@ public interface ArticleAuthorCleanupMapper {
     })
     List<String> findUuidsByAuthorAndStatuses(@Param("authorUuid") UUID authorUuid,
                                               @Param("statuses") List<String> statuses);
+
+    /**
+     * 擷取某作者在指定狀態下所有文章（內文＋封面網址）中引用的檔案 UUID 字串（去重）。
+     *
+     * <p>在資料庫端以正規表示式擷取 {@code /api/v1/files/{uuid}/content}，只回傳 UUID，不把內文搬到應用層。
+     * 狀態集合由呼叫端決定，須非空。</p>
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param statuses   文章狀態名稱，至少一筆
+     * @return 檔案 UUID 字串（小寫）；無則為空清單
+     */
+    @Select({
+        "<script>",
+        "SELECT DISTINCT lower(m[1]) FROM articles a,",
+        "LATERAL regexp_matches(coalesce(a.content_md, '') || ' ' || coalesce(a.cover_image_url, ''),",
+        "'/api/v1/files/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/content', 'g') AS m",
+        "WHERE a.author_uuid = #{authorUuid}::uuid AND a.status IN",
+        "<foreach collection='statuses' item='s' open='(' separator=',' close=')'>#{s}</foreach>",
+        "</script>"
+    })
+    List<String> findReferencedFileUuidsByAuthorAndStatuses(@Param("authorUuid") UUID authorUuid,
+                                                            @Param("statuses") List<String> statuses);
 }
