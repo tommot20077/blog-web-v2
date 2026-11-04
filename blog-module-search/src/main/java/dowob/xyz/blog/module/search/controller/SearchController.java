@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.search.controller;
 
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
@@ -35,10 +36,25 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class SearchController {
 
+    /** 搜尋字串 {@code q} 的長度上限（含 suggest）；超過回 400 {@code PARAM_VALID_ERROR}（SEC-05） */
+    public static final int MAX_QUERY_LENGTH = 100;
+
     /**
      * 搜尋服務
      */
     private final SearchService searchService;
+
+    /**
+     * 檢查搜尋字串長度。
+     *
+     * @param q 搜尋字串（可為 null）
+     * @throws BusinessException 長度超過 {@link #MAX_QUERY_LENGTH}（{@link CommonErrorCode#PARAM_VALID_ERROR}）
+     */
+    private static void requireQueryLength(String q) {
+        if (q != null && q.length() > MAX_QUERY_LENGTH) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR, "q 長度不可超過 " + MAX_QUERY_LENGTH);
+        }
+    }
 
     /**
      * 全文搜尋文章
@@ -48,7 +64,7 @@ public class SearchController {
      * 同時記錄搜尋歷史（需登入）與熱門搜尋統計。
      * </p>
      *
-     * @param q    搜尋關鍵字
+     * @param q    搜尋關鍵字（長度上限 {@value #MAX_QUERY_LENGTH}，超過回 400）
      * @param tag  標籤 slug 過濾（可選）
      * @param sort 排序：{@code relevance}（預設）/ {@code latest} / {@code hot}
      * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
@@ -63,6 +79,7 @@ public class SearchController {
             @RequestParam(defaultValue = "relevance") String sort,
             PageQuery pageQuery,
             @AuthenticationPrincipal AuthUser user) {
+        requireQueryLength(q);
         UUID userUuid = user == null ? null : user.uuid();
         return ApiResponse.success(searchService.search(q, tag, sort, pageQuery.page(), pageQuery.sizeOrDefault(10), userUuid));
     }
@@ -80,6 +97,7 @@ public class SearchController {
     @GetMapping("/suggest")
     public ApiResponse<List<String>> suggest(
             @RequestParam(required = false, defaultValue = "") String q) {
+        requireQueryLength(q);
         return ApiResponse.success(searchService.suggest(q));
     }
 

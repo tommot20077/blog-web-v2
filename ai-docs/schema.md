@@ -528,7 +528,7 @@ PRIMARY KEY (user_id, tag_id)
 **Indexes:**
 - `processed_events_pkey`（auto）
 - `uq_processed_events_event_consumer`（auto, UNIQUE）
-- `idx_processed_events_processed_at` on (processed_at) — 給未來 cleanup 用
+- `idx_processed_events_processed_at` on (processed_at) — 供 `ProcessedEventsCleanupJob` 清理挑列使用；該 job 每日（04:37）清理，保留 30 天（`app.idempotency.retention-days`，PERF-19）
 
 **Foreign keys:** 無
 

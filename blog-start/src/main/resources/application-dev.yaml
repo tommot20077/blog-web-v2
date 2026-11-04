@@ -65,3 +65,10 @@ server:
 app:
   mail:
     consumer-enabled: false
+
+# SEC-21：非正式環境開啟 Swagger UI 與 /v3/api-docs（基底 yaml 預設關閉）
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

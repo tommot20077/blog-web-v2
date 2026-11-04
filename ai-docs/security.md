@@ -153,7 +153,7 @@ public void changePassword(...) {
 | Method | Path | Description |
 |--------|------|-------------|
 | ANY | `/actuator/health/**`, `/actuator/info` | K3s liveness/readiness probe 與服務資訊 |
-| ANY | `/swagger-ui/**`, `/v3/api-docs/**`, `/swagger-ui.html` | API documentation |
+| ANY | `/swagger-ui/**`, `/v3/api-docs/**`, `/swagger-ui.html` | API documentation。僅在 springdoc 啟用時（dev／demo／`SPRINGDOC_ENABLED=true`）存在；正式環境關閉（SEC-21，Yuan 2026-11-04）：關閉時這些路徑**不在 permitAll**，匿名請求落入 `anyRequest().authenticated()` 回 401；已登入者打到則由 `GlobalExceptionHandler` 回 404 |
 | ANY | `/favicon.ico`, `/error` | favicon 與 Servlet 容器的錯誤轉發路徑 |
 | ANY | `/api/v1/auth/**` | Login, registration, refresh 等。**例外**:`POST /api/v1/auth/logout` 已在上一條規則設為 `authenticated()` |
 | GET | `/api/v1/articles` | 已發布文章列表 |

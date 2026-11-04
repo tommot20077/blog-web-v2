@@ -43,7 +43,10 @@ class TagUsageReconciliationJobIT extends TagCleanupITSupport {
             return result;
         });
         redis.delete(RedisKeyConstant.getReconciliationLockKey("tag", "tags.usage_count"));
+        /* PERF-18：重算只更新已存在的熱門榜單；先放一個帶 TTL 的榜單，才能驗證分數被寫入 */
         redis.delete(RedisKeyConstant.TAG_HOT_KEY);
+        redis.opsForZSet().add(RedisKeyConstant.TAG_HOT_KEY, UUID.randomUUID().toString(), 0.0);
+        redis.expire(RedisKeyConstant.TAG_HOT_KEY, 1, java.util.concurrent.TimeUnit.HOURS);
     }
 
     private UUID publishedArticle() {

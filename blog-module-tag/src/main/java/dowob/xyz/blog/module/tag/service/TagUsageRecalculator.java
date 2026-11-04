@@ -7,6 +7,8 @@ import dowob.xyz.blog.module.tag.repository.ArticleTagRepository;
 import dowob.xyz.blog.module.tag.repository.TagRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,8 +36,12 @@ import java.util.UUID;
  *       {@link ArticleFacade#filterPublishedUuids} 篩出已發布者（{@code articles} 屬 article 模組，
  *       不跨模組查表），其數量即新計數；</li>
  *   <li>與舊值不同才 {@code UPDATE}（寫絕對值），並清除該標籤的詳情快取；</li>
- *   <li>所有 DB 寫入完成後，才以 {@code ZADD} 把 Redis 熱門分數<b>設為</b>新計數
- *       （Redis 無法隨交易 rollback，先 DB 後 Redis；任何失敗都往外拋，由呼叫端重試，重算天然冪等）。</li>
+ *   <li>所有 DB 寫入完成後，才把 Redis 熱門分數<b>設為</b>新計數
+ *       （Redis 無法隨交易 rollback，先 DB 後 Redis；任何失敗都往外拋，由呼叫端重試，重算天然冪等）。
+ *       寫入以 Lua 原子判斷：<b>{@code tag:hot} 已存在才 {@code ZADD}</b>（PERF-18）——
+ *       該 key 的 1h TTL 到期後若直接 ZADD，會建出不帶 TTL 的殘缺 ZSet，{@code getHotTags}
+ *       之後恆走 cache-hit 而永不重建。key 不存在時不寫，DB 已是真相，下次 {@code getHotTags}
+ *       會從 DB 完整重建並設定 TTL。</li>
  * </ol>
  * 因為第 1 步先鎖再讀，後到的重算一定讀到先到者 commit 之後的狀態，不會被舊快照覆寫。
  * 鎖模式是 {@code FOR NO KEY UPDATE}（不是 {@code FOR UPDATE}），否則會與 article_tags FK 檢查的
@@ -68,6 +74,17 @@ import java.util.UUID;
 @Service
 public class TagUsageRecalculator {
 
+    /**
+     * 「榜單存在才更新分數」的 Lua 腳本（PERF-18）。
+     *
+     * <p>KEYS[1] = 熱門 ZSet；ARGV[1] = member、ARGV[2] = score。key 不存在回 0 且不寫入，
+     * 存在則 ZADD 並回 1；不碰 TTL。EXISTS 與 ZADD 在同一個腳本內，不會在兩者之間被 TTL 到期插隊。</p>
+     */
+    public static final RedisScript<Long> SET_HOT_SCORE_IF_PRESENT = new DefaultRedisScript<>(
+            "if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end "
+                    + "redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1]) return 1",
+            Long.class);
+
     /** 標籤資料存取（列鎖、寫入計數） */
     private final TagRepository tagRepository;
 
@@ -97,7 +114,7 @@ public class TagUsageRecalculator {
     }
 
     /**
-     * 重算指定標籤的使用計數（已發布文章數），並以 ZADD 設定 Redis 熱門分數。
+     * 重算指定標籤的使用計數（已發布文章數），並在熱門榜單存在時設定 Redis 熱門分數（見類別說明，PERF-18）。
      *
      * <p>null、空集合直接返回；重複與 null 的 id 先去除；不存在的標籤靜默略過。</p>
      *
@@ -135,8 +152,8 @@ public class TagUsageRecalculator {
 
         /* Redis 無法隨交易 rollback：先完成全部 DB 寫入，才一次設定熱門分數 */
         for (int i = 0; i < tags.size(); i++) {
-            stringRedisTemplate.opsForZSet()
-                    .add(RedisKeyConstant.TAG_HOT_KEY, tags.get(i).getId().toString(), counts.get(i));
+            stringRedisTemplate.execute(SET_HOT_SCORE_IF_PRESENT, List.of(RedisKeyConstant.TAG_HOT_KEY),
+                    tags.get(i).getId().toString(), String.valueOf(counts.get(i)));
         }
         return corrected;
     }

@@ -90,6 +90,9 @@ public class SearchServiceImpl implements SearchService {
      */
     private static final int SUGGEST_MAX_SIZE = 10;
 
+    /** 可計入全站熱門搜尋詞的最大長度（正規化後；超過者搜尋照常但不進榜，SEC-05） */
+    static final int HOT_TERM_MAX_LENGTH = 50;
+
     /**
      * 幽靈 document 掃描的每頁筆數
      */
@@ -165,9 +168,9 @@ public class SearchServiceImpl implements SearchService {
 
         long total = hits.getTotalHits();
 
-        /** 記錄搜尋關鍵字至 Redis */
+        /** 記錄搜尋關鍵字至 Redis（熱門詞僅在有命中已發布文章時計入，見 recordSearch） */
         if (StringUtils.hasText(q)) {
-            recordSearch(q, userUuid);
+            recordSearch(q, userUuid, total > 0);
         }
 
         return PageResult.of(page, size, total, results);
@@ -459,16 +462,24 @@ public class SearchServiceImpl implements SearchService {
     /**
      * 記錄搜尋關鍵字至 Redis 熱門榜與個人歷史
      *
-     * @param keyword 搜尋關鍵字
-     * @param userUuid 用戶 UUID（匿名為 null）
+     * <p>SEC-05（Yuan 2026-11-04 決定，Q15）：全站熱門詞 ZSet 只計入「有命中已發布文章」且正規化後
+     * 長度不超過 {@link #HOT_TERM_MAX_LENGTH} 的詞，使匿名者灌不進文章裡沒有的字，也灌不進超長字串；
+     * 匿名搜尋有結果時仍計入。個人搜尋歷史不受此規則影響。</p>
+     *
+     * @param keyword    搜尋關鍵字
+     * @param userUuid   用戶 UUID（匿名為 null）
+     * @param hasResults 本次搜尋是否有命中（total &gt; 0）
      */
-    private void recordSearch(String keyword, UUID userUuid) {
+    private void recordSearch(String keyword, UUID userUuid, boolean hasResults) {
         String lower = keyword.toLowerCase();
-        /** 更新熱門搜尋 ZSet（分數遞增），限制最多 500 個成員避免無限增長 */
-        redisTemplate.opsForZSet().incrementScore(RedisKeyConstant.SEARCH_HOT_KEY, lower, 1.0);
-        Long hotSize = redisTemplate.opsForZSet().zCard(RedisKeyConstant.SEARCH_HOT_KEY);
-        if (hotSize != null && hotSize > 500) {
-            redisTemplate.opsForZSet().removeRange(RedisKeyConstant.SEARCH_HOT_KEY, 0, hotSize - 501);
+        String hotTerm = lower.trim().replaceAll("\\s+", " ");
+        if (hasResults && hotTerm.length() <= HOT_TERM_MAX_LENGTH) {
+            /** 更新熱門搜尋 ZSet（分數遞增），限制最多 500 個成員避免無限增長 */
+            redisTemplate.opsForZSet().incrementScore(RedisKeyConstant.SEARCH_HOT_KEY, hotTerm, 1.0);
+            Long hotSize = redisTemplate.opsForZSet().zCard(RedisKeyConstant.SEARCH_HOT_KEY);
+            if (hotSize != null && hotSize > 500) {
+                redisTemplate.opsForZSet().removeRange(RedisKeyConstant.SEARCH_HOT_KEY, 0, hotSize - 501);
+            }
         }
 
         /** 記錄個人搜尋歷史 */

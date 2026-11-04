@@ -695,17 +695,17 @@ class SecurityConfigTest {
     // ── 靜態資源與 Swagger ──
 
     @Test
-    @DisplayName("未認證訪問 /swagger-ui/** 應回傳 200")
-    void unauthenticatedAccessSwagger_shouldReturn200() throws Exception {
+    @DisplayName("springdoc 關閉（預設）時，未認證訪問 /swagger-ui/** 應回傳 401（不在 permitAll）")
+    void unauthenticatedAccessSwagger_whenSpringdocDisabled_shouldReturn401() throws Exception {
         mockMvc.perform(get("/swagger-ui/index.html"))
-                .andExpect(status().isOk());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
-    @DisplayName("未認證訪問 /v3/api-docs/** 應回傳 200")
-    void unauthenticatedAccessApiDocs_shouldReturn200() throws Exception {
+    @DisplayName("springdoc 關閉（預設）時，未認證訪問 /v3/api-docs 應回傳 401（不在 permitAll）")
+    void unauthenticatedAccessApiDocs_whenSpringdocDisabled_shouldReturn401() throws Exception {
         mockMvc.perform(get("/v3/api-docs"))
-                .andExpect(status().isOk());
+                .andExpect(status().isUnauthorized());
     }
 
     // ── 自訂 401 入口點 ──
