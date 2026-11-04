@@ -45,7 +45,7 @@ public class SafeSocialLinksValidator implements ConstraintValidator<SafeSocialL
     static final int MAX_VALUE_LENGTH = 100;
 
     /** key 格式 */
-    private static final Pattern KEY_PATTERN = Pattern.compile("[a-z0-9_]{1,32}");
+    static final Pattern KEY_PATTERN = Pattern.compile("[a-z0-9_]{1,32}");
 
     /** value 內不允許出現的字元（可構成 scheme、路徑、HTML 注入的字元） */
     private static final String FORBIDDEN_VALUE_CHARS = "/:\\<>\"";
@@ -109,10 +109,12 @@ public class SafeSocialLinksValidator implements ConstraintValidator<SafeSocialL
     /**
      * 判斷單一 value 是否為安全的帳號名稱。
      *
+     * <p>套件可見：公開輸出的寬鬆解析（{@link PublicSocialLinks}）與寫入驗證共用這一份規則，不重寫第二份。</p>
+     *
      * @param handle value 字串
      * @return 安全回傳 true；空字串代表未填，視為安全
      */
-    private static boolean isSafeHandle(String handle) {
+    static boolean isSafeHandle(String handle) {
         if (handle.isEmpty()) {
             return true;
         }

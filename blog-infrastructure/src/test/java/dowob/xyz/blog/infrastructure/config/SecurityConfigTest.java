@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -33,6 +34,7 @@ import java.util.List;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -164,6 +166,31 @@ class SecurityConfigTest {
         @GetMapping("/api/v1/users/1")
         public String getUser() {
             return "user";
+        }
+
+        @GetMapping("/api/v1/users/{uuid}/profile")
+        public String getPublicProfile(@PathVariable String uuid) {
+            return "public-profile";
+        }
+
+        @GetMapping("/api/v1/users/me/profile")
+        public String getMeProfile() {
+            return "me-profile";
+        }
+
+        @PatchMapping("/api/v1/users/{uuid}/profile")
+        public String patchProfile(@PathVariable String uuid) {
+            return "profile-patched";
+        }
+
+        @GetMapping("/api/v1/authors")
+        public String searchAuthors() {
+            return "authors";
+        }
+
+        @PostMapping("/api/v1/authors")
+        public String createAuthor() {
+            return "author-created";
         }
 
         @GetMapping("/api/v1/files/abc")
@@ -467,6 +494,41 @@ class SecurityConfigTest {
     @DisplayName("未認證 GET /api/v1/users/** 應回傳 401（已收窄 permitAll）")
     void unauthenticatedGetUsers_shouldReturn401() throws Exception {
         mockMvc.perform(get("/api/v1/users/1"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/users/{uuid}/profile（公開作者頁）應回傳 200")
+    void unauthenticatedGetPublicProfile_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/users/" + ARTICLE_UUID + "/profile"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/users/me/profile 應回傳 401（permitAll 只限 UUID 形狀路徑，字面量子路徑 fail-closed）")
+    void unauthenticatedGetMeProfile_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/users/me/profile"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 PATCH /api/v1/users/{uuid}/profile 應回傳 401（僅開放 GET）")
+    void unauthenticatedPatchProfile_shouldReturn401() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/" + ARTICLE_UUID + "/profile"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/authors（作者搜尋）應回傳 200")
+    void unauthenticatedGetAuthors_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/authors"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/authors 應回傳 401（僅開放 GET）")
+    void unauthenticatedPostAuthors_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/authors"))
                 .andExpect(status().isUnauthorized());
     }
 
