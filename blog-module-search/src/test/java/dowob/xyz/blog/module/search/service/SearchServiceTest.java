@@ -56,6 +56,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -365,6 +366,33 @@ class SearchServiceTest {
         }
 
         @Test
+        @DisplayName("搜尋結果的 authorUuid 直接取自 ES 文件的 author.uuid，不查 UserFacade")
+        void search_withResults_mapsAuthorUuidFromDocument() {
+            ArticleDocument doc = buildTestDocument();
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(doc));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
+
+            assertThat(result.getRecords().get(0).getAuthorUuid()).isEqualTo(USER_UUID);
+            verifyNoInteractions(userFacade);
+        }
+
+        @Test
+        @DisplayName("ES 文件的 author.uuid 無法解析為 UUID（髒資料）時 authorUuid 為 null，不拋例外")
+        void search_whenDocAuthorUuidMalformed_authorUuidIsNull() {
+            ArticleDocument doc = buildTestDocument();
+            doc.setAuthor(new ArticleDocument.AuthorInfo("not-a-uuid", "Yuan"));
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(doc));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
+
+            assertThat(result.getRecords().get(0).getAuthorUuid()).isNull();
+            assertThat(result.getRecords().get(0).getAuthorNickname()).isEqualTo("Yuan");
+        }
+
+        @Test
         @DisplayName("指定 tag 篩選時，應加入 Nested Query 過濾")
         void search_withTag_executesNestedQuery() {
             SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
@@ -445,6 +473,7 @@ class SearchServiceTest {
             PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
 
             assertThat(result.getRecords().get(0).getAuthorNickname()).isNull();
+            assertThat(result.getRecords().get(0).getAuthorUuid()).isNull();
         }
 
         @Test

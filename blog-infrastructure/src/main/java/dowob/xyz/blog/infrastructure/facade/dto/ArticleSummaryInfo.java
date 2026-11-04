@@ -17,6 +17,7 @@ import java.util.UUID;
  * @param slug             文章 URL slug
  * @param summary          文章摘要
  * @param authorNickname   作者暱稱
+ * @param authorUuid       作者公開 UUID（取自 {@code articles.author_uuid}，供前端連到公開作者頁）
  * @param tagNames         標籤名稱列表
  * @param viewCount        瀏覽次數
  * @param likeCount        按讚次數
@@ -30,6 +31,7 @@ public record ArticleSummaryInfo(
         String slug,
         String summary,
         String authorNickname,
+        UUID authorUuid,
         List<String> tagNames,
         long viewCount,
         long likeCount,

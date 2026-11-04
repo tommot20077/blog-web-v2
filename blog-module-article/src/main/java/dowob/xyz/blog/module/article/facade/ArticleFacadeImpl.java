@@ -16,6 +16,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
+import dowob.xyz.blog.infrastructure.facade.dto.AuthorArticleStats;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
@@ -341,6 +342,7 @@ public class ArticleFacadeImpl implements ArticleFacade {
                         row.getSlug(),
                         row.getSummary(),
                         authors.get(row.getAuthorUuid()).nickname(),
+                        row.getAuthorUuid(),
                         tagNamesByArticleUuid.getOrDefault(row.getUuid(), Collections.emptyList()),
                         row.getViewCount(),
                         row.getLikeCount(),
@@ -755,5 +757,34 @@ public class ArticleFacadeImpl implements ArticleFacade {
             return Optional.empty();
         }
         return Optional.ofNullable(articleMapper.findNextPublishedInSeries(seriesUuid, currentPosition));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>無輸入、輸出與作者人數成正比，沒有可切批的維度（見介面 JavaDoc 的重評門檻）；
+     * 結果一律是可變的 HashMap。</p>
+     */
+    @Override
+    public Map<UUID, Long> countPublishedByAuthor() {
+        Map<UUID, Long> result = new HashMap<>();
+        articleMapper.countPublishedByAuthor()
+                .forEach(row -> result.put(row.authorUuid(), row.publishedCount()));
+        return result;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public AuthorArticleStats getPublishedStatsByAuthor(UUID authorUuid) {
+        if (authorUuid == null) {
+            return AuthorArticleStats.EMPTY;
+        }
+        ArticleMapper.AuthorStatsRow row = articleMapper.getPublishedStatsByAuthor(authorUuid);
+        if (row == null) {
+            return AuthorArticleStats.EMPTY;
+        }
+        return new AuthorArticleStats(row.publishedCount(), row.viewCount(), row.likeCount());
     }
 }
