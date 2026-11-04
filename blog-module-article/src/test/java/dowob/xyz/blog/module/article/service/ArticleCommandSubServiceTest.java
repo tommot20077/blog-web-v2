@@ -99,6 +99,9 @@ class ArticleCommandSubServiceTest {
     @Mock
     private ArticleResponseMapper articleResponseMapper;
 
+    @Mock
+    private ArticleArchiveCache archiveCache;
+
     private ObjectMapper objectMapper;
 
     /** 真實 codec：TOC 序列化行為本身是待驗證對象，不可 mock */
@@ -179,7 +182,8 @@ class ArticleCommandSubServiceTest {
                 transactionTemplate,
                 entityFinder,
                 articleResponseMapper,
-                articleTocCodec);
+                articleTocCodec,
+                archiveCache);
     }
 
     private EditorArticleResponse toEditorResponse(Article article) {
@@ -2422,6 +2426,222 @@ class ArticleCommandSubServiceTest {
                     .isNotNull();
             return expectation;
         }
+    }
+
+    // =========================================================================
+    // PERF-04：歸檔頁快取的主動失效
+    // =========================================================================
+
+    @Nested
+    @DisplayName("歸檔頁快取失效（PERF-04）")
+    class ArchiveCacheInvalidationTests {
+
+        @Test
+        @DisplayName("publishArticle：DB commit 之後才失效快取，且一定失效")
+        void publishArticle_evictsArchiveCacheAfterCommit() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
+
+            org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(transactionTemplate, archiveCache);
+            inOrder.verify(transactionTemplate).execute(any());
+            inOrder.verify(archiveCache).evict();
+        }
+
+        @Test
+        @DisplayName("publishArticle：轉換非法 → 沒有任何寫入，也不失效快取")
+        void publishArticle_invalidTransition_doesNotEvict() {
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(buildArticle(ArticleStatus.ARCHIVED));
+
+            assertThatThrownBy(() -> commandSubService.publishArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class);
+
+            verify(archiveCache, never()).evict();
+        }
+
+        @Test
+        @DisplayName("archiveArticle：PUBLISHED → ARCHIVED 於 commit 後失效快取（下架後歸檔頁不得再列出該文）")
+        void archiveArticle_evictsArchiveCacheAfterCommit() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID);
+
+            org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(transactionTemplate, archiveCache);
+            inOrder.verify(transactionTemplate).execute(any());
+            inOrder.verify(archiveCache).evict();
+        }
+
+        @Test
+        @DisplayName("archiveArticle：非 ADMIN／非法轉換 → 不失效快取")
+        void archiveArticle_rejected_doesNotEvict() {
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(buildArticle(ArticleStatus.DRAFT));
+            assertThatThrownBy(() -> commandSubService.archiveArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID))
+                    .isInstanceOf(BusinessException.class);
+
+            verify(archiveCache, never()).evict();
+        }
+
+        @Test
+        @DisplayName("deleteArticle：刪除 PUBLISHED 文章 → 刪除 commit 後失效快取")
+        void deleteArticle_published_evictsArchiveCacheAfterDelete() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
+
+            org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(articleRepository, archiveCache);
+            inOrder.verify(articleRepository).delete(article);
+            inOrder.verify(archiveCache).evict();
+        }
+
+        @Test
+        @DisplayName("deleteArticle：刪除非 PUBLISHED 文章不在歸檔中 → 不失效（避免草稿操作無謂打掉快取）")
+        void deleteArticle_draft_doesNotEvict() {
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(buildArticle(ArticleStatus.DRAFT));
+
+            commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
+
+            verify(archiveCache, never()).evict();
+        }
+
+        @Test
+        @DisplayName("deleteArticle：刪除失敗（例外）→ 不失效快取")
+        void deleteArticle_whenDeleteFails_doesNotEvict() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            doThrow(new RuntimeException("db down")).when(articleRepository).delete(article);
+
+            assertThatThrownBy(() -> commandSubService.deleteArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID))
+                    .isInstanceOf(RuntimeException.class);
+
+            verify(archiveCache, never()).evict();
+        }
+
+        @Test
+        @DisplayName("updateArticle（PUT）：DRAFT → PUBLISHED 進入歸檔集合 → commit 後失效快取")
+        void updateArticle_draftToPublished_evictsArchiveCache() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PUBLISHED);
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(transactionTemplate, archiveCache);
+            inOrder.verify(transactionTemplate).execute(any());
+            inOrder.verify(archiveCache).evict();
+        }
+
+        @Test
+        @DisplayName("updateArticle（PUT）：不碰歸檔集合的修改（改 DRAFT 標題、DRAFT → PENDING_REVIEW）→ 不失效")
+        void updateArticle_notTouchingPublishedSet_doesNotEvict() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            UpdateArticleRequest rename = new UpdateArticleRequest();
+            rename.setTitle("只改標題");
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, rename);
+
+            UpdateArticleRequest submit = new UpdateArticleRequest();
+            submit.setStatus(ArticleStatus.PENDING_REVIEW);
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, submit);
+
+            verify(archiveCache, never()).evict();
+        }
+
+        @Test
+        @DisplayName("不改變「已發布集合」的狀態轉換（送審／駁回／抽回／復原）不失效快取")
+        void transitionsNotTouchingPublishedSet_doNotEvict() {
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID))
+                    .thenReturn(buildArticle(ArticleStatus.DRAFT))
+                    .thenReturn(buildArticle(ArticleStatus.PENDING_REVIEW))
+                    .thenReturn(buildArticle(ArticleStatus.PENDING_REVIEW))
+                    .thenReturn(buildArticle(ArticleStatus.ARCHIVED));
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            commandSubService.submitForReview(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.rejectArticle(OTHER_USER_UUID, Role.ADMIN, ARTICLE_UUID, "理由");
+            commandSubService.withdrawArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID);
+            commandSubService.unarchiveArticle(OTHER_USER_UUID, Role.ADMIN, ARTICLE_UUID);
+
+            verify(archiveCache, never()).evict();
+        }
+    }
+
+    // =========================================================================
+    // W2A 審查提出：「PUT 改成 ARCHIVED 不發 article.archived」——以全轉換矩陣驗證
+    //
+    // 結論先行：updateArticle 開頭的內容凍結守衛（ArticleContentFreezePolicy）只放行 DRAFT／REJECTED 作為
+    // 來源，PUBLISHED／PENDING_REVIEW／ARCHIVED 的 PUT 一律在改任何東西之前就被擋下（A0209）。
+    // 因此 PUT 不存在「離開 PUBLISHED」的路徑，審查所述情境（PUBLISHED → ARCHIVED 經 PUT）不可能發生。
+    // 本矩陣把「PUT 能走的轉換 × 各自該發的事件」鎖成表，往後若放寬凍結守衛，漏發事件會立刻紅。
+    // =========================================================================
+
+    @Nested
+    @DisplayName("PUT 狀態轉換 × 事件矩陣")
+    class PutTransitionEventMatrixTests {
+
+        /** PUT 實際可成功的轉換（來源限 DRAFT／REJECTED，且需通過狀態機與 REJECTED→PENDING_REVIEW 入口守衛） */
+        private final java.util.Set<String> PUT_ACCEPTED = java.util.Set.of(
+                "DRAFT->PUBLISHED", "DRAFT->PENDING_REVIEW", "REJECTED->DRAFT");
+
+        private String key(ArticleStatus from, ArticleStatus to) {
+            return from + "->" + to;
+        }
+
+        @ParameterizedTest(name = "[{index}] PUT {0} → {1}")
+        @MethodSource("dowob.xyz.blog.module.article.service.ArticleCommandSubServiceTest#putTransitions")
+        @DisplayName("每一組 (來源, 目標)：PUT 成功者事件與快取失效符合預期；被拒者不寫入、不發任何事件、不失效")
+        void put_everyTransition_eventsMatchOutcome(ArticleStatus from, ArticleStatus to) {
+            Article article = buildArticle(from);
+            article.setPublishedAt(LocalDateTime.now().minusDays(1));
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(to);
+
+            if (!PUT_ACCEPTED.contains(key(from, to))) {
+                assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, request))
+                        .as("PUT %s → %s 應被拒絕", from, to)
+                        .isInstanceOf(BusinessException.class);
+                verify(articleRepository, never()).save(any());
+                verifyNoInteractions(articleEventPublisher);
+                verify(archiveCache, never()).evict();
+                return;
+            }
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, request);
+
+            // 凡是成功的 PUT 一律發 ContentChanged(SAVED)（既有契約）
+            verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
+            if (to == ArticleStatus.PUBLISHED) {
+                // 進入 PUBLISHED：search／tag 訂閱 article.updated（設計如此，見 TagArticleLifecycleConsumer），
+                // 歸檔頁快取必須失效
+                verify(articleEventPublisher).publishUpdated(any());
+                verify(archiveCache).evict();
+            } else {
+                verify(articleEventPublisher, never()).publishUpdated(any());
+                verify(articleEventPublisher, never()).publishArchived(any());
+                verify(archiveCache, never()).evict();
+            }
+        }
+    }
+
+    /**
+     * PUT 轉換矩陣的參數來源：全部 (來源, 目標) 狀態組合（含原地不動）。
+     *
+     * @return 參數流
+     */
+    static Stream<Arguments> putTransitions() {
+        return Arrays.stream(ArticleStatus.values())
+                .flatMap(from -> Arrays.stream(ArticleStatus.values()).map(to -> Arguments.of(from, to)));
     }
 
 }

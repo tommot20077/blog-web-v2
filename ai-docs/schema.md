@@ -109,7 +109,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 - `idx_articles_created_at`（V2）on created_at DESC
 - ~~`idx_articles_uuid`~~ V13 已 DROP（與 UNIQUE constraint 重複）
 - `idx_articles_series_position`（V15, partial；V32 起以同名重建於 `series_uuid`）on (series_uuid, series_position) WHERE series_uuid IS NOT NULL
-- `idx_articles_published_latest`（V22, partial）on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'——公開列表預設排序；`view_count` / `comment_count` 刻意不建排序索引（頻繁回寫，避免失去 HOT update）
+- `idx_articles_published_latest`（V22, partial）on (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'——公開列表預設排序；同一索引也服務歸檔頁 `GET /api/v1/articles/archive` 的 `ArticleMapper.findArchiveRows`（排序子句 `published_at DESC NULLS LAST, id DESC` 須與此索引逐字一致，免 Sort；PERF-04 因此**不需要**另建 `(published_at DESC)` 索引，見 `ArticleArchiveMapperIT` 的 EXPLAIN 斷言）與 `TrendingRefreshJob` 的範圍掃描；`view_count` / `comment_count` 刻意不建排序索引（頻繁回寫，避免失去 HOT update）
 
 **Foreign keys:**
 - **無任何外向 FK（M6 完成）**：V31 已移除 `author_id` → `users(id)`（使用者只做軟刪除，不新增連動，匿名化另案 DATA-02）；V32 已移除 `series_id` → `series(id)`（ON DELETE SET NULL）。「series 刪除 → 文章脫離系列」改由 `SeriesDeletedEvent` consumer＋每日校正負責：只清空 `series_uuid`／`series_position`，**文章留存**。與原 FK 的 SET NULL 的差異皆為有意：`series_position` 一併清空（系列已不存在）；`version` 遞增（過期的整筆 save 會撞樂觀鎖，不會把 ghost 歸屬寫回）；`updated_at` 不動（與改造前相同）

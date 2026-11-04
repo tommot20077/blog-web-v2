@@ -101,6 +101,16 @@ public class ArticleController {
      * 無已發布文章時回傳空清單。此端點為公開，與 {@link #getPublishedArticles} 同等不需登入。
      * </p>
      *
+     * <p>
+     * <b>量級假設與保護</b>（PERF-04）：本端點刻意<b>不分頁、不截斷</b>——前端年度歸檔頁需要全量，
+     * 自行依年份分組並統計總篇數，任何截斷都會讓統計與年份區塊悄悄變錯，屬契約語意變更。
+     * 假設已發布文章為數千篇以內（與 V22 索引註解的規模假設一致；單筆約 200 bytes，五千篇約 1 MB JSON）。
+     * 在此量級下的保護是：四欄投影（不撈正文）、標籤批次查詢（經 {@code BatchedQuery} 切批）、
+     * 走 {@code idx_articles_published_latest} 免排序、整份回應 Redis 快取（命中時不查 DB，
+     * 發布／下架／刪除時主動失效，另有 10 分鐘 TTL 兜底）。若已發布文章成長到數萬篇，
+     * 應改為依年份查詢的契約（新增 year 參數或年份索引端點），而非在此加硬上限。
+     * </p>
+     *
      * @return 歸檔文章投影列表（依 publishedAt 由新到舊排序）
      */
     @GetMapping("/archive")

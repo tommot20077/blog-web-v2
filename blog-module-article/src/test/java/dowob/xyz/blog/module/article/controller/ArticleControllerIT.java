@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.article.support.TestUsers;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
@@ -28,6 +29,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -146,6 +148,12 @@ class ArticleControllerIT {
     private ArticleRepository articleRepository;
 
     /**
+     * 直接檢視／清除 Redis（PERF-04 歸檔頁快取）
+     */
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    /**
      * 直接操作資料庫（公開列表篩選情境：標籤、分類、第二位作者與可控的排序鍵）
      */
     @Autowired
@@ -229,6 +237,9 @@ class ArticleControllerIT {
     @AfterEach
     void cleanUp() {
         articleRepository.deleteAll();
+        /* PERF-04：歸檔頁回應有 Redis 快取；本類別在 cleanUp 直接以 repository 刪文章（不經 service，不會觸發失效），
+         * 若不清掉，上一個測試留下的快取會被下一個測試讀到。 */
+        stringRedisTemplate.delete(RedisKeyConstant.ARTICLE_ARCHIVE_KEY);
         jdbcTemplate.update("DELETE FROM article_tags WHERE tag_id IN (SELECT id FROM tags WHERE slug LIKE 'it-list-%')");
         jdbcTemplate.update("DELETE FROM tags WHERE slug LIKE 'it-list-%'");
         jdbcTemplate.update("DELETE FROM categories WHERE slug LIKE 'it-list-%'");
@@ -1059,6 +1070,95 @@ class ArticleControllerIT {
                 .andExpect(jsonPath("$.data[0].uuid").value(secondUuid))
                 .andExpect(jsonPath("$.data[0].slug").exists())
                 .andExpect(jsonPath("$.data[0].publishedAt").exists());
+    }
+
+    @Test
+    @DisplayName("PERF-04：第二次 GET /archive 由 Redis 回應，不再查 DB（DB 被偷改後仍回快取內容），且 Redis 內確有快取鍵與 TTL")
+    void getArchive_secondCallServedFromRedis_notFromDb() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("原始標題");
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data[0].title").value("原始標題"));
+        assertThat(stringRedisTemplate.hasKey(RedisKeyConstant.ARTICLE_ARCHIVE_KEY)).isTrue();
+        Long ttl = stringRedisTemplate.getExpire(RedisKeyConstant.ARTICLE_ARCHIVE_KEY, java.util.concurrent.TimeUnit.SECONDS);
+        assertThat(ttl).isBetween(1L, RedisKeyConstant.ARTICLE_ARCHIVE_TTL_MINUTES * 60);
+
+        /* 繞過 service 直接改 DB（不會觸發失效）：若第二次還打 DB，標題會變 */
+        jdbcTemplate.update("UPDATE articles SET title = '被偷改' WHERE uuid = ?::uuid", uuid);
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].title").value("原始標題"));
+    }
+
+    @Test
+    @DisplayName("PERF-04：快取已填入後發布新文章 → 快取失效，下一次 GET /archive 立即看到新文章")
+    void getArchive_publishInvalidatesCache() throws Exception {
+        stubUserFacade();
+        createPublishedArticle("先發布的");
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(1)));
+        assertThat(stringRedisTemplate.hasKey(RedisKeyConstant.ARTICLE_ARCHIVE_KEY)).isTrue();
+
+        createPublishedArticle("後發布的");
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[0].title").value("後發布的"));
+    }
+
+    @Test
+    @DisplayName("PERF-04：快取已填入後 PUT 把 DRAFT 直接轉 PUBLISHED → 快取失效")
+    void getArchive_putDraftToPublishedInvalidatesCache() throws Exception {
+        stubUserFacade();
+        String draft = createArticle("草稿轉發布", "內容");
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(0)));
+        assertThat(stringRedisTemplate.hasKey(RedisKeyConstant.ARTICLE_ARCHIVE_KEY)).isTrue();
+
+        UpdateArticleRequest update = new UpdateArticleRequest();
+        update.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PUBLISHED);
+        mockMvc.perform(put("/api/v1/articles/" + draft)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(update)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].title").value("草稿轉發布"));
+    }
+
+    @Test
+    @DisplayName("PERF-04：快取已填入後刪除已發布文章 → 快取失效，歸檔頁不再列出")
+    void getArchive_deleteInvalidatesCache() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("將被刪除");
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(1)));
+
+        mockMvc.perform(delete("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(0)));
+    }
+
+    @Test
+    @DisplayName("PERF-04：快取內容壞掉（非 JSON）→ 當作未命中，回 200 並以 DB 結果覆寫快取")
+    void getArchive_corruptedCache_fallsBackToDbAndHeals() throws Exception {
+        stubUserFacade();
+        createPublishedArticle("正常文章");
+        stringRedisTemplate.opsForValue().set(RedisKeyConstant.ARTICLE_ARCHIVE_KEY, "{broken");
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)));
+
+        assertThat(stringRedisTemplate.opsForValue().get(RedisKeyConstant.ARTICLE_ARCHIVE_KEY)).startsWith("[");
     }
 
     /**
