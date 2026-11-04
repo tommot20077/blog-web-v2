@@ -295,4 +295,16 @@ class PublicAuthorIntegrationTest extends AbstractIntegrationTest {
                 .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
                         .isEqualTo(CommonErrorCode.PARAM_VALID_ERROR));
     }
+
+    @Test
+    @DisplayName("authors：至少有一位作者時 keyword 含 NUL → 400 PARAM_VALID_ERROR（不得讓 PostgreSQL 拒絕 0x00 變成 500）")
+    void searchAuthors_keywordContainingNul_throwsParamValidError() {
+        User author = createUser("it-nul-author", UserStatus.ACTIVE);
+        givenPublishedCounts(Map.of(author.getUuid(), 1L));
+
+        assertThatThrownBy(() -> publicAuthorService.searchAuthors("a\u0000b"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                        .isEqualTo(CommonErrorCode.PARAM_VALID_ERROR));
+    }
 }

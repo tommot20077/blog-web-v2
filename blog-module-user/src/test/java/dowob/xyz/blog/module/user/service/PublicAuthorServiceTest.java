@@ -219,6 +219,30 @@ class PublicAuthorServiceTest {
         }
 
         @Test
+        @DisplayName("keyword 含 NUL 字元（PostgreSQL 不接受 0x00）→ 400 PARAM_VALID_ERROR，且不查 facade 與 DB")
+        void keywordContainingNul_throwsParamValidError() {
+            assertThatThrownBy(() -> service.searchAuthors("ab\u0000cd"))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getErrorCode())
+                            .isEqualTo(CommonErrorCode.PARAM_VALID_ERROR));
+
+            verifyNoInteractions(articleFacade, userMapper);
+        }
+
+        @Test
+        @DisplayName("同篇數時暱稱不分大小寫排序：alice 排在 Zed 前面")
+        void sameCount_nicknameOrderIsCaseInsensitive() {
+            UUID zed = new UUID(0L, 1L);
+            UUID alice = new UUID(0L, 2L);
+            when(articleFacade.countPublishedByAuthor()).thenReturn(Map.of(zed, 3L, alice, 3L));
+            when(userMapper.findActiveAuthorsByUuids(anyList(), isNull()))
+                    .thenReturn(List.of(projection(zed, "Zed"), projection(alice, "alice")));
+
+            assertThat(service.searchAuthors(null)).extracting(AuthorSummaryResponse::nickname)
+                    .containsExactly("alice", "Zed");
+        }
+
+        @Test
         @DisplayName("keyword 恰 50 字（含前後空白不計）→ 通過")
         void keywordExactlyFifty_afterTrim_isAccepted() {
             when(articleFacade.countPublishedByAuthor()).thenReturn(Map.of());

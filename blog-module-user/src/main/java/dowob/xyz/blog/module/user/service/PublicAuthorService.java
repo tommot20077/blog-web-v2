@@ -50,9 +50,14 @@ public class PublicAuthorService {
     /** keyword 長度上限（trim 後，以 Unicode code point 計） */
     public static final int MAX_KEYWORD_LENGTH = 50;
 
-    /** 排序：已發布篇數 DESC 之後的次要鍵——暱稱 ASC，再以 uuid ASC 打破平手，使結果確定 */
+    /**
+     * 排序：已發布篇數 DESC 之後的次要鍵——暱稱不分大小寫 ASC，再依暱稱原值 {@code compareTo}
+     * （區分只差大小寫的暱稱），最後以 uuid ASC 打破平手，保證全序且結果確定
+     */
     private static final Comparator<User> NICKNAME_THEN_UUID =
-            Comparator.comparing(User::getNickname).thenComparing(User::getUuid);
+            Comparator.comparing(User::getNickname, String.CASE_INSENSITIVE_ORDER)
+                    .thenComparing(User::getNickname)
+                    .thenComparing(User::getUuid);
 
     /** 用戶資料存取 */
     private final UserRepository userRepository;
@@ -99,17 +104,17 @@ public class PublicAuthorService {
      * 搜尋作者（作者下拉選單）
      *
      * <p>只列 ACTIVE 且至少 1 篇 PUBLISHED 文章的作者。{@code keyword} 選填：trim 後不分大小寫、任意位置比對暱稱，
-     * {@code % _ \} 當字面字元；trim 後超過 {@value #MAX_KEYWORD_LENGTH} 字拋 400。
+     * {@code % _ \} 當字面字元；trim 後超過 {@value #MAX_KEYWORD_LENGTH} 字或含 NUL（PostgreSQL 不接受 0x00，會變 500）拋 400。
      * 排序：已發布篇數 DESC → 暱稱 ASC → uuid ASC，固定取前 {@value #MAX_AUTHORS} 筆。</p>
      *
      * @param keyword 暱稱關鍵字；null、空白視為不篩選
      * @return 作者清單，最多 {@value #MAX_AUTHORS} 筆
-     * @throws BusinessException {@link CommonErrorCode#PARAM_VALID_ERROR}：keyword 超過 {@value #MAX_KEYWORD_LENGTH} 字
+     * @throws BusinessException {@link CommonErrorCode#PARAM_VALID_ERROR}：keyword 超過 {@value #MAX_KEYWORD_LENGTH} 字或含 NUL
      */
     @Transactional(readOnly = true)
     public List<AuthorSummaryResponse> searchAuthors(String keyword) {
         String trimmed = keyword == null ? "" : keyword.trim();
-        if (trimmed.codePointCount(0, trimmed.length()) > MAX_KEYWORD_LENGTH) {
+        if (trimmed.codePointCount(0, trimmed.length()) > MAX_KEYWORD_LENGTH || trimmed.indexOf('\u0000') >= 0) {
             throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR);
         }
         Map<UUID, Long> publishedCounts = articleFacade.countPublishedByAuthor();
