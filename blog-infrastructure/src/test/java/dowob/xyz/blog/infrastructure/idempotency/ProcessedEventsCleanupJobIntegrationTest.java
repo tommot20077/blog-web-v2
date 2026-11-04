@@ -145,16 +145,63 @@ class ProcessedEventsCleanupJobIntegrationTest {
     }
 
     @Test
-    @DisplayName("兩個實例同時清理 → 不拋例外、總刪除數等於過期列數")
-    void concurrentRuns_doNotFail() throws Exception {
+    @DisplayName("SKIP LOCKED：被另一交易鎖住的過期列被跳過、其餘照刪；鎖釋放後再跑一次刪完")
+    void lockedRows_areSkipped_thenDeletedAfterRelease() throws Exception {
+        List<UUID> expired = new java.util.ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            expired.add(seed(NOW.minusDays(40).plusSeconds(i)));
+        }
+        UUID recent = seed(NOW.minusDays(1));
+
+        try (java.sql.Connection locker = java.sql.DriverManager.getConnection(
+                postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())) {
+            locker.setAutoCommit(false);
+            // 鎖住最舊的 3 筆（正是批次挑列會先碰到的列）
+            try (java.sql.PreparedStatement ps = locker.prepareStatement(
+                    "SELECT id FROM processed_events WHERE processed_at < ? ORDER BY processed_at LIMIT 3 FOR UPDATE")) {
+                ps.setObject(1, NOW.minusDays(30));
+                try (java.sql.ResultSet rs = ps.executeQuery()) {
+                    int locked = 0;
+                    while (rs.next()) {
+                        locked++;
+                    }
+                    assertThat(locked).isEqualTo(3);
+                }
+            }
+            List<UUID> lockedIds = jdbc.queryForList(
+                    "SELECT event_id FROM processed_events ORDER BY processed_at LIMIT 3", UUID.class);
+
+            ProcessedEventsCleanupJob.Result first = job(30, 4, 200).run(NOW);
+
+            assertThat(first.deleted()).isEqualTo(7);
+            assertThat(remaining()).containsExactlyInAnyOrder(
+                    java.util.stream.Stream.concat(lockedIds.stream(), java.util.stream.Stream.of(recent))
+                            .toArray(UUID[]::new));
+            locker.rollback();
+        }
+
+        ProcessedEventsCleanupJob.Result second = job(30, 4, 200).run(NOW);
+
+        assertThat(second.deleted()).isEqualTo(3);
+        assertThat(remaining()).containsExactly(recent);
+    }
+
+    @Test
+    @DisplayName("兩個實例以 CyclicBarrier 同時起跑 → 不拋例外、總刪除數等於過期列數")
+    void concurrentRuns_startTogether_doNotFail() throws Exception {
         for (int i = 0; i < 50; i++) {
             seed(NOW.minusDays(40).plusSeconds(i));
         }
         seed(NOW.minusDays(1));
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(2);
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
         try {
-            var f1 = pool.submit(() -> job(30, 5, 200).run(NOW));
-            var f2 = pool.submit(() -> job(30, 5, 200).run(NOW));
+            java.util.concurrent.Callable<ProcessedEventsCleanupJob.Result> task = () -> {
+                barrier.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                return job(30, 5, 200).run(NOW);
+            };
+            var f1 = pool.submit(task);
+            var f2 = pool.submit(task);
             int total = f1.get(30, java.util.concurrent.TimeUnit.SECONDS).deleted()
                     + f2.get(30, java.util.concurrent.TimeUnit.SECONDS).deleted();
             assertThat(total).isEqualTo(50);

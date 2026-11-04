@@ -80,6 +80,13 @@ public class SecurityConfig {
     private List<String> allowedOrigins;
 
     /**
+     * springdoc 是否啟用（SEC-21）。與 {@code springdoc.api-docs.enabled} 同一開關，預設 false；
+     * 僅 dev／demo／{@code SPRINGDOC_ENABLED=true} 為 true，此時才放行 swagger／api-docs 路徑。
+     */
+    @Value("${springdoc.api-docs.enabled:false}")
+    private boolean springdocEnabled;
+
+    /**
      * 建立 Spring Security 過濾器鏈
      *
      * <p>
@@ -97,7 +104,11 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
+                .authorizeHttpRequests(auth -> {
+                    if (springdocEnabled) {
+                        auth.requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll();
+                    }
+                    auth
                         // Actuator Health（K3s liveness/readiness probe）
                         .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
 
@@ -107,9 +118,10 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         // 靜態資源與 Swagger
-                        // SEC-21：springdoc 預設關閉（僅 dev／demo／SPRINGDOC_ENABLED=true 才存在端點），
-                        // 關閉時這些路徑回 404；放行規則保留，讓啟用的環境無需登入即可瀏覽。
-                        .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
+                        // SEC-21：springdoc 預設關閉（僅 dev／demo／SPRINGDOC_ENABLED=true 才存在端點）。
+                        // 只在啟用時才對 swagger／api-docs 路徑 permitAll（見本 lambda 前的條件式）；
+                        // 關閉時這些路徑不在放行清單，匿名請求落入 anyRequest().authenticated() 回 401，
+                        // 掃描器探測不會穿過 Security 打到靜態資源 handler（否則會 500 並洗 ERROR log）。
                         .requestMatchers("/favicon.ico", "/error").permitAll()
 
                         // 認證相關 API（logout 需認證，refresh 靠 cookie 驗證故保持公開）
@@ -184,7 +196,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
 
                         /** 其他所有請求需認證 */
-                        .anyRequest().authenticated())
+                        .anyRequest().authenticated();
+                })
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(unauthorizedEntryPoint())
                         .accessDeniedHandler(accessDeniedHandler()))

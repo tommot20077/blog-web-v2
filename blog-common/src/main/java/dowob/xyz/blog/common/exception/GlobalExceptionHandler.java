@@ -22,6 +22,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Optional;
@@ -275,6 +276,27 @@ public class GlobalExceptionHandler {
             OptimisticLockingFailureException e, HttpServletRequest request) {
         return resolveDataConflict(e, request.getRequestURI())
                 .orElseGet(() -> internalServerError(e, request.getRequestURI()));
+    }
+
+    /**
+     * 處理找不到路徑／靜態資源，回傳 HTTP 404 與 {@link CommonErrorCode#REQUEST_PATH_NOT_FOUND}
+     *
+     * <p>
+     * 請求未對應任何 controller 時，Spring 會落到靜態資源 handler 並拋出
+     * {@link NoResourceFoundException}。這是用戶端（或掃描器）探測不存在的路徑，不是系統錯誤：
+     * 以 DEBUG 單行記錄、不印 stack trace，避免正式站被探測時產生 ERROR log 洪水。
+     * </p>
+     *
+     * @param e       找不到資源例外
+     * @param request 當前 HTTP 請求
+     * @return HTTP 404 回應，body 含 {@link CommonErrorCode#REQUEST_PATH_NOT_FOUND}
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResourceFound(
+            NoResourceFoundException e, HttpServletRequest request) {
+        log.debug("No resource found: {} {}", request.getMethod(), request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResponse.failed(CommonErrorCode.REQUEST_PATH_NOT_FOUND));
     }
 
     /**

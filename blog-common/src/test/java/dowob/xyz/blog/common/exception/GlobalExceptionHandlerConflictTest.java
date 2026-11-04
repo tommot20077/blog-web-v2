@@ -13,11 +13,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -187,6 +189,31 @@ class GlobalExceptionHandlerConflictTest {
     }
 
     /**
+     * 驗證：找不到靜態資源／路徑（NoResourceFoundException）回 404 + REQUEST_PATH_NOT_FOUND，
+     * 而非被兜底成 500（SEC-21 複審；同時修正已登入使用者打不存在路徑會 500 的既有問題）。
+     */
+    @Test
+    @DisplayName("NoResourceFoundException 應回 404 + REQUEST_PATH_NOT_FOUND，body 為統一 Result 結構")
+    void noResourceFound_returns404_withCommonBody() throws Exception {
+        mockMvc.perform(get("/no-resource"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(CommonErrorCode.REQUEST_PATH_NOT_FOUND.getCode()))
+                .andExpect(jsonPath("$.message").value(CommonErrorCode.REQUEST_PATH_NOT_FOUND.getMessage()));
+    }
+
+    /**
+     * 驗證：NoResourceFoundException 不得以 ERROR 記錄，也不得帶 stack trace（掃描器探測不產生 log 洪水）。
+     */
+    @Test
+    @DisplayName("NoResourceFoundException 不記 ERROR、不帶 stack trace")
+    void noResourceFound_doesNotLogErrorOrStackTrace() throws Exception {
+        mockMvc.perform(get("/no-resource")).andExpect(status().isNotFound());
+
+        assertThat(logCaptor.events()).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
+        assertThat(logCaptor.events()).allSatisfy(event -> assertThat(event.getThrown()).isNull());
+    }
+
+    /**
      * 驗證：SystemException 仍回 500 與其自身錯誤碼。
      */
     @Test
@@ -334,6 +361,11 @@ class GlobalExceptionHandlerConflictTest {
         @GetMapping("/business-404")
         String businessNotFound() {
             throw new HttpStatusBusinessException(CommonErrorCode.REQUEST_PATH_NOT_FOUND, HttpStatus.NOT_FOUND);
+        }
+
+        @GetMapping("/no-resource")
+        String noResource() throws NoResourceFoundException {
+            throw new NoResourceFoundException(HttpMethod.GET, "no-resource");
         }
 
         @GetMapping("/system")

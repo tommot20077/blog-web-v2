@@ -254,6 +254,7 @@
 ### #11 — [H2] `GET /admin/articles/pending/count` 後端 endpoint 不存在
 
 **根因**：前端 `adminService.getPendingCount()` 打 `/api/v1/admin/articles/pending/count`，但後端 `AdminArticleController` 只實作 `/admin/articles/pending`。請求落到 Spring 的 `NoResourceFoundException` 回 500。前端有 `try/catch` fallback 為 0，admin badge 顯示 0（不擋人但功能殘缺）。
+**後端補修（W4C 複審）**：`GlobalExceptionHandler` 新增 `NoResourceFoundException` → 404（`REQUEST_PATH_NOT_FOUND`），不存在的路徑不再回 500。
 
 **修復**：前端 `getPendingCount` 改呼叫 `getPendingArticles(1, 1).total`。
 **Commit**: d62e736 (frontend repo)

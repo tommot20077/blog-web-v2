@@ -15,8 +15,9 @@ import java.time.LocalDateTime;
  * 超過保留期的標記不會再被用到。</p>
  *
  * <p><b>分批</b>：每批以 {@code idx_processed_events_processed_at} 挑出最舊的 {@code batchSize} 筆
- * （預設 5000）刪除，每批各自一個資料庫交易，避免單一長交易鎖表；迴圈到沒有過期列或達
- * {@code maxBatchesPerRun} 上限為止（剩餘的留給下次執行）。挑列時使用 {@code FOR UPDATE SKIP LOCKED}，
+ * （預設 5000）刪除，每批各自一個資料庫交易，避免單一長交易鎖表；迴圈只在某批刪除 0 筆（沒有可刪的過期列）或達
+ * {@code maxBatchesPerRun} 上限時結束；某批不足 {@code batchSize} 不算結束（多實例 SKIP LOCKED 下可能只拿到部分列，
+ * 其餘列剛被別的實例釋放或刪除，需再掃一輪確認）；達上限時剩餘的留給下次執行。挑列時使用 {@code FOR UPDATE SKIP LOCKED}，
  * 多個實例同時執行時各自拿到不重疊的列，不互相阻塞也不死鎖。</p>
  *
  * <p><b>多副本安全</b>：不需要分散式鎖。DELETE 本身冪等——同一列被刪兩次只是第二次影響 0 列；
@@ -47,7 +48,7 @@ public class ProcessedEventsCleanupJob {
      * 執行結果。
      *
      * @param deleted 共刪除的列數
-     * @param batches 實際執行的批數（含最後一批未滿者）
+     * @param batches 實際刪除了列的批數（含最後一批未滿者；刪 0 筆的終止探測不計）
      */
     public record Result(int deleted, int batches) {
     }
@@ -96,9 +97,6 @@ public class ProcessedEventsCleanupJob {
             }
             batches++;
             total += n;
-            if (n < properties.batchSize()) {
-                break;
-            }
         }
         long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
         log.info("processed_events 清理完成：刪除 {} 筆、{} 批、耗時 {} ms（保留 {} 天，cutoff={}）",
