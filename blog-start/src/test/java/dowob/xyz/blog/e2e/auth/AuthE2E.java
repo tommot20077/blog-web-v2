@@ -86,7 +86,7 @@ class AuthE2E extends AbstractE2ETest {
                 .andExpect(E2EAssertions.apiSuccess())
                 .andReturn().getResponse().getContentAsString();
 
-        // Assert — 回應內容相同（排除每次不同的 timestamp；無法由回應分辨 email 是否已存在），DB 仍只有一個帳號
+        // Assert — 回應內容相同（排除每次不同的 timestamp；單看回應無法分辨 email 是否已存在；副作用列舉殘餘見 findings SEC-14），DB 仍只有一個帳號
         com.fasterxml.jackson.databind.node.ObjectNode first =
                 (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(firstResponse);
         com.fasterxml.jackson.databind.node.ObjectNode second =

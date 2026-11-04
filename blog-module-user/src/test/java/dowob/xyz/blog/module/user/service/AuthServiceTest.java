@@ -165,7 +165,7 @@ class AuthServiceTest {
     }
 
     /**
-     * 驗證（SEC-14／Q8）：使用已存在的 email 註冊，對外與新註冊完全相同——正常返回、不拋錯、不建立帳號。
+     * 驗證（SEC-14／Q8）：使用已存在的 email 註冊，回應與新註冊相同——正常返回、不拋錯、不建立帳號。
      */
     @Test
     @DisplayName("register → 重複 email → 正常返回（與新註冊相同的成功），不建立帳號也不寫 token")
@@ -210,6 +210,24 @@ class AuthServiceTest {
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
+    }
+
+    /**
+     * 驗證：暱稱以保留前綴「已刪除使用者」開頭（含全形空白與 NFKC 變體）→ 拒絕為參數驗證錯誤，
+     * 且不進入雜湊、存在性檢查與寫入（防假冒 DATA-02 的已刪除帳號暱稱）。
+     */
+    @Test
+    @DisplayName("register → 暱稱以「已刪除使用者」開頭（含全形空白變體）→ PARAM_VALID_ERROR，不查 DB 不建帳號")
+    void register_withReservedDeletedNickname_throwsParamValidError() {
+        for (String nickname : new String[]{"已刪除使用者#1a2b3c4d", "已刪除使用者　#1a2b3c4d", "  已刪除使用者"}) {
+            assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, nickname))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getErrorCode().getCode())
+                            .isEqualTo(dowob.xyz.blog.common.api.errorcode.CommonErrorCode.PARAM_VALID_ERROR.getCode()));
+        }
+
+        verify(userRepository, never()).save(any());
+        verify(userRepository, never()).existsByNickname(anyString());
     }
 
     /* ---- RACE-02／RACE-03：併發註冊撞到唯一約束，轉成與依序第二次註冊相同的業務錯誤碼 ---- */
@@ -540,10 +558,10 @@ class AuthServiceTest {
      *
      * <p>判定：若先查 email，攻擊者拿一個已佔用的 username 搭配目標 email——email 存在回「成功」、
      * 不存在回 USERNAME_DUPLICATED，回應差異就成了 email 存在性的 oracle。先查 username／nickname，
-     * 帶著已佔用 username 的請求結果與 email 是否存在無關，不洩漏。</p>
+     * 帶著已佔用 username 的請求結果與 email 是否存在無關，不直接洩漏。</p>
      */
     @Test
-    @DisplayName("register → email 重複且 username 也重複 → 回 USERNAME_DUPLICATED（username 先查，不洩漏 email 存在性），不通知")
+    @DisplayName("register → email 重複且 username 也重複 → 回 USERNAME_DUPLICATED（username 先查，避免直接洩漏 email 存在性），不通知")
     void register_duplicateEmailAndDuplicateUsername_throwsUsernameDuplicatedWithoutNotice() {
         stubExistingEmailOwner();
         when(userRepository.existsByUsername(TEST_USERNAME)).thenReturn(true);

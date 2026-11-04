@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.user.service;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
 import dowob.xyz.blog.module.user.util.TokenVersionUtils;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
@@ -16,6 +17,7 @@ import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
+import dowob.xyz.blog.module.user.validation.UserNicknamePolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -96,8 +98,8 @@ public class AuthService {
      * 用於抑制單一 IP 大量建立假帳號。{@code clientIp} 為 null 時跳過 IP 限流。</p>
      *
      * <h4>email 重複一律回成功（SEC-14／Q8，Yuan 2026-10-24 定案 (a)）</h4>
-     * <p>email 已被註冊時，<b>不建立帳號、不回錯誤</b>，對外回與新註冊完全相同的成功（controller 回
-     * {@code ApiResponse<Void>}），避免註冊端點成為帳號枚舉 oracle；並在回應之前（無交易）發布
+     * <p>email 已被註冊時，<b>不建立帳號、不回錯誤</b>，回應與新註冊相同的成功（controller 回
+     * {@code ApiResponse<Void>}），消除「直接回 {@code EMAIL_DUPLICATED}」這種零成本的帳號列舉；並在回應之前（無交易）發布
      * {@link RegistrationAttemptOnExistingEmailEvent}，由 consumer 寄通知信給<b>原信箱主人</b>
      * （「有人嘗試用你的信箱註冊；若是你本人，請直接登入或使用忘記密碼」）。通知有 per-email 限流：
      * 同一信箱 {@link RedisKeyConstant#REGISTER_DUP_NOTICE_TTL_MINUTES} 分鐘（24 小時）內最多一封，
@@ -107,7 +109,15 @@ public class AuthService {
      * <p>username／nickname 重複<b>維持明確錯誤碼</b>（{@link UserErrorCode#USERNAME_DUPLICATED}、
      * {@link UserErrorCode#NICKNAME_DUPLICATED}），產品上需要讓使用者換一個名稱。</p>
      *
-     * <h4>檢查順序（防洩漏 email 存在性）</h4>
+     * <h4>殘餘風險（SEC-14 殘餘，Yuan 2026-11-04 決定接受）</h4>
+     * <p>本機制<b>並未</b>讓 email 存在性完全無法被探測，只是把零成本的直接列舉降為需 2 次請求的副作用列舉：
+     * email 為新時會建立 PENDING_VERIFICATION 帳號並佔用請求帶入的 username，email 已存在時不建帳號。
+     * 攻擊者可 (a) {@code register(E, U1)} 後 {@code login(U1, P)}——已存在回 {@code USER_PASSWORD_ERROR}、
+     * 新的回 {@code EMAIL_NOT_VERIFIED}；或 (b) 另用其他 email 再以 U1 註冊——已存在成功、新的回
+     * {@code USERNAME_DUPLICATED}。每探測一個 email 需 2 次請求，受每 IP 每小時
+     * {@link RedisKeyConstant#REGISTER_IP_MAX} 次的註冊限流減速。詳見 {@code ai-docs/findings.md} SEC-14。</p>
+     *
+     * <h4>檢查順序（降低直接洩漏 email 存在性）</h4>
      * <p>固定為 IP 限流 → 密碼雜湊 → username → nickname → email。username／nickname <b>必須先於</b> email：
      * 若先查 email，攻擊者帶一個已被佔用的 username 搭配目標 email——email 存在回「成功」、不存在回
      * {@code USERNAME_DUPLICATED}，回應差異就是 email 存在性的 oracle。先查 username／nickname 時，
@@ -143,6 +153,8 @@ public class AuthService {
                 clientIp == null ? null : RedisKeyConstant.getRegisterIpKey(clientIp),
                 RedisKeyConstant.REGISTER_IP_MAX,
                 RedisKeyConstant.REGISTER_IP_TTL_MINUTES);
+
+        requireNicknameNotReserved(nickname);
 
         /** 雜湊先於任何存在性檢查：所有路徑付出同量成本，防時間側通道列舉（見方法 JavaDoc） */
         String passwordHash = passwordEncoder.encode(password);
@@ -211,6 +223,18 @@ public class AuthService {
                             savedUser.getNickname(), tokenValue, verificationCode));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 拒絕保留暱稱（以「已刪除使用者」開頭，防假冒 DATA-02 的已刪除帳號），與 email 是否存在無關。
+     *
+     * @param nickname 暱稱
+     * @throws BusinessException 暱稱為保留暱稱（{@link CommonErrorCode#PARAM_VALID_ERROR}）
+     */
+    private void requireNicknameNotReserved(String nickname) {
+        if (UserNicknamePolicy.isReserved(nickname)) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR);
         }
     }
 

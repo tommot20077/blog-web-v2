@@ -169,7 +169,8 @@ class AuthControllerTest {
 
     /**
      * 驗證（SEC-14／Q8）：email 重複時 service 正常返回，端點的回應 body（排除每次不同的 timestamp）必須與新註冊相同，
-     * 不得有任何欄位（code、message、data）可分辨 email 是否已存在。
+     * 單看回應 body 的任何欄位（code、message、data）都無法分辨 email 是否已存在
+     * （副作用列舉需 2 次請求，見 findings SEC-14 殘餘）。
      * （原測試斷言 EMAIL_DUPLICATED 映射為 400；Q8 起 service 不再拋出該錯誤。）
      */
     @Test

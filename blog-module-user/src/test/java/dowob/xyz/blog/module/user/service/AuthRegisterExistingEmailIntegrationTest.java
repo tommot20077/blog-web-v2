@@ -183,7 +183,7 @@ class AuthRegisterExistingEmailIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    @DisplayName("email 與 username 同時重複 → USERNAME_DUPLICATED 且不通知（先查 username，不洩漏 email 存在性）")
+    @DisplayName("email 與 username 同時重複 → USERNAME_DUPLICATED 且不通知（先查 username，避免直接洩漏 email 存在性）")
     void register_duplicateEmailAndUsername_explicitUsernameError_noNotice() {
         registerOwner();
 
