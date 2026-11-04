@@ -24,8 +24,9 @@ import static org.mockito.Mockito.when;
  * ArticleQueryService enrich 路徑的批次查詢守衛。
  *
  * <p>{@code enrich} 以 {@code findIdsByUuids} 做 uuid → id 的批量轉換，
- * 輸入為一頁 {@code ArticleSummaryResponse}，其上界即分頁 size 上限
- * （{@code PageQuery.MAX_SIZE}），大於 {@link BatchedQuery#BATCH_SIZE}，故必須切批。
+ * 輸入為一頁 {@code ArticleSummaryResponse}，目前由分頁 size 上限
+ * （{@code PageQuery.MAX_SIZE}，SEC-04 第 3 段後為 100）界定，已小於 {@link BatchedQuery#BATCH_SIZE}；
+ * 但方法本身接受任意大小的輸入，批次守衛仍須保留。
  * 該查詢為 {@code WHERE uuid IN} 投影，無排序與聚合，屬跨批可合併形狀。</p>
  *
  * @author Yuan

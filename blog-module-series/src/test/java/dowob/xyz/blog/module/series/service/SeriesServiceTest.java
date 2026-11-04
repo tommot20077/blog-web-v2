@@ -1062,14 +1062,14 @@ class SeriesServiceTest {
     }
 
     @Test
-    @DisplayName("listPublic：size 夾在 [1, 100]，page 最小為 1")
-    void listPublicClampsPageAndSize() {
+    @DisplayName("listPublic：page 最小為 1、size 最小為 1（上界由 PageQuery.MAX_SIZE 在 controller 層保證，service 不再自夾）")
+    void listPublicClampsPageAndSizeLowerBound() {
         when(mapper.findAllUuidsOrderByCreatedAtDesc()).thenReturn(List.of());
 
-        PageResult<SeriesSummaryResponse> result = service.listPublic(-3, 100_000);
+        PageResult<SeriesSummaryResponse> result = service.listPublic(-3, 0);
 
         assertThat(result.getCurrent()).isEqualTo(1);
-        assertThat(result.getSize()).isEqualTo(100);
+        assertThat(result.getSize()).isEqualTo(1);
         verify(mapper, times(1)).findAllUuidsOrderByCreatedAtDesc();
         verify(articleFacade, never()).countPublishedBySeriesUuids(any());
     }

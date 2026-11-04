@@ -130,7 +130,7 @@ public interface ArticleMapper {
      * @param size       每頁筆數
      * @return 文章列表
      */
-    @Select("SELECT * FROM articles WHERE author_uuid = #{authorUuid}::uuid AND status = #{status} ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
+    @Select("SELECT * FROM articles WHERE author_uuid = #{authorUuid}::uuid AND status = #{status} ORDER BY created_at DESC, id DESC LIMIT #{size} OFFSET #{offset}")
     List<Article> findByAuthorUuidAndStatus(
             @Param("authorUuid") UUID authorUuid,
             @Param("status") ArticleStatus status,
@@ -145,7 +145,7 @@ public interface ArticleMapper {
      * @param size       每頁筆數
      * @return 文章列表
      */
-    @Select("SELECT * FROM articles WHERE author_uuid = #{authorUuid}::uuid ORDER BY created_at DESC LIMIT #{size} OFFSET #{offset}")
+    @Select("SELECT * FROM articles WHERE author_uuid = #{authorUuid}::uuid ORDER BY created_at DESC, id DESC LIMIT #{size} OFFSET #{offset}")
     List<Article> findByAuthorUuidPaged(
             @Param("authorUuid") UUID authorUuid,
             @Param("offset") long offset,
@@ -177,7 +177,7 @@ public interface ArticleMapper {
      * @param size   每頁筆數
      * @return 文章列表
      */
-    @Select("SELECT * FROM articles WHERE status = 'PENDING_REVIEW' ORDER BY created_at ASC LIMIT #{size} OFFSET #{offset}")
+    @Select("SELECT * FROM articles WHERE status = 'PENDING_REVIEW' ORDER BY created_at ASC, id ASC LIMIT #{size} OFFSET #{offset}")
     List<Article> findPendingReviewPage(@Param("offset") long offset, @Param("size") int size);
 
     /**

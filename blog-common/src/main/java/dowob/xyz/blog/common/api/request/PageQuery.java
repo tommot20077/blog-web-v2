@@ -41,11 +41,12 @@ public record PageQuery(Integer page, Integer size) {
     /**
      * 每頁筆數上限。
      *
-     * <p>取 1000 而非更小值，是為了不改變現行前端行為——前端文章列表目前即以
-     * {@code size=1000} 取全量後自行分頁。更嚴格的上限（如 100）需先由前端改為
-     * 真正的伺服器端分頁，否則前端會開始收到 400，見 findings {@code SEC-04}。</p>
+     * <p>取 100：公開列表端點一次最多放大成約一百筆資料的查詢（含作者解析、進度批次等），
+     * 超出範圍一律回 400（見 {@link PageQueryArgumentResolver}），不靜默夾界。
+     * 前端文章列表已改為伺服器端篩選／排序／分頁（每頁 12 筆），不再以大 size 取全量；
+     * 由 1000 降為 100 的前因後果見 findings {@code SEC-04}。</p>
      */
-    public static final int MAX_SIZE = 1000;
+    public static final int MAX_SIZE = 100;
 
     /**
      * 驗證分頁參數。

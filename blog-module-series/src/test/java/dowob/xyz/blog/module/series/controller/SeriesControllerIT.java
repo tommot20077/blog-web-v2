@@ -607,9 +607,17 @@ class SeriesControllerIT {
     }
 
     @Test
-    @DisplayName("GET /series?size=500 - 在 PageQuery 上限內但超過系列自身上限 100 → 仍夾到 100（SeriesService.MAX_PAGE_SIZE）")
-    void list_pageSizeAboveSeriesMax_clampedTo100() throws Exception {
-        mockMvc.perform(get("/api/v1/series").param("size", "500"))
+    @DisplayName("GET /series?size=101 - 剛超過 PageQuery 上限 100 → 400（SEC-04 第 3 段；取代原「size=500 夾到 100」）")
+    void list_pageSizeJustAbovePageQueryMax_returns400() throws Exception {
+        mockMvc.perform(get("/api/v1/series").param("size", "101"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0001"));
+    }
+
+    @Test
+    @DisplayName("GET /series?size=100 - 恰為 PageQuery 上限 → 200 且 size=100")
+    void list_pageSizeAtPageQueryMax_returns200() throws Exception {
+        mockMvc.perform(get("/api/v1/series").param("size", "100"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.size").value(100));
     }
