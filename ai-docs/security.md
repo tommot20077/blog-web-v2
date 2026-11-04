@@ -165,9 +165,13 @@ public void changePassword(...) {
 | GET | `/api/v1/files/**` | **不代表檔案公開**——permitAll 只代表「請求可到達 Controller」,實際授權在 `FileService#canRead()`(AVATAR 與已發布文章圖片對匿名開放;草稿圖片與未綁定檔案僅上傳者與 ADMIN 可讀) |
 | GET | `/api/v1/categories/**` | Category queries |
 | GET | `/api/v1/series/**` | Public series browsing(列表與詳情;寫入仍需認證) |
+| GET | `/api/v1/users/{uuid}/profile` | 公開作者頁資料(`{uuid}` 以 UUID 形狀比對,故 `/api/v1/users/me/...` 等字面量子路徑仍需認證;僅開放 GET)。只回可公開欄位,不含 email、username、role、通知偏好;非 ACTIVE(不存在、DELETED、未驗證、BANNED)一律 404 `A0101`,彼此不可區分 |
+| GET | `/api/v1/authors` | 作者下拉搜尋。只列 ACTIVE 且至少 1 篇 PUBLISHED 文章的作者,固定最多 20 筆,keyword 最多 50 字(超過回 400) |
 | GET | `/api/v1/recommend/**` | Recommendations |
 | GET | `/api/v1/search` | Search |
 | GET | `/api/v1/search/suggest` | Search suggestions |
+
+> (2026-11 公開作者功能,Yuan 已同意(設計 §3.4,`docs/plans/2026-10-23-public-author-profile-design.md`)新增 `GET /api/v1/users/{uuid}/profile` 與 `GET /api/v1/authors` 兩條 permitAll。兩者皆不取用 `@AuthenticationPrincipal`、回應不隨登入者而變,故不在原則 7 的豁免清單內,也不需要 `@PreAuthorize`。守衛:`SecurityConfigTest` 的 `unauthenticatedGetPublicProfile_shouldReturn200` / `unauthenticatedGetAuthors_shouldReturn200` 與反向 `unauthenticatedGetMeProfile_shouldReturn401` / `unauthenticatedPatchProfile_shouldReturn401` / `unauthenticatedPostAuthors_shouldReturn401`;`PublicAuthorControllerTest` 以 JSON 欄位白名單防止日後在 DTO 加 `email`／`username`／`role`。)
 
 > **Actuator 只有上表兩條是公開的，其餘限 ADMIN**（2026-09-06）：
 > `management.endpoints.web.exposure.include` 自 `health,info` 增為 `health,info,metrics`

@@ -61,6 +61,9 @@ public class SecurityConfig {
     /** 公開的文章留言端點：{@code GET /api/v1/articles/{uuid}/comments} */
     private static final String PUBLIC_ARTICLE_COMMENTS = PUBLIC_ARTICLE_DETAIL + "/comments";
 
+    /** 公開的作者頁資料端點：{@code GET /api/v1/users/{uuid}/profile} */
+    private static final String PUBLIC_USER_PROFILE = "/api/v1/users/" + UUID_PATH_VARIABLE + "/profile";
+
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
     private final ObjectMapper objectMapper;
@@ -156,6 +159,17 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/categories/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/series/**").permitAll()
+
+                        /*
+                         * 公開作者功能（Yuan 已同意，judgment.md §5；ai-docs/security.md Public Endpoints 表）：
+                         *   GET /api/v1/users/{uuid}/profile  PublicAuthorController#getPublicProfile（僅 ACTIVE 使用者，其餘一律 404）
+                         *   GET /api/v1/authors               PublicAuthorController#searchAuthors（只列 ACTIVE 且有已發布文章者，最多 20 筆）
+                         * 兩者都不取用 @AuthenticationPrincipal，回應不隨登入者而變。
+                         * 以 UUID 形狀限定 profile 路徑，故 /api/v1/users/me/... 等字面量子路徑仍落入 anyRequest().authenticated()；
+                         * 只開放 GET，PATCH /api/v1/users/{uuid}/profile 之類的寫入維持需認證。
+                         */
+                        .requestMatchers(HttpMethod.GET, PUBLIC_USER_PROFILE).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/authors").permitAll()
 
                         /** 推薦 API（公開） */
                         .requestMatchers(HttpMethod.GET, "/api/v1/recommend/**").permitAll()

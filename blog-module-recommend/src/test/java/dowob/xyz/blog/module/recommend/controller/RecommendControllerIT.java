@@ -111,9 +111,12 @@ class RecommendControllerIT {
     @MockitoBean
     private RabbitTemplate rabbitTemplate;
 
+    /** 測試用作者公開 UUID（隨機，與任何 id 無同構關係） */
+    private static final UUID AUTHOR_UUID = UUID.randomUUID();
+
     private ArticleSummaryInfo summaryInfo(UUID uuid, String title) {
         return new ArticleSummaryInfo(uuid, title, "slug-" + title,
-                "summary", "Author", List.of("Java"), 100L, 10L, LocalDateTime.now());
+                "summary", "Author", AUTHOR_UUID, List.of("Java"), 100L, 10L, LocalDateTime.now());
     }
 
     @Test
@@ -136,7 +139,8 @@ class RecommendControllerIT {
                 .andExpect(jsonPath("$.code").value("00000"))
                 .andExpect(jsonPath("$.data").isArray())
                 .andExpect(jsonPath("$.data[0].uuid").value(recommendedUuid.toString()))
-                .andExpect(jsonPath("$.data[0].title").value("Related Article"));
+                .andExpect(jsonPath("$.data[0].title").value("Related Article"))
+                .andExpect(jsonPath("$.data[0].authorUuid").value(AUTHOR_UUID.toString()));
     }
 
     @Test

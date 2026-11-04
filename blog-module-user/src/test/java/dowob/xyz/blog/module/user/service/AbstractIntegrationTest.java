@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.user.service;
 
 import com.redis.testcontainers.RedisContainer;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.user.TestUserModuleApplication;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
@@ -80,6 +81,17 @@ public abstract class AbstractIntegrationTest {
      */
     @MockitoBean
     protected JavaMailSender mailSender;
+
+    /**
+     * Mock ArticleFacade
+     *
+     * <p>
+     * PublicAuthorService 依賴 ArticleFacade 取得作者的已發布文章統計；article 模組不在 user 模組的測試 classpath，
+     * 由此 MockBean 提供，各測試按需 stubbing。
+     * </p>
+     */
+    @MockitoBean
+    protected ArticleFacade articleFacade;
 
     /**
      * PostgreSQL 測試容器（singleton：整個測試 JVM 只啟動一次，所有子類別共用）

@@ -150,6 +150,7 @@ class ArticleFacadeRecommendAuthorIT {
 
         assertThat(result).extracting(ArticleSummaryInfo::uuid).containsExactly(kept);
         assertThat(result.get(0).authorNickname()).isEqualTo("已知作者");
+        assertThat(result.get(0).authorUuid()).isEqualTo(KNOWN_AUTHOR);
     }
 
     @Test

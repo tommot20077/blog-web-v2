@@ -77,7 +77,7 @@ class RecommendServiceTest {
 
     private ArticleSummaryInfo summary(UUID uuid, String title) {
         return new ArticleSummaryInfo(uuid, title, "slug-" + title, "summary",
-                "Author", List.of("tag"), 100L, 10L, LocalDateTime.now());
+                "Author", UUID.randomUUID(), List.of("tag"), 100L, 10L, LocalDateTime.now());
     }
 
     @Nested
@@ -197,7 +197,7 @@ class RecommendServiceTest {
             mapper.registerModule(new JavaTimeModule());
             List<RecommendArticleResponse> cached = List.of(
                     new RecommendArticleResponse(UUID.randomUUID(), "T", "s", "sum",
-                            "A", List.of(), 1L, 0L, LocalDateTime.now())
+                            "A", UUID.randomUUID(), List.of(), 1L, 0L, LocalDateTime.now())
             );
             String cacheJson = mapper.writeValueAsString(cached);
 

@@ -495,11 +495,32 @@ public class SearchServiceImpl implements SearchService {
                 .summary(doc.getSummary())
                 .slug(doc.getSlug())
                 .authorNickname(doc.getAuthor() != null ? doc.getAuthor().getNickname() : null)
+                .authorUuid(doc.getAuthor() != null ? parseUuidOrNull(doc.getAuthor().getUuid()) : null)
                 .tagNames(tagNames)
                 .publishedAt(doc.getPublishedAt())
                 .viewCount(doc.getViewCount())
                 .likeCount(doc.getLikeCount())
                 .build();
+    }
+
+    /**
+     * 寬鬆解析 UUID 字串：null、空白或格式不符一律回傳 null，不拋例外
+     *
+     * <p>ES 文件的 {@code author.uuid} 是 Keyword 字串，舊文件或髒資料可能不是合法 UUID；
+     * 搜尋結果不應因單筆文件的作者欄位異常而整頁失敗。</p>
+     *
+     * @param value UUID 字串
+     * @return 解析成功的 UUID；否則 null
+     */
+    private static UUID parseUuidOrNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /**

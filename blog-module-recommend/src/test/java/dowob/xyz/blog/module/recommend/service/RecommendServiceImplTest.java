@@ -97,7 +97,7 @@ class RecommendServiceImplTest {
 
     private ArticleSummaryInfo summary(UUID uuid, String title) {
         return new ArticleSummaryInfo(uuid, title, "slug-" + title, "summary-" + title,
-                "Author", List.of("tag"), 100L, 10L, LocalDateTime.now());
+                "Author", UUID.randomUUID(), List.of("tag"), 100L, 10L, LocalDateTime.now());
     }
 
     /** 產生 n 個帶隨機 UUID 的摘要 */
@@ -407,6 +407,6 @@ class RecommendServiceImplTest {
 
     private RecommendArticleResponse resp(String title) {
         return new RecommendArticleResponse(UUID.randomUUID(), title, "slug-" + title,
-                "sum", "Author", List.of("tag"), 1L, 0L, LocalDateTime.now());
+                "sum", "Author", UUID.randomUUID(), List.of("tag"), 1L, 0L, LocalDateTime.now());
     }
 }
