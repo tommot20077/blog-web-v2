@@ -275,6 +275,24 @@ class UserAccountDeletionIntegrationTest {
         assertThat(info.get(bystander.getUuid()).avatarUrl()).isEqualTo("https://cdn.example.com/facade-other.png");
     }
 
+    @Test
+    @DisplayName("M2：刪帳會更新 updated_at；findRecentlyDeletedUuids 只回 48h 內的 DELETED 使用者")
+    void findRecentlyDeletedUuids_returnsOnlyRecentDeleted() {
+        User recent = createActiveUser("resend-recent");
+        User old = createActiveUser("resend-old");
+        User active = createActiveUser("resend-active");
+        jdbc.update("UPDATE users SET updated_at = ? WHERE uuid = ?",
+                Timestamp.valueOf(LocalDateTime.now().minusDays(10)), recent.getUuid());
+        userService.deleteAccount(recent.getUuid(), PASSWORD);
+        userService.deleteAccount(old.getUuid(), PASSWORD);
+        jdbc.update("UPDATE users SET updated_at = ? WHERE uuid = ?",
+                Timestamp.valueOf(LocalDateTime.now().minusHours(49)), old.getUuid());
+
+        List<UUID> found = userRepository.findRecentlyDeletedUuids(LocalDateTime.now().minusHours(48));
+
+        assertThat(found).contains(recent.getUuid()).doesNotContain(old.getUuid(), active.getUuid());
+    }
+
     /**
      * 建立並持久化一位帶完整個資的 ACTIVE 使用者。
      *
