@@ -1,13 +1,19 @@
 package dowob.xyz.blog.module.article.facade;
 
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.module.article.mapper.ArticleAuthorCleanupMapper;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * ArticleLookupFacade 實作
@@ -44,6 +50,9 @@ public class ArticleLookupFacadeImpl implements ArticleLookupFacade {
     /** ArticleData 組裝元件（只依賴 mapper 與 ObjectProvider，不會引入 service / facade 循環） */
     private final ArticleDataAssembler articleDataAssembler;
 
+    /** 作者名下文章查詢 mapper（只讀 SQL，不引入 service / facade 依賴） */
+    private final ArticleAuthorCleanupMapper articleAuthorCleanupMapper;
+
     /**
      * {@inheritDoc}
      */
@@ -53,5 +62,22 @@ public class ArticleLookupFacadeImpl implements ArticleLookupFacade {
             return Optional.empty();
         }
         return articleRepository.findByUuid(articleUuid).map(articleDataAssembler::toArticleData);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Set<UUID> findFileUuidsReferencedByRetainedArticles(UUID authorUuid) {
+        if (authorUuid == null) {
+            return Set.of();
+        }
+        /* 去留政策的唯一真相是 ArticleStatus：保留 = 不隨作者刪帳移除的狀態 */
+        List<String> retainedStatuses = Arrays.stream(ArticleStatus.values())
+                .filter(status -> !status.isRemovedWithAuthorAccount())
+                .map(Enum::name)
+                .toList();
+        return articleAuthorCleanupMapper.findReferencedFileUuidsByAuthorAndStatuses(authorUuid, retainedStatuses)
+                .stream().map(UUID::fromString).collect(Collectors.toSet());
     }
 }

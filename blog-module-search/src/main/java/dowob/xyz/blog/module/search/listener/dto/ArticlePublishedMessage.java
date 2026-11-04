@@ -65,7 +65,8 @@ public class ArticlePublishedMessage {
     private String contentText;
 
     /**
-     * 作者暱稱
+     * 作者暱稱（發布／編輯當下的舊值）。保留欄位僅為訊息相容；索引時<b>不再使用</b>，
+     * 一律改由 UserFacade 取作者當下暱稱（避免刪帳匿名化後 PII 被舊值寫回 ES）。僅在訊息沒有 authorUuid 時作為後備。
      */
     private String authorNickname;
 

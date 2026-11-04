@@ -8,20 +8,26 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.repository.UserRepository;
+import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -52,9 +58,34 @@ class UserServiceTest {
     @Mock
     private SessionRevoker sessionRevoker;
 
+    /** Mock：驗證 Token 存取（刪除帳號時清空該使用者的 token） */
+    @Mock
+    private VerificationTokenRepository verificationTokenRepository;
+
+    /** Mock：使用者事件發布元件（刪除帳號 commit 後發送 UserDeletedEvent） */
+    @Mock
+    private UserEventPublisher userEventPublisher;
+
+    /** Mock：交易管理員（搭配真實 TransactionTemplate，以驗證 commit／rollback 與事件發送的先後） */
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
+    /** Mock：交易狀態 */
+    @Mock
+    private TransactionStatus transactionStatus;
+
     /** 受測物件 */
-    @InjectMocks
     private UserService userService;
+
+    /**
+     * 組裝受測物件。使用真實的 {@link TransactionTemplate}（搭配 Mock 交易管理員），
+     * 讓刪除帳號的「交易內寫入、commit 後才發事件」可被驗證。
+     */
+    @BeforeEach
+    void setUp() {
+        userService = new UserService(userRepository, passwordEncoder, sessionRevoker,
+                verificationTokenRepository, new TransactionTemplate(transactionManager), userEventPublisher);
+    }
 
     /** 測試用用戶 ID */
     private static final Long TEST_USER_ID = 1L;
@@ -458,20 +489,160 @@ class UserServiceTest {
        ========================================================================= */
 
     /**
-     * 驗證：deleteAccount 使用正確密碼應將帳號狀態設為 DELETED。
+     * 驗證：deleteAccount 使用正確密碼應將帳號狀態設為 DELETED，並把所有個資匿名化（DATA-02）。
+     *
+     * <p>TEST-01：原測試只斷言 {@code status == DELETED}，把「刪帳只改 status」固化成規格，
+     * 使 DATA-02 的匿名化修法被它擋下。依 Q2 定案，正確行為是同時洗掉 users 列上的 PII。</p>
      */
     @Test
-    @DisplayName("deleteAccount → 正確密碼 → 應將狀態設為 DELETED")
-    void deleteAccount_withCorrectPassword_shouldSetStatusDeleted() {
-        User mockUser = buildActiveUser();
-        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
-        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
+    @DisplayName("deleteAccount → 正確密碼 → 狀態設為 DELETED 並匿名化 PII（DATA-02／TEST-01）")
+    void deleteAccount_withCorrectPassword_shouldMarkDeletedAndAnonymizePii() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
 
         userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
 
-        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
-        verify(userRepository).save(captor.capture());
-        assertThat(captor.getValue().getStatus()).isEqualTo(UserStatus.DELETED);
+        User saved = captureSavedUser();
+        assertThat(saved.getStatus()).isEqualTo(UserStatus.DELETED);
+        assertThat(saved.getNickname()).isEqualTo("已刪除使用者#11111111");
+        assertThat(saved.getUsername()).isEqualTo("deleted_" + TEST_USER_UUID);
+        assertThat(saved.getEmail()).isEqualTo("deleted+" + TEST_USER_UUID + "@invalid.invalid");
+        assertThat(saved.getAvatarUrl()).isNull();
+        assertThat(saved.getBio()).isNull();
+        assertThat(saved.getWebsite()).isNull();
+        assertThat(saved.getSocialLinks()).isNull();
+        assertThat(saved.getLocation()).isNull();
+        assertThat(saved.isEmailVerified()).isFalse();
+        assertThat(saved.isNotificationComment()).isFalse();
+        assertThat(saved.isNotificationLike()).isFalse();
+        assertThat(saved.isNotificationReview()).isFalse();
+        assertThat(saved.isNotificationFollow()).isFalse();
+        assertThat(saved.isNotificationNewsletter()).isFalse();
+    }
+
+    /**
+     * 驗證：匿名化後 password_hash 換成「沒有人知道明文」的雜湊——來源是隨機祕密，
+     * 不是使用者剛輸入的密碼，也不是原本的雜湊，任何舊登入路徑都不可能再通過。
+     */
+    @Test
+    @DisplayName("deleteAccount → password_hash 換成由隨機祕密產生的雜湊（不是原密碼、不是原雜湊）")
+    void deleteAccount_shouldReplacePasswordHashWithUnguessableOne() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+        when(passwordEncoder.encode(anyString())).thenReturn("unusable-bcrypt-hash");
+
+        userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
+
+        ArgumentCaptor<String> secret = ArgumentCaptor.forClass(String.class);
+        verify(passwordEncoder).encode(secret.capture());
+        assertThat(secret.getValue()).isNotEqualTo(TEST_PASSWORD).hasSizeGreaterThanOrEqualTo(32);
+        assertThat(captureSavedUser().getPasswordHash())
+                .isEqualTo("unusable-bcrypt-hash")
+                .isNotEqualTo("encodedPassword");
+    }
+
+    /**
+     * 驗證：匿名化同時遞增 tokenVersion（類別文件宣告「修改密碼與刪除帳號會遞增 tokenVersion」），
+     * 讓任何殘留的 JWT 即使快取回填也因版本不符被拒。
+     */
+    @Test
+    @DisplayName("deleteAccount → 遞增 tokenVersion")
+    void deleteAccount_shouldIncrementTokenVersion() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+
+        userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
+
+        assertThat(captureSavedUser().getTokenVersion()).isEqualTo("v2");
+    }
+
+    /**
+     * 驗證：刪除該使用者所有未用完的驗證 Token（信箱驗證、重設密碼），
+     * 避免舊 token 事後把 DELETED 帳號重新啟用或重設密碼。
+     */
+    @Test
+    @DisplayName("deleteAccount → 刪除該使用者的 verification_tokens")
+    void deleteAccount_shouldDeleteVerificationTokens() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+
+        userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
+
+        verify(verificationTokenRepository).deleteByUserId(TEST_USER_ID);
+    }
+
+    /**
+     * 驗證：暱稱墓碑值已被他人占用時（例如有人刻意註冊同名卡位），改用完整 uuid 的長格式，
+     * 刪帳不得因 uq_users_nickname 撞約束而失敗。
+     */
+    @Test
+    @DisplayName("deleteAccount → 暱稱墓碑值已被占用 → 改用長格式（不撞 uq_users_nickname）")
+    void deleteAccount_nicknameTombstoneTaken_shouldFallBackToLongForm() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+        when(userRepository.existsByNickname("已刪除使用者#11111111")).thenReturn(true);
+
+        userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
+
+        assertThat(captureSavedUser().getNickname())
+                .isEqualTo("已刪除使用者#" + TEST_USER_UUID.toString().replace("-", ""));
+    }
+
+    /**
+     * 驗證：username／email 墓碑值被卡位時，改用以隨機 uuid 組成的值，刪帳不得撞 UNIQUE。
+     */
+    @Test
+    @DisplayName("deleteAccount → username／email 墓碑值已被占用 → 改用隨機墓碑值")
+    void deleteAccount_usernameAndEmailTombstoneTaken_shouldFallBackToRandomTombstone() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+        when(userRepository.existsByUsername("deleted_" + TEST_USER_UUID)).thenReturn(true);
+        when(userRepository.existsByEmail("deleted+" + TEST_USER_UUID + "@invalid.invalid")).thenReturn(true);
+
+        userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
+
+        User saved = captureSavedUser();
+        assertThat(saved.getUsername()).startsWith("deleted_").isNotEqualTo("deleted_" + TEST_USER_UUID);
+        assertThat(saved.getEmail()).startsWith("deleted+").endsWith("@invalid.invalid")
+                .isNotEqualTo("deleted+" + TEST_USER_UUID + "@invalid.invalid");
+    }
+
+    /**
+     * 驗證：UserDeletedEvent 只在交易 commit 之後才發送（code-standards「Transaction + MQ 時序」）。
+     */
+    @Test
+    @DisplayName("deleteAccount → commit 之後才發送 UserDeletedEvent")
+    void deleteAccount_shouldPublishUserDeletedEventAfterCommit() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+        when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
+
+        userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD);
+
+        InOrder order = inOrder(userRepository, transactionManager, userEventPublisher);
+        order.verify(userRepository).save(any(User.class));
+        order.verify(transactionManager).commit(transactionStatus);
+        order.verify(userEventPublisher).publishDeleted(TEST_USER_UUID);
+    }
+
+    /**
+     * 驗證：交易失敗（rollback）時不發送事件，也不應有「已刪除」的對外宣告。
+     */
+    @Test
+    @DisplayName("deleteAccount → 交易內寫入失敗（rollback）→ 不發送 UserDeletedEvent")
+    void deleteAccount_whenTransactionFails_shouldNotPublishEvent() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+        when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
+        when(userRepository.save(any(User.class))).thenThrow(new IllegalStateException("DB down"));
+
+        assertThatThrownBy(() -> userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(transactionManager).rollback(transactionStatus);
+        verify(transactionManager, never()).commit(any());
+        verifyNoInteractions(userEventPublisher);
+        verifyNoInteractions(sessionRevoker);
     }
 
     /**
@@ -488,6 +659,7 @@ class UserServiceTest {
                 .isInstanceOf(BusinessException.class);
 
         verify(userRepository, never()).save(any());
+        verifyNoInteractions(verificationTokenRepository, userEventPublisher, sessionRevoker);
     }
 
     /**
@@ -500,6 +672,25 @@ class UserServiceTest {
 
         assertThatThrownBy(() -> userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD))
                 .isInstanceOf(BusinessException.class);
+
+        verifyNoInteractions(userEventPublisher);
+    }
+
+    /**
+     * 驗證（M1）：Redis 撤銷 session 失敗不得吞掉 UserDeletedEvent，也不得讓已 commit 的刪帳回錯誤。
+     */
+    @Test
+    @DisplayName("deleteAccount → session 撤銷（Redis）拋例外 → 事件仍發送、方法正常返回")
+    void deleteAccount_whenSessionRevokeFails_shouldStillPublishEventAndReturnNormally() {
+        User mockUser = buildPopulatedActiveUser();
+        stubCorrectPassword(mockUser);
+        when(transactionManager.getTransaction(any())).thenReturn(transactionStatus);
+        doThrow(new IllegalStateException("redis down")).when(sessionRevoker).revokeAllSessions(TEST_USER_UUID);
+
+        assertThatCode(() -> userService.deleteAccount(TEST_USER_UUID, TEST_PASSWORD)).doesNotThrowAnyException();
+
+        verify(transactionManager).commit(transactionStatus);
+        verify(userEventPublisher).publishDeleted(TEST_USER_UUID);
     }
 
     /**
@@ -574,6 +765,44 @@ class UserServiceTest {
     /* =========================================================================
        測試輔助方法
        ========================================================================= */
+
+    /**
+     * 建立帶有完整個資的 ACTIVE 使用者（供匿名化測試驗證每個欄位都被洗掉）。
+     *
+     * @return 含 username、頭貼、簡介、網站、社群連結、所在地與通知偏好的使用者
+     */
+    private User buildPopulatedActiveUser() {
+        User user = buildActiveUser();
+        user.setUsername("realname");
+        user.setAvatarUrl("https://cdn.example.com/avatar.png");
+        user.setBio("我是真人");
+        user.setWebsite("https://myblog.example.com");
+        user.setSocialLinks("{\"twitter\":\"@real\"}");
+        user.setLocation("Taipei");
+        user.setEmailVerified(true);
+        return user;
+    }
+
+    /**
+     * 讓 findByUuid 回傳指定使用者，且密碼比對通過。
+     *
+     * @param user 要被「刪除」的使用者
+     */
+    private void stubCorrectPassword(User user) {
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches(TEST_PASSWORD, user.getPasswordHash())).thenReturn(true);
+    }
+
+    /**
+     * 取得 deleteAccount 傳給 {@code userRepository.save} 的使用者。
+     *
+     * @return 被儲存的使用者
+     */
+    private User captureSavedUser() {
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        return captor.getValue();
+    }
 
     /**
      * 建立一個 ACTIVE 狀態的測試用 User 物件。

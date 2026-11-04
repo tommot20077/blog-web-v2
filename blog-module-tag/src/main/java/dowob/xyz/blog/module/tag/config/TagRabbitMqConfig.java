@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.tag.config;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
@@ -193,5 +194,45 @@ public class TagRabbitMqConfig {
                 .withArgument("x-dead-letter-exchange", "blog.dlq")
                 .withArgument("x-dead-letter-routing-key", "dead-letter")
                 .build();
+    }
+
+    /** 使用者帳號刪除事件 Queue 名稱 */
+    public static final String QUEUE_TAG_USER_DELETED = "tag.user-deleted";
+
+    /**
+     * 建立使用者事件 Topic Exchange 的宣告（與 user 模組宣告的 {@code user.events} 參數相同，重複宣告冪等）。
+     *
+     * <p>exchange 由 producer（user 模組）宣告；本模組不依賴 user 模組，故以事件契約常數
+     * {@link UserEventContract#EXCHANGE} 自行宣告同名 exchange，bean 名稱與 user 端不同以避免衝突。</p>
+     *
+     * @return TopicExchange 實例
+     */
+    @Bean
+    public TopicExchange tagUserEventsExchange() {
+        return new TopicExchange(UserEventContract.EXCHANGE);
+    }
+
+    /**
+     * 建立使用者帳號刪除事件消費用 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue tagUserDeletedQueue() {
+        return durableQueueWithDlq(QUEUE_TAG_USER_DELETED);
+    }
+
+    /**
+     * 建立使用者帳號刪除 Queue 與 Exchange 的綁定（routing key 取自共用事件契約
+     * {@link UserEventContract#ROUTING_KEY_DELETED}，不 import user 模組）
+     *
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding bindTagUserDeleted() {
+        return BindingBuilder
+                .bind(tagUserDeletedQueue())
+                .to(tagUserEventsExchange())
+                .with(UserEventContract.ROUTING_KEY_DELETED);
     }
 }

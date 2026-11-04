@@ -8,6 +8,8 @@ import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
@@ -18,7 +20,11 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
+import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.SearchHits;
+import org.springframework.data.elasticsearch.core.query.ByQueryResponse;
+import org.springframework.data.elasticsearch.core.query.ScriptType;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -68,6 +74,11 @@ public class SearchServiceImpl implements SearchService {
      * 文章 Facade（用於全量重建索引）
      */
     private final ArticleFacade articleFacade;
+
+    /**
+     * 使用者 Facade（取得作者當下的顯示資訊）
+     */
+    private final UserFacade userFacade;
 
     /**
      * 個人搜尋歷史最大保留筆數
@@ -224,11 +235,35 @@ public class SearchServiceImpl implements SearchService {
      * {@inheritDoc}
      */
     @Override
+    public long updateAuthorNickname(UUID authorUuid, String nickname) {
+        org.springframework.data.elasticsearch.core.query.Query matchAuthor = NativeQuery.builder()
+                .withQuery(Query.of(q -> q.term(t -> t.field("author.uuid").value(authorUuid.toString()))))
+                .build();
+        UpdateQuery updateQuery = UpdateQuery.builder(matchAuthor)
+                .withScriptType(ScriptType.INLINE)
+                .withLang("painless")
+                .withScript("ctx._source.author.nickname = params.nickname")
+                .withParams(Map.of("nickname", nickname))
+                .withAbortOnVersionConflict(false)
+                .withRefreshPolicy(RefreshPolicy.IMMEDIATE)
+                .build();
+        ByQueryResponse response = elasticsearchOperations.updateByQuery(
+                updateQuery, elasticsearchOperations.getIndexCoordinatesFor(ArticleDocument.class));
+        log.info("已改寫索引內作者暱稱：authorUuid={}, updated={}", authorUuid, response.getUpdated());
+        return response.getUpdated();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
     public void reindexAll() {
         log.info("開始全量重建 Elasticsearch 索引...");
         List<ArticleIndexData> articles = articleFacade.findAllPublishedForIndex();
+        /* 作者暱稱一律取當下值（一次批次查詢），不用 DB 快照內冗餘的舊暱稱（M3） */
+        Map<UUID, UserDisplayInfo> authors = loadAuthors(articles);
         List<ArticleDocument> documents = articles.stream()
-                .map(this::toDocument)
+                .map(a -> toDocument(a, authors))
                 .collect(Collectors.toList());
         articleSearchRepository.saveAll(documents);
         /*
@@ -470,10 +505,11 @@ public class SearchServiceImpl implements SearchService {
     /**
      * 將 ArticleIndexData 轉換為 ArticleDocument
      *
-     * @param data 文章索引資料
+     * @param data    文章索引資料
+     * @param authors 作者當下顯示資訊（key 為作者 UUID）
      * @return ES document
      */
-    private ArticleDocument toDocument(ArticleIndexData data) {
+    private ArticleDocument toDocument(ArticleIndexData data, Map<UUID, UserDisplayInfo> authors) {
         List<ArticleDocument.TagInfo> tags = data.tags() == null ? List.of() :
                 data.tags().stream()
                         .map(t -> new ArticleDocument.TagInfo(t.id(), t.name(), t.slug()))
@@ -486,12 +522,42 @@ public class SearchServiceImpl implements SearchService {
                 .slug(data.slug())
                 .author(new ArticleDocument.AuthorInfo(
                         data.authorUuid() == null ? null : data.authorUuid().toString(),
-                        data.authorNickname()))
+                        currentNickname(data, authors)))
                 .tags(tags)
                 .publishedAt(data.publishedAt())
                 .viewCount(data.viewCount())
                 .likeCount(data.likeCount())
                 .status("PUBLISHED")
                 .build();
+    }
+
+    /**
+     * 以單次批次查詢取得所有作者的當下顯示資訊。
+     *
+     * @param articles 待重建的文章
+     * @return 作者 UUID 對應顯示資訊；沒有任何帶 authorUuid 的文章時不查詢
+     */
+    private Map<UUID, UserDisplayInfo> loadAuthors(List<ArticleIndexData> articles) {
+        Set<UUID> authorUuids = articles.stream()
+                .map(ArticleIndexData::authorUuid)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        return authorUuids.isEmpty() ? Map.of() : userFacade.getDisplayInfoByUuids(authorUuids);
+    }
+
+    /**
+     * 決定文件的作者暱稱：有 authorUuid 時以當下值為準，查無此人用通用匿名暱稱（不回退到快照的舊暱稱）；
+     * 沒有 authorUuid 才沿用快照值。
+     *
+     * @param data    文章索引資料
+     * @param authors 作者當下顯示資訊
+     * @return 暱稱
+     */
+    private String currentNickname(ArticleIndexData data, Map<UUID, UserDisplayInfo> authors) {
+        if (data.authorUuid() == null) {
+            return data.authorNickname();
+        }
+        UserDisplayInfo info = authors.get(data.authorUuid());
+        return info != null && info.nickname() != null ? info.nickname() : ArticleDocument.ANONYMOUS_NICKNAME;
     }
 }

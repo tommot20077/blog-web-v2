@@ -1,10 +1,12 @@
 package dowob.xyz.blog.module.tag.config;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.TopicExchange;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -75,5 +77,39 @@ class TagRabbitMqConfigTest {
         assertThat(binding.getExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
         assertThat(binding.getRoutingKey()).isEqualTo(routingKey);
         assertThat(binding.getDestination()).isEqualTo(destination);
+    }
+
+    @Test
+    @DisplayName("user.events exchange：Topic、durable、不自動刪除；名稱取自 user 事件契約")
+    void userEventsExchange_matchesContractAndIsDurableTopic() {
+        TopicExchange exchange = config.tagUserEventsExchange();
+
+        assertThat(exchange.getName()).isEqualTo(UserEventContract.EXCHANGE).isEqualTo("user.events");
+        assertThat(exchange.getType()).isEqualTo("topic");
+        assertThat(exchange.isDurable()).isTrue();
+        assertThat(exchange.isAutoDelete()).isFalse();
+    }
+
+    @Test
+    @DisplayName("queue：tag.user-deleted、durable，並帶 DLQ 參數")
+    void userDeletedQueue_isDurableWithDlqArgs() {
+        Queue queue = config.tagUserDeletedQueue();
+
+        assertThat(TagRabbitMqConfig.QUEUE_TAG_USER_DELETED).isEqualTo("tag.user-deleted");
+        assertThat(queue.getName()).isEqualTo("tag.user-deleted");
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+                .containsEntry("x-dead-letter-exchange", "blog.dlq")
+                .containsEntry("x-dead-letter-routing-key", "dead-letter");
+    }
+
+    @Test
+    @DisplayName("binding：綁定 user.events exchange 與 user.deleted routing key（取自契約常數）")
+    void bindTagUserDeleted_bindsUserContract() {
+        Binding binding = config.bindTagUserDeleted();
+
+        assertThat(binding.getExchange()).isEqualTo(UserEventContract.EXCHANGE);
+        assertThat(binding.getRoutingKey()).isEqualTo(UserEventContract.ROUTING_KEY_DELETED);
+        assertThat(binding.getDestination()).isEqualTo("tag.user-deleted");
     }
 }
