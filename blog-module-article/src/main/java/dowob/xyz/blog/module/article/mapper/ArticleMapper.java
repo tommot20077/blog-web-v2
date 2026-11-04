@@ -443,6 +443,65 @@ public interface ArticleMapper {
                                             @Param("currentPosition") Integer currentPosition);
 
     /**
+     * 集合述詞：一次算出每位作者各自的 PUBLISHED 文章數。
+     *
+     * <p>只讀 {@code articles}，<b>不關聯 users</b>（作者是否 ACTIVE 由 user 模組判斷）。
+     * GROUP BY 天然只回傳有已發布文章的作者。無輸入、無 LIMIT，輸出與作者人數成正比
+     * （重評門檻見 {@code ArticleFacade#countPublishedByAuthor}）。</p>
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（authorUuid, publishedCount）必須與 {@link AuthorPublishedCountRow} 的元件順序一致，不可調整。</p>
+     *
+     * @return 每位有公開文章的作者及其計數
+     */
+    @Select("""
+            SELECT author_uuid AS authorUuid, COUNT(*) AS publishedCount
+              FROM articles
+             WHERE status = 'PUBLISHED'
+             GROUP BY author_uuid
+            """)
+    List<AuthorPublishedCountRow> countPublishedByAuthor();
+
+    /**
+     * 單一作者的已發布文章統計（篇數、瀏覽數總和、按讚數總和）。
+     *
+     * <p>聚合查詢無 GROUP BY，一定回傳恰好一列；沒有符合列時 {@code COUNT} 為 0、{@code SUM} 以
+     * {@code COALESCE} 轉 0。{@code SUM(view_count)} 對 BIGINT 會得到 NUMERIC，故一律轉回 BIGINT。</p>
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序（publishedCount, viewCount, likeCount）必須與 {@link AuthorStatsRow} 的元件順序一致，不可調整。</p>
+     *
+     * @param authorUuid 作者公開 UUID
+     * @return 統計列
+     */
+    @Select("""
+            SELECT COUNT(*) AS publishedCount,
+                   COALESCE(SUM(view_count), 0)::bigint AS viewCount,
+                   COALESCE(SUM(like_count), 0)::bigint AS likeCount
+              FROM articles
+             WHERE author_uuid = #{authorUuid}::uuid
+               AND status = 'PUBLISHED'
+            """)
+    AuthorStatsRow getPublishedStatsByAuthor(@Param("authorUuid") UUID authorUuid);
+
+    /**
+     * {@link #countPublishedByAuthor} 的投影列。
+     *
+     * @param authorUuid     作者公開 UUID
+     * @param publishedCount 該作者的 PUBLISHED 文章數
+     */
+    record AuthorPublishedCountRow(UUID authorUuid, Long publishedCount) {}
+
+    /**
+     * {@link #getPublishedStatsByAuthor} 的投影列。
+     *
+     * @param publishedCount 已發布篇數
+     * @param viewCount      瀏覽數總和
+     * @param likeCount      按讚數總和
+     */
+    record AuthorStatsRow(Long publishedCount, Long viewCount, Long likeCount) {}
+
+    /**
      * {@link #countPublishedBySeriesUuids} 的投影列。
      *
      * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），

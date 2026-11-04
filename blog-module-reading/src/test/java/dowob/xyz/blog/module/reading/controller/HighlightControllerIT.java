@@ -262,12 +262,12 @@ class HighlightControllerIT {
     }
 
     @Test
-    @DisplayName("GET /highlights - 文章不存在 → 400 + A0201（與改造前相同）")
-    void list_articleNotFound_returns400_A0201() throws Exception {
+    @DisplayName("GET /highlights - 文章不存在 → 200 空清單（SEC-16：不再洩漏文章存在性）")
+    void list_articleNotFound_returns200_emptyList() throws Exception {
         mockMvc.perform(get("/api/v1/articles/{uuid}/highlights", UUID.randomUUID())
                 .with(asUser(USER_ID, Role.USER)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("A0201"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
     }
 
     @Test

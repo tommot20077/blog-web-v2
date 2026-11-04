@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.comment.controller;
 
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.comment.service.CommentLikeService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,7 +37,7 @@ public class CommentLikeController {
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "按讚留言（idempotent；軟刪除留言阻擋 C0104）")
     public ApiResponse<Void> like(@AuthenticationPrincipal AuthUser user, @PathVariable UUID uuid) {
-        likeService.likeComment(uuid, user.uuid());
+        likeService.likeComment(uuid, user.uuid(), SecurityUtils.isAdmin());
         return ApiResponse.success();
     }
 

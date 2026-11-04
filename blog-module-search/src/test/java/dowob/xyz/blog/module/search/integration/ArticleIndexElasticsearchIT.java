@@ -216,6 +216,7 @@ class ArticleIndexElasticsearchIT {
         assertThat(result.getRecords()).singleElement().satisfies(r -> {
             assertThat(r.getArticleUuid()).isEqualTo(articleUuid);
             assertThat(r.getAuthorNickname()).isEqualTo("愛麗絲");
+            assertThat(r.getAuthorUuid()).isEqualTo(authorUuid);
         });
     }
 

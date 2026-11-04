@@ -8,6 +8,7 @@ import dowob.xyz.blog.infrastructure.event.UserDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.module.user.TestUserModuleApplication;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.repository.UserRepository;
@@ -82,6 +83,8 @@ class UserAccountDeletionIntegrationTest {
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
     @MockitoBean private JavaMailSender mailSender;
+    /** PublicAuthorService 依賴；article 模組不在 user 模組的測試 classpath，與 AbstractIntegrationTest 一致以 mock 提供 */
+    @MockitoBean private ArticleFacade articleFacade;
 
     @Autowired private UserService userService;
     @Autowired private AuthService authService;

@@ -7,6 +7,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.AuthorArticleStats;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 
 import java.time.LocalDateTime;
@@ -162,6 +163,24 @@ public interface ArticleFacade {
      * @return 文章存在為 true
      */
     boolean existsByUuid(UUID articleUuid);
+
+    /**
+     * 單筆可讀性述詞：這篇文章對指定檢視者是否「可讀」，供互動寫入路徑（留言、按讚、收藏、劃線、閱讀進度）
+     * 在寫入前做「可讀才可互動」檢查（SEC-16 ＝ AUTH-05／DATA-12）。
+     *
+     * <p>語意與 {@link #filterReadableUuids} 完全相同（委派 {@code ArticleVisibility} 單一真相）：
+     * PUBLISHED 全公開；非 PUBLISHED（DRAFT／PENDING_REVIEW／REJECTED／ARCHIVED）僅作者本人與 ADMIN；
+     * <b>查無此文章（含已硬刪）也回 false</b>。因此 caller 對「不可讀」與「不存在」可以給出完全相同的回應，
+     * 不會產生草稿存在性 oracle。簽章帶 viewer 身分（architecture.md：Readable 類方法必帶 viewer）。</p>
+     *
+     * <p>只用於建立／更新類互動；移除類互動（取消按讚、移除收藏、刪除自己的資料）不受文章可讀性影響。</p>
+     *
+     * @param articleUuid 文章公開 UUID；{@code null} 回傳 false
+     * @param viewerUuid  操作者公開 UUID；匿名為 null
+     * @param isAdmin     操作者是否為 ADMIN
+     * @return 文章存在且對該操作者可讀為 true
+     */
+    boolean isReadableBy(UUID articleUuid, UUID viewerUuid, boolean isAdmin);
 
     /**
      * comment 模組創建 comment 時連動 article.comment_count + 1。
@@ -387,4 +406,34 @@ public interface ArticleFacade {
      * @return 其中仍存在於 articles 表的 UUID 集合（不分狀態）
      */
     Set<UUID> filterExistingUuids(Collection<UUID> uuids);
+
+    // ─── 公開作者頁（集合述詞：以 articles 欄位對作者做計數）───
+
+    /**
+     * 集合述詞：取得每位作者各自的 PUBLISHED 文章數。
+     *
+     * <p>供 user 模組實作 {@code GET /api/v1/authors}：user 模組在這些作者中篩選 ACTIVE、依 nickname 比對、
+     * 依篇數排序並取前 20；article 模組<b>不得</b>為此 JOIN {@code users}（見 {@code architecture.md}）。
+     * 只計狀態字面量 PUBLISHED（與誰在問無關），故方法名為 {@code Published}，不是 {@code Readable}。</p>
+     *
+     * <p><b>傳輸量界限</b>：本方法沒有輸入，輸出與<b>作者人數</b>成正比（不是與頁大小成正比），
+     * 因此無法經 {@code BatchedQuery} 切批（輸入不存在），也不得以 {@code LIMIT} 截斷
+     * （前 N 名須在 user 模組套用 ACTIVE／nickname 條件後才決定，先截斷會靜默給出錯誤答案）。
+     * <b>作者超過約 1,000 人時重新評估</b>——屆時改由 owner 發布唯讀 view 或在 users 維護反正規化計數。
+     * 每次呼叫對全部已發布文章 {@code GROUP BY author_uuid}（走 {@code idx_articles_author_id}）。</p>
+     *
+     * @return 作者公開 UUID → PUBLISHED 文章數；<b>只含 count &gt; 0 者</b>，回傳可變的 Map
+     */
+    Map<UUID, Long> countPublishedByAuthor();
+
+    /**
+     * 取得單一作者的已發布文章統計（篇數、總瀏覽數、總按讚數）。
+     *
+     * <p>只計 PUBLISHED；作者沒有任何已發布文章（或根本不存在）時回傳全 0，<b>不回傳 null</b>。
+     * 瀏覽數來自 {@code articles.view_count}，由 Redis 每 5 分鐘回寫，最多落後約 5 分鐘。</p>
+     *
+     * @param authorUuid 作者公開 UUID；null 視為查無，回傳全 0（不查 DB）
+     * @return 作者統計，永不為 null
+     */
+    AuthorArticleStats getPublishedStatsByAuthor(UUID authorUuid);
 }

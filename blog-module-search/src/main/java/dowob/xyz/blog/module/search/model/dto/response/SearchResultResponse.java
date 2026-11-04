@@ -47,6 +47,12 @@ public class SearchResultResponse {
     private String authorNickname;
 
     /**
+     * 作者公開 UUID（取自 ES 文件的 {@code author.uuid}，供前端連到公開作者頁；
+     * 文件沒有作者或 uuid 無法解析時為 null）
+     */
+    private UUID authorUuid;
+
+    /**
      * 文章標籤名稱列表
      */
     private List<String> tagNames;
