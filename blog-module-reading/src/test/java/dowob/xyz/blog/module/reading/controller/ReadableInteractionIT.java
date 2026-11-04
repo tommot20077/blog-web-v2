@@ -55,6 +55,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -370,6 +371,40 @@ class ReadableInteractionIT {
         mockMvc.perform(delete("/api/v1/highlights/{u}", h.getUuid()).with(as(VIEWER, Role.USER)))
                 .andExpect(status().isOk());
         assertThat(highlightRepo.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("GET /highlights：他人 DRAFT 與不存在的 uuid 回應完全相同（status 與 body）")
+    void listHighlights_othersDraft_identicalToNotFound() throws Exception {
+        UUID draft = newArticle(ArticleStatus.DRAFT);
+
+        MvcResult onDraft = mockMvc.perform(get("/api/v1/articles/{u}/highlights", draft)
+                .with(as(VIEWER, Role.USER))).andReturn();
+        MvcResult onMissing = mockMvc.perform(get("/api/v1/articles/{u}/highlights", UUID.randomUUID())
+                .with(as(VIEWER, Role.USER))).andReturn();
+
+        assertThat(onDraft.getResponse().getStatus()).isEqualTo(200);
+        assertThat(onDraft.getResponse().getStatus()).isEqualTo(onMissing.getResponse().getStatus());
+        JsonNode a = objectMapper.readTree(onDraft.getResponse().getContentAsString());
+        JsonNode b = objectMapper.readTree(onMissing.getResponse().getContentAsString());
+        assertThat(a.path("code")).isEqualTo(b.path("code"));
+        assertThat(a.path("message")).isEqualTo(b.path("message"));
+        assertThat(a.path("data")).isEqualTo(b.path("data"));
+        assertThat(a.path("data").size()).isZero();
+    }
+
+    @Test
+    @DisplayName("GET /highlights：自己在已下架文章上的劃線仍可取回")
+    void listHighlights_ownHighlightOnArchivedArticle_stillReturned() throws Exception {
+        UUID a = newArticle(ArticleStatus.ARCHIVED);
+        seedHighlight(a, VIEWER);
+        seedHighlight(a, AUTHOR);
+
+        MvcResult r = mockMvc.perform(get("/api/v1/articles/{u}/highlights", a)
+                .with(as(VIEWER, Role.USER))).andReturn();
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(200);
+        assertThat(objectMapper.readTree(r.getResponse().getContentAsString()).path("data").size()).isEqualTo(1);
     }
 
     // ───────────────────────── 閱讀進度 ─────────────────────────

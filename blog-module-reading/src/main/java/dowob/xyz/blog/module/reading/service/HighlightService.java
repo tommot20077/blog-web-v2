@@ -66,15 +66,14 @@ public class HighlightService {
     /**
      * 查詢某使用者在某篇文章的所有劃線（建立時間由舊到新）。
      *
+     * <p>只回呼叫者自己的資料，因此<b>不檢查文章存在或可讀性</b>（SEC-16）：文章不存在、不可讀、已下架時，
+     * 沒有劃線就回空清單，與他人草稿的回應完全相同，不形成存在性 oracle；使用者仍能取回自己在已下架文章上的劃線。</p>
+     *
      * @param articleUuid 文章公開 UUID
      * @param userUuid    使用者公開 UUID
-     * @return 劃線列表
-     * @throws BusinessException 文章不存在
+     * @return 劃線列表；沒有則為空清單
      */
     public List<HighlightResponse> getByArticle(UUID articleUuid, UUID userUuid) {
-        if (!articleFacade.existsByUuid(articleUuid)) {
-            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
-        }
         return repo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(userUuid, articleUuid)
                 .stream().map(this::toResponse).toList();
     }

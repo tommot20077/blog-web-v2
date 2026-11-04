@@ -34,6 +34,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -276,6 +277,7 @@ class CommentServiceTest {
         Comment c = new Comment();
         c.setId(1L);
         c.setUuid(commentUuid);
+        c.setArticleUuid(articleUuid);
         c.setUserUuid(userUuid);
         c.setContent("original");
         c.setContentHtml("<p>original</p>");
@@ -283,6 +285,7 @@ class CommentServiceTest {
         c.setDeletedAt(null);
 
         when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+        when(articleFacade.isReadableBy(eq(articleUuid), any(), anyBoolean())).thenReturn(true);
         when(renderer.render("edited")).thenReturn("<p>edited</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -305,10 +308,12 @@ class CommentServiceTest {
         Comment c = new Comment();
         c.setId(1L);
         c.setUuid(commentUuid);
+        c.setArticleUuid(articleUuid);
         c.setUserUuid(userUuid);
         c.setCreatedAt(LocalDateTime.now().minusMinutes(10));
 
         when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+        when(articleFacade.isReadableBy(eq(articleUuid), any(), anyBoolean())).thenReturn(true);
 
         EditCommentRequest req = new EditCommentRequest();
         req.setContent("late");
@@ -324,10 +329,12 @@ class CommentServiceTest {
         Comment c = new Comment();
         c.setId(1L);
         c.setUuid(commentUuid);
+        c.setArticleUuid(articleUuid);
         c.setUserUuid(otherUserUuid);     // 不是 admin 自己的留言
         c.setCreatedAt(LocalDateTime.now().minusMinutes(10));
 
         when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+        when(articleFacade.isReadableBy(eq(articleUuid), any(), anyBoolean())).thenReturn(true);
         when(renderer.render(any())).thenReturn("<p>x</p>");
         when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -346,10 +353,12 @@ class CommentServiceTest {
         Comment c = new Comment();
         c.setId(1L);
         c.setUuid(commentUuid);
+        c.setArticleUuid(articleUuid);
         c.setUserUuid(otherUserUuid);     // 別人留的
         c.setCreatedAt(LocalDateTime.now());
 
         when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+        when(articleFacade.isReadableBy(eq(articleUuid), any(), anyBoolean())).thenReturn(true);
 
         EditCommentRequest req = new EditCommentRequest();
         req.setContent("hijack");
@@ -364,11 +373,13 @@ class CommentServiceTest {
         Comment c = new Comment();
         c.setId(1L);
         c.setUuid(commentUuid);
+        c.setArticleUuid(articleUuid);
         c.setUserUuid(userUuid);
         c.setCreatedAt(LocalDateTime.now());
         c.setDeletedAt(LocalDateTime.now());
 
         when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(c));
+        when(articleFacade.isReadableBy(eq(articleUuid), any(), anyBoolean())).thenReturn(true);
 
         EditCommentRequest req = new EditCommentRequest();
         req.setContent("ghost");

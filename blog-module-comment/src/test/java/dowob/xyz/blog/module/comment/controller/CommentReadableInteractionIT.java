@@ -49,6 +49,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -261,6 +262,52 @@ class CommentReadableInteractionIT {
         mockMvc.perform(post("/api/v1/comments/{u}/like", onPublished.getUuid()).with(as(VIEWER, Role.USER)))
                 .andExpect(status().isOk());
         assertThat(commentRepo.findByUuid(onPublished.getUuid()).orElseThrow().getLikeCount()).isEqualTo(1);
+    }
+
+    private String editBody() throws Exception {
+        dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest req =
+                new dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest();
+        req.setContent("edited");
+        return objectMapper.writeValueAsString(req);
+    }
+
+    @Test
+    @DisplayName("PUT 編輯留言：作者在文章退回 DRAFT 後編輯自己的留言 → 等同文章不存在，content／edited_at 不變")
+    void editComment_articleBackToDraft_sameAsNotFound_unchanged() throws Exception {
+        UUID a = newArticle(ArticleStatus.PUBLISHED);
+        Comment c = seedComment(a, VIEWER);
+        c.setCreatedAt(LocalDateTime.now());
+        commentRepo.save(c);
+        setStatus(a, ArticleStatus.DRAFT);
+
+        Outcome onDraft = outcomeOf(mockMvc.perform(put("/api/v1/comments/{u}", c.getUuid())
+                .with(as(VIEWER, Role.USER)).contentType(MediaType.APPLICATION_JSON).content(editBody())).andReturn());
+
+        assertThat(onDraft.status()).isEqualTo(400);
+        assertThat(onDraft.code()).isEqualTo("A0201");
+        Comment after = commentRepo.findByUuid(c.getUuid()).orElseThrow();
+        assertThat(after.getContent()).isEqualTo("seed");
+        assertThat(after.getEditedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("PUT 編輯留言：ADMIN 對非公開文章下的留言、PUBLISHED 下作者本人的留言允許")
+    void editComment_adminAndPublished_allowed() throws Exception {
+        UUID draft = newArticle(ArticleStatus.DRAFT);
+        Comment onDraft = seedComment(draft, VIEWER);
+        mockMvc.perform(put("/api/v1/comments/{u}", onDraft.getUuid())
+                .with(as(ADMIN, Role.ADMIN)).contentType(MediaType.APPLICATION_JSON).content(editBody()))
+                .andExpect(status().isOk());
+        assertThat(commentRepo.findByUuid(onDraft.getUuid()).orElseThrow().getContent()).isEqualTo("edited");
+
+        UUID published = newArticle(ArticleStatus.PUBLISHED);
+        Comment mine = seedComment(published, VIEWER);
+        mine.setCreatedAt(LocalDateTime.now());
+        commentRepo.save(mine);
+        mockMvc.perform(put("/api/v1/comments/{u}", mine.getUuid())
+                .with(as(VIEWER, Role.USER)).contentType(MediaType.APPLICATION_JSON).content(editBody()))
+                .andExpect(status().isOk());
+        assertThat(commentRepo.findByUuid(mine.getUuid()).orElseThrow().getContent()).isEqualTo("edited");
     }
 
     @Test

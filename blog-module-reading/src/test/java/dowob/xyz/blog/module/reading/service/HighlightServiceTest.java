@@ -89,7 +89,6 @@ class HighlightServiceTest {
     void getByArticle_returnsUserOwnedOnly() {
         UserHighlight h1 = new UserHighlight();
         h1.setId(1L); h1.setUuid(UUID.randomUUID());
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(true);
         when(repo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(userUuid, articleUuid))
                 .thenReturn(List.of(h1));
 
@@ -236,15 +235,13 @@ class HighlightServiceTest {
     }
 
     @Test
-    @DisplayName("getByArticle：article 不存在 → throw ARTICLE_NOT_FOUND")
-    void getByArticle_articleNotFound_throwsArticleNotFound() {
+    @DisplayName("SEC-16：getByArticle 只回自己的劃線，不問文章存在或可讀；沒劃線回空清單（消除存在性 oracle）")
+    void getByArticle_noHighlights_returnsEmpty_withoutConsultingArticle() {
         UUID articleUuid = UUID.randomUUID();
-        when(articleFacade.existsByUuid(articleUuid)).thenReturn(false);
+        when(repo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(userUuid, articleUuid)).thenReturn(List.of());
 
-        assertThatThrownBy(() -> service.getByArticle(articleUuid, userUuid))
-                .isInstanceOf(BusinessException.class)
-                .extracting(t -> ((BusinessException) t).getCode())
-                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
-        verify(repo, never()).findByUserUuidAndArticleUuidOrderByCreatedAtAsc(any(), any());
+        assertThat(service.getByArticle(articleUuid, userUuid)).isEmpty();
+
+        org.mockito.Mockito.verifyNoInteractions(articleFacade);
     }
 }

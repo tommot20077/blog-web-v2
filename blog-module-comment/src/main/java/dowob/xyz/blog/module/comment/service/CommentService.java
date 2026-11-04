@@ -127,6 +127,7 @@ public class CommentService {
      *
      * <p>規則：
      * <ul>
+     *   <li>留言所屬文章須對操作者可讀（SEC-16），否則拋 {@code ARTICLE_NOT_FOUND}</li>
      *   <li>軟刪除留言無法編輯（{@link CommentErrorCode#COMMENT_DELETED}）</li>
      *   <li>非作者且非 Admin 拋 {@link AccessDeniedException}</li>
      *   <li>作者超過 5 分鐘拋 {@link CommentErrorCode#EDIT_WINDOW_EXPIRED}</li>
@@ -144,6 +145,11 @@ public class CommentService {
                                        EditCommentRequest req) {
         Comment c = commentRepo.findByUuid(commentUuid)
                 .orElseThrow(() -> new BusinessException(CommentErrorCode.COMMENT_NOT_FOUND));
+
+        // SEC-16：編輯屬更新類互動，留言所屬文章必須對操作者可讀；不可讀與文章不存在同一個回應
+        if (!articleFacade.isReadableBy(c.getArticleUuid(), currentUserUuid, isAdmin)) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND);
+        }
 
         if (c.getDeletedAt() != null) {
             throw new BusinessException(CommentErrorCode.COMMENT_DELETED);
