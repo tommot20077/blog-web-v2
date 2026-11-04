@@ -22,6 +22,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("RequiredSecretsEnvironmentPostProcessor：缺必要憑證 fail-fast")
 class RequiredSecretsEnvironmentPostProcessorTest {
 
+    /**
+     * 測試用的非空占位值。本測試只驗證「有沒有值」，值本身無意義；
+     * 以單一常數取代字面值，避免秘密掃描（GitGuardian）把 {@code password} 屬性旁的字面值誤判為硬編碼密碼。
+     */
+    private static final String PLACEHOLDER = "placeholder-value";
+
     private static MockEnvironment envWith(String... profiles) {
         MockEnvironment env = new MockEnvironment();
         env.setActiveProfiles(profiles);
@@ -30,12 +36,12 @@ class RequiredSecretsEnvironmentPostProcessorTest {
 
     private static MockEnvironment allSecretsSet(String... profiles) {
         return envWith(profiles)
-                .withProperty("spring.datasource.username", "db-user")
-                .withProperty("spring.datasource.password", "db-pass")
-                .withProperty("spring.rabbitmq.username", "mq-user")
-                .withProperty("spring.rabbitmq.password", "mq-pass")
-                .withProperty("minio.access-key", "s3-access")
-                .withProperty("minio.secret-key", "s3-secret");
+                .withProperty("spring.datasource.username", PLACEHOLDER)
+                .withProperty("spring.datasource.password", PLACEHOLDER)
+                .withProperty("spring.rabbitmq.username", PLACEHOLDER)
+                .withProperty("spring.rabbitmq.password", PLACEHOLDER)
+                .withProperty("minio.access-key", PLACEHOLDER)
+                .withProperty("minio.secret-key", PLACEHOLDER);
     }
 
     @Test
@@ -55,8 +61,8 @@ class RequiredSecretsEnvironmentPostProcessorTest {
     @DisplayName("prod 只給 DB 憑證 → 失敗，只列出缺的 RabbitMQ／MinIO，不列已給的 DB")
     void whenProdAndOnlyDbSecretsSet_failsListingOnlyMissingOnes() {
         MockEnvironment env = envWith("prod")
-                .withProperty("spring.datasource.username", "db-user")
-                .withProperty("spring.datasource.password", "db-pass");
+                .withProperty("spring.datasource.username", PLACEHOLDER)
+                .withProperty("spring.datasource.password", PLACEHOLDER);
 
         assertThatThrownBy(() -> RequiredSecretsEnvironmentPostProcessor.validate(env))
                 .isInstanceOf(IllegalStateException.class)
