@@ -168,25 +168,45 @@ class AuthControllerTest {
     }
 
     /**
-     * 驗證：重複 email 時業務例外應映射為對應的錯誤碼。
+     * 驗證（SEC-14／Q8）：email 重複時 service 正常返回，端點的回應 body（排除每次不同的 timestamp）必須與新註冊相同，
+     * 單看回應 body 的任何欄位（code、message、data）都無法分辨 email 是否已存在
+     * （副作用列舉需 2 次請求，見 findings SEC-14 殘餘）。
+     * （原測試斷言 EMAIL_DUPLICATED 映射為 400；Q8 起 service 不再拋出該錯誤。）
      */
     @Test
-    @DisplayName("POST /register → 重複 email → 應回傳 EMAIL_DUPLICATED 錯誤碼")
-    void register_duplicateEmail_shouldReturnEmailDuplicatedError() throws Exception {
-        RegisterRequest request = new RegisterRequest();
-        request.setEmail(TEST_EMAIL);
-        request.setPassword(TEST_PASSWORD);
-        request.setUsername(TEST_USERNAME);
-        request.setNickname(TEST_NICKNAME);
+    @DisplayName("POST /register → email 重複（service 靜默成功）→ 回應 body（排除 timestamp）與新註冊相同")
+    void register_duplicateEmail_responseIdenticalToFreshRegistration() throws Exception {
+        doNothing().when(authService).register(anyString(), anyString(), anyString(), anyString(), nullable(String.class));
+        RegisterRequest fresh = new RegisterRequest();
+        fresh.setEmail("fresh@example.com");
+        fresh.setPassword(TEST_PASSWORD);
+        fresh.setUsername(TEST_USERNAME);
+        fresh.setNickname(TEST_NICKNAME);
+        RegisterRequest duplicate = new RegisterRequest();
+        duplicate.setEmail(TEST_EMAIL);
+        duplicate.setPassword(TEST_PASSWORD);
+        duplicate.setUsername("another");
+        duplicate.setNickname("Another");
 
-        doThrow(new BusinessException(UserErrorCode.EMAIL_DUPLICATED))
-                .when(authService).register(anyString(), anyString(), anyString(), anyString(), nullable(String.class));
-
-        mockMvc.perform(post("/api/v1/auth/register")
+        String freshBody = mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value(UserErrorCode.EMAIL_DUPLICATED.getCode()));
+                        .content(objectMapper.writeValueAsString(fresh)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String duplicateBody = mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(duplicate)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        /* 回應含 timestamp（毫秒時間戳）本來就每次不同，比對時排除，其餘欄位（code、message、data）必須逐字相同 */
+        com.fasterxml.jackson.databind.node.ObjectNode freshJson =
+                (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(freshBody);
+        com.fasterxml.jackson.databind.node.ObjectNode duplicateJson =
+                (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(duplicateBody);
+        freshJson.remove("timestamp");
+        duplicateJson.remove("timestamp");
+        org.assertj.core.api.Assertions.assertThat(duplicateJson).isEqualTo(freshJson);
     }
 
     // =========================================================================

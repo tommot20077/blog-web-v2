@@ -12,6 +12,7 @@ import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.validation.ProfileFieldLimits;
 import dowob.xyz.blog.module.user.validation.SafeHttpUrlValidator;
 import dowob.xyz.blog.module.user.validation.SafeSocialLinksValidator;
+import dowob.xyz.blog.module.user.validation.UserNicknamePolicy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -89,13 +90,17 @@ public class UserService {
      * @param socialLinks 社群連結 JSON 字串（可為 null）
      * @param avatarUrl   頭貼 URL（可為 null）
      * @param location    所在地（可為 null）
-     * @throws BusinessException website／avatarUrl／socialLinks 未通過 SEC-10 安全驗證時
+     * @throws BusinessException website／avatarUrl／socialLinks 未通過 SEC-10 安全驗證，或暱稱以保留前綴
+     *                           「已刪除使用者」開頭（{@link UserNicknamePolicy}，防假冒已刪除帳號）時
      *                           （{@link CommonErrorCode#PARAM_VALID_ERROR}）
      */
     @Transactional
     public void updateProfile(UUID userUuid, String nickname, String bio, String website, String socialLinks,
                               String avatarUrl, String location) {
         validateProfileUrlFields(website, socialLinks, avatarUrl);
+        if (UserNicknamePolicy.isReserved(nickname)) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR);
+        }
 
         User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));

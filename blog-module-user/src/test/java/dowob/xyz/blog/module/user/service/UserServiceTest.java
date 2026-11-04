@@ -92,6 +92,23 @@ class UserServiceTest {
     }
 
     /**
+     * 驗證：改名為保留前綴「已刪除使用者」開頭的暱稱 → 拒絕為參數驗證錯誤，不寫入（防假冒已刪除帳號）。
+     */
+    @Test
+    @DisplayName("updateProfile → 暱稱以「已刪除使用者」開頭（含全形空白變體）→ PARAM_VALID_ERROR，不查 DB 不儲存")
+    void updateProfile_withReservedDeletedNickname_throwsParamValidError() {
+        for (String nickname : new String[]{"已刪除使用者#1a2b3c4d", "已刪除使用者　#1a2b3c4d", "  已刪除使用者"}) {
+            assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, nickname, null, null, null, null, null))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(e -> assertThat(((BusinessException) e).getErrorCode().getCode())
+                            .isEqualTo(CommonErrorCode.PARAM_VALID_ERROR.getCode()));
+        }
+
+        verify(userRepository, never()).save(any());
+        verify(userRepository, never()).findByUuid(any());
+    }
+
+    /**
      * 驗證：updateProfile 應正確設定 website 與 socialLinks 欄位。
      */
     @Test

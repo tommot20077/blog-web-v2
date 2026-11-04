@@ -40,6 +40,9 @@ public enum UserErrorCode implements IErrorCode {
 
     /**
      * 信箱已被註冊
+     *
+     * <p>SEC-14／Q8 起註冊端點遇到重複 email 一律回成功（並通知原信箱主人），不再回傳此錯誤碼；
+     * 保留此常數只為維持錯誤碼表與既有 API 文件的穩定，確認前端不再依賴後可再移除。</p>
      */
     EMAIL_DUPLICATED("A0106", "該信箱已被註冊"),
 

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.user.service;
 
+import dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent;
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import jakarta.mail.Session;
@@ -73,6 +74,32 @@ class UserMailServiceTest {
         assertThat(message.getSubject()).isEqualTo("Reset your password");
         assertThat((String) message.getContent())
                 .contains("https://90030.xyz/reset-password?token=reset-token-abc");
+    }
+
+    @Test
+    @DisplayName("sendRegistrationAttemptNotice → 寄給原信箱主人，告知有人嘗試註冊並引導登入／忘記密碼，且不含任何驗證或重設 token")
+    void sendRegistrationAttemptNotice_shouldNotifyOwnerWithLoginAndForgotPasswordLinks() throws Exception {
+        JavaMailSender mailSender = mock(JavaMailSender.class);
+        MimeMessage message = new MimeMessage(Session.getInstance(new Properties()));
+        when(mailSender.createMimeMessage()).thenReturn(message);
+        UserMailService service = buildService(mailSender);
+        RegistrationAttemptOnExistingEmailEvent event = new RegistrationAttemptOnExistingEmailEvent(
+                UUID.randomUUID(), UUID.randomUUID(), "owner@example.com", "OwnerNick");
+
+        service.sendRegistrationAttemptNotice(event);
+
+        verify(mailSender).send(any(MimeMessage.class));
+        assertThat(message.getAllRecipients()[0].toString()).isEqualTo("owner@example.com");
+        assertThat(message.getFrom()[0].toString())
+                .contains("Blog Security Bot")
+                .contains("no-reply@90030.xyz");
+        assertThat(message.getSubject()).isEqualTo("Someone tried to register with your email address");
+        String body = (String) message.getContent();
+        assertThat(body)
+                .contains("OwnerNick")
+                .contains("https://90030.xyz/login")
+                .contains("https://90030.xyz/forgot-password")
+                .doesNotContain("token=");
     }
 
     private UserMailService buildService(JavaMailSender mailSender) {

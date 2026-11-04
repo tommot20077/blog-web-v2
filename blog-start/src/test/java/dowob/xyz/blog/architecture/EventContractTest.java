@@ -93,7 +93,9 @@ class EventContractTest {
             Map.entry("dowob.xyz.blog.module.user.model.event.UserRegisteredEvent",
                     "user 內部：寄送驗證信（EmailVerificationConsumer 同模組消費）"),
             Map.entry("dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent",
-                    "user 內部：寄送重設密碼信（PasswordResetConsumer 同模組消費）"));
+                    "user 內部：寄送重設密碼信（PasswordResetConsumer 同模組消費）"),
+            Map.entry("dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent",
+                    "user 內部：寄送「有人嘗試用你的信箱註冊」通知信（RegistrationAttemptNoticeConsumer 同模組消費，SEC-14／Q8）"));
 
     @Test
     @DisplayName("規則 (a)：事件必須有 UUID eventId（無例外清單）")
