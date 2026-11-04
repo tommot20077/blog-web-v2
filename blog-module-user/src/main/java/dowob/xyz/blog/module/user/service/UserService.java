@@ -39,7 +39,7 @@ import java.util.function.Predicate;
 public class UserService {
 
     /** 已刪除使用者的暱稱前綴（後接 uuid 片段以維持 {@code uq_users_nickname} 唯一） */
-    private static final String DELETED_NICKNAME_PREFIX = "已刪除使用者#";
+    private static final String DELETED_NICKNAME_PREFIX = UserNicknamePolicy.DELETED_NICKNAME_PREFIX + "#";
 
     /** 已刪除使用者的 email 墓碑網域：{@code .invalid} 為 RFC 2606 保留 TLD，永不可投遞 */
     private static final String DELETED_EMAIL_DOMAIN = "@invalid.invalid";
