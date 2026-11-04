@@ -73,7 +73,10 @@ public class Tag implements Persistable<UUID> {
     private UUID parentId;
 
     /**
-     * 文章使用計數（不可為負數）
+     * 已發布文章數（不可為負數）。
+     *
+     * <p>由 {@code TagUsageRecalculator} 依事件／每日校正重算寫入（DATA-01），對外即前台的 {@code articleCount}；
+     * 不含草稿等未發布文章，所以<b>不可</b>用來判斷標籤是否仍被使用（見 {@code TagService#adminDeleteTag}）。</p>
      */
     private int usageCount = 0;
 
@@ -85,7 +88,8 @@ public class Tag implements Persistable<UUID> {
     /**
      * 增加使用計數
      *
-     * <p>每次文章使用此標籤時呼叫，計數加一。</p>
+     * <p>注意：正式流程已改為重算（{@code TagUsageRecalculator}），不再呼叫本方法；
+     * 它只改記憶體中的欄位，不會寫回資料庫。</p>
      */
     public void incrementUsage() {
         this.usageCount++;
@@ -94,7 +98,7 @@ public class Tag implements Persistable<UUID> {
     /**
      * 減少使用計數
      *
-     * <p>每次文章移除此標籤時呼叫，計數減一，最低為 0，不會出現負數。</p>
+     * <p>注意：正式流程已改為重算（{@code TagUsageRecalculator}），不再呼叫本方法。</p>
      */
     public void decrementUsage() {
         this.usageCount = Math.max(0, this.usageCount - 1);

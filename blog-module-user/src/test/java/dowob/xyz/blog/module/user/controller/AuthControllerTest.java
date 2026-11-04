@@ -10,6 +10,7 @@ import dowob.xyz.blog.infrastructure.security.AuthState;
 import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.infrastructure.web.ClientIpResolver;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.LoginRequest;
 import dowob.xyz.blog.module.user.model.dto.request.RegisterRequest;
@@ -59,7 +60,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @version 1.0
  */
 @WebMvcTest(AuthController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, ClientIpResolver.class})
 class AuthControllerTest {
 
     /** MockMvc，用於模擬 HTTP 請求 */
@@ -960,11 +961,12 @@ class AuthControllerTest {
     // =========================================================================
 
     /**
-     * 驗證：login 帶 X-Forwarded-For 時，應取第一個 IP 傳入 authService.login。
+     * 驗證：預設（app.http.trusted-proxy-count=0）下 login 完全忽略 X-Forwarded-For，
+     * 以 remoteAddr 傳入 authService.login——偽造 XFF 無法換掉被限流的 IP（SEC-01）。
      */
     @Test
-    @DisplayName("POST /login → 帶 X-Forwarded-For → 應將第一個 IP 傳入 authService.login")
-    void login_withXForwardedFor_shouldPassFirstIpToService() throws Exception {
+    @DisplayName("POST /login → 帶偽造 X-Forwarded-For（預設不信任 proxy）→ 應忽略 XFF，將 RemoteAddr 傳入 authService.login")
+    void login_withForgedXForwardedFor_shouldIgnoreItAndPassRemoteAddrToService() throws Exception {
         LoginRequest request = new LoginRequest();
         request.setIdentifier(TEST_EMAIL);
         request.setPassword(TEST_PASSWORD);
@@ -974,11 +976,12 @@ class AuthControllerTest {
 
         mockMvc.perform(post("/api/v1/auth/login")
                         .header("X-Forwarded-For", "203.0.113.7, 70.41.3.18, 150.172.238.178")
+                        .with(req -> { req.setRemoteAddr("198.51.100.23"); return req; })
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk());
 
-        verify(authService).login(eq(TEST_EMAIL), eq(TEST_PASSWORD), eq("203.0.113.7"));
+        verify(authService).login(eq(TEST_EMAIL), eq(TEST_PASSWORD), eq("198.51.100.23"));
     }
 
     /**
@@ -1024,11 +1027,12 @@ class AuthControllerTest {
     }
 
     /**
-     * 驗證：register 帶 X-Forwarded-For 時，應取第一個 IP 傳入 authService.register。
+     * 驗證：預設（app.http.trusted-proxy-count=0）下 register 完全忽略 X-Forwarded-For，
+     * 以 remoteAddr 傳入 authService.register（SEC-01）。
      */
     @Test
-    @DisplayName("POST /register → 帶 X-Forwarded-For → 應將第一個 IP 傳入 authService.register")
-    void register_withXForwardedFor_shouldPassFirstIpToService() throws Exception {
+    @DisplayName("POST /register → 帶偽造 X-Forwarded-For（預設不信任 proxy）→ 應忽略 XFF，將 RemoteAddr 傳入 authService.register")
+    void register_withForgedXForwardedFor_shouldIgnoreItAndPassRemoteAddrToService() throws Exception {
         RegisterRequest request = new RegisterRequest();
         request.setEmail(TEST_EMAIL);
         request.setPassword(TEST_PASSWORD);
@@ -1039,12 +1043,13 @@ class AuthControllerTest {
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .header("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+                        .with(req -> { req.setRemoteAddr("198.51.100.24"); return req; })
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk());
 
         verify(authService).register(eq(TEST_EMAIL), eq(TEST_PASSWORD), eq(TEST_USERNAME),
-                eq(TEST_NICKNAME), eq("203.0.113.9"));
+                eq(TEST_NICKNAME), eq("198.51.100.24"));
     }
 
     /**

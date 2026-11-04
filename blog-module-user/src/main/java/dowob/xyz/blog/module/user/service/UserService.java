@@ -3,11 +3,15 @@ package dowob.xyz.blog.module.user.service;
 import dowob.xyz.blog.common.api.enums.UserStatus;
 
 import dowob.xyz.blog.module.user.util.TokenVersionUtils;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.dto.response.UserProfileResponse;
 import dowob.xyz.blog.module.user.repository.UserRepository;
+import dowob.xyz.blog.module.user.validation.ProfileFieldLimits;
+import dowob.xyz.blog.module.user.validation.SafeHttpUrlValidator;
+import dowob.xyz.blog.module.user.validation.SafeSocialLinksValidator;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -85,10 +89,14 @@ public class UserService {
      * @param socialLinks 社群連結 JSON 字串（可為 null）
      * @param avatarUrl   頭貼 URL（可為 null）
      * @param location    所在地（可為 null）
+     * @throws BusinessException website／avatarUrl／socialLinks 未通過 SEC-10 安全驗證時
+     *                           （{@link CommonErrorCode#PARAM_VALID_ERROR}）
      */
     @Transactional
     public void updateProfile(UUID userUuid, String nickname, String bio, String website, String socialLinks,
                               String avatarUrl, String location) {
+        validateProfileUrlFields(website, socialLinks, avatarUrl);
+
         User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
@@ -110,6 +118,29 @@ public class UserService {
                 throw new BusinessException(UserErrorCode.NICKNAME_DUPLICATED);
             }
             throw e;
+        }
+    }
+
+    /**
+     * 個人資料 URL 類欄位的防禦縱深檢查（SEC-10）
+     *
+     * <p>與 controller 的 {@code @Valid} 使用同一份驗證邏輯，避免其他呼叫路徑（內部呼叫、未來新增的入口）
+     * 繞過協定白名單。在任何 DB 存取之前執行；失敗一律回傳既有的 {@link CommonErrorCode#PARAM_VALID_ERROR}，
+     * 不新增前端未知的錯誤碼。</p>
+     *
+     * @param website     個人網站 URL
+     * @param socialLinks 社群連結 JSON 字串
+     * @param avatarUrl   頭貼 URL
+     */
+    private void validateProfileUrlFields(String website, String socialLinks, String avatarUrl) {
+        if (!SafeHttpUrlValidator.isSafe(website, ProfileFieldLimits.WEBSITE_MAX_LENGTH, false)) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR, "website: 必須是合法的 http/https 網址");
+        }
+        if (!SafeHttpUrlValidator.isSafe(avatarUrl, ProfileFieldLimits.AVATAR_URL_MAX_LENGTH, true)) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR, "avatarUrl: 必須是合法的 http/https 網址");
+        }
+        if (!SafeSocialLinksValidator.isSafe(socialLinks)) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR, "socialLinks: 社群連結格式不正確");
         }
     }
 

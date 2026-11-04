@@ -4,6 +4,9 @@ import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.repository.ArticleTagRepository;
 import dowob.xyz.blog.module.tag.service.TagNormalizationService;
+import dowob.xyz.blog.module.tag.service.TagUsageRecalculator;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -44,6 +47,9 @@ class TagFacadeImplTest {
 
     @Mock
     private ArticleTagRepository articleTagRepository;
+
+    @Mock
+    private TagUsageRecalculator tagUsageRecalculator;
 
     @InjectMocks
     private TagFacadeImpl tagFacadeImpl;
@@ -340,6 +346,131 @@ class TagFacadeImplTest {
             List<UUID> result = tagFacadeImpl.findTagIdsByArticleUuid(articleUuid);
 
             assertThat(result).isNotNull().isEmpty();
+        }
+    }
+
+    /** ----------------------------------------------------------------------- */
+    /** 插入順序與被移除標籤的重算                                              */
+    /** ----------------------------------------------------------------------- */
+
+    @Nested
+    @DisplayName("syncArticleTags／deleteArticleTags：插入順序與被移除標籤重算")
+    class RemovedTagsAndOrderingTests {
+
+        /** 在「有外層交易同步」的情境下執行動作，回傳註冊的同步供測試手動觸發 commit／rollback */
+        private List<TransactionSynchronization> withSynchronization(Runnable action) {
+            TransactionSynchronizationManager.initSynchronization();
+            try {
+                action.run();
+                return List.copyOf(TransactionSynchronizationManager.getSynchronizations());
+            } finally {
+                TransactionSynchronizationManager.clearSynchronization();
+            }
+        }
+
+        @Test
+        @DisplayName("插入 article_tags 依 tag id 的 uuid 位元組無號順序（與資料庫 ORDER BY id 一致），而非輸入順序")
+        void syncArticleTags_insertsInUnsignedUuidOrder() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID low = new UUID(1L, 0L);
+            UUID high = new UUID(-1L, 0L);
+            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of());
+
+            tagFacadeImpl.syncArticleTags(articleUuid, List.of(high, low));
+
+            InOrder order = inOrder(articleTagRepository);
+            order.verify(articleTagRepository).save(articleUuid, low);
+            order.verify(articleTagRepository).save(articleUuid, high);
+        }
+
+        @Test
+        @DisplayName("[A,B] → [A]：commit 之前不重算；commit 之後只對被移除的 B 重算")
+        void syncArticleTags_removedTag_recalculatedOnlyAfterCommit() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID a = UUID.randomUUID();
+            UUID b = UUID.randomUUID();
+            when(articleTagRepository.findTagsByArticleId(articleUuid))
+                    .thenReturn(List.of(buildTag(a, "A", "a"), buildTag(b, "B", "b")));
+
+            List<TransactionSynchronization> syncs =
+                    withSynchronization(() -> tagFacadeImpl.syncArticleTags(articleUuid, List.of(a)));
+
+            verify(tagUsageRecalculator, never()).recalculateInNewTransaction(org.mockito.ArgumentMatchers.anyCollection());
+            syncs.forEach(TransactionSynchronization::afterCommit);
+            verify(tagUsageRecalculator).recalculateInNewTransaction(java.util.Set.of(b));
+        }
+
+        @Test
+        @DisplayName("外層交易 rollback（只有 afterCompletion、沒有 afterCommit）：不重算")
+        void syncArticleTags_rollback_doesNotRecalculate() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID a = UUID.randomUUID();
+            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+
+            List<TransactionSynchronization> syncs =
+                    withSynchronization(() -> tagFacadeImpl.syncArticleTags(articleUuid, List.of()));
+            syncs.forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            verify(tagUsageRecalculator, never()).recalculateInNewTransaction(org.mockito.ArgumentMatchers.anyCollection());
+        }
+
+        @Test
+        @DisplayName("新舊集合相同或只有新增：沒有被移除的標籤，不註冊重算")
+        void syncArticleTags_noRemovedTags_registersNothing() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID a = UUID.randomUUID();
+            UUID added = UUID.randomUUID();
+            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+
+            List<TransactionSynchronization> syncs =
+                    withSynchronization(() -> tagFacadeImpl.syncArticleTags(articleUuid, List.of(a, added)));
+            syncs.forEach(TransactionSynchronization::afterCommit);
+
+            verify(tagUsageRecalculator, never()).recalculateInNewTransaction(org.mockito.ArgumentMatchers.anyCollection());
+        }
+
+        @Test
+        @DisplayName("deleteArticleTags：commit 後對原本掛的全部標籤重算")
+        void deleteArticleTags_recalculatesAllFormerTagsAfterCommit() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID a = UUID.randomUUID();
+            UUID b = UUID.randomUUID();
+            when(articleTagRepository.findTagsByArticleId(articleUuid))
+                    .thenReturn(List.of(buildTag(a, "A", "a"), buildTag(b, "B", "b")));
+
+            List<TransactionSynchronization> syncs =
+                    withSynchronization(() -> tagFacadeImpl.deleteArticleTags(articleUuid));
+            syncs.forEach(TransactionSynchronization::afterCommit);
+
+            verify(tagUsageRecalculator).recalculateInNewTransaction(java.util.Set.of(a, b));
+        }
+
+        @Test
+        @DisplayName("commit 後重算拋例外：吞掉只記 WARN（交易已 commit，由每日校正兜底）")
+        void recalculationFailureAfterCommit_isSwallowed() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID a = UUID.randomUUID();
+            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+            when(tagUsageRecalculator.recalculateInNewTransaction(org.mockito.ArgumentMatchers.anyCollection()))
+                    .thenThrow(new RuntimeException("DB down"));
+
+            List<TransactionSynchronization> syncs =
+                    withSynchronization(() -> tagFacadeImpl.deleteArticleTags(articleUuid));
+
+            org.assertj.core.api.Assertions.assertThatCode(() -> syncs.forEach(TransactionSynchronization::afterCommit))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("沒有外層交易同步（auto-commit）：刪除已生效，立即重算")
+        void withoutTransactionSynchronization_recalculatesImmediately() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID a = UUID.randomUUID();
+            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+
+            tagFacadeImpl.deleteArticleTags(articleUuid);
+
+            verify(tagUsageRecalculator).recalculateInNewTransaction(java.util.Set.of(a));
         }
     }
 }

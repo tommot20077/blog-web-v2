@@ -65,7 +65,14 @@ public class SecurityConfig {
 
     private final ObjectMapper objectMapper;
 
-    /** CORS 允許的來源清單，透過環境變數注入。生產環境同域部署時 CORS 不觸發。 */
+    /**
+     * CORS 允許的來源清單，透過環境變數注入。
+     *
+     * <p>生產環境同域部署時 CORS 不觸發，前提是 app 還原得出 client 看到的 scheme／host／port：
+     * {@code app.http.trusted-proxy-count >= 1} 且 proxy 帶 {@code X-Forwarded-Proto}
+     * （由 {@code TrustedForwardedRequestFilter} 還原，且其順序早於本設定建立的 {@code CorsFilter}）。
+     * count = 0 時 TLS 終結 proxy 後方的 https 同網域 Origin 會被視為跨域。</p>
+     */
     @Value("${app.cors.allowed-origins:http://localhost:3000,http://localhost:5500,http://127.0.0.1:5500}")
     private List<String> allowedOrigins;
 

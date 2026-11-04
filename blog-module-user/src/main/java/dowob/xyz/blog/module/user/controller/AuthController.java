@@ -8,6 +8,7 @@ import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.security.AuthState;
 import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
 import dowob.xyz.blog.infrastructure.security.JwtService;
+import dowob.xyz.blog.infrastructure.web.ClientIpResolver;
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.LoginRequest;
@@ -57,6 +58,9 @@ public class AuthController {
     /** JWT 服務，用於 Refresh Token 驗證 */
     private final JwtService jwtService;
 
+    /** Client IP 解析器（登入／註冊 IP 限流用；信任鏈由 app.http.trusted-proxy-count 控制） */
+    private final ClientIpResolver clientIpResolver;
+
     /** Redis 操作模板，用於 Refresh Token 比對 */
     private final StringRedisTemplate redisTemplate;
 
@@ -77,7 +81,7 @@ public class AuthController {
     @PostMapping("/register")
     public ApiResponse<Void> register(@Valid @RequestBody RegisterRequest request, HttpServletRequest httpRequest) {
         authService.register(request.getEmail(), request.getPassword(), request.getUsername(), request.getNickname(),
-                resolveClientIp(httpRequest));
+                clientIpResolver.resolve(httpRequest));
         return ApiResponse.success();
     }
 
@@ -97,7 +101,7 @@ public class AuthController {
                                            HttpServletRequest httpRequest,
                                            HttpServletResponse response) {
         LoginResult loginResult = authService.login(request.getIdentifier(), request.getPassword(),
-                resolveClientIp(httpRequest));
+                clientIpResolver.resolve(httpRequest));
 
         ResponseCookie refreshCookie = ResponseCookie.from("refreshToken", loginResult.refreshToken())
                 .httpOnly(true)
@@ -159,24 +163,6 @@ public class AuthController {
 
     private ResponseStatusException unauthenticatedRefresh() {
         return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "請先登入");
-    }
-
-    /**
-     * 解析 client IP（供 IP 層級限流使用）
-     *
-     * <p>prod 環境前後端同域（{@code https://90030.xyz}）並走反向代理，故優先信任
-     * {@code X-Forwarded-For} 標頭並取其第一個 IP（最接近真實 client 的位址）；
-     * 若無此標頭則退回 {@link HttpServletRequest#getRemoteAddr()}。</p>
-     *
-     * @param request HTTP 請求
-     * @return client IP 字串；無法解析時可能為 null
-     */
-    private String resolveClientIp(HttpServletRequest request) {
-        String forwardedFor = request.getHeader("X-Forwarded-For");
-        if (forwardedFor != null && !forwardedFor.isBlank()) {
-            return forwardedFor.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 
     /**

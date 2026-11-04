@@ -5,6 +5,7 @@ import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Date;
@@ -41,6 +42,18 @@ class JwtServiceTest {
     private static final String TEST_VERSION = "v1";
 
     /**
+     * 建立啟用指定 profile 的 Environment（SEC-13：未設私鑰時只有非正式 profile 才允許自動產生金鑰）。
+     *
+     * @param profile 要啟用的 profile
+     * @return MockEnvironment
+     */
+    private static MockEnvironment envWithProfile(String profile) {
+        MockEnvironment env = new MockEnvironment();
+        env.setActiveProfiles(profile);
+        return env;
+    }
+
+    /**
      * 每個測試前重新初始化 JwtService，確保金鑰對是乾淨狀態。
      *
      * <p>
@@ -52,7 +65,7 @@ class JwtServiceTest {
      */
     @BeforeEach
     void setUp() {
-        jwtService = new JwtService();
+        jwtService = new JwtService(envWithProfile("test"));
         ReflectionTestUtils.setField(jwtService, "expiration", 3600000L);
         ReflectionTestUtils.setField(jwtService, "accessTokenExpiration", 900000L);
         ReflectionTestUtils.setField(jwtService, "refreshTokenExpiration", 604800000L);
@@ -204,7 +217,8 @@ class JwtServiceTest {
                 .encodeToString(pair.getPrivate().getEncoded())
                 + "\n-----END PRIVATE KEY-----";
 
-        JwtService svcWithPem = new JwtService();
+        // 設了私鑰時不依賴任何 profile：以「無 profile」環境證明 PEM 路徑在正式環境同樣可用
+        JwtService svcWithPem = new JwtService(new MockEnvironment());
         ReflectionTestUtils.setField(svcWithPem, "privateKeyPem", pem);
         ReflectionTestUtils.setField(svcWithPem, "expiration", 3600000L);
         ReflectionTestUtils.setField(svcWithPem, "accessTokenExpiration", 900000L);
@@ -261,9 +275,9 @@ class JwtServiceTest {
      * 驗證：未提供 PEM 私鑰時（空字串），JwtService 應動態生成金鑰對（開發模式）。
      */
     @Test
-    @DisplayName("未提供 PEM 私鑰時，應動態生成金鑰對（開發模式）")
+    @DisplayName("未提供 PEM 私鑰時，於 dev profile 應動態生成金鑰對（開發模式）")
     void whenPrivateKeyPemEmpty_shouldGenerateDynamically() {
-        JwtService svcNoPem = new JwtService();
+        JwtService svcNoPem = new JwtService(envWithProfile("dev"));
         ReflectionTestUtils.setField(svcNoPem, "privateKeyPem", "");
         ReflectionTestUtils.setField(svcNoPem, "expiration", 3600000L);
         ReflectionTestUtils.setField(svcNoPem, "accessTokenExpiration", 900000L);

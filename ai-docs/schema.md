@@ -173,7 +173,7 @@ PRIMARY KEY (article_id, category_id)
 | icon | VARCHAR(100) | | |
 | description | TEXT | | |
 | parent_id | UUID | REFERENCES tags(id) | 階層式 tag；自我參照 |
-| usage_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數 |
+| usage_count | INTEGER | NOT NULL DEFAULT 0 | 反正規化計數 = **已發布**文章數（不含草稿／待審／駁回／下架）；由 `TagUsageRecalculator` 依事件重算、`TagUsageReconciliationJob` 每日 04:11 全量校正寫入（DATA-01），不可用來判斷標籤是否仍被使用 |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 
 **Indexes:**
@@ -204,7 +204,7 @@ PRIMARY KEY (article_id, tag_id)
 **Foreign keys:**
 - `tag_id` → `tags(id)`（NO ACTION；模組內部關聯）
 
-**刪除連動：** 文章刪除 → 其 `article_tags` 列刪除，改由 `TagArticleDeletedConsumer`（訂閱 `ArticleDeletedEvent`，queue `tag.article-deleted`）＋ `ArticleTagOrphanReconciliationJob`（每日 03:59 校正）負責；與原 CASCADE 一致，**只刪關聯列，`tags` 本身與 `tags.usage_count` 不動**（使用計數重算為 DATA-01，另案）。
+**刪除連動：** 文章刪除 → 其 `article_tags` 列刪除，改由 `TagArticleDeletedConsumer`（訂閱 `ArticleDeletedEvent`，queue `tag.article-deleted`）＋ `ArticleTagOrphanReconciliationJob`（每日 03:59 校正）負責；與原 CASCADE 一致，**只刪關聯列，`tags` 本身不動**；刪除後對原本掛的標籤重算 `usage_count`（已發布文章數）。刪除標籤的守衛看 `article_tags` 是否有任何列（含草稿），不看 `usage_count`。
 
 ---
 
@@ -577,6 +577,6 @@ PRIMARY KEY (user_id, tag_id)
 | `created_at / updated_at TIMESTAMP` | 所有業務 entity；Spring Data JDBC 用 `@CreatedDate` / `@LastModifiedDate` |
 | `deleted_at TIMESTAMP NULL` | 軟刪除模式（comments；users 用 status 欄位替代） |
 | `deleted_by_role VARCHAR(20) NULL` | 記錄刪除者角色（AUTHOR / ADMIN），僅 comments 使用 |
-| 反正規化計數 | `articles.{view_count, like_count, comment_count}`、`comments.like_count`、`tags.usage_count`；由 service 層原子 UPDATE 維護 |
+| 反正規化計數 | `articles.{view_count, like_count, comment_count}`、`comments.like_count`、`tags.usage_count`；除 `tags.usage_count` 外由 service 層原子 UPDATE 維護，`tags.usage_count`（已發布文章數）則由事件觸發重算＋每日校正維護 |
 | Naming: UNIQUE constraint | 明確命名 `uq_{table}_{purpose}`（例 `uq_article_likes_user_article`）；避免靠 PG 自動命名 |
 | Naming: B-tree index | `idx_{table}_{purpose}`（例 `idx_comments_article_uuid_top_level`）；複合索引用語意名而非欄位串接 |
