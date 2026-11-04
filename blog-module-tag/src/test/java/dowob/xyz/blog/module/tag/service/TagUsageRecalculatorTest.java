@@ -16,7 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.Collection;
 import java.util.HashSet;
@@ -28,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -54,13 +55,11 @@ class TagUsageRecalculatorTest {
     @Mock private ArticleTagRepository articleTagRepository;
     @Mock private ArticleFacade articleFacade;
     @Mock private RedisTemplate<String, String> stringRedisTemplate;
-    @Mock private ZSetOperations<String, String> zSetOps;
 
     private TagUsageRecalculator recalculator;
 
     @BeforeEach
     void setUp() {
-        when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOps);
         recalculator = new TagUsageRecalculator(tagRepository, articleTagRepository, articleFacade, stringRedisTemplate);
     }
 
@@ -96,7 +95,7 @@ class TagUsageRecalculatorTest {
 
         assertThat(corrected).isEqualTo(1);
         verify(tagRepository).updateUsageCount(tagId, 2);
-        verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 2.0);
+        verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(tagId.toString()), eq("2"));
         verify(stringRedisTemplate).delete(RedisKeyConstant.getTagDetailKey("java"));
     }
 
@@ -110,7 +109,7 @@ class TagUsageRecalculatorTest {
         recalculator.recalculate(List.of(tagId));
 
         verify(tagRepository).updateUsageCount(tagId, 0);
-        verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 0.0);
+        verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(tagId.toString()), eq("0"));
         verifyNoInteractions(articleFacade);
     }
 
@@ -142,7 +141,7 @@ class TagUsageRecalculatorTest {
         assertThat(corrected).isZero();
         verify(tagRepository, never()).updateUsageCount(any(), anyInt());
         verify(stringRedisTemplate, never()).delete(RedisKeyConstant.getTagDetailKey("java"));
-        verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 1.0);
+        verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(tagId.toString()), eq("1"));
     }
 
     @Test
@@ -157,7 +156,7 @@ class TagUsageRecalculatorTest {
         recalculator.recalculate(List.of(tagId));
         recalculator.recalculate(List.of(tagId));
 
-        verify(zSetOps, times(2)).add(RedisKeyConstant.TAG_HOT_KEY, tagId.toString(), 1.0);
+        verify(stringRedisTemplate, times(2)).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(tagId.toString()), eq("1"));
         verify(tagRepository, never()).updateUsageCount(any(), anyInt());
     }
 
@@ -171,7 +170,7 @@ class TagUsageRecalculatorTest {
 
         assertThat(corrected).isZero();
         verify(tagRepository, never()).updateUsageCount(any(), anyInt());
-        verify(zSetOps, never()).add(any(), any(), anyDouble());
+        verify(stringRedisTemplate, never()).execute(any(RedisScript.class), anyList(), any(Object[].class));
     }
 
     @Test
@@ -230,11 +229,11 @@ class TagUsageRecalculatorTest {
 
         recalculator.recalculate(List.of(first, second));
 
-        InOrder order = inOrder(tagRepository, zSetOps);
+        InOrder order = inOrder(tagRepository, stringRedisTemplate);
         order.verify(tagRepository).updateUsageCount(first, 1);
         order.verify(tagRepository).updateUsageCount(second, 1);
-        order.verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, first.toString(), 1.0);
-        order.verify(zSetOps).add(RedisKeyConstant.TAG_HOT_KEY, second.toString(), 1.0);
+        order.verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(first.toString()), eq("1"));
+        order.verify(stringRedisTemplate).execute(eq(TagUsageRecalculator.SET_HOT_SCORE_IF_PRESENT), eq(List.of(RedisKeyConstant.TAG_HOT_KEY)), eq(second.toString()), eq("1"));
     }
 
     @Test
@@ -252,7 +251,7 @@ class TagUsageRecalculatorTest {
         assertThatThrownBy(() -> recalculator.recalculate(List.of(first, second)))
                 .isInstanceOf(RuntimeException.class);
 
-        verify(zSetOps, never()).add(any(), any(), anyDouble());
+        verify(stringRedisTemplate, never()).execute(any(RedisScript.class), anyList(), any(Object[].class));
     }
 
     @Test
@@ -266,7 +265,7 @@ class TagUsageRecalculatorTest {
         assertThatThrownBy(() -> recalculator.recalculate(List.of(tagId))).isInstanceOf(RuntimeException.class);
 
         verify(tagRepository, never()).updateUsageCount(any(), anyInt());
-        verify(zSetOps, never()).add(any(), any(), anyDouble());
+        verify(stringRedisTemplate, never()).execute(any(RedisScript.class), anyList(), any(Object[].class));
     }
 
     @Test
