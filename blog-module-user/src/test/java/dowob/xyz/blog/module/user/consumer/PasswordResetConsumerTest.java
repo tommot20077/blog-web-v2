@@ -106,7 +106,7 @@ class PasswordResetConsumerTest {
      * @return 新格式的密碼重設申請事件
      */
     private static UserPasswordResetRequestedEvent event() {
-        return new UserPasswordResetRequestedEvent(EVENT_ID, USER_UUID, "test@example.com", "reset-token-abc");
+        return new UserPasswordResetRequestedEvent(EVENT_ID, USER_UUID);
     }
 
     /**
@@ -234,7 +234,7 @@ class PasswordResetConsumerTest {
     @DisplayName("handlePasswordResetRequested：舊格式訊息（eventId 為 null）→ 不呼叫冪等服務，照常寄信並正常返回")
     void handlePasswordResetRequested_legacyMessageWithoutEventId_sendsWithoutDedup() throws IOException {
         UserPasswordResetRequestedEvent legacy =
-                new UserPasswordResetRequestedEvent(null, null, "test@example.com", "reset-token-abc");
+                new UserPasswordResetRequestedEvent(null, null);
 
         consumer.handlePasswordResetRequested(legacy);
 

@@ -77,7 +77,7 @@ class RegistrationAttemptNoticeConsumerTest {
     }
 
     private static RegistrationAttemptOnExistingEmailEvent event() {
-        return new RegistrationAttemptOnExistingEmailEvent(EVENT_ID, OWNER_UUID, "owner@example.com", "Owner");
+        return new RegistrationAttemptOnExistingEmailEvent(EVENT_ID, OWNER_UUID);
     }
 
     @Test
@@ -141,7 +141,7 @@ class RegistrationAttemptNoticeConsumerTest {
     @DisplayName("eventId 為 null 的訊息 → 不查冪等表，照常寄信")
     void handle_withoutEventId_sendsWithoutDedup() {
         RegistrationAttemptOnExistingEmailEvent noId =
-                new RegistrationAttemptOnExistingEmailEvent(null, OWNER_UUID, "owner@example.com", "Owner");
+                new RegistrationAttemptOnExistingEmailEvent(null, OWNER_UUID);
 
         consumer.handleRegistrationAttempt(noId);
 

@@ -219,8 +219,7 @@ public class AuthService {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
                     UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                    new UserRegisteredEvent(UUID.randomUUID(), savedUser.getUuid(), savedUser.getEmail(),
-                            savedUser.getNickname(), tokenValue, verificationCode));
+                    new UserRegisteredEvent(UUID.randomUUID(), savedUser.getUuid()));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
@@ -283,8 +282,7 @@ public class AuthService {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
                     UserRabbitMqConfig.ROUTING_KEY_REGISTRATION_ATTEMPT,
-                    new RegistrationAttemptOnExistingEmailEvent(UUID.randomUUID(), owner.getUuid(),
-                            owner.getEmail(), owner.getNickname()));
+                    new RegistrationAttemptOnExistingEmailEvent(UUID.randomUUID(), owner.getUuid()));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             try {
@@ -551,6 +549,9 @@ public class AuthService {
             /** DB 操作在 transaction 內 */
             String tokenValue = UUID.randomUUID().toString();
             transactionTemplate.executeWithoutResult(status -> {
+                /** 先刪同類舊 token，讓「最新」等於「唯一」：晚到的舊寄信事件不會寄出仍有效的舊 token（ARCH-24） */
+                verificationTokenRepository.deleteByUserIdAndType(user.getId(), "PASSWORD_RESET");
+
                 VerificationToken resetToken = new VerificationToken();
                 resetToken.setUserId(user.getId());
                 resetToken.setToken(tokenValue);
@@ -565,8 +566,7 @@ public class AuthService {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
                         UserRabbitMqConfig.ROUTING_KEY_PASSWORD_RESET,
-                        new UserPasswordResetRequestedEvent(UUID.randomUUID(), user.getUuid(), user.getEmail(),
-                                tokenValue));
+                        new UserPasswordResetRequestedEvent(UUID.randomUUID(), user.getUuid()));
             } catch (Exception e) {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
@@ -636,9 +636,7 @@ public class AuthService {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
                         UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                        new UserRegisteredEvent(UUID.randomUUID(), user.getUuid(), user.getEmail(),
-                                user.getNickname(), tokenValue,
-                                verificationCode));
+                        new UserRegisteredEvent(UUID.randomUUID(), user.getUuid()));
             } catch (Exception e) {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
@@ -677,7 +675,8 @@ public class AuthService {
 
         sessionRevoker.revokeAllSessions(user.getUuid());
 
-        verificationTokenRepository.delete(resetToken);
+        /** 刪除該使用者所有重設 token（不只用掉的這筆），避免晚到的舊寄信事件寄出仍有效的舊 token（ARCH-24） */
+        verificationTokenRepository.deleteByUserIdAndType(user.getId(), "PASSWORD_RESET");
     }
 
     /**

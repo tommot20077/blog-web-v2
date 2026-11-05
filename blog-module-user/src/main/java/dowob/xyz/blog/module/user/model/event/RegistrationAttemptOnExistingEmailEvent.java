@@ -9,15 +9,14 @@ import java.util.UUID;
  * 並在回應之後發布本事件，由 consumer 寄通知信給<b>原信箱主人</b>：「有人嘗試用你的信箱註冊；
  * 若是你本人，請直接登入或使用忘記密碼」。</p>
  *
- * <p><b>刻意不帶任何註冊請求的資料</b>（嘗試者提交的 username／nickname／密碼／IP）：
+ * <p><b>事件不含個資（ARCH-24）</b>：不帶 email 與暱稱，consumer 寄信當下以 {@code userUuid} 查 {@code users}。
+ * 也<b>刻意不帶任何註冊請求的資料</b>（嘗試者提交的 username／nickname／密碼／IP）：
  * 信件內容只由原帳號資料組成，攻擊者無法藉由請求欄位在寄給受害者的信裡注入文字或連結。</p>
  *
  * @param eventId  事件 dedup key（發送端每次 publish 時隨機產生）
  * @param userUuid 原信箱主人的公開 UUID
- * @param email    原信箱主人的電子信箱（取自資料庫儲存值，而非請求輸入）
- * @param nickname 原信箱主人的暱稱（信件稱呼用）
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
-public record RegistrationAttemptOnExistingEmailEvent(UUID eventId, UUID userUuid, String email, String nickname) {
+public record RegistrationAttemptOnExistingEmailEvent(UUID eventId, UUID userUuid) {
 }
