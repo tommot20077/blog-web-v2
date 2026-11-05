@@ -78,6 +78,12 @@ jobs:
       - name: 執行 E2E 測試（Testcontainers）
         run: ./mvnw -B test -Pe2e -pl blog-start -am --no-transfer-progress
 
+      # ContextSmokeTest 被 @EnabledIfSystemProperty(context.smoke) gate 住，且檔名不符 -Pe2e 的
+      # includes（**/*E2E.java），上一步不會執行它；故不帶 -Pe2e，改用 -Dtest 明確指定（Q11）。
+      # -am 會連帶跑上游模組，無該類別時靠 failIfNoSpecifiedTests=false 略過。
+      - name: 執行 ContextSmokeTest（Spring Context 組裝驗證）
+        run: ./mvnw -B test -pl blog-start -am -Dtest=ContextSmokeTest -Dcontext.smoke=true -Dsurefire.failIfNoSpecifiedTests=false --no-transfer-progress
+
       - name: 上傳 E2E 測試報告
         if: always()
         continue-on-error: true
