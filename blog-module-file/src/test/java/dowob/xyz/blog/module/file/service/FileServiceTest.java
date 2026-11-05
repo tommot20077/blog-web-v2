@@ -1310,7 +1310,7 @@ class FileServiceTest {
          *
          * <p>原實作先跑解綁迴圈、再解析作者並於 null 時 return，等於在 articleLookupFacade
          * 暫時查不到（文章剛被刪、或跨模組查詢瞬間失敗）時把該文章所有既有綁定清空且不會補回
-         * ——已發布文章的圖片全部退回「未綁定 = 私有」，讀者端整篇破圖。這正是 FileFacade
+         * ——已發布文章的圖片全部退回「未綁定 = 私有」，讀者端整篇破圖。這正是 bindToArticle 完整替換語意
          * javadoc 警告的「權限殘留反向問題」。上面兩個既有 fail-safe 測試把
          * {@code findByArticleUuid} stub 成空清單，解綁迴圈是 no-op，因此測不到這條路徑。</p>
          */

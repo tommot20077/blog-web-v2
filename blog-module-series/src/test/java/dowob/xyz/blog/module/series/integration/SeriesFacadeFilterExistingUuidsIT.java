@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.series.integration;
 
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
@@ -74,8 +73,6 @@ class SeriesFacadeFilterExistingUuidsIT {
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
-    /** article 模組的 ArticleFileBinder 依賴 FileFacade，其實作在 blog-module-file（未被本測試 scan） */
-    @MockitoBean private FileFacade fileFacade;
 
     /** 本測試寫入的 series uuid，供清理 */
     private final List<UUID> inserted = new ArrayList<>();

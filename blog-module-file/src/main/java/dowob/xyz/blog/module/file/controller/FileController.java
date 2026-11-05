@@ -71,8 +71,8 @@ public class FileController {
      *
      * @param file           上傳的檔案
      * @param usageType      用途類型
-     * @param articleUuid    要一併綁定的文章 UUID（可選；新文章尚未儲存時可留空，待文章儲存時再由
-     *                       {@code blog-module-article} 掃描內文回填綁定）
+     * @param articleUuid    要一併綁定的文章 UUID（可選；新文章尚未儲存時可留空，待文章儲存後由 file 模組消費
+     *                       {@code ArticleContentChangedEvent} 掃描內文回填綁定）
      * @param user         當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 上傳成功的檔案資訊（{@code url} 為相對路徑 {@code /api/v1/files/{id}/content}）

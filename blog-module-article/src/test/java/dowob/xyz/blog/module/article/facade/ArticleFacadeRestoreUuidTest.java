@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
@@ -14,7 +13,6 @@ import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
-import dowob.xyz.blog.module.article.service.ArticleFileBinder;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.article.service.ArticleTocCodec;
@@ -90,7 +88,6 @@ class ArticleFacadeRestoreUuidTest {
     @Mock private TagFacade tagFacade;
     @Mock private ArticleEventPublisher articleEventPublisher;
     @Mock private TransactionTemplate transactionTemplate;
-    @Mock private FileFacade fileFacade;
 
     private final ArticleMarkdownRenderer renderer = new ArticleMarkdownRenderer();
     private final ArticleTocCodec tocCodec = new ArticleTocCodec(new ObjectMapper());
@@ -107,7 +104,6 @@ class ArticleFacadeRestoreUuidTest {
         facade = new ArticleFacadeImpl(
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
-                new ArticleFileBinder(fileFacade),
                 new ArticleDataAssembler(),
                 null, renderer, tocCodec);
         when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
@@ -206,16 +202,15 @@ class ArticleFacadeRestoreUuidTest {
     }
 
     @Test
-    @DisplayName("UUID 還原：順序 save → syncArticleTags → publishContentChanged → 綁檔")
-    void applyRestoreContentByUuid_invocationOrder_saveThenSyncTagsThenPublishThenBind() {
+    @DisplayName("UUID 還原：順序 save → syncArticleTags → publishContentChanged（綁檔已改由 file 模組消費 RESTORED 事件，W5A）")
+    void applyRestoreContentByUuid_invocationOrder_saveThenSyncTagsThenPublish() {
         facade.applyRestoreContent(articleUuid, source(List.of(UUID.randomUUID())));
 
-        InOrder inOrder = inOrder(articleRepository, tagFacade, articleEventPublisher, fileFacade);
+        InOrder inOrder = inOrder(articleRepository, tagFacade, articleEventPublisher);
         inOrder.verify(articleRepository).save(existing);
         inOrder.verify(tagFacade).syncArticleTags(eq(articleUuid), anyList());
         inOrder.verify(articleEventPublisher)
                 .publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
-        inOrder.verify(fileFacade).bindFilesToArticle(eq(articleUuid), anyList());
     }
 
     @Test
@@ -251,7 +246,7 @@ class ArticleFacadeRestoreUuidTest {
                 .isEqualTo("A0201");
 
         verify(articleRepository, never()).save(any(Article.class));
-        verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+        verifyNoInteractions(tagFacade, articleEventPublisher);
     }
 
     @ParameterizedTest(name = "狀態 {0}")
@@ -268,7 +263,7 @@ class ArticleFacadeRestoreUuidTest {
         assertThat(existing.getTitle()).isEqualTo("舊標題");
         assertThat(existing.getContentHtml()).isEqualTo("<p>舊</p>");
         verify(articleRepository, never()).save(any(Article.class));
-        verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+        verifyNoInteractions(tagFacade, articleEventPublisher);
     }
 
     // ─── 事件／綁檔必須在交易 commit 之後（Transaction+MQ 時序）───
@@ -293,23 +288,18 @@ class ArticleFacadeRestoreUuidTest {
             assertThat(committed).as("publishUpdated 必須在交易 commit 之後呼叫").isTrue();
             return null;
         }).when(articleEventPublisher).publishUpdated(any(Article.class));
-        org.mockito.Mockito.doAnswer(inv -> {
-            assertThat(committed).as("檔案綁定必須在交易 commit 之後呼叫").isTrue();
-            return null;
-        }).when(fileFacade).bindFilesToArticle(any(), any());
         return committed;
     }
 
     @Test
-    @DisplayName("UUID 還原：事件與綁檔在交易 commit 之後才發（不在 callback 內）")
-    void applyRestoreContentByUuid_eventsAndBindingHappenAfterCommit() {
+    @DisplayName("UUID 還原：事件在交易 commit 之後才發（不在 callback 內）")
+    void applyRestoreContentByUuid_eventsHappenAfterCommit() {
         simulateCommitAfterCallback();
 
         facade.applyRestoreContent(articleUuid, source(List.of()));
 
         verify(articleEventPublisher)
                 .publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
-        verify(fileFacade).bindFilesToArticle(eq(articleUuid), anyList());
     }
 
     // ─── 入口 null 檢查 ───
@@ -322,7 +312,7 @@ class ArticleFacadeRestoreUuidTest {
                 .withMessageContaining("articleUuid").withMessageContaining("不可為 null");
 
         verify(articleRepository, never()).save(any(Article.class));
-        verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+        verifyNoInteractions(tagFacade, articleEventPublisher);
     }
 
     @Test
@@ -333,7 +323,7 @@ class ArticleFacadeRestoreUuidTest {
                 .withMessageContaining("source").withMessageContaining("不可為 null");
 
         verify(articleRepository, never()).save(any(Article.class));
-        verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+        verifyNoInteractions(tagFacade, articleEventPublisher);
     }
 
     @Test
@@ -347,6 +337,6 @@ class ArticleFacadeRestoreUuidTest {
                 .withMessageContaining("source.content").withMessageContaining("不可為 null");
 
         verify(articleRepository, never()).save(any(Article.class));
-        verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+        verifyNoInteractions(tagFacade, articleEventPublisher);
     }
 }

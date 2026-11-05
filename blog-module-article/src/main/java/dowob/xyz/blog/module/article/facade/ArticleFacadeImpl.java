@@ -29,7 +29,6 @@ import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleContentFreezePolicy;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
-import dowob.xyz.blog.module.article.service.ArticleFileBinder;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
@@ -109,18 +108,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * Spring 宣告式事務模板（用於縮小事務範圍，確保 MQ 於 DB commit 後才發送）
      */
     private final TransactionTemplate transactionTemplate;
-
-    /**
-     * 文章「檔案 → 文章」綁定回填元件（修復：版本還原路徑繞過檔案綁定掃描導致還原後圖片破圖）
-     *
-     * <p>
-     * 比照 {@code ArticleCommandSubService} create/update 路徑（Task B6）：
-     * applyRestoreContent 會改動 article.content，因此還原後也必須重新掃描並回填「檔案 → 文章」
-     * 綁定，否則還原後內文引用的圖仍停在未綁定 = 私有（fail-safe），已發布文章會破圖；
-     * 而還原前內容引用、還原後不再引用的圖，其舊綁定也不會被解除（權限殘留）。
-     * </p>
-     */
-    private final ArticleFileBinder articleFileBinder;
 
     /**
      * ArticleData 組裝元件（authorUuid / seriesUuid 直接取自 articles 的欄位，沒有任何查詢或依賴）
@@ -422,11 +409,10 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * </p>
      *
      * <p>
-     * <strong>檔案綁定回填（修復：還原後圖片破圖）</strong>：DB commit 後，比照
-     * {@code ArticleCommandSubService}（Task B6）另呼叫 {@link ArticleFileBinder#bindFilesToArticleSafely}，
-     * 掃描的是 {@code saved.getContent()}（DB 實際存下的那份）。此呼叫與事件發送一樣是
-     * best-effort：{@code ArticleFileBinder} 內部已吞掉並記錄失敗，不會讓還原流程失敗。
-     * 且 {@code VersioningService.restore} 本身並非 {@code @Transactional}
+     * <strong>檔案綁定</strong>：本方法不再同步回填「檔案 → 文章」綁定（W5A／Q12）。DB commit 後發出的
+     * {@code ContentChanged(RESTORED)} 事件由 file 模組消費，依文章最新內文非同步回填，
+     * 使還原後內文引用的圖綁定到本文章、不再引用的圖解除綁定。
+     * {@code VersioningService.restore} 本身並非 {@code @Transactional}
      * （見 ai-docs/backlog/2026-07-14-full-review-findings.md §C2 補充），
      * 故此處確實是「外層無交易」情境下的真實 post-commit。
      * </p>
@@ -501,8 +487,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
             articleEventPublisher.publishUpdated(saved);
         }
 
-        /** DB 已 commit，best-effort 回填「檔案 → 文章」綁定：掃描 saved.getContent()（DB 實際存下的內容） */
-        articleFileBinder.bindFilesToArticleSafely(saved.getUuid(), saved.getContent());
     }
 
     /**

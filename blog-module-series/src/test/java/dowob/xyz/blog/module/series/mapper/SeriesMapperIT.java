@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.series.mapper;
 
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -74,7 +73,6 @@ class SeriesMapperIT {
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
-    @MockitoBean private FileFacade fileFacade;
 
     @BeforeEach
     @AfterEach

@@ -82,7 +82,7 @@
 | Q9 | refresh 鏈的修法深度：DB 為權威 / 加 token 輪替 / 只補 role 變更時 bump tokenVersion。**→ 已定案（Yuan，2026-10-24）選項 (a')**：`/auth/refresh` 改用與 `JwtAuthenticationFilter` 相同的 Redis cache-aside loader（miss 時查 DB 並回填），不做 token 輪替。**未實作**。**2026-11-04 對帳**：已實作——`14eacbc`（T0b-2，PR #82），見 SEC-03（DONE） | SEC-03（含 SEC-26） |
 | Q10 | 事件契約規範的強制程度（是否全面改成「只帶 UUID 不帶 Long PK」——會與消滅 N+1 的方向相反）。**→ 已定案（Yuan，2026-10-24）選項 (b2)**：跨模組識別（文章、系列、使用者）在儲存層、facade 與事件全面改為 UUID，每個事件都帶 `eventId`，以模組為單位逐一施工（即擴大後的 ARCH-30）。（2026-10-24 時**未實作**）。**2026-10-31 對帳**：已實作完成（M1～M8、Z1、Z2，PR #83～#92；ARCH-07、ARCH-30 轉 DONE） | ARCH-07、ARCH-30 |
 | Q11 | ArchUnit 守衛的嚴格度與例外清單（現有 12 處跨模組 import 判白名單還是先修掉）。**2026-11-04 對帳**：實質上已以「不設例外清單、全數修掉」落地（`b36d5c2`、`70631e1`，PR #92），守衛現況見 ARCH-03；Yuan 尚未明確確認，建議結案 | ARCH-17 → ARCH-03 |
-| Q12 | backlog `2026-07-29-article-file-binding-via-mq` 是否關閉或降為 Info（前置動機已由 PR #54 解決） | 見 §backlog |
+| Q12 | backlog `2026-07-29-article-file-binding-via-mq` 是否關閉或降為 Info（前置動機已由 PR #54 解決）。**→ 已定案並已實作（Yuan，2026-11-05，W5A）**：不關閉、直接做——file 模組新增 `FileArticleContentChangedConsumer` 消費 `ArticleContentChangedEvent`（SAVED／PUBLISHED／RESTORED），經 `ArticleLookupFacade.findContentByUuid` 取最新內文，由 file 模組的 `ArticleFileBindingService` 解析並回填綁定（`executeIdempotent` 依 eventId 去重）；一刀切移除 article 模組的 `ArticleFileBinder`、三個同步呼叫點與 `FileFacade`；守衛 `ArticleFileBindingDecouplingTest` | 見 §backlog（已完成） |
 | Q13 | 是否設 Jacoco 覆蓋率門檻與目標值；`blog-module-user` / `blog-infrastructure`（0 個 IT）是否單獨定標 | ARCH-12 相關 |
 | Q14 | 版本保留策略 `retain: 50`（`article_versions` ≈ 正文的 50 倍體積）是否調降或改存 diff | PERF-37 |
 | Q15 | 匿名是否可寫入全站熱門搜尋詞（關掉會讓匿名搜尋不計入熱門榜）。**→ 已定案（Yuan，2026-11-04）並已實作**：匿名搜尋仍計入，但只計「有命中已發布文章」且 <= 50 字的詞；`q` 上限 100（見 SEC-05） | SEC-05（DONE） |

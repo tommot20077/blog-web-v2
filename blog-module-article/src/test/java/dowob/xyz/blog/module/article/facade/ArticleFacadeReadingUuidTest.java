@@ -56,7 +56,7 @@ class ArticleFacadeReadingUuidTest {
      */
     @BeforeEach
     void setUp() {
-        facade = new ArticleFacadeImpl(articleMapper, null, null, null, null, null, null, null, null,
+        facade = new ArticleFacadeImpl(articleMapper, null, null, null, null, null, null, null,
                 null, queryServiceProvider, null, null);
     }
 

@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.article.facade;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
@@ -22,7 +21,6 @@ import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
-import dowob.xyz.blog.module.article.service.ArticleFileBinder;
 import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.article.service.ArticleTocCodec;
 import dowob.xyz.blog.module.article.service.ArticleService;
@@ -93,9 +91,6 @@ class ArticleFacadeImplTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
-    @Mock
-    private FileFacade fileFacade;
-
     /** 還原流程在 article 內部渲染 Markdown：使用真實的純計算元件，才能斷言 HTML／TOC 與同一份 Markdown 的渲染結果一致 */
     private final ArticleMarkdownRenderer renderer = new ArticleMarkdownRenderer();
 
@@ -114,17 +109,9 @@ class ArticleFacadeImplTest {
 
     @BeforeEach
     void setUp() {
-        /**
-         * 比照 ArticleCommandSubServiceTest：用「真實」的 ArticleFileBinder 包裝被 mock 的
-         * fileFacade，讓 applyRestoreContent 綁定回填測試能驗證到真正的正則擷取邏輯，
-         * 而不只是 mock-to-mock 的空殼呼叫。
-         */
-        ArticleFileBinder articleFileBinder = new ArticleFileBinder(fileFacade);
-
         facade = new ArticleFacadeImpl(
             articleMapper, userFacade, recommendMapper, articleService,
             articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
-            articleFileBinder,
             new ArticleDataAssembler(),
             null, renderer, tocCodec
         );
@@ -674,7 +661,7 @@ class ArticleFacadeImplTest {
                 .isEqualTo("A0201");
 
             verify(articleRepository, never()).save(any(Article.class));
-            verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+            verifyNoInteractions(tagFacade, articleEventPublisher);
         }
 
         @Test
@@ -791,7 +778,7 @@ class ArticleFacadeImplTest {
             ArticleFacadeImpl facadeWithNullToc = new ArticleFacadeImpl(
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
-                new ArticleFileBinder(fileFacade), new ArticleDataAssembler(),
+                new ArticleDataAssembler(),
                 null, renderer, nullCodec
             );
             existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
@@ -821,89 +808,24 @@ class ArticleFacadeImplTest {
         }
 
         /**
-         * 修復：版本還原路徑繞過檔案綁定掃描，導致還原後文章圖片破圖。
+         * 還原後的檔案綁定改由 file 模組消費 RESTORED 事件回填（W5A／Q12，Yuan 2026-11-05 決定）。
          *
-         * <p><strong>邊界分析場景表</strong></p>
-         * <pre>
-         * # | 情境                                   | 輸入                                  | 預期行為
-         * 1 | 還原內容含 2 張圖                       | saved.getContent() 含 2 個檔案連結     | bindFilesToArticle 以這 2 個 uuid 呼叫一次
-         *   |（且必須掃描 DB 實際存下的內容，而非 data.content()，防部分更新時漏字）|            |
-         * 2 | 還原內容無圖                             | saved.getContent() 不含任何檔案連結    | 以空清單呼叫（解除該文章既有綁定，正確行為）
-         * 3 | 綁定失敗（facade 拋例外）                 | bindFilesToArticle 丟 RuntimeException | 還原仍成功，不往外拋
-         * 4 | 呼叫順序                                 | -                                     | save → publish events → bindFilesToArticleSafely（DB commit 後才對外呼叫）
-         * 5 | article 不存在                          | -（見上方 applyRestoreContent_articleNotFound_throws） | 完全不觸發 fileFacade（verifyNoInteractions 已含 fileFacade）
-         * </pre>
+         * <p>原本（修復「還原後圖片破圖」）本方法在 commit 後同步呼叫 FileFacade；現在 article 模組完全不碰 file 模組，
+         * 只需保證仍發出 RESTORED 事件（回填的觸發來源）。解析與回填的測試見 file 模組。</p>
          */
         @Nested
-        @DisplayName("檔案綁定回填（修復：版本還原繞過檔案綁定掃描）")
-        class RestoreFileBindingTests {
+        @DisplayName("還原後檔案綁定改由 file 模組消費 RESTORED 事件（W5A／Q12）")
+        class RestoreFileBindingViaEventTests {
 
             @Test
-            @DisplayName("正常：還原內容含 2 張圖 → 以還原後實際內容（saved.getContent()，非 data.content()）呼叫綁定一次")
-            void applyRestoreContent_contentWithTwoImages_bindsFileUuidsFromPersistedContent() {
-                UUID fileId1 = UUID.randomUUID();
-                UUID fileId2 = UUID.randomUUID();
-                String persistedContent = "![a](/api/v1/files/" + fileId1 + "/content)\n"
-                        + "![b](/api/v1/files/" + fileId2 + "/content)";
-
-                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "data.content() 不應被拿來掃描的內容", "sum", null, List.of());
-
-                /**
-                 * 模擬 repository.save() 回傳的 entity 內容與 data.content() 不同：
-                 * 綁定必須掃描 save() 回傳（DB 實際存下）的內容，而非呼叫端傳入的 data.content()，
-                 * 才能防禦「將來此路徑改成部分更新」時掃到不完整內容。
-                 */
-                when(articleRepository.save(any(Article.class))).thenAnswer(inv -> {
-                    Article a = inv.getArgument(0);
-                    a.setContent(persistedContent);
-                    return a;
-                });
+            @DisplayName("還原內容含圖 → 發出 RESTORED 事件（file 模組據此非同步回填綁定）")
+            void applyRestoreContent_contentWithImages_publishesRestoredForAsyncBinding() {
+                ArticleRestoreSource data = new ArticleRestoreSource("T", "s",
+                        "![img](/api/v1/files/" + UUID.randomUUID() + "/content)", "sum", null, List.of());
 
                 facade.applyRestoreContent(articleUuid, data);
 
-                @SuppressWarnings("unchecked")
-                ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
-                verify(fileFacade).bindFilesToArticle(eq(articleUuid), captor.capture());
-                assertThat(captor.getValue()).containsExactlyInAnyOrder(fileId1, fileId2);
-            }
-
-            @Test
-            @DisplayName("邊界：還原內容無圖 → 以空清單呼叫綁定（解除該文章既有綁定，正確行為）")
-            void applyRestoreContent_contentWithoutImages_bindsEmptyList() {
-                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "純文字內容，沒有任何圖片連結", "sum", null, List.of());
-
-                facade.applyRestoreContent(articleUuid, data);
-
-                verify(fileFacade).bindFilesToArticle(articleUuid, List.of());
-            }
-
-            @Test
-            @DisplayName("穩健性：檔案綁定失敗 → 還原仍成功，不往外拋")
-            void applyRestoreContent_fileBindingThrows_restoreStillSucceeds() {
-                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "![img](/api/v1/files/" + UUID.randomUUID() + "/content)", "sum", null, List.of());
-                doThrow(new RuntimeException("file service 掛了"))
-                        .when(fileFacade).bindFilesToArticle(any(), any());
-
-                assertThatCode(() -> facade.applyRestoreContent(articleUuid, data))
-                        .doesNotThrowAnyException();
-
-                verify(articleRepository).save(existing);
-                assertThat(existing.getContent()).isNotBlank();
-            }
-
-            @Test
-            @DisplayName("順序：save → publish events → bindFilesToArticleSafely（DB commit 後才對外呼叫綁定）")
-            void applyRestoreContent_invocationOrder_saveThenPublishThenBind() {
-                /* F-H1 後 PUBLISHED 已被內容凍結守衛擋下，順序驗證改以 DRAFT 為前提 */
-                existing.setStatus(ArticleStatus.DRAFT);
-                ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
-
-                facade.applyRestoreContent(articleUuid, data);
-
-                InOrder inOrder = inOrder(articleRepository, articleEventPublisher, fileFacade);
-                inOrder.verify(articleRepository).save(existing);
-                inOrder.verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
-                inOrder.verify(fileFacade).bindFilesToArticle(eq(articleUuid), anyList());
+                verify(articleEventPublisher).publishContentChanged(existing, ArticleContentChangedEvent.Action.RESTORED);
             }
         }
 
@@ -1013,7 +935,7 @@ class ArticleFacadeImplTest {
                 assertThat(existing.getContent()).isEqualTo("A");
                 assertThat(existing.getStatus()).isEqualTo(frozen);
                 verify(articleRepository, never()).save(any(Article.class));
-                verifyNoInteractions(tagFacade, articleEventPublisher, fileFacade);
+                verifyNoInteractions(tagFacade, articleEventPublisher);
             }
 
             @ParameterizedTest

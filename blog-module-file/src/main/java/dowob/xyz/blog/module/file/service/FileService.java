@@ -107,7 +107,7 @@ public interface FileService {
      * <p>
      * <b>擁有權不變量（安全複審 CRITICAL 修復）</b>：{@code fileUuids} 內的檔案僅在「該檔案的上傳者
      * == {@code articleUuid} 對應文章的作者」時才會被綁定；不符者安靜略過（記錄可疑嘗試但不拋錯，
-     * 因為呼叫端如 blog-module-article 內文掃描取得的 UUID 屬使用者輸入）。文章不存在或無法解析
+     * 因為呼叫端如 file 模組依文章內文解析出的 UUID 屬使用者輸入）。文章不存在或無法解析
      * 其作者 UUID 時，fail-safe 為不綁定任何檔案。
      * </p>
      *
