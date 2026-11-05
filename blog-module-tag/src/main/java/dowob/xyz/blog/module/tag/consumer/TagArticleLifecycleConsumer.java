@@ -18,8 +18,9 @@ import java.util.UUID;
  * <p>{@code tags.usage_count} 計的是已發布文章，所以任何讓文章進出 PUBLISHED 的轉換都要重算受影響標籤：</p>
  * <ul>
  *   <li>{@link ArticlePublishedEvent}（發布）：DRAFT／PENDING_REVIEW → PUBLISHED；</li>
- *   <li>{@link ArticleUpdatedEvent}（更新）：PUT 端點把 DRAFT 直接轉成 PUBLISHED 時只會發這個事件
- *       （不發 {@code article.published}，且沒帶 tagNames 時也不發 {@code article.tagged}）；</li>
+ *   <li>{@link ArticleUpdatedEvent}（更新）：PUT 端點把 DRAFT 直接轉成 PUBLISHED 時，除了本事件也會加發
+ *       {@code article.published}（W5B 起兩者並發，重算冪等，重複收到無妨）；沒帶 tagNames 時不發
+ *       {@code article.tagged}；</li>
  *   <li>{@link ArticleArchivedEvent}（下架）：PUBLISHED → ARCHIVED，事件不帶標籤，由
  *       {@code article_tags} 查出。</li>
  * </ul>

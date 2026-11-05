@@ -1673,6 +1673,71 @@ class ArticleCommandSubServiceTest {
             verify(articleEventPublisher, never()).publishUpdated(any());
             verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
         }
+
+        @Test
+        @DisplayName("正常：PUT DRAFT → PUBLISHED，除 Updated 外加發 ArticlePublishedEvent，標籤回查自 DB")
+        void updateArticle_draftToPublished_shouldAlsoPublishPublishedEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            List<TagInfo> dbTags = List.of(new TagInfo(UUID.randomUUID(), "Spring", "spring"));
+            when(articleMapper.findTagsByArticleUuid(article.getUuid())).thenReturn(dbTags);
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PUBLISHED);
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(articleEventPublisher).publishPublished(any(Article.class), eq(dbTags));
+            verify(articleEventPublisher).publishUpdated(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("正常：PUT DRAFT → PUBLISHED 的 ContentChanged 為 PUBLISHED（version 凍結發布快照），不再發 SAVED")
+        void updateArticle_draftToPublished_shouldPublishContentChangedPublishedNotSaved() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PUBLISHED);
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.PUBLISHED));
+            verify(articleEventPublisher, never()).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
+        }
+
+        @Test
+        @DisplayName("正常：PUT 只改草稿內容（無狀態轉換）不發 ArticlePublishedEvent")
+        void updateArticle_draftContentOnly_shouldNotPublishPublishedEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("只改標題");
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(articleEventPublisher, never()).publishPublished(any(), any());
+        }
+
+        @Test
+        @DisplayName("正常：PUT DRAFT → PENDING_REVIEW（未進入 PUBLISHED）不發 ArticlePublishedEvent")
+        void updateArticle_draftToPendingReview_shouldNotPublishPublishedEvent() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setStatus(ArticleStatus.PENDING_REVIEW);
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(articleEventPublisher, never()).publishPublished(any(), any());
+            verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
+        }
     }
 
     @Nested
@@ -2619,14 +2684,18 @@ class ArticleCommandSubServiceTest {
 
             commandSubService.updateArticle(AUTHOR_UUID, Role.ADMIN, ARTICLE_UUID, request);
 
-            // 凡是成功的 PUT 一律發 ContentChanged(SAVED)（既有契約）
-            verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
             if (to == ArticleStatus.PUBLISHED) {
-                // 進入 PUBLISHED：search／tag 訂閱 article.updated（設計如此，見 TagArticleLifecycleConsumer），
-                // 歸檔頁快取必須失效
+                // 進入 PUBLISHED（W5B，Yuan 2026-11-05）：與「發布」端點一致——加發 article.published，
+                // ContentChanged 為 PUBLISHED（擇一，不再發 SAVED）；article.updated 照舊保留；歸檔頁快取失效
+                verify(articleEventPublisher).publishPublished(any(), any());
+                verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.PUBLISHED));
+                verify(articleEventPublisher, never()).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
                 verify(articleEventPublisher).publishUpdated(any());
                 verify(archiveCache).evict();
             } else {
+                // 其餘成功的 PUT 一律發 ContentChanged(SAVED)（既有契約），不發 Published／Updated
+                verify(articleEventPublisher).publishContentChanged(any(), eq(ArticleContentChangedEvent.Action.SAVED));
+                verify(articleEventPublisher, never()).publishPublished(any(), any());
                 verify(articleEventPublisher, never()).publishUpdated(any());
                 verify(articleEventPublisher, never()).publishArchived(any());
                 verify(archiveCache, never()).evict();
