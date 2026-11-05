@@ -336,6 +336,24 @@ public interface ArticleFacade {
     Map<UUID, Integer> countPublishedBySeriesUuids(Collection<UUID> seriesUuids);
 
     /**
+     * 集合述詞：從給定的 series 中，挑出「仍有保留文章」者。
+     *
+     * <p>「保留文章」＝作者刪帳（匿名化，DATA-02）時<b>不會被移除</b>的狀態（{@code PUBLISHED}、{@code ARCHIVED}），
+     * 判斷委派 {@code ArticleStatus#isRemovedWithAuthorAccount}（去留政策的唯一真相，不在此另寫狀態集合）。
+     * 供 series 模組在作者刪帳時決定哪些系列已經「空了」可以刪除。直接查 {@code articles.status}／{@code series_uuid}，
+     * <b>不依賴</b> {@code series.article_count}（文章刪除與 series consumer 的執行順序不確定，計數可能尚未遞減）。</p>
+     *
+     * <p>與 {@link #countPublishedBySeriesUuids} 的差異：後者是狀態字面量 PUBLISHED（公開可見性），
+     * 本方法是「去留政策」，ARCHIVED 也算保留。</p>
+     *
+     * <p><b>傳輸量界限</b>：與 {@code seriesUuids} 大小成正比；實作端經 {@code BatchedQuery} 切批。</p>
+     *
+     * @param seriesUuids series 公開 UUID 集合；null 或空集合回傳空集合（不查 DB）；null 元素會被忽略
+     * @return 至少有一篇保留文章的 series 公開 UUID；回傳可變的 Set
+     */
+    Set<UUID> filterSeriesUuidsWithRetainedArticles(Collection<UUID> seriesUuids);
+
+    /**
      * series 內 PUBLISHED 且位置小於 current 的最後一篇（prev 導覽）。
      *
      * <p>直接以 {@code articles.series_uuid} 查詢。</p>

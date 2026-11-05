@@ -355,6 +355,80 @@ class SeriesServiceTest {
         verifyNoInteractions(eventPublisher);
     }
 
+    // ── deleteSeriesWithoutRetainedArticles（作者刪帳連動）──────────────────────
+
+    private Series seriesOf(long id, UUID uuid, UUID authorUuid) {
+        Series s = new Series();
+        s.setId(id);
+        s.setUuid(uuid);
+        s.setTitle("S" + id);
+        s.setSlug("s-" + id);
+        s.setAuthorUuid(authorUuid);
+        // 故意讓 article_count 與實際保留文章數不符：判斷必須以 article facade 為準，不可看這個欄位
+        s.setArticleCount(id == 1L ? 0 : 5);
+        return s;
+    }
+
+    @Test
+    @DisplayName("deleteSeriesWithoutRetainedArticles：只刪「沒有保留文章」的系列，回傳被刪的 uuid；有保留文章者不動；判斷不看 article_count")
+    void deleteSeriesWithoutRetainedArticles_deletesOnlySeriesWithoutRetainedArticles() {
+        UUID emptyUuid = UUID.randomUUID();
+        UUID retainedUuid = UUID.randomUUID();
+        UUID staleCountUuid = UUID.randomUUID();
+        when(repo.findByAuthorUuid(userUuid)).thenReturn(List.of(
+                seriesOf(1L, emptyUuid, userUuid),
+                // article_count 為 5 但實際已無保留文章（草稿刪除與本 consumer 的順序不定，計數可能尚未遞減）
+                seriesOf(2L, staleCountUuid, userUuid),
+                // article_count 為 5，確有保留文章
+                seriesOf(3L, retainedUuid, userUuid)));
+        when(articleFacade.filterSeriesUuidsWithRetainedArticles(anyCollection()))
+                .thenReturn(new java.util.HashSet<>(java.util.Set.of(retainedUuid)));
+
+        List<UUID> deleted = service.deleteSeriesWithoutRetainedArticles(userUuid);
+
+        assertThat(deleted).containsExactlyInAnyOrder(emptyUuid, staleCountUuid);
+        verify(repo).deleteById(1L);
+        verify(repo).deleteById(2L);
+        verify(repo, never()).deleteById(3L);
+        verifyNoInteractions(mapper);
+    }
+
+    @Test
+    @DisplayName("deleteSeriesWithoutRetainedArticles：作者沒有任何系列 → 回傳空，不問 article facade")
+    void deleteSeriesWithoutRetainedArticles_noSeries_doesNothing() {
+        when(repo.findByAuthorUuid(userUuid)).thenReturn(List.of());
+
+        assertThat(service.deleteSeriesWithoutRetainedArticles(userUuid)).isEmpty();
+
+        verifyNoInteractions(articleFacade);
+        verify(repo, never()).deleteById(any());
+    }
+
+    @Test
+    @DisplayName("deleteSeriesWithoutRetainedArticles：系列都還有保留文章 → 一個都不刪")
+    void deleteSeriesWithoutRetainedArticles_allRetained_deletesNothing() {
+        UUID a = UUID.randomUUID();
+        when(repo.findByAuthorUuid(userUuid)).thenReturn(List.of(seriesOf(1L, a, userUuid)));
+        when(articleFacade.filterSeriesUuidsWithRetainedArticles(anyCollection()))
+                .thenReturn(new java.util.HashSet<>(java.util.Set.of(a)));
+
+        assertThat(service.deleteSeriesWithoutRetainedArticles(userUuid)).isEmpty();
+
+        verify(repo, never()).deleteById(any());
+    }
+
+    @Test
+    @DisplayName("deleteSeriesWithoutRetainedArticles：本方法不發事件（事件由呼叫端在交易 commit 後發）")
+    void deleteSeriesWithoutRetainedArticles_doesNotPublishEvents() {
+        UUID a = UUID.randomUUID();
+        when(repo.findByAuthorUuid(userUuid)).thenReturn(List.of(seriesOf(1L, a, userUuid)));
+        when(articleFacade.filterSeriesUuidsWithRetainedArticles(anyCollection())).thenReturn(new java.util.HashSet<>());
+
+        service.deleteSeriesWithoutRetainedArticles(userUuid);
+
+        verifyNoInteractions(eventPublisher);
+    }
+
     // ── addArticleToSeries（RACE-14：由寫入本身決定是否為新成員）─────────────────
 
     @Test

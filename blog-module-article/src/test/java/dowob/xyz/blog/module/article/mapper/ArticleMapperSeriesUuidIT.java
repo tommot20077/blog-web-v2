@@ -61,6 +61,30 @@ class ArticleMapperSeriesUuidIT extends ArticleSeriesITSupport {
         assertThat(mapper.findBySeriesUuidOrderByPosition(UUID.randomUUID())).isEmpty();
     }
 
+    // ─── 作者刪帳：系列是否仍有保留文章 ───
+
+    @Test
+    @DisplayName("findSeriesUuidsHavingArticlesInStatuses：只回傳在指定狀態下有文章的系列，不含只剩其他狀態或無文章者")
+    void findSeriesUuidsHavingArticlesInStatuses_returnsOnlySeriesWithMatchingStatus() {
+        UUID withPublished = UUID.randomUUID();
+        UUID withArchived = UUID.randomUUID();
+        UUID onlyDraft = UUID.randomUUID();
+        UUID mixed = UUID.randomUUID();
+        UUID empty = UUID.randomUUID();
+        insertArticle(withPublished, 1, "PUBLISHED");
+        insertArticle(withPublished, 2, "PUBLISHED");
+        insertArticle(withArchived, 1, "ARCHIVED");
+        insertArticle(onlyDraft, 1, "DRAFT");
+        insertArticle(onlyDraft, 2, "REJECTED");
+        insertArticle(mixed, 1, "DRAFT");
+        insertArticle(mixed, 2, "PUBLISHED");
+
+        List<UUID> result = mapper.findSeriesUuidsHavingArticlesInStatuses(
+                List.of(withPublished, withArchived, onlyDraft, mixed, empty), List.of("PUBLISHED", "ARCHIVED"));
+
+        assertThat(result).containsExactlyInAnyOrder(withPublished, withArchived, mixed);
+    }
+
     // ─── 條件式寫入（RACE-14） ───
 
     @Test

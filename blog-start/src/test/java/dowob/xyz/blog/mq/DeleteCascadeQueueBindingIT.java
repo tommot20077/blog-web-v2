@@ -27,6 +27,7 @@ import dowob.xyz.blog.module.search.listener.ArticleSearchListener;
 import dowob.xyz.blog.module.search.listener.UserDeletedSearchListener;
 import dowob.xyz.blog.module.series.config.SeriesRabbitMqConfig;
 import dowob.xyz.blog.module.series.consumer.SeriesArticleDeletedConsumer;
+import dowob.xyz.blog.module.series.consumer.SeriesUserDeletedConsumer;
 import dowob.xyz.blog.module.series.service.SeriesEventPublisher;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
 import dowob.xyz.blog.module.tag.consumer.TagArticleDeletedConsumer;
@@ -81,7 +82,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       {@code tag.article-deleted}、{@code version.article-deleted}、{@code search.index.delete} 各收到一則</li>
  *   <li>series 刪除 → {@code article.series-deleted} 收到一則</li>
  *   <li>user 刪除帳號（DATA-02）→ {@code article.user-deleted}、{@code reading.user-deleted}、{@code version.user-deleted}、
- *       {@code tag.user-deleted}、{@code file.user-deleted}、{@code search.user-deleted} 各收到一則</li>
+ *       {@code tag.user-deleted}、{@code series.user-deleted}、{@code file.user-deleted}、{@code search.user-deleted} 各收到一則</li>
  *   <li>該 queue 在正式程式碼裡<b>真的有 {@code @RabbitListener} consumer 訂閱</b>（以反射找出對應方法），
  *       且收到的訊息能被轉成該 consumer 的參數型別、欄位正確</li>
  *   <li>AMQP messageId 等於事件的 eventId（有狀態重試的追蹤依據）</li>
@@ -118,6 +119,7 @@ class DeleteCascadeQueueBindingIT {
             ReadingRabbitMqConfig.QUEUE_READING_USER_DELETED, ReadingUserDeletedConsumer.class,
             VersionRabbitMqConfig.QUEUE_VERSION_USER_DELETED, VersionUserDeletedConsumer.class,
             TagRabbitMqConfig.QUEUE_TAG_USER_DELETED, TagUserDeletedConsumer.class,
+            SeriesRabbitMqConfig.QUEUE_SERIES_USER_DELETED, SeriesUserDeletedConsumer.class,
             FileRabbitMqConfig.QUEUE_USER_DELETED, FileUserDeletedConsumer.class,
             SearchRabbitMqConfig.QUEUE_SEARCH_USER_DELETED, UserDeletedSearchListener.class);
 
@@ -272,7 +274,7 @@ class DeleteCascadeQueueBindingIT {
     }
 
     @Test
-    @DisplayName("user 刪帳事件（DATA-02）：article／reading／version／tag／file／search 的 user-deleted queue 都收到，且對應 consumer 存在、能還原事件，messageId 等於 eventId")
+    @DisplayName("user 刪帳事件（DATA-02）：article／reading／version／tag／series／file／search 的 user-deleted queue 都收到，且對應 consumer 存在、能還原事件，messageId 等於 eventId")
     void userDeleted_reachesEveryCascadeQueue() {
         UUID userUuid = UUID.randomUUID();
         UserEventPublisher publisher = new UserEventPublisher(rabbitTemplate);

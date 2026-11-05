@@ -399,6 +399,30 @@ public interface ArticleMapper {
     List<SeriesPublishedCountRow> countPublishedBySeriesUuids(@Param("seriesUuids") Collection<UUID> seriesUuids);
 
     /**
+     * 從給定的 series 中，挑出在指定狀態下仍有文章者（作者刪帳後「系列是否空了」的判斷）。
+     *
+     * <p>狀態集合由呼叫端依 {@code ArticleStatus#isRemovedWithAuthorAccount} 決定（去留政策的唯一真相），
+     * 本方法不寫死任何狀態。呼叫端須保證 {@code seriesUuids}、{@code statuses} 皆非空。</p>
+     *
+     * @param seriesUuids series 公開 UUID 集合（不得為空）
+     * @param statuses    文章狀態名稱（不得為空）
+     * @return 至少有一篇指定狀態文章的 series 公開 UUID（去重）
+     */
+    @Select({
+        "<script>",
+        "SELECT DISTINCT series_uuid FROM articles",
+        " WHERE status IN",
+        "<foreach collection='statuses' item='s' open='(' separator=',' close=')'>#{s}</foreach>",
+        "   AND series_uuid IN",
+        "<foreach collection='seriesUuids' item='uuid' open='(' separator=',' close=')'>",
+        "  #{uuid}::uuid",
+        "</foreach>",
+        "</script>"
+    })
+    List<UUID> findSeriesUuidsHavingArticlesInStatuses(@Param("seriesUuids") Collection<UUID> seriesUuids,
+                                                       @Param("statuses") List<String> statuses);
+
+    /**
      * series 內 PUBLISHED 且 position 小於 current 的最後一筆（prev 導覽）。
      *
      * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），

@@ -256,6 +256,7 @@ PRIMARY KEY (user_id, tag_id)
 - `idx_series_author`（V15 建立於 `author_id`；V29 以同名在 `author_uuid` 上重建）on author_uuid
 
 **Foreign keys:** 無（V29 已移除 `author_id` → `users(id)`（NO ACTION）；使用者只做軟刪除，該 FK 從未觸發，拿掉後行為不變，故不新增連動）。
+使用者刪除帳號（匿名化，DATA-02）時，由 `SeriesUserDeletedConsumer` 訂閱 `UserDeletedEvent`，刪除該作者名下「已無保留文章（PUBLISHED、ARCHIVED 皆無）」的系列；仍有保留文章的系列保留，作者顯示為匿名。是否仍有保留文章回問 `ArticleFacade.filterSeriesUuidsWithRetainedArticles`，不看 `article_count`。
 被參照：無（V32 已移除 `articles.series_id` → `series(id)` 的 FK；`articles.series_uuid` 不建 FK。刪除 series 時文章脫離系列的行為不變，改由事件＋每日校正負責；刪除 series 也不再觸碰 `articles` 的列）。
 
 ---
