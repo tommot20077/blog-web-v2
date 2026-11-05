@@ -48,7 +48,7 @@ public class RegistrationAttemptNoticeConsumer {
      *
      * <p>同一信箱的通知頻率另由發送端限流（{@code AuthService} 的 24 小時名額），consumer 不重複限流。</p>
      *
-     * @param event 重複信箱註冊事件，包含原信箱主人的 uuid、信箱與暱稱
+     * @param event 重複信箱註冊事件，只含 eventId 與原信箱主人的 userUuid；信箱與暱稱於寄信時查詢（ARCH-24）
      */
     @RabbitListener(
             queues = UserRabbitMqConfig.QUEUE_REGISTRATION_ATTEMPT,
@@ -59,8 +59,9 @@ public class RegistrationAttemptNoticeConsumer {
                 () -> "userUuid=" + event.userUuid() + ", eventId=" + event.eventId(),
                 event.eventId(), () -> {
                     log.info("收到重複信箱註冊事件 - userUuid={}, eventId={}", event.userUuid(), event.eventId());
-                    userMailService.sendRegistrationAttemptNotice(event);
-                    log.info("重複信箱註冊通知信已送出 - userUuid={}", event.userUuid());
+                    if (userMailService.sendRegistrationAttemptNotice(event)) {
+                        log.info("重複信箱註冊通知信已送出 - userUuid={}", event.userUuid());
+                    }
                 });
     }
 }

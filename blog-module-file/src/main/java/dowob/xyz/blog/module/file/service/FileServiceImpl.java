@@ -15,13 +15,13 @@ import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
-import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
-import io.minio.http.Method;
 
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.Tika;
@@ -45,7 +45,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 檔案服務實作
@@ -81,12 +80,10 @@ public class FileServiceImpl implements FileService {
      * bindToArticle / uploadFile 判斷文章作者用；不得直接查 article 表）。
      *
      * <p>
-     * <b>刻意不注入 {@code ArticleFacade}</b>：那顆胖 Bean 的依賴閉包含
-     * {@code ArticleService} 與 {@code ArticleFileBinder}，而 {@code ArticleFileBinder}
-     * 反過來依賴 {@code FileFacade → FileServiceImpl}，會形成 Spring 建構子循環依賴
-     * 導致應用程式完全無法啟動（成因與修法見 {@link ArticleLookupFacade} javadoc）。
-     * 這裡改注入依賴閉包只有 {@code ArticleRepository} 的 {@link ArticleLookupFacade}，
-     * 環不成立，授權判斷仍完整保留在本 service 層。
+     * <b>刻意不注入 {@code ArticleFacade}</b>：那顆胖 Bean 的依賴閉包含 {@code ArticleService} 等整個
+     * article 寫入路徑，file 只需要「作者是誰／目前狀態／內文」三項唯讀資料，改注入依賴閉包只有
+     * {@code ArticleRepository} 的 {@link ArticleLookupFacade}（成因見其 javadoc），
+     * 授權判斷仍完整保留在本 service 層。
      * </p>
      */
     private final ArticleLookupFacade articleLookupFacade;
@@ -218,7 +215,7 @@ public class FileServiceImpl implements FileService {
          * B4 / spec §3.1：回傳相對路徑而非 MinIO 直連網址，避免絕對網址把域名焊進 markdown 內文
          * （換域名時內文全破）。瀏覽器對 {@code /api/...} 以當前 origin 解析是 HTML 內建行為，
          * 不需要 render-time 改寫。實際內容由 {@code GET /api/v1/files/{id}/content} 端點
-         * 判斷授權後 302 導向 MinIO presigned URL 取得。
+         * 判斷授權後由後端從物件儲存串流回瀏覽器（W5A：不再 302／presigned，物件儲存不對外）。
          */
         String url = "/api/v1/files/" + fileId + "/content";
         return new FileUploadResponse(fileId, url, width, height, (long) fileBytes.length, usageType);
@@ -319,15 +316,15 @@ public class FileServiceImpl implements FileService {
      * <b>fail-safe 的順序很重要</b>：解析不到文章作者時必須<b>在解綁之前</b>就整個放棄，
      * 什麼都不動。若先跑解綁迴圈才發現作者解析失敗（文章剛被刪、或跨模組查詢瞬間失敗）並
      * return，該文章的既有綁定已被清空且不會補回——已發布文章的圖片會全部退回
-     * 「未綁定 = 私有」，讀者端整篇破圖，正是 {@code FileFacade} javadoc 警告的
+     * 「未綁定 = 私有」，讀者端整篇破圖，正是 {@link FileService#bindToArticle} 完整替換語意的
      * 「權限殘留反向問題」。唯一例外是呼叫端<b>明確傳入空清單</b>：那是「清除本文章所有綁定」
      * 的合法用法，語意上不需要作者資訊，因此不受此前置檢查限制。
      * </p>
      *
      * <p>
      * 全程標註 {@link Transactional}：解綁與綁定是同一次「完整替換」的兩半，中途拋例外
-     * 若各自獨立提交會留下半套綁定狀態（呼叫端 {@code ArticleFileBinder} 以 best-effort
-     * 吞掉例外，不會有人重試）。
+     * 若各自獨立提交會留下半套綁定狀態（呼叫端 {@code FileArticleContentChangedConsumer}
+     * 的冪等交易會 rollback 並交由 MQ 重試，但仍應避免留下半套狀態）。
      * </p>
      */
     @Override
@@ -444,14 +441,8 @@ public class FileServiceImpl implements FileService {
      */
     @Override
     public boolean canRead(FileMetadata metadata, UUID requesterId, boolean isAdmin) {
-        if (metadata.getUsageType() == UsageType.AVATAR) {
+        if (isPubliclyReadable(metadata)) {
             return true;
-        }
-        if (metadata.getArticleUuid() != null) {
-            Optional<ArticleData> boundArticle = articleLookupFacade.findByUuid(metadata.getArticleUuid());
-            if (boundArticle.isPresent() && ArticleStatus.isPubliclyVisible(boundArticle.get().status())) {
-                return true;
-            }
         }
         if (metadata.belongsTo(requesterId)) {
             return true;
@@ -462,35 +453,39 @@ public class FileServiceImpl implements FileService {
     /**
      * {@inheritDoc}
      *
-     * <p>
-     * 使用 MinIO SDK {@code getPresignedObjectUrl}，方法固定為 GET，效期固定 5 分鐘（300 秒）。
-     * 本方法不做任何權限判斷，呼叫端（{@code FileController}）須先呼叫 {@link #canRead} 通過後才可呼叫。
-     * </p>
+     * <p>授權矩陣中不依賴請求者身分的部分（AVATAR、綁定公開文章）；未綁定或文章查無資料一律 false（fail-safe）。</p>
      */
     @Override
-    public String generatePresignedUrl(UUID fileId) {
-        FileMetadata metadata = fileMetadataRepository.findById(fileId)
-                .orElseThrow(() -> new BusinessException(FileErrorCode.FILE_NOT_FOUND));
-        return generatePresignedUrl(metadata);
+    public boolean isPubliclyReadable(FileMetadata metadata) {
+        if (metadata.getUsageType() == UsageType.AVATAR) {
+            return true;
+        }
+        if (metadata.getArticleUuid() != null) {
+            Optional<ArticleData> boundArticle = articleLookupFacade.findByUuid(metadata.getArticleUuid());
+            return boundArticle.isPresent() && ArticleStatus.isPubliclyVisible(boundArticle.get().status());
+        }
+        return false;
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p>接受已取得的 {@link FileMetadata}，不再查一次 DB（理由同 {@link #canRead(FileMetadata, UUID, boolean)}）。</p>
+     * <p>
+     * 使用 MinIO SDK {@code getObject} 取得串流，由呼叫端（{@code FileController}）邊讀邊寫入 response，
+     * 不整檔載入記憶體。本方法不做任何權限判斷，呼叫端須先呼叫 {@link #canRead} 通過。
+     * 物件儲存的主機只在後端內網可達，瀏覽器不會直接連線。
+     * </p>
      */
     @Override
-    public String generatePresignedUrl(FileMetadata metadata) {
+    public InputStream openContent(FileMetadata metadata) {
         try {
-            return minioClient.getPresignedObjectUrl(
-                    GetPresignedObjectUrlArgs.builder()
-                            .method(Method.GET)
+            return minioClient.getObject(
+                    GetObjectArgs.builder()
                             .bucket(bucketName)
                             .object(metadata.getStoragePath())
-                            .expiry(5, TimeUnit.MINUTES)
                             .build());
         } catch (Exception e) {
-            log.error("產生 MinIO 簽名網址失敗: {}", metadata.getStoragePath(), e);
+            log.error("開啟 MinIO 物件串流失敗: {}", metadata.getStoragePath(), e);
             throw new SystemException(CommonErrorCode.STORAGE_ERROR);
         }
     }

@@ -3,6 +3,7 @@
 > 日期：2026-07-26
 > 範圍：`blog-module-file`、`blog-infrastructure`（新 Facade）、`blog-module-article`、`blog-db-migration`
 > 狀態：設計定案（Yuan 已選定「代理端點 + 302 轉簽名網址」），待實作
+> **2026-11-05 更新（W5A，Yuan 決定）**：§3 的「302 轉簽名網址」已改為「後端 getObject 串流」——presigned URL 的主機是後端連物件儲存的內網位址，瀏覽器連不到，且前端 CSP 只允許同源圖片。授權矩陣不變；公開可讀回 `public, max-age=86400`，其餘 `private, no-store`，支援 ETag／304。下文 302／presigned 敘述為歷史設計記錄。
 
 ---
 

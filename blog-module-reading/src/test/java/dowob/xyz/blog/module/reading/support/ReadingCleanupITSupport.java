@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.reading.support;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
@@ -72,8 +71,6 @@ public abstract class ReadingCleanupITSupport {
     @MockitoBean private TagFacade tagFacade;
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
-    /** article 模組的 ArticleFileBinder 依賴 FileFacade，其實作在 blog-module-file（未被本測試 scan） */
-    @MockitoBean private FileFacade fileFacade;
 
     @Autowired protected ArticleRepository articleRepo;
     @Autowired protected JdbcTemplate jdbc;

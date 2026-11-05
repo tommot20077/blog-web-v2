@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.article.support;
 
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
@@ -76,7 +75,6 @@ public abstract class ArticleSeriesITSupport {
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
-    @MockitoBean private FileFacade fileFacade;
     /** series 模組的 facade（article 不依賴 series 模組，以 mock 取代；各測試自行設定行為） */
     @MockitoBean protected SeriesFacade seriesFacade;
 

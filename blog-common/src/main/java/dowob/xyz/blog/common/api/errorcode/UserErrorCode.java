@@ -6,6 +6,9 @@ import lombok.Getter;
 /**
  * 用戶/認證模組錯誤碼 (User Module) 範圍：A01
  *
+ * <p>A0106 已停用（Q8，2026-11-04）：註冊遇到重複 email 一律回成功（SEC-14），不再有「信箱已被註冊」錯誤；
+ * 保留此碼不重用。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -37,14 +40,6 @@ public enum UserErrorCode implements IErrorCode {
      * 無權限訪問
      */
     TOKEN_ACCESS_FORBIDDEN("A0105", "無權限訪問"),
-
-    /**
-     * 信箱已被註冊
-     *
-     * <p>SEC-14／Q8 起註冊端點遇到重複 email 一律回成功（並通知原信箱主人），不再回傳此錯誤碼；
-     * 保留此常數只為維持錯誤碼表與既有 API 文件的穩定，確認前端不再依賴後可再移除。</p>
-     */
-    EMAIL_DUPLICATED("A0106", "該信箱已被註冊"),
 
     /**
      * 暱稱已被使用

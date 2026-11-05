@@ -1,6 +1,7 @@
 package dowob.xyz.blog.mq;
 
 import dowob.xyz.blog.infrastructure.config.RabbitMqConfig;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
@@ -17,6 +18,7 @@ import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.comment.config.CommentRabbitMqConfig;
 import dowob.xyz.blog.module.comment.consumer.CommentArticleDeletedConsumer;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
+import dowob.xyz.blog.module.file.consumer.FileArticleContentChangedConsumer;
 import dowob.xyz.blog.module.file.consumer.FileUserDeletedConsumer;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.reading.config.ReadingRabbitMqConfig;
@@ -27,6 +29,7 @@ import dowob.xyz.blog.module.search.listener.ArticleSearchListener;
 import dowob.xyz.blog.module.search.listener.UserDeletedSearchListener;
 import dowob.xyz.blog.module.series.config.SeriesRabbitMqConfig;
 import dowob.xyz.blog.module.series.consumer.SeriesArticleDeletedConsumer;
+import dowob.xyz.blog.module.series.consumer.SeriesUserDeletedConsumer;
 import dowob.xyz.blog.module.series.service.SeriesEventPublisher;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
 import dowob.xyz.blog.module.tag.consumer.TagArticleDeletedConsumer;
@@ -81,7 +84,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       {@code tag.article-deleted}、{@code version.article-deleted}、{@code search.index.delete} 各收到一則</li>
  *   <li>series 刪除 → {@code article.series-deleted} 收到一則</li>
  *   <li>user 刪除帳號（DATA-02）→ {@code article.user-deleted}、{@code reading.user-deleted}、{@code version.user-deleted}、
- *       {@code tag.user-deleted}、{@code file.user-deleted}、{@code search.user-deleted} 各收到一則</li>
+ *       {@code tag.user-deleted}、{@code series.user-deleted}、{@code file.user-deleted}、{@code search.user-deleted} 各收到一則</li>
  *   <li>該 queue 在正式程式碼裡<b>真的有 {@code @RabbitListener} consumer 訂閱</b>（以反射找出對應方法），
  *       且收到的訊息能被轉成該 consumer 的參數型別、欄位正確</li>
  *   <li>AMQP messageId 等於事件的 eventId（有狀態重試的追蹤依據）</li>
@@ -118,6 +121,7 @@ class DeleteCascadeQueueBindingIT {
             ReadingRabbitMqConfig.QUEUE_READING_USER_DELETED, ReadingUserDeletedConsumer.class,
             VersionRabbitMqConfig.QUEUE_VERSION_USER_DELETED, VersionUserDeletedConsumer.class,
             TagRabbitMqConfig.QUEUE_TAG_USER_DELETED, TagUserDeletedConsumer.class,
+            SeriesRabbitMqConfig.QUEUE_SERIES_USER_DELETED, SeriesUserDeletedConsumer.class,
             FileRabbitMqConfig.QUEUE_USER_DELETED, FileUserDeletedConsumer.class,
             SearchRabbitMqConfig.QUEUE_SEARCH_USER_DELETED, UserDeletedSearchListener.class);
 
@@ -253,6 +257,34 @@ class DeleteCascadeQueueBindingIT {
     }
 
     @Test
+    @DisplayName("文章內容變更事件（W5A／Q12）：file.article-binding 綁到 article.events＋article.content.changed，FileArticleContentChangedConsumer 存在、能還原事件，messageId 等於 eventId")
+    void articleContentChanged_reachesFileBindingQueue() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setUuid(articleUuid);
+        article.setAuthorUuid(UUID.randomUUID());
+        ArticleEventPublisher publisher = new ArticleEventPublisher(
+                rabbitTemplate, Mockito.mock(UserFacade.class), Mockito.mock(ArticleMapper.class));
+        Method listener = listenerMethodFor(FileArticleContentChangedConsumer.class,
+                FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED);
+        assertThat(listener).as("file.article-binding 應有 @RabbitListener 訂閱").isNotNull();
+        context.getBean(RabbitAdmin.class).purgeQueue(FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED, false);
+
+        publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.RESTORED);
+
+        Message[] raw = new Message[1];
+        Object restored = receiveAs(FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED, listener.getParameterTypes()[0], raw);
+        assertThat(restored).isInstanceOf(ArticleContentChangedEvent.class);
+        ArticleContentChangedEvent event = (ArticleContentChangedEvent) restored;
+        assertThat(event.articleUuid()).isEqualTo(articleUuid);
+        assertThat(event.action()).isEqualTo(ArticleContentChangedEvent.Action.RESTORED);
+        assertThat(raw[0].getMessageProperties().getReceivedExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
+        assertThat(raw[0].getMessageProperties().getReceivedRoutingKey())
+                .isEqualTo(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED);
+        assertThat(raw[0].getMessageProperties().getMessageId()).isEqualTo(event.eventId().toString());
+    }
+
+    @Test
     @DisplayName("series 刪除事件：article.series-deleted 收到，ArticleSeriesDeletedConsumer 存在、能還原事件，messageId 等於 eventId")
     void seriesDeleted_reachesArticleQueue() {
         UUID seriesUuid = UUID.randomUUID();
@@ -272,7 +304,7 @@ class DeleteCascadeQueueBindingIT {
     }
 
     @Test
-    @DisplayName("user 刪帳事件（DATA-02）：article／reading／version／tag／file／search 的 user-deleted queue 都收到，且對應 consumer 存在、能還原事件，messageId 等於 eventId")
+    @DisplayName("user 刪帳事件（DATA-02）：article／reading／version／tag／series／file／search 的 user-deleted queue 都收到，且對應 consumer 存在、能還原事件，messageId 等於 eventId")
     void userDeleted_reachesEveryCascadeQueue() {
         UUID userUuid = UUID.randomUUID();
         UserEventPublisher publisher = new UserEventPublisher(rabbitTemplate);
@@ -311,10 +343,10 @@ class DeleteCascadeQueueBindingIT {
         Message image = converter.toMessage(
                 new ImageUploadedEvent(imageEventId, UUID.randomUUID(), "files/a.jpg", "image/jpeg"), new MessageProperties());
         Message registered = converter.toMessage(
-                new UserRegisteredEvent(registeredEventId, UUID.randomUUID(), "a@b.c", "nick", "token", "123456"),
+                new UserRegisteredEvent(registeredEventId, UUID.randomUUID()),
                 new MessageProperties());
         Message reset = converter.toMessage(
-                new UserPasswordResetRequestedEvent(resetEventId, UUID.randomUUID(), "a@b.c", "token"), new MessageProperties());
+                new UserPasswordResetRequestedEvent(resetEventId, UUID.randomUUID()), new MessageProperties());
 
         assertThat(image.getMessageProperties().getMessageId()).isEqualTo(imageEventId.toString());
         assertThat(registered.getMessageProperties().getMessageId()).isEqualTo(registeredEventId.toString());

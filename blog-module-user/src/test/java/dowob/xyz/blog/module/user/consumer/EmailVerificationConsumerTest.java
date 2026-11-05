@@ -105,7 +105,7 @@ class EmailVerificationConsumerTest {
      * @return 新格式的用戶註冊事件
      */
     private static UserRegisteredEvent event() {
-        return new UserRegisteredEvent(EVENT_ID, USER_UUID, "test@example.com", "TestUser", "token-abc", "123456");
+        return new UserRegisteredEvent(EVENT_ID, USER_UUID);
     }
 
     /**
@@ -229,7 +229,7 @@ class EmailVerificationConsumerTest {
     @DisplayName("handleUserRegistered：舊格式訊息（eventId 為 null）→ 不呼叫冪等服務，照常寄信並正常返回")
     void handleUserRegistered_legacyMessageWithoutEventId_sendsWithoutDedup() throws IOException {
         UserRegisteredEvent legacy =
-                new UserRegisteredEvent(null, null, "test@example.com", "TestUser", "token-abc", "123456");
+                new UserRegisteredEvent(null, null);
 
         consumer.handleUserRegistered(legacy);
 

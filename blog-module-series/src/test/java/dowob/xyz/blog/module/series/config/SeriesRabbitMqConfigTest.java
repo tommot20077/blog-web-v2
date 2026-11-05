@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.series.config;
 
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
+import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Binding;
@@ -53,5 +54,30 @@ class SeriesRabbitMqConfigTest {
         assertThat(binding.getExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
         assertThat(binding.getRoutingKey()).isEqualTo(ArticleEventContract.ROUTING_KEY_DELETED);
         assertThat(binding.getDestination()).isEqualTo("series.article-deleted");
+    }
+
+    @Test
+    @DisplayName("queue：series.user-deleted、durable，並帶 DLQ 參數")
+    void userDeletedQueue_isDurableWithDlqArgs() {
+        Queue queue = config.seriesUserDeletedQueue();
+
+        assertThat(queue.getName()).isEqualTo("series.user-deleted");
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+                .containsEntry("x-dead-letter-exchange", "blog.dlq")
+                .containsEntry("x-dead-letter-routing-key", "dead-letter");
+    }
+
+    @Test
+    @DisplayName("binding：以事件契約常數綁定 user.events exchange 與 user.deleted routing key")
+    void bindSeriesUserDeleted_bindsUserEventContract() {
+        TopicExchange exchange = config.seriesUserEventsExchange();
+        Binding binding = config.bindSeriesUserDeleted(config.seriesUserDeletedQueue(), exchange);
+
+        assertThat(exchange.getName()).isEqualTo(UserEventContract.EXCHANGE);
+        assertThat(exchange.isDurable()).isTrue();
+        assertThat(binding.getExchange()).isEqualTo(UserEventContract.EXCHANGE);
+        assertThat(binding.getRoutingKey()).isEqualTo(UserEventContract.ROUTING_KEY_DELETED);
+        assertThat(binding.getDestination()).isEqualTo("series.user-deleted");
     }
 }

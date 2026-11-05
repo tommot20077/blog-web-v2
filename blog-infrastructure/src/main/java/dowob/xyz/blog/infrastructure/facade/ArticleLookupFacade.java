@@ -17,26 +17,16 @@ import java.util.UUID;
  *
  * <h3>為什麼需要與 {@link ArticleFacade} 分開？</h3>
  * <p>
- * article 模組與 file 模組互相需要對方的資料，形成 Spring 建構子循環依賴：
- * </p>
- * <pre>
- * articleServiceImpl → articleCommandSubService → articleFileBinder
- *   → fileFacadeImpl → fileServiceImpl → articleFacadeImpl → articleServiceImpl
- * </pre>
- * <p>
- * （另有一條較短的同源環：{@code articleFacadeImpl → articleFileBinder → fileFacadeImpl
- * → fileServiceImpl → articleFacadeImpl}。）
+ * article 模組與 file 模組曾互相需要對方的資料，形成 Spring 建構子循環依賴
+ * （歷史成因：article 儲存文章後同步呼叫 file 綁定檔案，file 授權又需要 article 的元資料）。
+ * 打斷方式是把 file 模組所需的最小查詢（「這篇文章的作者是誰／目前狀態／內文」）切出成本介面，
+ * 由依賴閉包乾淨的 Bean 實作，環自然消失——比照 {@code SeriesFacadeImpl}「重構依賴鏈使環不成立」的既有慣例
+ * （本專案零個 {@code @Lazy}、也未開啟 {@code spring.main.allow-circular-references}）。
  * </p>
  * <p>
- * 兩條環的共同「回邊」都是 <b>fileServiceImpl → articleFacadeImpl</b>：
- * {@code ArticleFacadeImpl} 是一顆「胖」Bean，其依賴閉包含 {@code ArticleService} 與
- * {@code ArticleFileBinder}，而後者又指回 {@code FileFacade}。file 模組只需要
- * 「這篇文章的作者是誰 / 目前狀態」兩項唯讀資料，卻因此被迫依賴整個 article 寫入路徑。
- * </p>
- * <p>
- * 因此比照 {@code SeriesFacadeImpl}「重構依賴鏈使環不成立」的既有慣例（本專案零個
- * {@code @Lazy}、也未開啟 {@code spring.main.allow-circular-references}），
- * 把 file 模組所需的最小查詢切出成本介面，由依賴閉包乾淨的 Bean 實作，環自然消失。
+ * W5A／Q12 起，「檔案 → 文章」綁定的回填改由 file 模組消費 {@code ArticleContentChangedEvent} 非同步完成，
+ * article 模組不再依賴 file 模組的任何綁定類別；file 模組仍透過本介面唯讀取得文章資料
+ * （授權判斷要即時答案，不能走事件）。
  * </p>
  *
  * <p>
@@ -66,11 +56,22 @@ public interface ArticleLookupFacade {
      * 內文與封面中引用的檔案 UUID。
      *
      * <p>用途：作者刪帳清檔（DATA-02／DATA-07）時，凡在此集合內的檔案一律保留，不論其 {@code file_metadata.article_uuid}
-     * 綁到哪裡——封面圖不會被 {@code ArticleFileBinder} 綁定（只掃內文），同一張圖同時用在草稿與已發布文章時
+     * 綁到哪裡——封面圖不會被 file 模組的內文綁定回填（{@code ArticleFileBindingService}，只掃內文）綁定，同一張圖同時用在草稿與已發布文章時
      * 也可能只綁到草稿那篇。引用格式為 {@code /api/v1/files/{uuid}/content}（內文與 {@code coverImageUrl} 皆掃描）。</p>
      *
      * @param authorUuid 作者公開 UUID；為 null 時回傳空集合
      * @return 被保留文章引用的檔案 UUID（去重、小寫正規化後解析）；無則為空集合
      */
     Set<UUID> findFileUuidsReferencedByRetainedArticles(UUID authorUuid);
+
+    /**
+     * 依文章公開 UUID 取得文章<b>目前最新</b>的 Markdown 內文。
+     *
+     * <p>用途：file 模組消費 {@code ArticleContentChangedEvent} 後，以最新內文解析所引用的檔案並回填綁定
+     * （事件本身只帶 articleUuid，不帶內文；取最新值使事件亂序或重送時結果仍收斂到最新內文）。</p>
+     *
+     * @param articleUuid 文章公開 UUID；為 null 時回傳 {@link Optional#empty()}
+     * @return 文章存在時為其內文（內文為 null 時以空字串表示）；文章不存在時為 empty
+     */
+    Optional<String> findContentByUuid(UUID articleUuid);
 }

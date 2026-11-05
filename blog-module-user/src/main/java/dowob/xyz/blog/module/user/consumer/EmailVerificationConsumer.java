@@ -55,9 +55,13 @@ public class EmailVerificationConsumer {
      * {@link ConsumerExecutor} 輸出）。ack 前當機造成的重投會被擋下而不重寄；若使用者仍沒收到信，
      * 請其走「重發驗證信」（產生新 eventId）。</p>
      *
+     * <p><b>事件不含個資與 token（ARCH-24）</b>：consumer 於寄信當下以 {@code userUuid} 查詢（見
+     * {@link UserMailService#sendVerificationEmail}）。使用者已刪帳、token 已過期或已被取代刪除時不寄，
+     * 記一行 INFO 後正常 ack（不進 DLQ）；寄出的永遠是目前有效的 token。冪等標記仍在同一交易內，被略過的事件同樣標記為已處理。</p>
+     *
      * <p>郵件發送成功後正常返回（容器 ack）；失敗則往外拋，由容器重試（最多 3 次，寄信失敗可能重寄同一連結），耗盡後送 DLQ。</p>
      *
-     * @param event       用戶已註冊事件，包含信箱、暱稱與驗證 Token
+     * @param event       用戶已註冊事件，只含 eventId 與 userUuid；信箱、暱稱、驗證 Token、驗證碼於寄信時查詢
      */
     @RabbitListener(
             queues = UserRabbitMqConfig.QUEUE_EMAIL_VERIFICATION,
@@ -68,8 +72,9 @@ public class EmailVerificationConsumer {
                 () -> "userUuid=" + event.userUuid() + ", eventId=" + event.eventId(),
                 event.eventId(), () -> {
                     log.info("收到用戶註冊事件 - userUuid={}, eventId={}", event.userUuid(), event.eventId());
-                    userMailService.sendVerificationEmail(event);
-                    log.info("驗證信已送出 - userUuid={}", event.userUuid());
+                    if (userMailService.sendVerificationEmail(event)) {
+                        log.info("驗證信已送出 - userUuid={}", event.userUuid());
+                    }
                 });
     }
 }

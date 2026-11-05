@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
  * 本專案的檔案存取控制設計（見
  * {@code docs/superpowers/specs/2026-07-26-file-access-control-design.md} §1、§3、§7）
  * 刻意把 MinIO bucket 維持**完全私有**，所有圖片一律經由後端代理端點
- * {@code GET /api/v1/files/{id}/content} 驗權後，302 轉導至短效 presigned URL 取得。
+ * {@code GET /api/v1/files/{id}/content} 驗權後，由後端以 getObject 串流回瀏覽器（W5A，物件儲存不對外）。
  * 這個設計的前提是「bucket 本身不可匿名讀取」——一旦 bucket 被設成
  * public-read（例如呼叫 {@code setBucketPolicy} 授予 {@code Principal: *}
  * 的 {@code s3:GetObject} 權限），後端所有的權限判斷（草稿只給作者/管理員看、
@@ -46,8 +46,7 @@ import static org.mockito.Mockito.when;
  * 本機開發時，曾為了應急手動對執行中的容器下過
  * {@code mc anonymous set download}（僅影響當下容器，不在程式碼內），
  * 讓「圖片看不到」的症狀消失。<b>未來若又遇到類似症狀，正確的修法是檢查
- * 代理端點 {@code /api/v1/files/{id}/content} 的授權邏輯或 presigned URL
- * 產生流程，而不是回頭把 bucket policy 改成 public-read。</b>
+ * 代理端點 {@code /api/v1/files/{id}/content} 的授權邏輯或串流流程，而不是回頭把 bucket policy 改成 public-read。</b>
  * 這支測試就是為了在有人「順手」這樣改時，能在 CI 就攔下來。
  * </p>
  *

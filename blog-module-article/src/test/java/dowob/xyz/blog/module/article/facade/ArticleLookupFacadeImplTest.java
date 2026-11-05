@@ -212,4 +212,44 @@ class ArticleLookupFacadeImplTest {
         assertThat(articleLookupFacadeImpl.findFileUuidsReferencedByRetainedArticles(null)).isEmpty();
         verifyNoInteractions(articleAuthorCleanupMapper);
     }
+
+    /** W5A：file 模組消費內容變更事件時，以此取得文章最新內文來回填檔案綁定 */
+    @Test
+    @DisplayName("findContentByUuid → 文章存在 → 回傳目前內文")
+    void findContentByUuid_articleExists_returnsContent() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setUuid(articleUuid);
+        article.setContent("![a](/api/v1/files/x/content)");
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        assertThat(articleLookupFacadeImpl.findContentByUuid(articleUuid)).contains("![a](/api/v1/files/x/content)");
+    }
+
+    @Test
+    @DisplayName("findContentByUuid → 文章內文為 null → 以空字串表示（與「文章不存在」區分）")
+    void findContentByUuid_nullContent_returnsEmptyString() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setUuid(articleUuid);
+        article.setContent(null);
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        assertThat(articleLookupFacadeImpl.findContentByUuid(articleUuid)).contains("");
+    }
+
+    @Test
+    @DisplayName("findContentByUuid → 文章不存在 → empty")
+    void findContentByUuid_articleMissing_returnsEmpty() {
+        UUID articleUuid = UUID.randomUUID();
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        assertThat(articleLookupFacadeImpl.findContentByUuid(articleUuid)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("findContentByUuid → articleUuid 為 null → empty 且不查 DB")
+    void findContentByUuid_nullUuid_returnsEmpty() {
+        assertThat(articleLookupFacadeImpl.findContentByUuid(null)).isEmpty();
+    }
 }

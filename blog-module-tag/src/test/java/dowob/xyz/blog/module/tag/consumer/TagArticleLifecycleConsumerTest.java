@@ -71,7 +71,7 @@ class TagArticleLifecycleConsumerTest {
     }
 
     @Test
-    @DisplayName("文章更新事件（PUT 把 DRAFT 直接轉 PUBLISHED 且未帶標籤時只會發這個事件）：重算該文章所掛標籤")
+    @DisplayName("文章更新事件（PUT 把 DRAFT 轉 PUBLISHED 時與 article.published 並發）：重算該文章所掛標籤")
     void onArticleUpdated_recalculatesTagsOfArticle() {
         UUID articleUuid = UUID.randomUUID();
 

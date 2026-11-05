@@ -52,8 +52,8 @@ import static org.mockito.Mockito.verify;
  *       {@code NICKNAME_DUPLICATED}。</li>
  *   <li><b>RACE-03</b>：註冊以 {@code existsByEmail}／{@code existsByUsername} 先查再寫，併發撞到
  *       {@code users} 的 email／username UNIQUE 時無人接住 → 500。改為依約束名稱轉成現行的
- *       {@code EMAIL_DUPLICATED}／{@code USERNAME_DUPLICATED}，與「依序第二次註冊」行為完全一致；
- *       Q8（SEC-14）起 email 重複不再回錯誤，改為靜默成功＋通知原信箱主人，併發落敗者同樣如此。</li>
+ *       {@code USERNAME_DUPLICATED}（email 撞約束原轉 {@code EMAIL_DUPLICATED}，即 A0106），與「依序第二次註冊」行為完全一致；
+ *       Q8（SEC-14）起 email 重複不再回錯誤，改為靜默成功＋通知原信箱主人，併發落敗者同樣如此，A0106 已停用。</li>
  * </ul>
  *
  * <p><b>讓競態穩定重現</b>：在 {@code users} 上安裝 {@code BEFORE INSERT OR UPDATE} 觸發器睡 0.3 秒。
@@ -181,16 +181,21 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
 
         ArgumentCaptor<UserRegisteredEvent> event = ArgumentCaptor.forClass(UserRegisteredEvent.class);
         verify(rabbitTemplate, times(1)).convertAndSend(anyString(), anyString(), event.capture());
-        assertThat(event.getValue().email()).as("唯一發出的事件屬於贏家").isEqualTo(emails[winner]);
+        assertThat(event.getValue().userUuid()).as("唯一發出的事件屬於贏家")
+                .isEqualTo(jdbc.queryForObject("SELECT uuid FROM users WHERE id = ?", java.util.UUID.class, winnerId));
 
         assertThat(redis.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(emails[winner])))
-                .as("贏家的驗證碼 key").isEqualTo(event.getValue().verificationCode());
+                .as("贏家的驗證碼 key").matches("\\d{6}");
         if (!emails[loser].equals(emails[winner])) {
             assertThat(redis.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(emails[loser])))
                     .as("輸家的 email 沒有任何驗證碼 key").isNull();
         }
         redis.delete(RedisKeyConstant.getEmailVerifyCodeKey(emails[winner]));
         redis.delete(RedisKeyConstant.getEmailVerifyCodeKey(emails[loser]));
+    }
+
+    private java.util.UUID uuidOfEmail(String email) {
+        return jdbc.queryForObject("SELECT uuid FROM users WHERE email = ?", java.util.UUID.class, email);
     }
 
     private long countWhere(String column, String value) {
@@ -227,7 +232,7 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
         ArgumentCaptor<RegistrationAttemptOnExistingEmailEvent> notice =
                 ArgumentCaptor.forClass(RegistrationAttemptOnExistingEmailEvent.class);
         verify(rabbitTemplate, times(1)).convertAndSend(anyString(), anyString(), notice.capture());
-        assertThat(notice.getValue().email()).isEqualTo(EMAIL_PREFIX + "seq-e@example.com");
+        assertThat(notice.getValue().userUuid()).isEqualTo(uuidOfEmail(EMAIL_PREFIX + "seq-e@example.com"));
     }
 
     @Test
@@ -284,7 +289,8 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
             verify(rabbitTemplate, times(1)).convertAndSend(
                     eq(UserRabbitMqConfig.EXCHANGE), eq(UserRabbitMqConfig.ROUTING_KEY_REGISTRATION_ATTEMPT),
                     notice.capture());
-            assertThat(notice.getValue().email()).as("第 %d 輪：通知寄給贏家（原信箱主人）", round).isEqualTo(email);
+            assertThat(notice.getValue().userUuid()).as("第 %d 輪：通知寄給贏家（原信箱主人）", round)
+                    .isEqualTo(uuidOfEmail(email));
             assertThat(notice.getValue().userUuid()).isEqualTo(
                     jdbc.queryForObject("SELECT uuid FROM users WHERE email = ?", UUID.class, email));
         }

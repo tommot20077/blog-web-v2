@@ -41,8 +41,6 @@ class ArticleCommandSubService {
     private final CategoryMapper categoryMapper;
     private final CategoryRepository categoryRepository;
     private final TagFacade tagFacade;
-    /** 文章「檔案 → 文章」綁定回填元件，供文章儲存後掃描 content 回填綁定（Task B6，已抽出見 {@link ArticleFileBinder}） */
-    private final ArticleFileBinder articleFileBinder;
     private final ArticleMarkdownRenderer markdownRenderer;
     private final TransactionTemplate transactionTemplate;
     private final ArticleEntityFinder entityFinder;
@@ -143,9 +141,6 @@ class ArticleCommandSubService {
             List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
             articleEventPublisher.publishTagged(saved, tagIds);
         }
-
-        /** DB 已 commit，best-effort 回填「檔案 → 文章」綁定（Task B6，失敗不影響建立結果） */
-        articleFileBinder.bindFilesToArticleSafely(saved.getUuid(), saved.getContent());
 
         return articleResponseMapper.toEditorResponse(saved);
     }
@@ -267,22 +262,38 @@ class ArticleCommandSubService {
             archiveCache.evict();
         }
 
+        /**
+         * 這次 PUT 是否讓文章「進入」PUBLISHED。與「發布」端點同一語意：進入已發布集合就是一次發布，
+         * 下游（推薦快取、標籤計數、搜尋索引、version 發布快照）都以 Published 事件為準。
+         */
+        boolean enteredPublished = previousStatus != ArticleStatus.PUBLISHED
+                && updated.getStatus() == ArticleStatus.PUBLISHED;
+
         /** DB 已 commit，best-effort 發送更新事件 MQ */
         if (updated.getStatus() == ArticleStatus.PUBLISHED) {
             articleEventPublisher.publishUpdated(updated);
         }
 
-        /** best-effort 發送 ContentChanged(SAVED) MQ（任何狀態下都發，供 version 模組觸發快照） */
-        articleEventPublisher.publishContentChanged(updated, ArticleContentChangedEvent.Action.SAVED);
+        /** DB 已 commit，best-effort 補發發布事件（與「發布」端點一致；Updated 照舊保留） */
+        if (enteredPublished) {
+            /** payload 的標籤須是 DB 現況（請求沒帶 tagNames 時 tagInfos 為空），由 publisher 在 best-effort 範圍內回查 */
+            articleEventPublisher.publishPublished(updated);
+        }
+
+        /**
+         * best-effort 發送 ContentChanged MQ（任何狀態下都發，供 version 模組觸發快照）：
+         * 進入 PUBLISHED 發 PUBLISHED（與「發布」端點一致，version 凍結發布快照並清 AUTO 快照），其餘發 SAVED。
+         * 兩者擇一不並發：SAVED 與 PUBLISHED 走同一 queue，並發會多產生一份隨即被清掉的 AUTO 快照。
+         */
+        articleEventPublisher.publishContentChanged(updated, enteredPublished
+                ? ArticleContentChangedEvent.Action.PUBLISHED
+                : ArticleContentChangedEvent.Action.SAVED);
 
         /** DB 已 commit，best-effort 發送標籤事件 MQ */
         if (tagInfos != null && !tagInfos.isEmpty()) {
             List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
             articleEventPublisher.publishTagged(updated, tagIds);
         }
-
-        /** DB 已 commit，best-effort 回填「檔案 → 文章」綁定（Task B6，失敗不影響更新結果） */
-        articleFileBinder.bindFilesToArticleSafely(updated.getUuid(), updated.getContent());
 
         return articleResponseMapper.toEditorResponse(updated);
     }

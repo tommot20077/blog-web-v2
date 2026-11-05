@@ -99,7 +99,7 @@ public class AuthService {
      *
      * <h4>email 重複一律回成功（SEC-14／Q8，Yuan 2026-10-24 定案 (a)）</h4>
      * <p>email 已被註冊時，<b>不建立帳號、不回錯誤</b>，回應與新註冊相同的成功（controller 回
-     * {@code ApiResponse<Void>}），消除「直接回 {@code EMAIL_DUPLICATED}」這種零成本的帳號列舉；並在回應之前（無交易）發布
+     * {@code ApiResponse<Void>}），消除「直接回「信箱已被註冊」（已停用的 A0106）」這種零成本的帳號列舉；並在回應之前（無交易）發布
      * {@link RegistrationAttemptOnExistingEmailEvent}，由 consumer 寄通知信給<b>原信箱主人</b>
      * （「有人嘗試用你的信箱註冊；若是你本人，請直接登入或使用忘記密碼」）。通知有 per-email 限流：
      * 同一信箱 {@link RedisKeyConstant#REGISTER_DUP_NOTICE_TTL_MINUTES} 分鐘（24 小時）內最多一封，
@@ -219,8 +219,7 @@ public class AuthService {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
                     UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                    new UserRegisteredEvent(UUID.randomUUID(), savedUser.getUuid(), savedUser.getEmail(),
-                            savedUser.getNickname(), tokenValue, verificationCode));
+                    new UserRegisteredEvent(UUID.randomUUID(), savedUser.getUuid()));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
@@ -283,8 +282,7 @@ public class AuthService {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
                     UserRabbitMqConfig.ROUTING_KEY_REGISTRATION_ATTEMPT,
-                    new RegistrationAttemptOnExistingEmailEvent(UUID.randomUUID(), owner.getUuid(),
-                            owner.getEmail(), owner.getNickname()));
+                    new RegistrationAttemptOnExistingEmailEvent(UUID.randomUUID(), owner.getUuid()));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             try {
@@ -551,6 +549,9 @@ public class AuthService {
             /** DB 操作在 transaction 內 */
             String tokenValue = UUID.randomUUID().toString();
             transactionTemplate.executeWithoutResult(status -> {
+                /** 先刪同類舊 token，讓「最新」等於「唯一」：晚到的舊寄信事件不會寄出仍有效的舊 token（ARCH-24） */
+                verificationTokenRepository.deleteByUserIdAndType(user.getId(), "PASSWORD_RESET");
+
                 VerificationToken resetToken = new VerificationToken();
                 resetToken.setUserId(user.getId());
                 resetToken.setToken(tokenValue);
@@ -565,8 +566,7 @@ public class AuthService {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
                         UserRabbitMqConfig.ROUTING_KEY_PASSWORD_RESET,
-                        new UserPasswordResetRequestedEvent(UUID.randomUUID(), user.getUuid(), user.getEmail(),
-                                tokenValue));
+                        new UserPasswordResetRequestedEvent(UUID.randomUUID(), user.getUuid()));
             } catch (Exception e) {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
@@ -636,9 +636,7 @@ public class AuthService {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
                         UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                        new UserRegisteredEvent(UUID.randomUUID(), user.getUuid(), user.getEmail(),
-                                user.getNickname(), tokenValue,
-                                verificationCode));
+                        new UserRegisteredEvent(UUID.randomUUID(), user.getUuid()));
             } catch (Exception e) {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
@@ -677,7 +675,8 @@ public class AuthService {
 
         sessionRevoker.revokeAllSessions(user.getUuid());
 
-        verificationTokenRepository.delete(resetToken);
+        /** 刪除該使用者所有重設 token（不只用掉的這筆），避免晚到的舊寄信事件寄出仍有效的舊 token（ARCH-24） */
+        verificationTokenRepository.deleteByUserIdAndType(user.getId(), "PASSWORD_RESET");
     }
 
     /**

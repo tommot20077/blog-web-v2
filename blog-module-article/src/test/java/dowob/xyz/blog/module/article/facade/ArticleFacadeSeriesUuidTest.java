@@ -63,7 +63,7 @@ class ArticleFacadeSeriesUuidTest {
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, null, null, articleService, null, null, null, null,
-                null, new ArticleDataAssembler(), null, null, null);
+                new ArticleDataAssembler(), null, null, null);
     }
 
     private static Article article(long id, UUID seriesUuid, int position) {
@@ -107,6 +107,47 @@ class ArticleFacadeSeriesUuidTest {
             assertThat(facade.findBySeriesUuidOrderByPosition(null)).isEmpty();
 
             verifyNoInteractions(articleService);
+        }
+    }
+
+    @Nested
+    @DisplayName("filterSeriesUuidsWithRetainedArticles（作者刪帳後「系列是否仍有保留文章」）")
+    class FilterSeriesUuidsWithRetainedArticles {
+
+        @Test
+        @DisplayName("null、空集合或只含 null → 回傳空集合，不查 DB")
+        void nullOrEmpty_returnsEmptyWithoutAnyQuery() {
+            assertThat(facade.filterSeriesUuidsWithRetainedArticles(null)).isEmpty();
+            assertThat(facade.filterSeriesUuidsWithRetainedArticles(List.of())).isEmpty();
+            assertThat(facade.filterSeriesUuidsWithRetainedArticles(Arrays.asList((UUID) null))).isEmpty();
+
+            verifyNoInteractions(articleMapper);
+        }
+
+        @Test
+        @DisplayName("保留狀態集合取自 ArticleStatus 的刪帳去留判斷（PUBLISHED、ARCHIVED），不寫死")
+        void queriesWithRetainedStatusesDerivedFromArticleStatus() {
+            when(articleMapper.findSeriesUuidsHavingArticlesInStatuses(anyCollection(), any()))
+                    .thenReturn(List.of(SERIES_A));
+
+            java.util.Set<UUID> result = facade.filterSeriesUuidsWithRetainedArticles(List.of(SERIES_A, SERIES_B));
+
+            assertThat(result).containsExactly(SERIES_A);
+            ArgumentCaptor<List<String>> statuses = ArgumentCaptor.forClass(List.class);
+            verify(articleMapper).findSeriesUuidsHavingArticlesInStatuses(anyCollection(), statuses.capture());
+            assertThat(statuses.getValue()).containsExactlyInAnyOrder("PUBLISHED", "ARCHIVED");
+        }
+
+        @Test
+        @DisplayName("重複與 null 元素先去重再查詢")
+        void duplicatesAndNulls_areDeduplicatedBeforeQuerying() {
+            when(articleMapper.findSeriesUuidsHavingArticlesInStatuses(anyCollection(), any())).thenReturn(List.of());
+
+            facade.filterSeriesUuidsWithRetainedArticles(Arrays.asList(SERIES_A, null, SERIES_A, SERIES_B));
+
+            ArgumentCaptor<Collection<UUID>> captor = ArgumentCaptor.forClass(Collection.class);
+            verify(articleMapper).findSeriesUuidsHavingArticlesInStatuses(captor.capture(), any());
+            assertThat(captor.getValue()).containsExactlyInAnyOrder(SERIES_A, SERIES_B);
         }
     }
 

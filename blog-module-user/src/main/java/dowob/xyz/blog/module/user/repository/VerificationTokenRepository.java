@@ -41,4 +41,16 @@ public interface VerificationTokenRepository extends CrudRepository<Verification
      * @param type   Token 類型
      */
     void deleteByUserIdAndType(Long userId, String type);
+
+    /**
+     * 查詢某用戶指定類型「最新」（id 最大）的一筆驗證 Token
+     *
+     * <p>供寄信 consumer 於寄信當下回 DB 取得要寄出的 token（ARCH-24：事件不攜帶 token）。
+     * 呼叫端須自行檢查是否過期。</p>
+     *
+     * @param userId 用戶 ID
+     * @param type   Token 類型
+     * @return 最新一筆驗證 Token Optional；沒有則為 empty
+     */
+    Optional<VerificationToken> findFirstByUserIdAndTypeOrderByIdDesc(Long userId, String type);
 }

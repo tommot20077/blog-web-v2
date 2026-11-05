@@ -19,9 +19,11 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.util.StreamUtils;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -29,10 +31,13 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 import java.util.UUID;
 
@@ -47,6 +52,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 public class FileController {
@@ -56,21 +62,19 @@ public class FileController {
      */
     private final FileService fileService;
 
-    /**
-     * {@code /content} 302 導向回應的快取秒數。
-     *
-     * <p>刻意短於 {@code FileServiceImpl} 產生 presigned URL 的 5 分鐘效期，
-     * 確保瀏覽器不會拿到已經過期的 Location。</p>
-     */
-    private static final int CONTENT_REDIRECT_CACHE_SECONDS = 240;
+    /** 公開可讀內容的快取策略：一天（頭像、公開文章圖片；內容以檔案 UUID 為鍵，不可變） */
+    private static final String PUBLIC_CACHE_CONTROL = "public, max-age=86400";
+
+    /** 需登入／擁有者才可讀內容的快取策略：不得被共用快取或瀏覽器儲存 */
+    private static final String PRIVATE_CACHE_CONTROL = "private, no-store";
 
     /**
      * 上傳檔案（需要 FILE_UPLOAD 權限），可選擇性一併綁定至文章
      *
      * @param file           上傳的檔案
      * @param usageType      用途類型
-     * @param articleUuid    要一併綁定的文章 UUID（可選；新文章尚未儲存時可留空，待文章儲存時再由
-     *                       {@code blog-module-article} 掃描內文回填綁定）
+     * @param articleUuid    要一併綁定的文章 UUID（可選；新文章尚未儲存時可留空，待文章儲存後由 file 模組消費
+     *                       {@code ArticleContentChangedEvent} 掃描內文回填綁定）
      * @param user         當前登入者（AuthUser）
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 上傳成功的檔案資訊（{@code url} 為相對路徑 {@code /api/v1/files/{id}/content}）
@@ -128,38 +132,49 @@ public class FileController {
     }
 
     /**
-     * 依授權矩陣判斷後，302 導向 MinIO 短效簽名網址取得檔案內容
+     * 依授權矩陣判斷後，由後端直接串流檔案內容回瀏覽器
      *
      * <p>
      * 端點本身對所有請求皆「可到達」（見 {@code SecurityConfig} 的 permitAll 註解），
      * 但實際授權判斷在 {@link FileService#canRead}，依 spec §4 授權矩陣：
      * AVATAR、已綁定 PUBLISHED 文章的圖片對匿名開放；草稿圖片與未綁定檔案僅上傳者與 ADMIN 可讀。
+     * 檔案不存在 404、無權限 403。
      * </p>
      *
      * <p>
-     * <b>絕不可回傳圖片位元組</b>：本端點僅回 302 + {@code Location}，由瀏覽器直接向 MinIO 取得實際內容，
-     * 讓圖片流量不經過應用伺服器（本設計的核心目的）。
+     * <b>串流而非導向（W5A，Yuan 2026-11-05 決定）</b>：物件儲存（MinIO／SeaweedFS）的位址僅後端內網可達，
+     * 瀏覽器連不到 presigned URL，且前端 CSP {@code img-src 'self' blob:} 只允許同源，故改由後端以
+     * {@code getObject} 邊讀邊寫（不整檔進記憶體）。回應標頭：
+     * {@code Content-Type} 取自 metadata、{@code Content-Length}、{@code X-Content-Type-Options: nosniff}、
+     * {@code Content-Disposition: inline}、{@code Content-Security-Policy: default-src 'none'; sandbox}
+     * （縱深防禦：即使日後 allowlist 放行 SVG 等可執行內容，直接導覽時也不執行腳本）。
+     * </p>
+     *
+     * <p>
+     * <b>快取</b>：公開可讀（AVATAR、綁定公開文章）→ {@code public, max-age=86400}；
+     * 其餘（需登入／擁有者）→ {@code private, no-store}，避免共用快取存到。
+     * {@code ETag} 取自檔案 UUID（物件寫入後內容不可變），{@code If-None-Match} 命中回 304
+     * （<b>授權判斷先於 304</b>，無權限者不會因帶了 ETag 而繞過）。
      * </p>
      *
      * @param id             檔案 UUID
-     * @param user         當前登入者（AuthUser；匿名為 null）
+     * @param user           當前登入者（AuthUser；匿名為 null）
      * @param authentication 當前認證資訊（用於判斷是否為 ADMIN）
-     * @param response       HTTP 回應（用於寫入 302 狀態碼與 Location 標頭）
+     * @param ifNoneMatch    請求的 {@code If-None-Match} 標頭；可為 null
+     * @param response       HTTP 回應（寫入標頭與內容）
+     * @throws IOException 寫出內容失敗（例如用戶端中斷連線）
      */
     @GetMapping("/api/v1/files/{id}/content")
     public void getFileContent(
             @PathVariable UUID id,
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication,
-            HttpServletResponse response) {
+            @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch,
+            HttpServletResponse response) throws IOException {
         UUID requesterId = user == null ? null : user.uuid();
         boolean isAdmin = SecurityUtils.isAdmin(authentication);
 
-        /*
-         * 只查一次 metadata，授權判斷與簽名網址產生都重用它。
-         * 原本 canRead(id,..) 與 generatePresignedUrl(id) 各自 findById 一次——
-         * 一頁十張圖就是二十次 DB 查詢。
-         */
+        /* 只查一次 metadata，授權判斷與串流都重用它（一頁十張圖就是十個請求）。 */
         FileMetadata metadata;
         try {
             metadata = fileService.getFileMetadata(id);
@@ -179,15 +194,71 @@ public class FileController {
             throw new HttpStatusBusinessException(FileErrorCode.FILE_ACCESS_DENIED, HttpStatus.FORBIDDEN);
         }
 
-        String presignedUrl = fileService.generatePresignedUrl(metadata);
-        response.setStatus(HttpServletResponse.SC_FOUND);
-        response.setHeader(HttpHeaders.LOCATION, presignedUrl);
         /*
-         * 302 本身可被瀏覽器短暫快取，省下同一頁重複載入時的往返；但必須是 private——
-         * 授權結果因人而異，且 Location 帶的是短效簽名網址，絕不可被共用快取層交叉服務。
-         * max-age 取 240 秒，短於 presigned URL 的 5 分鐘效期，避免快取到的網址已失效。
+         * 匿名且非 ADMIN 卻通過 canRead，必然是公開可讀（只有矩陣前兩條不看身分），省一次文章查詢；
+         * 其餘情況（登入者可能因擁有者／ADMIN 身分才通過）需實際判斷是否公開。
          */
-        response.setHeader(HttpHeaders.CACHE_CONTROL, "private, max-age=" + CONTENT_REDIRECT_CACHE_SECONDS);
+        boolean publicCacheable = (requesterId == null && !isAdmin) || fileService.isPubliclyReadable(metadata);
+        String etag = "\"" + metadata.getId() + "\"";
+        String cacheControl = publicCacheable ? PUBLIC_CACHE_CONTROL : PRIVATE_CACHE_CONTROL;
+
+        /* 304 不需要讀物件，維持在 openContent 之前；此時回應本身就是成功語意，帶快取標頭正確。 */
+        if (matchesEtag(ifNoneMatch, etag)) {
+            response.setHeader(HttpHeaders.ETAG, etag);
+            response.setHeader(HttpHeaders.CACHE_CONTROL, cacheControl);
+            response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
+            return;
+        }
+
+        /*
+         * 先開串流、成功後才設任何標頭：開啟失敗（MinIO 故障）時 response 尚未 commit 也尚未帶 ETag／public 快取標頭，
+         * 全域例外處理器回的 500 不會被 CDN／瀏覽器當成「可快取的公開圖片」存一天。
+         */
+        try (InputStream in = fileService.openContent(metadata)) {
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setHeader(HttpHeaders.ETAG, etag);
+            response.setHeader(HttpHeaders.CACHE_CONTROL, cacheControl);
+            response.setContentType(metadata.getContentType());
+            if (metadata.getSize() != null) {
+                response.setContentLengthLong(metadata.getSize());
+            }
+            response.setHeader("X-Content-Type-Options", "nosniff");
+            response.setHeader(HttpHeaders.CONTENT_DISPOSITION, "inline");
+            response.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+            StreamUtils.copy(in, response.getOutputStream());
+        } catch (IOException e) {
+            /*
+             * 串流階段的 IOException 絕大多數是瀏覽器中途取消（ClientAbortException／Broken pipe）：
+             * response 已 commit，往外拋只會讓通用 Exception 處理器記 ERROR 並試圖再寫 JSON，徒增噪音。
+             */
+            log.debug("檔案內容串流中斷（多為用戶端取消）fileId={}: {}", id, e.getMessage());
+        }
+    }
+
+    /**
+     * 判斷 {@code If-None-Match} 是否命中目前 ETag（支援 {@code *}、逗號分隔多值與弱驗證前綴 {@code W/}）
+     *
+     * @param ifNoneMatch 請求標頭值；可為 null
+     * @param etag        目前 ETag（含雙引號）
+     * @return 命中則 true
+     */
+    private static boolean matchesEtag(String ifNoneMatch, String etag) {
+        if (ifNoneMatch == null || ifNoneMatch.isBlank()) {
+            return false;
+        }
+        for (String candidate : ifNoneMatch.split(",")) {
+            String tag = candidate.trim();
+            if (tag.equals("*")) {
+                return true;
+            }
+            if (tag.startsWith("W/")) {
+                tag = tag.substring(2);
+            }
+            if (tag.equals(etag)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

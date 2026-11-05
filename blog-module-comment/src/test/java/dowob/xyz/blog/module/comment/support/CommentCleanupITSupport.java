@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.comment.support;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -77,8 +76,6 @@ public abstract class CommentCleanupITSupport {
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
-    /** article 模組的 ArticleFileBinder 依賴 FileFacade，其實作在未被本測試 scan 的 blog-module-file */
-    @MockitoBean private FileFacade fileFacade;
 
     @Autowired protected ArticleRepository articleRepo;
     @Autowired protected CommentRepository commentRepo;

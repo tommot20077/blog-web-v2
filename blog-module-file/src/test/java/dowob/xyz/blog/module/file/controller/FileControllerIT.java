@@ -47,8 +47,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.allOf;
-import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -621,8 +619,8 @@ class FileControllerIT {
      * <p>
      * 場景涵蓋：AVATAR 匿名可讀、已綁定 PUBLISHED 匿名可讀、已綁定 DRAFT（匿名/他人拒絕，
      * 上傳者/ADMIN 允許）、未綁定 fail-safe（匿名拒絕，上傳者允許）、檔案不存在 404、
-     * 以及回應必須是 302 + Location（絕不可回傳圖片位元組）。
-     * Red：此端點目前不存在，GET 會落到 Spring 預設 404，下列非 404 期待的斷言會全部失敗。
+     * 以及（W5A，Yuan 2026-11-05 決定）授權通過後由後端直接串流圖片位元組（200 + body），
+     * 不再 302 導向 presigned URL——物件儲存完全不對外。
      * </p>
      */
     @Nested
@@ -658,31 +656,43 @@ class FileControllerIT {
             return objectMapper.readTree(uploadResponse).path("data").path("id").asText();
         }
 
-        @Test
-        @DisplayName("規則1：AVATAR 檔案，匿名存取 → 302 導向 presigned URL")
-        void getFileContent_avatarUsageType_anonymous_returns302() throws Exception {
-            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
-
-            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
-                    .andExpect(status().isFound())
-                    .andReturn();
-
-            String location = result.getResponse().getHeader("Location");
-            assertThat(location).isNotBlank();
-            assertThat(location).contains("X-Amz-Signature");
+        /** 取得 createTestJpeg 的原始位元組（用來比對串流回來的 body） */
+        private byte[] testJpegBytes() throws Exception {
+            return getClass().getClassLoader().getResourceAsStream("test.jpg").readAllBytes();
         }
 
         @Test
-        @DisplayName("規則2：已綁定 PUBLISHED 文章的檔案，匿名存取 → 302")
-        void getFileContent_boundToPublishedArticle_anonymous_returns302() throws Exception {
+        @DisplayName("規則1：AVATAR 檔案，匿名存取 → 200 串流，body 等於上傳內容、Content-Type 取自 metadata、public 快取")
+        void getFileContent_avatarUsageType_anonymous_streamsBytes() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
+
+            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "image/jpeg"))
+                    .andExpect(header().string(HttpHeaders.CONTENT_LENGTH, String.valueOf(testJpegBytes().length)))
+                    .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                    .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "inline"))
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "public, max-age=86400"))
+                    .andExpect(header().doesNotExist(HttpHeaders.LOCATION))
+                    .andReturn();
+
+            assertThat(result.getResponse().getContentAsByteArray()).isEqualTo(testJpegBytes());
+        }
+
+        @Test
+        @DisplayName("規則2：已綁定 PUBLISHED 文章的檔案，匿名存取 → 200 串流 + public 快取")
+        void getFileContent_boundToPublishedArticle_anonymous_streamsPublic() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(articleUuid, "PUBLISHED", null, USER_A_UUID, null)));
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, articleUuid);
 
-            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
-                    .andExpect(status().isFound())
-                    .andExpect(header().exists("Location"));
+            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "public, max-age=86400"))
+                    .andReturn();
+
+            assertThat(result.getResponse().getContentAsByteArray()).isEqualTo(testJpegBytes());
         }
 
         @Test
@@ -711,8 +721,8 @@ class FileControllerIT {
         }
 
         @Test
-        @DisplayName("已綁定 DRAFT 文章的檔案，上傳者本人存取 → 302")
-        void getFileContent_boundToDraftArticle_uploader_returns302() throws Exception {
+        @DisplayName("已綁定 DRAFT 文章的檔案，上傳者本人存取 → 200 串流 + private, no-store")
+        void getFileContent_boundToDraftArticle_uploader_streamsPrivate() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(articleUuid, "DRAFT", null, USER_A_UUID, null)));
@@ -720,13 +730,13 @@ class FileControllerIT {
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
                             .with(asUser(USER_A_ID, Role.AUTHOR)))
-                    .andExpect(status().isFound())
-                    .andExpect(header().exists("Location"));
+                    .andExpect(status().isOk())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }
 
         @Test
-        @DisplayName("已綁定 DRAFT 文章的檔案，ADMIN 存取 → 302")
-        void getFileContent_boundToDraftArticle_admin_returns302() throws Exception {
+        @DisplayName("已綁定 DRAFT 文章的檔案，ADMIN 存取 → 200 串流 + private, no-store")
+        void getFileContent_boundToDraftArticle_admin_streamsPrivate() throws Exception {
             UUID articleUuid = UUID.randomUUID();
             when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
                     new ArticleData(articleUuid, "DRAFT", null, USER_A_UUID, null)));
@@ -734,8 +744,8 @@ class FileControllerIT {
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
                             .with(asUser(USER_B_ID, Role.ADMIN)))
-                    .andExpect(status().isFound())
-                    .andExpect(header().exists("Location"));
+                    .andExpect(status().isOk())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"));
         }
 
         @Test
@@ -748,17 +758,21 @@ class FileControllerIT {
         }
 
         @Test
-        @DisplayName("未綁定任何文章的檔案，上傳者本人存取 → 302")
-        void getFileContent_unbound_uploader_returns302() throws Exception {
+        @DisplayName("未綁定任何文章的檔案，上傳者本人存取 → 200 串流 + private, no-store")
+        void getFileContent_unbound_uploader_streamsPrivate() throws Exception {
             String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, null);
 
-            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
                             .with(asUser(USER_A_ID, Role.AUTHOR)))
-                    .andExpect(status().isFound());
+                    .andExpect(status().isOk())
+                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, no-store"))
+                    .andReturn();
+
+            assertThat(result.getResponse().getContentAsByteArray()).isEqualTo(testJpegBytes());
         }
 
         @Test
-        @DisplayName("效能：單次 /content 請求只查一次 file_metadata（原本 canRead 與 presign 各查一次）")
+        @DisplayName("效能：單次 /content 請求只查一次 file_metadata（授權與串流共用同一份 metadata）")
         void getFileContent_authorized_queriesMetadataOnlyOnce() throws Exception {
             String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
             UUID fileUuid = UUID.fromString(fileId);
@@ -766,20 +780,45 @@ class FileControllerIT {
             clearInvocations(fileMetadataRepository);
 
             mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
-                    .andExpect(status().isFound());
+                    .andExpect(status().isOk());
 
             verify(fileMetadataRepository, times(1)).findById(fileUuid);
         }
 
         @Test
-        @DisplayName("快取：302 需帶 private 且短於 presign 效期的 Cache-Control，避免中間層共用他人網址")
-        void getFileContent_setsPrivateCacheControlShorterThanPresignExpiry() throws Exception {
+        @DisplayName("ETag：回應帶 ETag；以該值 If-None-Match 再請求 → 304 無 body；不吻合 → 200")
+        void getFileContent_ifNoneMatch_returns304() throws Exception {
             String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
 
-            mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
-                    .andExpect(status().isFound())
-                    .andExpect(header().string(HttpHeaders.CACHE_CONTROL,
-                            allOf(containsString("private"), containsString("max-age=240"))));
+            String etag = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getHeader(HttpHeaders.ETAG);
+            assertThat(etag).isNotBlank();
+
+            MvcResult notModified = mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .header(HttpHeaders.IF_NONE_MATCH, etag))
+                    .andExpect(status().isNotModified())
+                    .andExpect(header().string(HttpHeaders.ETAG, etag))
+                    .andReturn();
+            assertThat(notModified.getResponse().getContentAsByteArray()).isEmpty();
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .header(HttpHeaders.IF_NONE_MATCH, "\"stale\""))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("授權先於 304：無權限者帶正確 ETag 仍 403")
+        void getFileContent_forbiddenWithMatchingEtag_returns403() throws Exception {
+            String fileId = uploadAndGetFileId(UsageType.ARTICLE_CONTENT, USER_A_ID, Role.AUTHOR, null);
+            String etag = mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .with(asUser(USER_A_ID, Role.AUTHOR)))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getHeader(HttpHeaders.ETAG);
+
+            mockMvc.perform(get("/api/v1/files/" + fileId + "/content")
+                            .header(HttpHeaders.IF_NONE_MATCH, etag))
+                    .andExpect(status().isForbidden());
         }
 
         @Test
@@ -787,21 +826,6 @@ class FileControllerIT {
         void getFileContent_fileNotFound_returns404() throws Exception {
             mockMvc.perform(get("/api/v1/files/" + UUID.randomUUID() + "/content"))
                     .andExpect(status().isNotFound());
-        }
-
-        @Test
-        @DisplayName("回應必須是 302 + 有效 Location，絕不可回傳圖片位元組")
-        void getFileContent_response_isRedirectNotBytes() throws Exception {
-            String fileId = uploadAndGetFileId(UsageType.AVATAR, USER_A_ID, Role.AUTHOR, null);
-
-            MvcResult result = mockMvc.perform(get("/api/v1/files/" + fileId + "/content"))
-                    .andExpect(status().isFound())
-                    .andReturn();
-
-            String location = result.getResponse().getHeader("Location");
-            assertThat(location).isNotBlank();
-            /** 302 導向回應不應帶圖片 body：Content-Type 不應為圖片類型 */
-            assertThat(result.getResponse().getContentType()).isNotEqualTo(MediaType.IMAGE_JPEG_VALUE);
         }
 
         @Test
