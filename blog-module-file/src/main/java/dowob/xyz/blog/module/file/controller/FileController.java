@@ -19,6 +19,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -51,6 +52,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 public class FileController {
@@ -198,17 +200,24 @@ public class FileController {
          */
         boolean publicCacheable = (requesterId == null && !isAdmin) || fileService.isPubliclyReadable(metadata);
         String etag = "\"" + metadata.getId() + "\"";
-        response.setHeader(HttpHeaders.ETAG, etag);
-        response.setHeader(HttpHeaders.CACHE_CONTROL, publicCacheable ? PUBLIC_CACHE_CONTROL : PRIVATE_CACHE_CONTROL);
+        String cacheControl = publicCacheable ? PUBLIC_CACHE_CONTROL : PRIVATE_CACHE_CONTROL;
 
+        /* 304 不需要讀物件，維持在 openContent 之前；此時回應本身就是成功語意，帶快取標頭正確。 */
         if (matchesEtag(ifNoneMatch, etag)) {
+            response.setHeader(HttpHeaders.ETAG, etag);
+            response.setHeader(HttpHeaders.CACHE_CONTROL, cacheControl);
             response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
             return;
         }
 
-        /* 先開串流再設標頭：開啟失敗時 response 尚未 commit，仍可由全域例外處理器回標準錯誤格式。 */
+        /*
+         * 先開串流、成功後才設任何標頭：開啟失敗（MinIO 故障）時 response 尚未 commit 也尚未帶 ETag／public 快取標頭，
+         * 全域例外處理器回的 500 不會被 CDN／瀏覽器當成「可快取的公開圖片」存一天。
+         */
         try (InputStream in = fileService.openContent(metadata)) {
             response.setStatus(HttpServletResponse.SC_OK);
+            response.setHeader(HttpHeaders.ETAG, etag);
+            response.setHeader(HttpHeaders.CACHE_CONTROL, cacheControl);
             response.setContentType(metadata.getContentType());
             if (metadata.getSize() != null) {
                 response.setContentLengthLong(metadata.getSize());
@@ -217,6 +226,12 @@ public class FileController {
             response.setHeader(HttpHeaders.CONTENT_DISPOSITION, "inline");
             response.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
             StreamUtils.copy(in, response.getOutputStream());
+        } catch (IOException e) {
+            /*
+             * 串流階段的 IOException 絕大多數是瀏覽器中途取消（ClientAbortException／Broken pipe）：
+             * response 已 commit，往外拋只會讓通用 Exception 處理器記 ERROR 並試圖再寫 JSON，徒增噪音。
+             */
+            log.debug("檔案內容串流中斷（多為用戶端取消）fileId={}: {}", id, e.getMessage());
         }
     }
 

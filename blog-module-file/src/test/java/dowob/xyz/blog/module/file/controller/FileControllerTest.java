@@ -1,7 +1,9 @@
 package dowob.xyz.blog.module.file.controller;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
+import dowob.xyz.blog.common.exception.SystemException;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -27,6 +29,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -239,6 +242,44 @@ class FileControllerTest {
                 .extracting(e -> ((HttpStatusBusinessException) e).getStatus())
                 .isEqualTo(HttpStatus.FORBIDDEN);
         verify(fileService, never()).openContent(metadata);
+    }
+
+    /** r2 MEDIUM：物件儲存失敗時，500 錯誤回應不得帶 public 快取標頭或 ETag（避免 CDN 快取住錯誤，公開圖破圖最長一天） */
+    @Test
+    @DisplayName("getFileContent_openContentFails_errorResponseCarriesNoPublicCacheOrEtag")
+    void getFileContent_openContentFails_errorResponseCarriesNoPublicCacheOrEtag() {
+        UUID fileId = UUID.randomUUID();
+        FileMetadata metadata = contentMetadata(fileId, new byte[]{1});
+        when(fileService.getFileMetadata(fileId)).thenReturn(metadata);
+        when(fileService.canRead(metadata, null, false)).thenReturn(true);
+        when(fileService.openContent(metadata)).thenThrow(new SystemException(CommonErrorCode.STORAGE_ERROR));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThatThrownBy(() -> fileController.getFileContent(fileId, null, null, null, response))
+                .isInstanceOf(SystemException.class);
+
+        assertThat(response.getHeader("ETag")).isNull();
+        assertThat(response.getHeader("Cache-Control")).as("錯誤回應不得帶 public").isNull();
+    }
+
+    /** r2 LOW：串流途中瀏覽器取消（IOException）屬正常現象——不往外拋，避免被通用處理器記 ERROR 並試圖寫 JSON */
+    @Test
+    @DisplayName("getFileContent_clientAbortsDuringStreaming_returnsQuietly")
+    void getFileContent_clientAbortsDuringStreaming_returnsQuietly() {
+        UUID fileId = UUID.randomUUID();
+        FileMetadata metadata = contentMetadata(fileId, new byte[]{1, 2, 3});
+        when(fileService.getFileMetadata(fileId)).thenReturn(metadata);
+        when(fileService.canRead(metadata, null, false)).thenReturn(true);
+        when(fileService.openContent(metadata)).thenReturn(new java.io.InputStream() {
+            @Override
+            public int read() throws java.io.IOException {
+                throw new java.io.IOException("Broken pipe");
+            }
+        });
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThatCode(() -> fileController.getFileContent(fileId, null, null, null, response))
+                .doesNotThrowAnyException();
     }
 
     /** 刪除：requesterId 為 AuthUser.uuid()；ADMIN 角色傳遞 isAdmin = true */

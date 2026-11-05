@@ -85,6 +85,17 @@ class FileArticleContentChangedConsumerTest {
     }
 
     @Test
+    @DisplayName("r2：listener 並行度固定為 1（同一篇文章的事件依序處理，避免兩條執行緒交錯讀到新舊內文而讓綁定停在舊內文）")
+    void listener_concurrencyIsOne() throws Exception {
+        org.springframework.amqp.rabbit.annotation.RabbitListener listener =
+                FileArticleContentChangedConsumer.class
+                        .getMethod("onContentChanged", ArticleContentChangedEvent.class)
+                        .getAnnotation(org.springframework.amqp.rabbit.annotation.RabbitListener.class);
+
+        org.assertj.core.api.Assertions.assertThat(listener.concurrency()).isEqualTo("1");
+    }
+
+    @Test
     @DisplayName("缺 articleUuid 的 payload：不處理、不進冪等交易、正常返回（避免無限重送）")
     void onContentChanged_nullArticleUuid_skips() {
         consumer.onContentChanged(event(UUID.randomUUID(), null, ArticleContentChangedEvent.Action.SAVED));
