@@ -36,12 +36,12 @@ spring:
       #   executeIdempotent 的 consumer 在整個 body 期間持有一條 DB 連線（寄信 consumer 的 SMTP 最壞約 15 秒）。
       #   使用 DB 的 @RabbitListener container 共 13 個：其中 12 個沿用全域並行度（最多 max-concurrency 條執行緒），
       #   另有 file.article-binding 以 @RabbitListener(concurrency = "1") 固定為 1 條（同一篇文章的事件須依序處理）。
-      #   最壞同時佔用 = 12 × max-concurrency + 1 = 12 × 2 + 1 = 25 條；30 − 25 = 5 條留給 HTTP／排程
-      #   （低於原本「HTTP 預留 ≥ 6」的目標差 1；要恢復 ≥ 6 請把 DB_POOL_MAX_SIZE 調為 31）。
+      #   最壞同時佔用 = 12 × max-concurrency + 1 = 12 × 2 + 1 = 25 條；32 − 25 = 7 條留給 HTTP／排程
+      #   （Yuan 2026-11-05 決定由 30 調為 32：恢復「HTTP 預留 ≥ 6」並為日後新增 consumer 留 1 條餘裕）。
       #   調高 MQ_LISTENER_MAX_CONCURRENCY 時，務必同步調高本值：maximum-pool-size ≥ 12 × max-concurrency + 1 + HTTP 預留。
       #   多副本部署時 DB 總連線 = 副本數 × 本值，需不超過 Postgres max_connections。
-      maximum-pool-size: ${DB_POOL_MAX_SIZE:30}
-      # minimum-idle 未設時等於 maximum-pool-size，會讓每個副本常駐 30 條連線（原本預設 10）；
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:32}
+      # minimum-idle 未設時等於 maximum-pool-size，會讓每個副本常駐 32 條連線（原本預設 10）；
       # 改為平時只保留 10 條，尖峰（MQ consumer 吃滿）才長到 maximum-pool-size，閒置後由 Hikari 收回。
       minimum-idle: ${DB_POOL_MIN_IDLE:10}
 
