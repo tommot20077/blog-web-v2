@@ -54,9 +54,13 @@ public class PasswordResetConsumer {
      * {@link ConsumerExecutor} 輸出）。ack 前當機造成的重投會被擋下而不重寄；若使用者仍沒收到信，
      * 請其走「再次忘記密碼」（產生新 eventId）。</p>
      *
+     * <p><b>事件不含個資與 token（ARCH-24）</b>：consumer 於寄信當下以 {@code userUuid} 查詢（見
+     * {@link UserMailService#sendPasswordResetEmail}）。使用者已刪帳、重設 token 已使用或已過期時不寄，
+     * 記一行 INFO 後正常 ack（不進 DLQ）。冪等標記仍在同一交易內，被略過的事件同樣標記為已處理。</p>
+     *
      * <p>郵件發送成功後正常返回（容器 ack）；失敗則往外拋，由容器重試（最多 3 次，寄信失敗可能重寄同一連結），耗盡後送 DLQ。</p>
      *
-     * @param event       密碼重設請求事件，包含用戶 UUID、信箱與重設 Token
+     * @param event       密碼重設請求事件，只含 eventId 與 userUuid；信箱與重設 Token 於寄信時查詢
      */
     @RabbitListener(
             queues = UserRabbitMqConfig.QUEUE_PASSWORD_RESET,
@@ -67,8 +71,9 @@ public class PasswordResetConsumer {
                 () -> "userUuid=" + event.userUuid() + ", eventId=" + event.eventId(),
                 event.eventId(), () -> {
                     log.info("收到密碼重設請求 - userUuid={}, eventId={}", event.userUuid(), event.eventId());
-                    userMailService.sendPasswordResetEmail(event);
-                    log.info("密碼重設信已送出 - userUuid={}", event.userUuid());
+                    if (userMailService.sendPasswordResetEmail(event)) {
+                        log.info("密碼重設信已送出 - userUuid={}", event.userUuid());
+                    }
                 });
     }
 }

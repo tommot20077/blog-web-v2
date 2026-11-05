@@ -311,10 +311,10 @@ class DeleteCascadeQueueBindingIT {
         Message image = converter.toMessage(
                 new ImageUploadedEvent(imageEventId, UUID.randomUUID(), "files/a.jpg", "image/jpeg"), new MessageProperties());
         Message registered = converter.toMessage(
-                new UserRegisteredEvent(registeredEventId, UUID.randomUUID(), "a@b.c", "nick", "token", "123456"),
+                new UserRegisteredEvent(registeredEventId, UUID.randomUUID()),
                 new MessageProperties());
         Message reset = converter.toMessage(
-                new UserPasswordResetRequestedEvent(resetEventId, UUID.randomUUID(), "a@b.c", "token"), new MessageProperties());
+                new UserPasswordResetRequestedEvent(resetEventId, UUID.randomUUID()), new MessageProperties());
 
         assertThat(image.getMessageProperties().getMessageId()).isEqualTo(imageEventId.toString());
         assertThat(registered.getMessageProperties().getMessageId()).isEqualTo(registeredEventId.toString());

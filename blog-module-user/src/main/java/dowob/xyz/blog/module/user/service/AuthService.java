@@ -219,8 +219,7 @@ public class AuthService {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
                     UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                    new UserRegisteredEvent(UUID.randomUUID(), savedUser.getUuid(), savedUser.getEmail(),
-                            savedUser.getNickname(), tokenValue, verificationCode));
+                    new UserRegisteredEvent(UUID.randomUUID(), savedUser.getUuid()));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
         }
@@ -283,8 +282,7 @@ public class AuthService {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
                     UserRabbitMqConfig.ROUTING_KEY_REGISTRATION_ATTEMPT,
-                    new RegistrationAttemptOnExistingEmailEvent(UUID.randomUUID(), owner.getUuid(),
-                            owner.getEmail(), owner.getNickname()));
+                    new RegistrationAttemptOnExistingEmailEvent(UUID.randomUUID(), owner.getUuid()));
         } catch (Exception e) {
             log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             try {
@@ -565,8 +563,7 @@ public class AuthService {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
                         UserRabbitMqConfig.ROUTING_KEY_PASSWORD_RESET,
-                        new UserPasswordResetRequestedEvent(UUID.randomUUID(), user.getUuid(), user.getEmail(),
-                                tokenValue));
+                        new UserPasswordResetRequestedEvent(UUID.randomUUID(), user.getUuid()));
             } catch (Exception e) {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
@@ -636,9 +633,7 @@ public class AuthService {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
                         UserRabbitMqConfig.ROUTING_KEY_REGISTERED,
-                        new UserRegisteredEvent(UUID.randomUUID(), user.getUuid(), user.getEmail(),
-                                user.getNickname(), tokenValue,
-                                verificationCode));
+                        new UserRegisteredEvent(UUID.randomUUID(), user.getUuid()));
             } catch (Exception e) {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }

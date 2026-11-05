@@ -116,8 +116,6 @@ class AuthRegisterExistingEmailIntegrationTest extends AbstractIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM users WHERE username = ?", Long.class,
                 PREFIX + "attacker")).as("嘗試者的 username 沒有被建立").isZero();
         RegistrationAttemptOnExistingEmailEvent event = captureNotice();
-        assertThat(event.email()).isEqualTo(OWNER_EMAIL);
-        assertThat(event.nickname()).isEqualTo("Q8Owner");
         assertThat(event.userUuid()).isEqualTo(
                 jdbc.queryForObject("SELECT uuid FROM users WHERE email = ?", java.util.UUID.class, OWNER_EMAIL));
         verify(rabbitTemplate, times(0)).convertAndSend(anyString(), eq(UserRabbitMqConfig.ROUTING_KEY_REGISTERED),

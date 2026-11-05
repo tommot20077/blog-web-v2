@@ -272,7 +272,6 @@ class AuthServiceTest {
                 any(UserRegisteredEvent.class));
         RegistrationAttemptOnExistingEmailEvent event = captureSingleRegistrationAttemptEvent();
         assertThat(event.userUuid()).isEqualTo(OWNER_UUID);
-        assertThat(event.email()).isEqualTo(OWNER_EMAIL);
     }
 
     /**
@@ -443,10 +442,9 @@ class AuthServiceTest {
         RegistrationAttemptOnExistingEmailEvent event = captureSingleRegistrationAttemptEvent();
         assertThat(event.eventId()).isNotNull();
         assertThat(event.userUuid()).isEqualTo(OWNER_UUID);
-        assertThat(event.email()).as("寄給資料庫儲存的信箱，而非請求輸入").isEqualTo(OWNER_EMAIL);
-        assertThat(event.nickname()).isEqualTo("OwnerNick");
-        assertThat(event.toString()).doesNotContain(TEST_USERNAME).doesNotContain(TEST_NICKNAME)
-                .doesNotContain(TEST_PASSWORD);
+        assertThat(event.toString()).as("事件不含 email／暱稱（ARCH-24），也不含嘗試者提交的資料")
+                .doesNotContain(OWNER_EMAIL).doesNotContain("OwnerNick")
+                .doesNotContain(TEST_USERNAME).doesNotContain(TEST_NICKNAME).doesNotContain(TEST_PASSWORD);
         verify(rabbitTemplate, never()).convertAndSend(anyString(), eq(UserRabbitMqConfig.ROUTING_KEY_REGISTERED),
                 any(UserRegisteredEvent.class));
     }
@@ -627,13 +625,15 @@ class AuthServiceTest {
 
         ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
-        assertThat(eventCaptor.getValue().verificationCode()).matches("\\d{6}");
+        ArgumentCaptor<String> codeCaptor = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(
                 eq(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL)),
-                eq(eventCaptor.getValue().verificationCode()),
+                codeCaptor.capture(),
                 eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
                 eq(TimeUnit.MINUTES)
         );
+        assertThat(codeCaptor.getValue()).as("驗證碼只存 Redis，事件不帶（ARCH-24）").matches("\\d{6}");
+        assertThat(eventCaptor.getValue().toString()).doesNotContain(codeCaptor.getValue());
     }
 
     /**
@@ -1102,7 +1102,8 @@ class AuthServiceTest {
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
         assertThat(eventCaptor.getValue().userUuid()).isEqualTo(USER_UUID);
         assertThat(eventCaptor.getValue().eventId()).isNotNull();
-        assertThat(eventCaptor.getValue().email()).isEqualTo(TEST_EMAIL);
+        assertThat(eventCaptor.getValue().toString()).as("事件不含 email 與 token（ARCH-24）")
+                .doesNotContain(TEST_EMAIL);
     }
 
     /**
@@ -1385,13 +1386,15 @@ class AuthServiceTest {
         verify(verificationTokenRepository).save(any(VerificationToken.class));
         ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
-        assertThat(eventCaptor.getValue().verificationCode()).matches("\\d{6}");
+        ArgumentCaptor<String> codeCaptor = ArgumentCaptor.forClass(String.class);
         verify(valueOperations).set(
                 eq(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL)),
-                eq(eventCaptor.getValue().verificationCode()),
+                codeCaptor.capture(),
                 eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
                 eq(TimeUnit.MINUTES)
         );
+        assertThat(codeCaptor.getValue()).as("驗證碼只存 Redis，事件不帶（ARCH-24）").matches("\\d{6}");
+        assertThat(eventCaptor.getValue().toString()).doesNotContain(codeCaptor.getValue());
     }
 
     /**
