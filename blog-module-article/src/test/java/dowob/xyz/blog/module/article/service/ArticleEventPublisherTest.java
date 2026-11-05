@@ -195,6 +195,33 @@ class ArticleEventPublisherTest {
         }
 
         @Test
+        @DisplayName("publishPublished(Article)：標籤由 publisher 內部回查 DB 現況並帶進事件")
+        void publishPublishedSingleArg_shouldLookUpTagsItself() {
+            Article article = publishedArticle();
+            TagInfo tag = new TagInfo(UUID.randomUUID(), "Spring", "spring");
+            when(articleMapper.findTagsByArticleUuid(article.getUuid())).thenReturn(List.of(tag));
+            when(userFacade.getDisplayInfoByUuids(List.of(AUTHOR_UUID))).thenReturn(displayInfo(AUTHOR_UUID, "愛麗絲"));
+
+            publisher.publishPublished(article);
+
+            ArgumentCaptor<ArticlePublishedEvent> captor = ArgumentCaptor.forClass(ArticlePublishedEvent.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq(ArticleEventContract.EXCHANGE), eq(ArticleEventContract.ROUTING_KEY_PUBLISHED), captor.capture());
+            assertThat(captor.getValue().tags()).containsExactly(tag);
+        }
+
+        @Test
+        @DisplayName("publishPublished(Article)：標籤回查丟例外 → 不外拋（best-effort），也不送出事件")
+        void publishPublishedSingleArg_whenTagLookupFails_shouldSwallow() {
+            Article article = publishedArticle();
+            when(articleMapper.findTagsByArticleUuid(article.getUuid())).thenThrow(new RuntimeException("DB down"));
+
+            assertThatCode(() -> publisher.publishPublished(article)).doesNotThrowAnyException();
+
+            verifyNoInteractions(rabbitTemplate);
+        }
+
+        @Test
         @DisplayName("publishPublished：facade 查無作者暱稱 → authorNickname 為 null，事件仍送出（authorUuid 照帶）")
         void publishPublished_whenNicknameMissing_shouldStillPublishWithNullNickname() {
             Article article = publishedArticle();

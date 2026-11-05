@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
@@ -180,6 +181,33 @@ class SeriesUserDeletedConsumerIT {
         verifyNoInteractions(rabbitTemplate);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM processed_events WHERE event_id = ? AND consumer_name = ?",
                 Integer.class, ev.eventId(), SeriesUserDeletedConsumer.CONSUMER_NAME)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("跨作者：已刪帳作者的系列內有他人的 PUBLISHED 文章（admin 才能放入）→ 系列保留")
+    void seriesContainingOthersPublishedArticle_isRetained() {
+        UUID series = insertSeries(deletedAuthor, "cross-published");
+        insertArticle(otherAuthor, series, 1, "PUBLISHED");
+
+        consumer.onUserDeleted(event());
+
+        assertThat(seriesExists(series)).isTrue();
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    @Test
+    @DisplayName("跨作者：已刪帳作者的系列內只有他人的草稿 → 系列被刪，他人文章列仍在（只是等 SeriesDeletedEvent 後脫離系列）")
+    void seriesContainingOnlyOthersDraft_isDeletedButArticleRemains() {
+        UUID series = insertSeries(deletedAuthor, "cross-draft");
+        insertArticle(otherAuthor, series, 1, "DRAFT");
+
+        consumer.onUserDeleted(event());
+
+        assertThat(seriesExists(series)).isFalse();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM articles WHERE author_uuid = ?", Integer.class, otherAuthor))
+                .as("他人的文章不會被刪").isEqualTo(1);
+        verify(rabbitTemplate).convertAndSend(
+                eq(SeriesEventContract.EXCHANGE), eq(SeriesEventContract.ROUTING_KEY_DELETED), any(SeriesDeletedEvent.class));
     }
 
     @Test

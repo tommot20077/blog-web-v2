@@ -281,8 +281,8 @@ class ArticleCommandSubService {
 
         /** DB 已 commit，best-effort 補發發布事件（與「發布」端點一致；Updated 照舊保留） */
         if (enteredPublished) {
-            /** payload 的標籤須是 DB 現況：請求沒帶 tagNames 時 tagInfos 為空，直接用會讓搜尋索引丟掉既有標籤 */
-            articleEventPublisher.publishPublished(updated, articleMapper.findTagsByArticleUuid(updated.getUuid()));
+            /** payload 的標籤須是 DB 現況（請求沒帶 tagNames 時 tagInfos 為空），由 publisher 在 best-effort 範圍內回查 */
+            articleEventPublisher.publishPublished(updated);
         }
 
         /**
