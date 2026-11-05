@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.file.controller;
 
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -13,6 +14,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.data.domain.Pageable;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockMultipartFile;
@@ -20,11 +22,15 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
+import java.io.ByteArrayInputStream;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -104,40 +110,135 @@ class FileControllerTest {
         verify(fileService).canRead(metadata, null, false);
     }
 
-    /** 內容導向：登入者以 AuthUser.uuid() 作為 requesterId，且回 302 + Location */
+    /** 建立含 id／contentType／size 的 metadata，供 /content 串流測試使用 */
+    private static FileMetadata contentMetadata(UUID fileId, byte[] bytes) {
+        FileMetadata metadata = new FileMetadata();
+        metadata.setId(fileId);
+        metadata.setContentType("image/png");
+        metadata.setSize((long) bytes.length);
+        return metadata;
+    }
+
+    /** W5A：登入者以 AuthUser.uuid() 作為 requesterId，後端串流 200 + 內容，非公開 → private, no-store */
     @Test
-    @DisplayName("getFileContent_authenticated_usesAuthUserUuidAsRequesterId")
-    void getFileContent_authenticated_usesAuthUserUuidAsRequesterId() {
+    @DisplayName("getFileContent_authenticatedNonPublic_streamsBytesWithPrivateNoStore")
+    void getFileContent_authenticatedNonPublic_streamsBytesWithPrivateNoStore() throws Exception {
         AuthUser user = authUser(Role.AUTHOR);
         UUID fileId = UUID.randomUUID();
-        FileMetadata metadata = new FileMetadata();
+        byte[] bytes = {9, 8, 7, 6, 5};
+        FileMetadata metadata = contentMetadata(fileId, bytes);
         when(fileService.getFileMetadata(fileId)).thenReturn(metadata);
         when(fileService.canRead(metadata, user.uuid(), false)).thenReturn(true);
-        when(fileService.generatePresignedUrl(metadata)).thenReturn("http://storage/presigned");
+        when(fileService.isPubliclyReadable(metadata)).thenReturn(false);
+        when(fileService.openContent(metadata)).thenReturn(new ByteArrayInputStream(bytes));
         MockHttpServletResponse response = new MockHttpServletResponse();
 
-        fileController.getFileContent(fileId, user, authenticationOf(user), response);
+        fileController.getFileContent(fileId, user, authenticationOf(user), null, response);
 
-        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_FOUND);
-        assertThat(response.getHeader("Location")).isEqualTo("http://storage/presigned");
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+        assertThat(response.getContentAsByteArray()).isEqualTo(bytes);
+        assertThat(response.getContentType()).isEqualTo("image/png");
+        assertThat(response.getHeader("Content-Length")).isEqualTo("5");
+        assertThat(response.getHeader("X-Content-Type-Options")).isEqualTo("nosniff");
+        assertThat(response.getHeader("Content-Disposition")).isEqualTo("inline");
+        assertThat(response.getHeader("Cache-Control")).isEqualTo("private, no-store");
+        assertThat(response.getHeader("ETag")).isNotBlank();
+        assertThat(response.getHeader("Location")).isNull();
         verify(fileService).canRead(metadata, user.uuid(), false);
     }
 
-    /** 內容導向：匿名（user 為 null）時 requesterId 為 null */
+    /** W5A：匿名（user 為 null）時 requesterId 為 null；能讀即為公開 → public, max-age=86400 */
     @Test
-    @DisplayName("getFileContent_anonymous_passesNullRequesterId")
-    void getFileContent_anonymous_passesNullRequesterId() {
+    @DisplayName("getFileContent_anonymous_passesNullRequesterIdAndIsPublicCacheable")
+    void getFileContent_anonymous_passesNullRequesterIdAndIsPublicCacheable() throws Exception {
         UUID fileId = UUID.randomUUID();
-        FileMetadata metadata = new FileMetadata();
+        byte[] bytes = {1, 2, 3};
+        FileMetadata metadata = contentMetadata(fileId, bytes);
         when(fileService.getFileMetadata(fileId)).thenReturn(metadata);
         when(fileService.canRead(metadata, null, false)).thenReturn(true);
-        when(fileService.generatePresignedUrl(metadata)).thenReturn("http://storage/presigned");
+        when(fileService.openContent(metadata)).thenReturn(new ByteArrayInputStream(bytes));
         MockHttpServletResponse response = new MockHttpServletResponse();
 
-        fileController.getFileContent(fileId, null, null, response);
+        fileController.getFileContent(fileId, null, null, null, response);
 
-        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_FOUND);
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+        assertThat(response.getContentAsByteArray()).isEqualTo(bytes);
+        assertThat(response.getHeader("Cache-Control")).isEqualTo("public, max-age=86400");
         verify(fileService).canRead(metadata, null, false);
+    }
+
+    /** W5A：登入者讀取公開檔案（例如作者看自己已發布文章的圖）→ 仍為 public 快取 */
+    @Test
+    @DisplayName("getFileContent_authenticatedPubliclyReadable_isPublicCacheable")
+    void getFileContent_authenticatedPubliclyReadable_isPublicCacheable() throws Exception {
+        AuthUser user = authUser(Role.USER);
+        UUID fileId = UUID.randomUUID();
+        byte[] bytes = {1};
+        FileMetadata metadata = contentMetadata(fileId, bytes);
+        when(fileService.getFileMetadata(fileId)).thenReturn(metadata);
+        when(fileService.canRead(metadata, user.uuid(), false)).thenReturn(true);
+        when(fileService.isPubliclyReadable(metadata)).thenReturn(true);
+        when(fileService.openContent(metadata)).thenReturn(new ByteArrayInputStream(bytes));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        fileController.getFileContent(fileId, user, authenticationOf(user), null, response);
+
+        assertThat(response.getHeader("Cache-Control")).isEqualTo("public, max-age=86400");
+    }
+
+    /** W5A：If-None-Match 命中 ETag → 304，且不開啟物件儲存、不寫 body（授權仍先判斷） */
+    @Test
+    @DisplayName("getFileContent_ifNoneMatchHitsEtag_returns304WithoutBody")
+    void getFileContent_ifNoneMatchHitsEtag_returns304WithoutBody() throws Exception {
+        UUID fileId = UUID.randomUUID();
+        FileMetadata metadata = contentMetadata(fileId, new byte[]{1});
+        when(fileService.getFileMetadata(fileId)).thenReturn(metadata);
+        when(fileService.canRead(metadata, null, false)).thenReturn(true);
+        MockHttpServletResponse first = new MockHttpServletResponse();
+        when(fileService.openContent(metadata)).thenReturn(new ByteArrayInputStream(new byte[]{1}));
+        fileController.getFileContent(fileId, null, null, null, first);
+        String etag = first.getHeader("ETag");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        fileController.getFileContent(fileId, null, null, etag, response);
+
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_NOT_MODIFIED);
+        assertThat(response.getContentAsByteArray()).isEmpty();
+        assertThat(response.getHeader("ETag")).isEqualTo(etag);
+        verify(fileService, times(1)).openContent(metadata);
+    }
+
+    /** W5A：If-None-Match 不吻合 → 正常 200 */
+    @Test
+    @DisplayName("getFileContent_ifNoneMatchMismatch_returns200")
+    void getFileContent_ifNoneMatchMismatch_returns200() throws Exception {
+        UUID fileId = UUID.randomUUID();
+        FileMetadata metadata = contentMetadata(fileId, new byte[]{1});
+        when(fileService.getFileMetadata(fileId)).thenReturn(metadata);
+        when(fileService.canRead(metadata, null, false)).thenReturn(true);
+        when(fileService.openContent(metadata)).thenReturn(new ByteArrayInputStream(new byte[]{1}));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        fileController.getFileContent(fileId, null, null, "\"other\"", response);
+
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+    }
+
+    /** W5A：無權限者即使帶了正確 ETag 也必須 403（授權先於 304，不洩漏存在性以外的資訊） */
+    @Test
+    @DisplayName("getFileContent_forbiddenEvenWithMatchingEtag_throws403")
+    void getFileContent_forbiddenEvenWithMatchingEtag_throws403() {
+        UUID fileId = UUID.randomUUID();
+        FileMetadata metadata = contentMetadata(fileId, new byte[]{1});
+        when(fileService.getFileMetadata(fileId)).thenReturn(metadata);
+        when(fileService.canRead(metadata, null, false)).thenReturn(false);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThatThrownBy(() -> fileController.getFileContent(fileId, null, null, "*", response))
+                .isInstanceOf(HttpStatusBusinessException.class)
+                .extracting(e -> ((HttpStatusBusinessException) e).getStatus())
+                .isEqualTo(HttpStatus.FORBIDDEN);
+        verify(fileService, never()).openContent(metadata);
     }
 
     /** 刪除：requesterId 為 AuthUser.uuid()；ADMIN 角色傳遞 isAdmin = true */

@@ -15,13 +15,13 @@ import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
-import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
-import io.minio.http.Method;
 
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.Tika;
@@ -45,7 +45,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 /**
  * 檔案服務實作
@@ -218,7 +217,7 @@ public class FileServiceImpl implements FileService {
          * B4 / spec §3.1：回傳相對路徑而非 MinIO 直連網址，避免絕對網址把域名焊進 markdown 內文
          * （換域名時內文全破）。瀏覽器對 {@code /api/...} 以當前 origin 解析是 HTML 內建行為，
          * 不需要 render-time 改寫。實際內容由 {@code GET /api/v1/files/{id}/content} 端點
-         * 判斷授權後 302 導向 MinIO presigned URL 取得。
+         * 判斷授權後由後端從物件儲存串流回瀏覽器（W5A：不再 302／presigned，物件儲存不對外）。
          */
         String url = "/api/v1/files/" + fileId + "/content";
         return new FileUploadResponse(fileId, url, width, height, (long) fileBytes.length, usageType);
@@ -444,14 +443,8 @@ public class FileServiceImpl implements FileService {
      */
     @Override
     public boolean canRead(FileMetadata metadata, UUID requesterId, boolean isAdmin) {
-        if (metadata.getUsageType() == UsageType.AVATAR) {
+        if (isPubliclyReadable(metadata)) {
             return true;
-        }
-        if (metadata.getArticleUuid() != null) {
-            Optional<ArticleData> boundArticle = articleLookupFacade.findByUuid(metadata.getArticleUuid());
-            if (boundArticle.isPresent() && ArticleStatus.isPubliclyVisible(boundArticle.get().status())) {
-                return true;
-            }
         }
         if (metadata.belongsTo(requesterId)) {
             return true;
@@ -462,35 +455,39 @@ public class FileServiceImpl implements FileService {
     /**
      * {@inheritDoc}
      *
-     * <p>
-     * 使用 MinIO SDK {@code getPresignedObjectUrl}，方法固定為 GET，效期固定 5 分鐘（300 秒）。
-     * 本方法不做任何權限判斷，呼叫端（{@code FileController}）須先呼叫 {@link #canRead} 通過後才可呼叫。
-     * </p>
+     * <p>授權矩陣中不依賴請求者身分的部分（AVATAR、綁定公開文章）；未綁定或文章查無資料一律 false（fail-safe）。</p>
      */
     @Override
-    public String generatePresignedUrl(UUID fileId) {
-        FileMetadata metadata = fileMetadataRepository.findById(fileId)
-                .orElseThrow(() -> new BusinessException(FileErrorCode.FILE_NOT_FOUND));
-        return generatePresignedUrl(metadata);
+    public boolean isPubliclyReadable(FileMetadata metadata) {
+        if (metadata.getUsageType() == UsageType.AVATAR) {
+            return true;
+        }
+        if (metadata.getArticleUuid() != null) {
+            Optional<ArticleData> boundArticle = articleLookupFacade.findByUuid(metadata.getArticleUuid());
+            return boundArticle.isPresent() && ArticleStatus.isPubliclyVisible(boundArticle.get().status());
+        }
+        return false;
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p>接受已取得的 {@link FileMetadata}，不再查一次 DB（理由同 {@link #canRead(FileMetadata, UUID, boolean)}）。</p>
+     * <p>
+     * 使用 MinIO SDK {@code getObject} 取得串流，由呼叫端（{@code FileController}）邊讀邊寫入 response，
+     * 不整檔載入記憶體。本方法不做任何權限判斷，呼叫端須先呼叫 {@link #canRead} 通過。
+     * 物件儲存的主機只在後端內網可達，瀏覽器不會直接連線。
+     * </p>
      */
     @Override
-    public String generatePresignedUrl(FileMetadata metadata) {
+    public InputStream openContent(FileMetadata metadata) {
         try {
-            return minioClient.getPresignedObjectUrl(
-                    GetPresignedObjectUrlArgs.builder()
-                            .method(Method.GET)
+            return minioClient.getObject(
+                    GetObjectArgs.builder()
                             .bucket(bucketName)
                             .object(metadata.getStoragePath())
-                            .expiry(5, TimeUnit.MINUTES)
                             .build());
         } catch (Exception e) {
-            log.error("產生 MinIO 簽名網址失敗: {}", metadata.getStoragePath(), e);
+            log.error("開啟 MinIO 物件串流失敗: {}", metadata.getStoragePath(), e);
             throw new SystemException(CommonErrorCode.STORAGE_ERROR);
         }
     }

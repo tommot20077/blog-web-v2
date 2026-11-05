@@ -159,12 +159,12 @@
 | ID | 嚴重度 | 標題 | 證據 | 狀態 |
 |----|--------|------|------|------|
 | FILE-01 | Medium | 公開未授權 `GET /files/{id}` metadata 洩漏 storagePath + uploaderId（= AUTH-07） | **已修證據**：`FileController.java:126-132` 先取 metadata 再 `canRead`（無權 403）；`FileMetadata.java:59-61` `storagePath` `@JsonIgnore` | **DONE（安全面）**／架構面見 ARCH-08 |
-| FILE-02 | Low-Medium | MinIO 同源 inline serving 無 nosniff/無 Content-Disposition | **大幅緩解**：`FileServiceImpl.java:491-505` 改 5 分鐘 presigned、`FileController.java:188-196` 302 導向 + `Cache-Control: private`；Tika magic-byte + `application.yaml:84-88` 僅 4 種 `image/*` allowlist ⇒ svg/html 無法上傳。**殘留 LOW**：MinIO 直出回應仍無 `X-Content-Type-Options`／`Content-Disposition`（應用層無法插手，需 ingress 層處理） | OPEN（殘留 LOW）|
+| FILE-02 | Low-Medium | MinIO 同源 inline serving 無 nosniff/無 Content-Disposition | **大幅緩解**：`FileServiceImpl.java:491-505` 改 5 分鐘 presigned、`FileController.java:188-196` 302 導向 + `Cache-Control: private`；Tika magic-byte + `application.yaml:84-88` 僅 4 種 `image/*` allowlist ⇒ svg/html 無法上傳。**殘留 LOW**：MinIO 直出回應仍無 `X-Content-Type-Options`／`Content-Disposition`（應用層無法插手，需 ingress 層處理） 〔先前紀錄：OPEN（殘留 LOW）〕。**2026-11-05 W5A 更新**：`/content` 改由後端 `getObject` 串流（Yuan 決定；presigned 主機為內網位址，瀏覽器連不到），應用層直接回 `X-Content-Type-Options: nosniff`、`Content-Disposition: inline`、`Content-Security-Policy: default-src 'none'; sandbox`，殘留 LOW 消除；快取 `public, max-age=86400`（公開）／`private, no-store`（其餘）＋ETag／304 | **DONE** |
 | FILE-03 | Low | 使用者可控副檔名進 storage key 與 thumbnail outputFormat（無白名單/未濾 `..`、null byte）→ **SEC-18**（PLAUSIBLE：MinIO 是否對 key 正規化未實測） | `FileServiceImpl.java:583-590,156-157`、`ThumbnailConsumer.java:74,87` | OPEN |
 | FILE-04 | Medium | 縮圖無最大像素防護 → decompression bomb 致 worker OOM（DoS）→ **SEC-11 ＝ PERF-25**。性能面補：`concurrentConsumers=1` ⇒ 單一惡意圖片停擺整條 `file.thumbnail` queue | `FileServiceImpl.java:170-183`（header 讀了寬高卻未據此拒絕）、`ThumbnailConsumer.java:84-88` | OPEN |
 | FILE-05 | Low | size 檢查在全量讀入記憶體之後；multipart 未設定 → 實際生效框架預設 1MB，與程式 5MB 矛盾 → **SEC-17 ＝ PERF-24**。2026-09-04 確認未變 | `FileServiceImpl.java:130-145`、`application.yaml`（`rg multipart` 零命中） | OPEN |
 | FILE-06 | Low | 無 EXIF/GPS metadata 剝除 → 洩漏照片拍攝地點（隱私）→ **SEC-19** | `FileServiceImpl.java:160-167` | OPEN |
-| FILE-07 | Medium | 回傳裸 object URL（無 presigned），bucket 幾必 public-read | **已修證據**：`FileServiceImpl.java:225-227` 改回相對路徑 `/api/v1/files/{id}/content`；`MinioConfig.java:83-100` `ensureBucket` **不設任何 public-read policy**（bucket 維持私有），內容一律走 presigned | **DONE** |
+| FILE-07 | Medium | 回傳裸 object URL（無 presigned），bucket 幾必 public-read | **已修證據**：`FileServiceImpl.java:225-227` 改回相對路徑 `/api/v1/files/{id}/content`；`MinioConfig.java:83-100` `ensureBucket` **不設任何 public-read policy**（bucket 維持私有），內容一律走 presigned | **DONE** 〔2026-11-05 W5A：`/content` 已改後端串流，不再 presigned／302，bucket 仍維持私有〕 |
 
 ---
 

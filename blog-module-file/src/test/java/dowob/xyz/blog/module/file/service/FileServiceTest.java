@@ -13,11 +13,12 @@ import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
-import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.GetObjectArgs;
+import io.minio.GetObjectResponse;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
-import io.minio.http.Method;
+import okhttp3.Headers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -38,6 +39,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
@@ -1530,51 +1532,99 @@ class FileServiceTest {
         }
     }
 
-    /** B4：generatePresignedUrl —— 產生短效簽名網址供 /content 端點 302 導向使用 */
+    /** W5A：openContent —— 以 MinIO getObject 串流物件內容（取代 presigned URL 302） */
     @Nested
-    @DisplayName("generatePresignedUrl 測試 (B4)")
-    class GeneratePresignedUrlTests {
+    @DisplayName("openContent 測試 (W5A)")
+    class OpenContentTests {
 
-        /**
-         * 驗證使用 MinIO SDK getPresignedObjectUrl 以 GET 方法、5 分鐘（300 秒）效期產生簽名網址。
-         * Red：FileService 尚無此方法，編譯失敗。
-         */
+        /** 以 getObject（bucket + storagePath）取得串流，並原樣回傳其內容，不整檔讀入記憶體 */
         @Test
-        @DisplayName("generatePresignedUrl_whenFileExists_callsMinioWithGetMethodAndFiveMinuteExpiry")
-        void generatePresignedUrl_whenFileExists_callsMinioWithGetMethodAndFiveMinuteExpiry() throws Exception {
-            UUID fileId = UUID.randomUUID();
+        @DisplayName("openContent_whenObjectExists_returnsStreamFromGetObject")
+        void openContent_whenObjectExists_returnsStreamFromGetObject() throws Exception {
             FileMetadata metadata = new FileMetadata();
-            metadata.setId(fileId);
+            metadata.setId(UUID.randomUUID());
             metadata.setStoragePath("articles/2024/01/01/test.jpg");
-            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
-            when(minioClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
-                    .thenReturn("http://localhost:9000/test-bucket/articles/2024/01/01/test.jpg?X-Amz-Signature=abc");
+            byte[] bytes = {1, 2, 3, 4};
+            when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(
+                    new GetObjectResponse(Headers.of(), "test-bucket", "", "articles/2024/01/01/test.jpg",
+                            new ByteArrayInputStream(bytes)));
 
-            String url = fileService.generatePresignedUrl(fileId);
+            try (InputStream in = fileService.openContent(metadata)) {
+                assertThat(in.readAllBytes()).isEqualTo(bytes);
+            }
 
-            assertThat(url).contains("X-Amz-Signature");
-            ArgumentCaptor<GetPresignedObjectUrlArgs> captor = ArgumentCaptor.forClass(GetPresignedObjectUrlArgs.class);
-            verify(minioClient).getPresignedObjectUrl(captor.capture());
-            GetPresignedObjectUrlArgs args = captor.getValue();
-            assertThat(args.method()).isEqualTo(Method.GET);
-            assertThat(args.bucket()).isEqualTo("test-bucket");
-            assertThat(args.object()).isEqualTo("articles/2024/01/01/test.jpg");
-            assertThat(args.expiry()).isEqualTo(300);
+            ArgumentCaptor<GetObjectArgs> captor = ArgumentCaptor.forClass(GetObjectArgs.class);
+            verify(minioClient).getObject(captor.capture());
+            assertThat(captor.getValue().bucket()).isEqualTo("test-bucket");
+            assertThat(captor.getValue().object()).isEqualTo("articles/2024/01/01/test.jpg");
         }
 
-        /**
-         * 檔案不存在時應拋出 BusinessException(FILE_NOT_FOUND)，讓 controller 能區分 404 vs 403。
-         * Red：方法不存在，編譯失敗。
-         */
+        /** 物件儲存失敗 → STORAGE_ERROR（SystemException），不洩漏底層例外細節 */
         @Test
-        @DisplayName("generatePresignedUrl_whenFileNotFound_throwsBusinessException")
-        void generatePresignedUrl_whenFileNotFound_throwsBusinessException() {
-            UUID fileId = UUID.randomUUID();
-            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+        @DisplayName("openContent_whenStorageFails_throwsSystemException")
+        void openContent_whenStorageFails_throwsSystemException() throws Exception {
+            FileMetadata metadata = new FileMetadata();
+            metadata.setStoragePath("articles/x.jpg");
+            when(minioClient.getObject(any(GetObjectArgs.class))).thenThrow(new IOException("boom"));
 
-            assertThatThrownBy(() -> fileService.generatePresignedUrl(fileId))
-                    .isInstanceOf(BusinessException.class)
-                    .hasMessageContaining(FileErrorCode.FILE_NOT_FOUND.getMessage());
+            assertThatThrownBy(() -> fileService.openContent(metadata))
+                    .isInstanceOf(SystemException.class);
+        }
+    }
+
+    /** W5A：isPubliclyReadable —— 授權矩陣中與請求者身分無關的部分，決定可否被共用快取 */
+    @Nested
+    @DisplayName("isPubliclyReadable 測試 (W5A)")
+    class IsPubliclyReadableTests {
+
+        private FileMetadata metadata(UsageType usageType, UUID articleUuid) {
+            FileMetadata m = new FileMetadata();
+            m.setId(UUID.randomUUID());
+            m.setUsageType(usageType);
+            m.setArticleUuid(articleUuid);
+            m.setUploaderId(UUID.randomUUID());
+            return m;
+        }
+
+        @Test
+        @DisplayName("isPubliclyReadable_avatar_true")
+        void isPubliclyReadable_avatar_true() {
+            assertThat(fileService.isPubliclyReadable(metadata(UsageType.AVATAR, null))).isTrue();
+        }
+
+        @Test
+        @DisplayName("isPubliclyReadable_boundToPublishedArticle_true")
+        void isPubliclyReadable_boundToPublishedArticle_true() {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(articleUuid, "PUBLISHED", null, UUID.randomUUID(), null)));
+
+            assertThat(fileService.isPubliclyReadable(metadata(UsageType.ARTICLE_CONTENT, articleUuid))).isTrue();
+        }
+
+        @Test
+        @DisplayName("isPubliclyReadable_boundToDraftArticle_false")
+        void isPubliclyReadable_boundToDraftArticle_false() {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                    new ArticleData(articleUuid, "DRAFT", null, UUID.randomUUID(), null)));
+
+            assertThat(fileService.isPubliclyReadable(metadata(UsageType.ARTICLE_CONTENT, articleUuid))).isFalse();
+        }
+
+        @Test
+        @DisplayName("isPubliclyReadable_unbound_false")
+        void isPubliclyReadable_unbound_false() {
+            assertThat(fileService.isPubliclyReadable(metadata(UsageType.ARTICLE_CONTENT, null))).isFalse();
+        }
+
+        @Test
+        @DisplayName("isPubliclyReadable_boundArticleMissing_false")
+        void isPubliclyReadable_boundArticleMissing_false() {
+            UUID articleUuid = UUID.randomUUID();
+            when(articleLookupFacade.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+            assertThat(fileService.isPubliclyReadable(metadata(UsageType.ARTICLE_CONTENT, articleUuid))).isFalse();
         }
     }
 

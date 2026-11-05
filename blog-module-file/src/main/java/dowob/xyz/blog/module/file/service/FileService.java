@@ -7,6 +7,7 @@ import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.InputStream;
 import java.util.List;
 import java.util.UUID;
 
@@ -154,27 +155,29 @@ public interface FileService {
     boolean canRead(FileMetadata metadata, UUID requesterId, boolean isAdmin);
 
     /**
-     * 產生指定檔案的 MinIO 短效簽名網址（B4：供 {@code GET /api/v1/files/{id}/content} 302 導向使用）
+     * 判斷檔案是否「公開可讀」（任何人含匿名皆可讀，因此可被共用快取存放）
      *
      * <p>
-     * 效期固定 5 分鐘：足夠瀏覽器完成一次載入，即使網址外流也很快失效。
-     * 呼叫端須先以 {@link #canRead} 完成授權判斷後才呼叫本方法——本方法本身不做任何權限檢查。
+     * 為授權矩陣中不依賴請求者身分的那一部分：{@code usageType = AVATAR}，或綁定的文章目前為公開可見狀態。
+     * 上傳者本人／ADMIN 才能讀的檔案回傳 false。供 {@code /content} 端點決定 {@code Cache-Control}。
      * </p>
      *
-     * @param fileId 檔案 UUID
-     * @return MinIO 簽名網址（含效期、簽章等查詢參數）
-     * @throws dowob.xyz.blog.common.exception.BusinessException FILE_NOT_FOUND 若檔案不存在
+     * @param metadata 已取得的檔案元資料（不可為 null）
+     * @return 公開可讀則 true
      */
-    String generatePresignedUrl(UUID fileId);
+    boolean isPubliclyReadable(FileMetadata metadata);
 
     /**
-     * 產生指定檔案的 MinIO 短效簽名網址（接受已取得的 metadata，省掉一次 DB 查詢）
+     * 開啟檔案內容的串流（供 {@code GET /api/v1/files/{id}/content} 由後端直接串流回瀏覽器）
      *
-     * <p>語意與效期同 {@link #generatePresignedUrl(UUID)}；同樣不做任何權限檢查，
-     * 呼叫端須先以 {@link #canRead(FileMetadata, UUID, boolean)} 完成授權判斷。</p>
+     * <p>
+     * 以 MinIO {@code getObject} 取得物件串流，不將整檔讀入記憶體；<b>呼叫端負責關閉</b>回傳的串流。
+     * 本方法不做任何權限檢查，呼叫端須先以 {@link #canRead(FileMetadata, UUID, boolean)} 完成授權判斷。
+     * </p>
      *
      * @param metadata 已取得的檔案元資料（不可為 null）
-     * @return MinIO 簽名網址
+     * @return 物件內容串流
+     * @throws dowob.xyz.blog.common.exception.SystemException STORAGE_ERROR 若物件儲存讀取失敗
      */
-    String generatePresignedUrl(FileMetadata metadata);
+    InputStream openContent(FileMetadata metadata);
 }
