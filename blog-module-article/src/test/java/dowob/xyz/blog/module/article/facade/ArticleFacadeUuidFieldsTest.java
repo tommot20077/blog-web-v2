@@ -2,7 +2,6 @@ package dowob.xyz.blog.module.article.facade;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
@@ -13,7 +12,6 @@ import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
-import dowob.xyz.blog.module.article.service.ArticleFileBinder;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -59,7 +57,6 @@ class ArticleFacadeUuidFieldsTest {
     @Mock private TagFacade tagFacade;
     @Mock private ArticleEventPublisher articleEventPublisher;
     @Mock private TransactionTemplate transactionTemplate;
-    @Mock private FileFacade fileFacade;
 
     private ArticleFacadeImpl facade;
 
@@ -72,7 +69,7 @@ class ArticleFacadeUuidFieldsTest {
         facade = new ArticleFacadeImpl(
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
-                new ArticleFileBinder(fileFacade), assembler, null, null, null);
+                assembler, null, null, null);
     }
 
     private static Article article(long id, UUID seriesUuid) {

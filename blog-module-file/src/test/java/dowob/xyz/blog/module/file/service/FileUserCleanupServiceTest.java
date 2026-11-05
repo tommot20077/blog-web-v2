@@ -112,6 +112,36 @@ class FileUserCleanupServiceTest {
     }
 
     @Test
+    @DisplayName("W5A：綁定尚未回填的時間窗——內文剛引用、article_uuid 仍為 NULL 的檔案，被保留文章內文引用 → 保留；只被草稿引用者 → 刪除")
+    void bindingNotYetBackfilled_stillCorrectViaContentReferences() {
+        /* 綁定改為非同步回填：兩者 article_uuid 皆仍為 NULL（事件尚未被消費） */
+        FileMetadata referencedByPublished = file(UsageType.ARTICLE_CONTENT, null);
+        FileMetadata referencedOnlyByDraft = file(UsageType.ARTICLE_CONTENT, null);
+        stubFiles(referencedByPublished, referencedOnlyByDraft);
+        when(articleLookupFacade.findFileUuidsReferencedByRetainedArticles(uploader))
+                .thenReturn(Set.of(referencedByPublished.getId()));
+
+        int deleted = service.deleteFilesNotReferencedByRetainedArticles(uploader);
+
+        assertThat(deleted).isEqualTo(1);
+        verify(fileService, never()).deleteFile(referencedByPublished.getId(), uploader, false);
+        verify(fileService).deleteFile(referencedOnlyByDraft.getId(), uploader, false);
+    }
+
+    @Test
+    @DisplayName("W5A：綁定仍指向舊的已發布文章、但內文已不再引用 → 只會多保留（以綁定為準），不會誤刪")
+    void staleBindingToRetainedArticle_isKeptNeverWronglyDeleted() {
+        UUID published = UUID.randomUUID();
+        FileMetadata staleBound = file(UsageType.ARTICLE_CONTENT, published);
+        stubFiles(staleBound);
+        stubArticle(published, "PUBLISHED");
+        when(articleLookupFacade.findFileUuidsReferencedByRetainedArticles(uploader)).thenReturn(Set.of());
+
+        assertThat(service.deleteFilesNotReferencedByRetainedArticles(uploader)).isZero();
+        verify(fileService, never()).deleteFile(any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    @Test
     @DisplayName("M4：查詢保留文章引用失敗 → 整體往外拋、不刪任何檔案")
     void retainedReferenceLookupFails_deletesNothingAndThrows() {
         stubFiles(file(UsageType.ARTICLE_CONTENT, null));

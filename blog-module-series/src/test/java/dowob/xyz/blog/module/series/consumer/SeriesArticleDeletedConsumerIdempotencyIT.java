@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.series.consumer;
 
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -83,7 +82,6 @@ class SeriesArticleDeletedConsumerIdempotencyIT {
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
-    @MockitoBean private FileFacade fileFacade;
 
     /** 本測試建立的 series 公開 UUID */
     private UUID seriesUuid;

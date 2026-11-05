@@ -22,16 +22,20 @@ import java.util.UUID;
  *
  * <p><b>「被保留文章引用」的判斷</b>只用既有的跨模組資訊，不 JOIN article 表：</p>
  * <ul>
- *   <li>檔案的 {@code article_uuid} 綁定（{@code ArticleFileBinder} 於文章儲存時回填；內文圖片以此綁定，
+ *   <li>檔案的 {@code article_uuid} 綁定（{@link ArticleFileBindingService} 於文章內容變更事件到達後非同步回填；內文圖片以此綁定，
  *       未綁定的檔案本來就不對外公開——見 {@code FileServiceImpl#canRead} 的授權矩陣，因此刪除它們不會讓任何公開頁面破圖）；</li>
  *   <li>{@link ArticleLookupFacade#findByUuid} 取得綁定文章的狀態，去留依 {@link ArticleStatus#isRemovedWithAuthorAccount(String)}：
  *       文章已不存在，或屬 DRAFT／PENDING_REVIEW／REJECTED（隨作者刪帳移除）→ 不算被引用，檔案刪除；
  *       PUBLISHED／ARCHIVED（保留）→ 檔案保留。</li>
  * </ul>
- * <p><b>綁定欄位不足以判斷</b>：{@code ArticleFileBinder} 只掃內文、不掃 {@code coverImageUrl}，且重新綁定時會把不在
+ * <p><b>綁定欄位不足以判斷</b>：{@link ArticleFileBindingService} 只掃內文、不掃 {@code coverImageUrl}，且重新綁定時會把不在
  * 內文清單的既有綁定改成 NULL，所以已發布文章的封面檔 {@code article_uuid} 常為 NULL；同一張圖同時用在草稿與已發布文章
  * 時也可能只綁到草稿那篇。因此另以 {@link ArticleLookupFacade#findFileUuidsReferencedByRetainedArticles} 取得保留文章
  * 內文與封面實際引用的檔案集合，凡在集合內一律保留（不論 article_uuid）。</p>
+ * <p><b>綁定尚未回填的時間窗（W5A）</b>：綁定由 {@code FileArticleContentChangedConsumer} 非同步回填，文章剛儲存、
+ * 事件還沒被消費前，內文新引用的檔案 {@code article_uuid} 仍是 NULL（或舊值）。此時判斷仍正確，因為「保留文章內文／封面
+ * 實際引用的檔案集合」是直接掃文章內容取得的，不依賴綁定：被保留文章引用的檔案不論綁定是否已回填都會保留；
+ * 只被草稿引用而尚未回填的檔案則本來就該隨草稿刪除；反方向（綁定仍指向已不引用它的舊文章）只會多保留、不會誤刪。</p>
  * <p>頭像（{@link UsageType#AVATAR}）是使用者個資，一律刪除。每個不同的文章只查一次狀態，不逐檔查詢。</p>
  *
  * <p>實際刪除委派既有的 {@link FileService#deleteFile}（以上傳者本人身分）：metadata 列與 MinIO 物件

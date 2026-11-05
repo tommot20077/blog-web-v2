@@ -33,7 +33,7 @@ import java.util.stream.Collectors;
  * <p>
  * <b>不得為本類別新增 service / facade 依賴</b>：它存在的唯一理由是打斷
  * article ⇄ file 模組的 Spring 建構子循環依賴（成因見 {@link ArticleLookupFacade} javadoc）。
- * 加上任何指回 {@code ArticleService} / {@code ArticleFileBinder} / {@code FileFacade}
+ * 加上任何指回 {@code ArticleService} / {@code ArticleFacade} 等胖 Bean
  * 的依賴，都會讓環重新成立，而且單元測試（全 mock）抓不到，只有實際啟動應用程式才會現形。
  * </p>
  *
@@ -79,5 +79,17 @@ public class ArticleLookupFacadeImpl implements ArticleLookupFacade {
                 .toList();
         return articleAuthorCleanupMapper.findReferencedFileUuidsByAuthorAndStatuses(authorUuid, retainedStatuses)
                 .stream().map(UUID::fromString).collect(Collectors.toSet());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Optional<String> findContentByUuid(UUID articleUuid) {
+        if (articleUuid == null) {
+            return Optional.empty();
+        }
+        return articleRepository.findByUuid(articleUuid)
+                .map(article -> article.getContent() == null ? "" : article.getContent());
     }
 }

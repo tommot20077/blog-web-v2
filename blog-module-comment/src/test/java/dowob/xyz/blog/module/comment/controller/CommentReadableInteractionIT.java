@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -97,7 +96,6 @@ class CommentReadableInteractionIT {
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
-    @MockitoBean private FileFacade fileFacade;
 
     private static final UUID AUTHOR = SeededUsers.USER_UUID;
     private static final UUID VIEWER = SeededUsers.OTHER_USER_UUID;

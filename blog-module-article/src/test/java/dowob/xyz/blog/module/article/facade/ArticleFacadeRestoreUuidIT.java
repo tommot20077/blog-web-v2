@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.article.facade;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
@@ -46,6 +45,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * M3-a：UUID 版 {@link ArticleFacade#findContentByUuid} 與
@@ -98,7 +98,6 @@ class ArticleFacadeRestoreUuidIT {
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
     @MockitoBean private TagFacade tagFacade;
-    @MockitoBean private FileFacade fileFacade;
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
@@ -109,7 +108,7 @@ class ArticleFacadeRestoreUuidIT {
 
     @BeforeEach
     void setUp() {
-        reset(tagFacade, fileFacade, rabbitTemplate);
+        reset(tagFacade, rabbitTemplate);
     }
 
     @AfterEach
@@ -197,14 +196,13 @@ class ArticleFacadeRestoreUuidIT {
     }
 
     @Test
-    @DisplayName("UUID 版還原：tags 為 null 以空清單同步；還原後重新綁定檔案")
-    void applyRestoreContent_uuidVersion_nullTagsSyncEmptyAndRebindsFiles() {
+    @DisplayName("UUID 版還原：tags 為 null 以空清單同步；不再同步綁定檔案（改由 file 模組消費 RESTORED 事件，W5A）")
+    void applyRestoreContent_uuidVersion_nullTagsSyncEmptyAndNoSyncFileBinding() {
         UUID uuid = insertArticle("DRAFT");
 
         articleFacade.applyRestoreContent(uuid, source("tags-" + uuid, null));
 
         assertThat(capturedTags(uuid)).isEmpty();
-        verify(fileFacade, times(1)).bindFilesToArticle(eq(uuid), any());
     }
 
     @Test

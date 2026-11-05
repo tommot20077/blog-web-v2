@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.file.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,5 +53,40 @@ class FileRabbitMqConfigTest {
         assertThat(binding.getExchange()).isEqualTo(UserEventContract.EXCHANGE);
         assertThat(binding.getRoutingKey()).isEqualTo(UserEventContract.ROUTING_KEY_DELETED);
         assertThat(binding.getDestination()).isEqualTo("file.user-deleted");
+    }
+
+    @Test
+    @DisplayName("article.events exchange（W5A）：Topic、durable、不自動刪除；名稱取自 article 事件契約")
+    void articleEventsExchange_matchesContractAndIsDurableTopic() {
+        TopicExchange exchange = config.fileArticleEventsExchange();
+
+        assertThat(exchange.getName()).isEqualTo(ArticleEventContract.EXCHANGE).isEqualTo("article.events");
+        assertThat(exchange.getType()).isEqualTo("topic");
+        assertThat(exchange.isDurable()).isTrue();
+        assertThat(exchange.isAutoDelete()).isFalse();
+    }
+
+    @Test
+    @DisplayName("queue（W5A）：file.article-binding、durable，並帶 DLQ 參數")
+    void articleBindingQueue_isDurableWithDlqArgs() {
+        Queue queue = config.fileArticleBindingQueue();
+
+        assertThat(FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED).isEqualTo("file.article-binding");
+        assertThat(queue.getName()).isEqualTo("file.article-binding");
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+                .containsEntry("x-dead-letter-exchange", "blog.dlq")
+                .containsEntry("x-dead-letter-routing-key", "dead-letter");
+    }
+
+    @Test
+    @DisplayName("binding（W5A）：綁定 article.events exchange 與 article.content.changed routing key（取自契約常數）")
+    void bindFileArticleBinding_bindsContentChangedContract() {
+        Binding binding = config.bindFileArticleBinding(config.fileArticleBindingQueue(), config.fileArticleEventsExchange());
+
+        assertThat(binding.getExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
+        assertThat(binding.getRoutingKey()).isEqualTo(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED)
+                .isEqualTo("article.content.changed");
+        assertThat(binding.getDestination()).isEqualTo("file.article-binding");
     }
 }

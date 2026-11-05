@@ -1,6 +1,7 @@
 package dowob.xyz.blog.mq;
 
 import dowob.xyz.blog.infrastructure.config.RabbitMqConfig;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
@@ -17,6 +18,7 @@ import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
 import dowob.xyz.blog.module.comment.config.CommentRabbitMqConfig;
 import dowob.xyz.blog.module.comment.consumer.CommentArticleDeletedConsumer;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
+import dowob.xyz.blog.module.file.consumer.FileArticleContentChangedConsumer;
 import dowob.xyz.blog.module.file.consumer.FileUserDeletedConsumer;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.reading.config.ReadingRabbitMqConfig;
@@ -252,6 +254,34 @@ class DeleteCascadeQueueBindingIT {
         assertThat(raw[0].getMessageProperties().getMessageId()).isEqualTo(event.eventId().toString());
         assertThat(raw[0].getMessageProperties().getReceivedExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
         assertThat(raw[0].getMessageProperties().getReceivedRoutingKey()).isEqualTo(ArticleEventContract.ROUTING_KEY_DELETED);
+    }
+
+    @Test
+    @DisplayName("文章內容變更事件（W5A／Q12）：file.article-binding 綁到 article.events＋article.content.changed，FileArticleContentChangedConsumer 存在、能還原事件，messageId 等於 eventId")
+    void articleContentChanged_reachesFileBindingQueue() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setUuid(articleUuid);
+        article.setAuthorUuid(UUID.randomUUID());
+        ArticleEventPublisher publisher = new ArticleEventPublisher(
+                rabbitTemplate, Mockito.mock(UserFacade.class), Mockito.mock(ArticleMapper.class));
+        Method listener = listenerMethodFor(FileArticleContentChangedConsumer.class,
+                FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED);
+        assertThat(listener).as("file.article-binding 應有 @RabbitListener 訂閱").isNotNull();
+        context.getBean(RabbitAdmin.class).purgeQueue(FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED, false);
+
+        publisher.publishContentChanged(article, ArticleContentChangedEvent.Action.RESTORED);
+
+        Message[] raw = new Message[1];
+        Object restored = receiveAs(FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED, listener.getParameterTypes()[0], raw);
+        assertThat(restored).isInstanceOf(ArticleContentChangedEvent.class);
+        ArticleContentChangedEvent event = (ArticleContentChangedEvent) restored;
+        assertThat(event.articleUuid()).isEqualTo(articleUuid);
+        assertThat(event.action()).isEqualTo(ArticleContentChangedEvent.Action.RESTORED);
+        assertThat(raw[0].getMessageProperties().getReceivedExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
+        assertThat(raw[0].getMessageProperties().getReceivedRoutingKey())
+                .isEqualTo(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED);
+        assertThat(raw[0].getMessageProperties().getMessageId()).isEqualTo(event.eventId().toString());
     }
 
     @Test

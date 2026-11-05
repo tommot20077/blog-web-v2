@@ -2,7 +2,6 @@ package dowob.xyz.blog.module.series.integration;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -89,7 +88,6 @@ class ArticleSeriesConditionalAssignmentIT {
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
-    @MockitoBean private FileFacade fileFacade;
 
     @BeforeEach
     @AfterEach

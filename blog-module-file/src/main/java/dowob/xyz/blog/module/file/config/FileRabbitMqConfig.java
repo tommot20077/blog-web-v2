@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.file.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
@@ -16,7 +17,8 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>
  * 宣告圖片上傳相關的 Exchange、Queue 與 Binding；另訂閱 {@code user.events} 的 {@code user.deleted}，
- * 於使用者刪除帳號後清除其未被保留文章引用的檔案（DATA-02）。
+ * 於使用者刪除帳號後清除其未被保留文章引用的檔案（DATA-02）；訂閱 {@code article.events} 的
+ * {@code article.content.changed}，依文章最新內文回填「檔案 → 文章」綁定（Q12）。
  * </p>
  *
  * @author Yuan
@@ -117,5 +119,48 @@ public class FileRabbitMqConfig {
                                        @Qualifier("fileUserEventsExchange") TopicExchange fileUserEventsExchange) {
         return BindingBuilder.bind(fileUserDeletedQueue).to(fileUserEventsExchange)
                 .with(UserEventContract.ROUTING_KEY_DELETED);
+    }
+
+    /** 文章內容變更事件（檔案綁定回填）Queue 名稱 */
+    public static final String QUEUE_ARTICLE_CONTENT_CHANGED = "file.article-binding";
+
+    /**
+     * 宣告文章事件 Topic Exchange（與 article 模組宣告的 {@code article.events} 參數相同，重複宣告冪等）。
+     *
+     * <p>exchange 由 producer（article 模組）宣告；本模組不依賴 article 模組，故以事件契約常數
+     * {@link ArticleEventContract#EXCHANGE} 自行宣告同名 exchange，bean 名稱與 article 端不同以避免衝突。</p>
+     *
+     * @return TopicExchange 實例
+     */
+    @Bean
+    public TopicExchange fileArticleEventsExchange() {
+        return new TopicExchange(ArticleEventContract.EXCHANGE);
+    }
+
+    /**
+     * 宣告 file.article-binding Queue（持久化，含 DLQ 設定）：消費文章內容變更事件，回填「檔案 → 文章」綁定（Q12）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue fileArticleBindingQueue() {
+        return QueueBuilder.durable(QUEUE_ARTICLE_CONTENT_CHANGED)
+                .withArgument("x-dead-letter-exchange", "blog.dlq")
+                .withArgument("x-dead-letter-routing-key", "dead-letter")
+                .build();
+    }
+
+    /**
+     * 將 fileArticleBindingQueue 綁定至 article.events 的 {@code article.content.changed} routing key
+     *
+     * @param fileArticleBindingQueue  檔案綁定回填 Queue
+     * @param fileArticleEventsExchange 文章事件 Topic Exchange 的宣告
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding bindFileArticleBinding(Queue fileArticleBindingQueue,
+                                          @Qualifier("fileArticleEventsExchange") TopicExchange fileArticleEventsExchange) {
+        return BindingBuilder.bind(fileArticleBindingQueue).to(fileArticleEventsExchange)
+                .with(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED);
     }
 }

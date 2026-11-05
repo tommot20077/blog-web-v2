@@ -5,7 +5,6 @@ import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
@@ -110,7 +109,6 @@ class DataConflictFallbackIT {
     @MockitoBean private RabbitTemplate rabbitTemplate;
     @MockitoBean private TagFacade tagFacade;
     @MockitoBean private UserFacade userFacade;
-    @MockitoBean private FileFacade fileFacade;
     @MockitoBean private UserAuthService userAuthService;
 
     private UUID articleUuid;
