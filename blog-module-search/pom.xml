@@ -11,6 +11,12 @@
 
     <artifactId>blog-module-search</artifactId>
 
+    <!-- Jacoco 棘輪下限（2026-11-05 現值減 2pp 無條件捨去；只可上調不可下調，Q13） -->
+    <properties>
+        <jacoco.minimum.line>0.91</jacoco.minimum.line>
+        <jacoco.minimum.branch>0.83</jacoco.minimum.branch>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>dowob.xyz</groupId>

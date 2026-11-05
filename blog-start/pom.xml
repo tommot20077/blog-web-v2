@@ -12,6 +12,12 @@
     <artifactId>blog-start</artifactId>
     <description>Application Entry Point</description>
 
+    <!-- Jacoco 棘輪下限（2026-11-05 現值減 2pp 無條件捨去；只可上調不可下調，Q13） -->
+    <properties>
+        <jacoco.minimum.line>0.76</jacoco.minimum.line>
+        <jacoco.minimum.branch>0.98</jacoco.minimum.branch>
+    </properties>
+
     <dependencies>
         <!-- Spring Boot Starter Web -->
         <dependency>
