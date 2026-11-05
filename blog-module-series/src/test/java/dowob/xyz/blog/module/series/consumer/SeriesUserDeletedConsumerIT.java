@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.series.consumer;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
 import dowob.xyz.blog.infrastructure.event.UserDeletedEvent;
-import dowob.xyz.blog.infrastructure.facade.FileFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -82,7 +81,6 @@ class SeriesUserDeletedConsumerIT {
     @MockitoBean private UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
-    @MockitoBean private FileFacade fileFacade;
 
     /** 被刪帳的作者（隨機 UUID，與任何 id 無關） */
     private UUID deletedAuthor;
