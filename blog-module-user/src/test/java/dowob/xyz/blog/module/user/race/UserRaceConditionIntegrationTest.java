@@ -52,8 +52,8 @@ import static org.mockito.Mockito.verify;
  *       {@code NICKNAME_DUPLICATED}。</li>
  *   <li><b>RACE-03</b>：註冊以 {@code existsByEmail}／{@code existsByUsername} 先查再寫，併發撞到
  *       {@code users} 的 email／username UNIQUE 時無人接住 → 500。改為依約束名稱轉成現行的
- *       {@code EMAIL_DUPLICATED}／{@code USERNAME_DUPLICATED}，與「依序第二次註冊」行為完全一致；
- *       Q8（SEC-14）起 email 重複不再回錯誤，改為靜默成功＋通知原信箱主人，併發落敗者同樣如此。</li>
+ *       {@code USERNAME_DUPLICATED}（email 撞約束原轉 {@code EMAIL_DUPLICATED}，即 A0106），與「依序第二次註冊」行為完全一致；
+ *       Q8（SEC-14）起 email 重複不再回錯誤，改為靜默成功＋通知原信箱主人，併發落敗者同樣如此，A0106 已停用。</li>
  * </ul>
  *
  * <p><b>讓競態穩定重現</b>：在 {@code users} 上安裝 {@code BEFORE INSERT OR UPDATE} 觸發器睡 0.3 秒。

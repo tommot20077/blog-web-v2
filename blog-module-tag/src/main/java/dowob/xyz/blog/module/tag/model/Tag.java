@@ -84,23 +84,4 @@ public class Tag implements Persistable<UUID> {
      * 建立時間
      */
     private LocalDateTime createdAt;
-
-    /**
-     * 增加使用計數
-     *
-     * <p>注意：正式流程已改為重算（{@code TagUsageRecalculator}），不再呼叫本方法；
-     * 它只改記憶體中的欄位，不會寫回資料庫。</p>
-     */
-    public void incrementUsage() {
-        this.usageCount++;
-    }
-
-    /**
-     * 減少使用計數
-     *
-     * <p>注意：正式流程已改為重算（{@code TagUsageRecalculator}），不再呼叫本方法。</p>
-     */
-    public void decrementUsage() {
-        this.usageCount = Math.max(0, this.usageCount - 1);
-    }
 }
