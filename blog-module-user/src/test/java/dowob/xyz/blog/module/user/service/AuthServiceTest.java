@@ -1203,7 +1203,7 @@ class AuthServiceTest {
         verify(userRepository).save(userCaptor.capture());
         assertThat(userCaptor.getValue().getTokenVersion()).isEqualTo("v2");
         verify(sessionRevoker).revokeAllSessions(mockUser.getUuid());
-        verify(verificationTokenRepository).delete(resetToken);
+        verify(verificationTokenRepository).deleteByUserIdAndType(mockUser.getId(), "PASSWORD_RESET");
     }
 
     /**

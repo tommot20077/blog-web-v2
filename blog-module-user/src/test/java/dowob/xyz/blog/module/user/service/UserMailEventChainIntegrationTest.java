@@ -39,7 +39,7 @@ import static org.mockito.Mockito.when;
  * <p>鏈路：{@code AuthService}（註冊／忘記密碼／重發）→ 捕捉發出的事件 → 呼叫真實 consumer（含真實冪等表）→
  * 攔截 {@code JavaMailSender.send} 的信件內容。{@code verification_tokens} 的 Repository 在此測試基底為
  * {@code @MockitoBean}（見 {@link AbstractIntegrationTest}），以記憶體 map 模擬「最新一筆 token」的儲存與查詢；
- * users 與 Redis 為真實。真實 verification_tokens 表的行為由 E2E 套件的 PostgreSQL 覆蓋。</p>
+ * users 與 Redis 為真實。真實 verification_tokens 表與衍生查詢由 {@link VerificationTokenRealDbIntegrationTest} 以真 DB 覆蓋。</p>
  *
  * @author Yuan
  * @version 1.0

@@ -156,6 +156,22 @@ class UserMailServiceTest {
     }
 
     @Test
+    @DisplayName("sendVerificationEmail：Redis 讀取拋例外 → 降級只寄連結（不重試進 DLQ），WARN 不含 email")
+    void sendVerificationEmail_redisFailure_degradesToLinkOnly() throws Exception {
+        givenUser(UserStatus.PENDING_VERIFICATION);
+        givenToken("EMAIL_VERIFICATION", "verify-token-abc", LocalDateTime.now().plusHours(1));
+        when(valueOps.get(RedisKeyConstant.getEmailVerifyCodeKey(DB_EMAIL)))
+                .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("down"));
+
+        boolean sent = service.sendVerificationEmail(registered());
+
+        assertThat(sent).isTrue();
+        assertThat((String) message.getContent())
+                .contains("https://90030.xyz/verify-email?token=verify-token-abc")
+                .doesNotContain("verification code");
+    }
+
+    @Test
     @DisplayName("sendVerificationEmail：token 已過期 → 不寄（也不查驗證碼）")
     void sendVerificationEmail_expiredToken_doesNotSend() {
         givenUser(UserStatus.PENDING_VERIFICATION);

@@ -64,7 +64,8 @@ public abstract class AbstractIntegrationTest {
      *
      * <p>
      * AuthService.register() 需要儲存 VerificationToken，
-     * 整合測試不設置 verification_tokens 資料表，以 MockBean 替代。
+     * 此基底以 MockBean 替代以便各測試自行 stub（verification_tokens 表在 Flyway 下實際存在；
+     * 真實 repository 的行為見 VerificationTokenRealDbIntegrationTest）。
      * </p>
      */
     @MockitoBean

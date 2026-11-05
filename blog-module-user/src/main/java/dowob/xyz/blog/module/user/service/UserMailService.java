@@ -76,7 +76,7 @@ public class UserMailService {
      *
      * <p><b>事件不含個資與 token（ARCH-24）</b>，本方法於寄信當下以 {@code event.userUuid()} 查詢：
      * email、暱稱查 {@code users}；驗證連結 token 查 {@code verification_tokens}
-     * 該使用者<b>最新一筆</b>且未過期的 {@code EMAIL_VERIFICATION}；驗證碼查 Redis。</p>
+     * 該使用者<b>最新一筆</b>且未過期的 {@code EMAIL_VERIFICATION}；驗證碼查 Redis（Redis 故障時降級為只寄連結）。</p>
      *
      * <p><b>為何查「最新有效」而非事件指定的那一筆</b>：token 表只有 Long 主鍵（事件契約禁止 Long，且本任務不新增 migration），
      * 而「重寄」本來就會刪舊建新（{@code deleteByUserIdAndType}）。查最新有效即可保證晚到的舊事件<b>絕不會寄出
@@ -101,7 +101,7 @@ public class UserMailService {
             return false;
         }
         String verifyUrl = buildUrl("/verify-email", token.get().getToken());
-        String code = redisTemplate.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(user.get().getEmail()));
+        String code = readVerificationCode(user.get());
         String codePart = code == null ? "" : """
 
                 Or enter this verification code:
@@ -191,6 +191,21 @@ public class UserMailService {
 
         sendSecurityMail(owner.get().getEmail(), "Someone tried to register with your email address", body);
         return true;
+    }
+
+    /**
+     * 讀取 Redis 中的驗證碼；Redis 故障時降級為 {@code null}（只寄連結），記 WARN 且不含 email。
+     *
+     * @param user 收件使用者
+     * @return 驗證碼；不存在或 Redis 故障為 {@code null}
+     */
+    private String readVerificationCode(User user) {
+        try {
+            return redisTemplate.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(user.getEmail()));
+        } catch (RuntimeException e) {
+            log.warn("讀取驗證碼失敗，降級為只寄驗證連結 - userUuid={}, error={}", user.getUuid(), e.getClass().getSimpleName());
+            return null;
+        }
     }
 
     /**
