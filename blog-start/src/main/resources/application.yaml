@@ -85,6 +85,9 @@ spring:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       database: ${REDIS_DATABASE:0}
+      # 指令逾時與連線逾時：Lettuce 預設 60s／10s，Redis 異常時會長時間拖住請求執行緒
+      timeout: ${REDIS_TIMEOUT:2s}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:2s}
 
   # Elasticsearch
   elasticsearch:
