@@ -41,9 +41,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -748,6 +750,32 @@ public class ArticleFacadeImpl implements ArticleFacade {
         }
         BatchedQuery.queryInBatches(distinct, articleMapper::countPublishedBySeriesUuids)
                 .forEach(row -> result.put(row.seriesUuid(), row.publishedCount()));
+        return result;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Set<UUID> filterSeriesUuidsWithRetainedArticles(Collection<UUID> seriesUuids) {
+        Set<UUID> result = new HashSet<>();
+        if (seriesUuids == null || seriesUuids.isEmpty()) {
+            return result;
+        }
+        List<UUID> distinct = seriesUuids.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (distinct.isEmpty()) {
+            return result;
+        }
+        /* 去留政策的唯一真相是 ArticleStatus：保留 = 不隨作者刪帳移除的狀態（與 ArticleLookupFacadeImpl 同一判斷） */
+        List<String> retainedStatuses = Arrays.stream(ArticleStatus.values())
+                .filter(status -> !status.isRemovedWithAuthorAccount())
+                .map(Enum::name)
+                .toList();
+        result.addAll(BatchedQuery.queryInBatches(distinct,
+                batch -> articleMapper.findSeriesUuidsHavingArticlesInStatuses(batch, retainedStatuses)));
         return result;
     }
 

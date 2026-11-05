@@ -334,6 +334,41 @@ public class SeriesService {
     }
 
     /**
+     * 作者刪帳（匿名化，DATA-02）連動：刪除該作者名下「已無保留文章」的系列。
+     *
+     * <p>作者刪帳時，草稿／待審／被駁回的文章會被移除，已發布與已下架的保留。系列若因此一篇保留文章都沒有，
+     * 就會成為作者已匿名、裡面 0 篇文章的空系列並出現在公開系列列表，所以在這裡刪除；仍有保留文章的系列保留，
+     * 作者顯示為匿名（users 列已匿名化，讀取路徑自動套用）。</p>
+     *
+     * <p><b>不依賴 {@code series.article_count}</b>：article 模組刪除草稿與本方法的執行順序不確定，計數可能尚未遞減。
+     * 「是否仍有保留文章」一律回問 {@link ArticleFacade#filterSeriesUuidsWithRetainedArticles}
+     * （去留政策的唯一真相是 {@code ArticleStatus#isRemovedWithAuthorAccount}）。</p>
+     *
+     * <p>刪除沿用 {@link #deleteSeries} 的做法（{@code repo.deleteById}；成員文章的歸屬由 {@code SeriesDeletedEvent}
+     * consumer 與每日校正清空）。本方法<b>只刪資料列、不發事件</b>：呼叫端（consumer）在交易 commit 後，
+     * 對回傳的每個 UUID 呼叫 {@link SeriesEventPublisher#publishDeleted}。可重入：已刪除的系列查不到，重跑回傳空清單。</p>
+     *
+     * @param authorUuid 被刪帳的作者公開 UUID
+     * @return 本次被刪除的系列公開 UUID；無則為空清單
+     */
+    public List<UUID> deleteSeriesWithoutRetainedArticles(UUID authorUuid) {
+        List<Series> owned = repo.findByAuthorUuid(authorUuid);
+        if (owned.isEmpty()) {
+            return List.of();
+        }
+        Set<UUID> retained = articleFacade.filterSeriesUuidsWithRetainedArticles(
+                owned.stream().map(Series::getUuid).toList());
+        List<UUID> deleted = new java.util.ArrayList<>();
+        for (Series s : owned) {
+            if (!retained.contains(s.getUuid())) {
+                repo.deleteById(s.getId());
+                deleted.add(s.getUuid());
+            }
+        }
+        return deleted;
+    }
+
+    /**
      * 將文章加入 Series（或更新排序位置）。
      *
      * <p>業務規則：

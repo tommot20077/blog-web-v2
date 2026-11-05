@@ -256,6 +256,7 @@ PRIMARY KEY (user_id, tag_id)
 - `idx_series_author`（V15 建立於 `author_id`；V29 以同名在 `author_uuid` 上重建）on author_uuid
 
 **Foreign keys:** 無（V29 已移除 `author_id` → `users(id)`（NO ACTION）；使用者只做軟刪除，該 FK 從未觸發，拿掉後行為不變，故不新增連動）。
+使用者刪除帳號（匿名化，DATA-02）時，由 `SeriesUserDeletedConsumer` 訂閱 `UserDeletedEvent`，刪除該作者名下「已無保留文章（PUBLISHED、ARCHIVED 皆無）」的系列；仍有保留文章的系列保留，作者顯示為匿名。是否仍有保留文章回問 `ArticleFacade.filterSeriesUuidsWithRetainedArticles`，不看 `article_count`。
 被參照：無（V32 已移除 `articles.series_id` → `series(id)` 的 FK；`articles.series_uuid` 不建 FK。刪除 series 時文章脫離系列的行為不變，改由事件＋每日校正負責；刪除 series 也不再觸碰 `articles` 的列）。
 
 ---
@@ -571,7 +572,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V31** | 跨模組識別全面改 UUID（article 模組，作者維度）：`articles` 新增 `author_uuid UUID`，由 `users.uuid` 回填後 `SET NOT NULL`（找不到作者時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `author_id`（連帶移除 `articles_author_id_fkey` → `users(id)` 與 `idx_articles_author_id` (author_id)）；以同名在 `author_uuid` 上重建 `idx_articles_author_id`。新 uuid 欄位不建 FK；`articles.series_id` → `series(id)` ON DELETE SET NULL 是系列維度，到 M6-b 才動。使用者只做軟刪除，不新增連動 |
 | **V32** | 跨模組識別全面改 UUID（article 模組，系列維度，M6 完成）：`articles` 新增 `series_uuid UUID`，由 `series.uuid` 回填（`series_id` 為 NULL 者維持 NULL；`series_id` 非 NULL 卻找不到系列時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `series_id`（連帶移除 `articles_series_id_fkey` → `series(id)` ON DELETE SET NULL 與 partial index `idx_articles_series_position` (series_id, series_position)）；以同名在 (series_uuid, series_position) 上重建 partial index（WHERE series_uuid IS NOT NULL）。`series_uuid` 維持可 NULL、**不建 FK**；`series_position` 不動。刪除連動改由 article 訂閱 `SeriesDeletedEvent`（queue `article.series-deleted`）清空 `series_uuid`／`series_position`，並以每日校正排程兜底。至此 `articles` 沒有任何跨模組 FK |
 | **V33** | 跨模組識別全面改 UUID（tag 模組，M7-tag）：DROP `article_tags_article_id_fkey`（`article_tags.article_id` → `articles(uuid)` ON DELETE CASCADE，最後一條跨模組 FK；欄位名稱不改、不新增 FK）；`tag_id` → `tags(id)` 模組內 FK 與 PK 不動。PERF-07：新增 `idx_article_tags_tag_id` on `article_tags (tag_id)`、`idx_user_tag_follows_tag_id` on `user_tag_follows (tag_id)`。刪除連動改由 tag 訂閱 `ArticleDeletedEvent`（queue `tag.article-deleted`）刪除 `article_tags` 列，並以每日校正排程 `ArticleTagOrphanReconciliationJob`（03:59）兜底；`tags.usage_count` 不動（DATA-01 另案）。RACE-08 無 schema 變動（`tags` 的 name／slug UNIQUE 不變，程式改以 `INSERT ... ON CONFLICT DO NOTHING` 建立） |
-| **V34** | RACE-02（M8，user 階段）：`users` 新增 UNIQUE 約束 `uq_users_nickname` (nickname)。比對語意與應用層 `existsByNickname` 一致（精確比對、含軟刪除者，不加 lower()／不排除 DELETED）。遷移前先檢查既有重複：有重複 → `RAISE EXCEPTION` 列出重複的暱稱與筆數、**不修改任何資料**（需人工處理後再遷移）。應用層保留 `existsByNickname` 先查作為快速路徑，註冊與改名寫入時撞到 `uq_users_nickname` 轉成 `NICKNAME_DUPLICATED`；註冊撞 `users_username_key` 轉成 `USERNAME_DUPLICATED`；撞 `users_email_key` 原轉 `EMAIL_DUPLICATED`，Q8（SEC-14）起改為靜默成功並通知原信箱主人（RACE-03，無 schema 變動） |
+| **V34** | RACE-02（M8，user 階段）：`users` 新增 UNIQUE 約束 `uq_users_nickname` (nickname)。比對語意與應用層 `existsByNickname` 一致（精確比對、含軟刪除者，不加 lower()／不排除 DELETED）。遷移前先檢查既有重複：有重複 → `RAISE EXCEPTION` 列出重複的暱稱與筆數、**不修改任何資料**（需人工處理後再遷移）。應用層保留 `existsByNickname` 先查作為快速路徑，註冊與改名寫入時撞到 `uq_users_nickname` 轉成 `NICKNAME_DUPLICATED`；註冊撞 `users_username_key` 轉成 `USERNAME_DUPLICATED`；撞 `users_email_key` 原轉 `EMAIL_DUPLICATED`（A0106），Q8（SEC-14）起改為靜默成功並通知原信箱主人（RACE-03，無 schema 變動；A0106 已於 2026-11-05 停用並刪除常數，不重用） |
 
 ---
 

@@ -99,7 +99,7 @@ public class AuthService {
      *
      * <h4>email 重複一律回成功（SEC-14／Q8，Yuan 2026-10-24 定案 (a)）</h4>
      * <p>email 已被註冊時，<b>不建立帳號、不回錯誤</b>，回應與新註冊相同的成功（controller 回
-     * {@code ApiResponse<Void>}），消除「直接回 {@code EMAIL_DUPLICATED}」這種零成本的帳號列舉；並在回應之前（無交易）發布
+     * {@code ApiResponse<Void>}），消除「直接回「信箱已被註冊」（已停用的 A0106）」這種零成本的帳號列舉；並在回應之前（無交易）發布
      * {@link RegistrationAttemptOnExistingEmailEvent}，由 consumer 寄通知信給<b>原信箱主人</b>
      * （「有人嘗試用你的信箱註冊；若是你本人，請直接登入或使用忘記密碼」）。通知有 per-email 限流：
      * 同一信箱 {@link RedisKeyConstant#REGISTER_DUP_NOTICE_TTL_MINUTES} 分鐘（24 小時）內最多一封，

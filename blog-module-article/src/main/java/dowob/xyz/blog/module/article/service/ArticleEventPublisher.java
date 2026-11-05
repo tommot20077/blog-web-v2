@@ -115,6 +115,22 @@ public class ArticleEventPublisher {
      * @param article 已發布的文章實體
      * @param tags    文章標籤列表
      */
+    /**
+     * 發送文章發布事件，標籤由本方法回查 DB 現況（PUT 進入 PUBLISHED 的路徑用，請求不一定帶 tagNames）。
+     *
+     * <p>回查與發送一樣是 best-effort：查詢失敗只記 warn，不外拋——呼叫端此時 DB 已 commit，
+     * 例外會讓 PUT 回 500 並跳過後續的 ContentChanged／Tagged 事件。</p>
+     *
+     * @param article 已發布的文章實體
+     */
+    public void publishPublished(Article article) {
+        try {
+            publishPublished(article, articleMapper.findTagsByArticleUuid(article.getUuid()));
+        } catch (Exception e) {
+            log.warn("ArticlePublishedEvent 標籤回查失敗，事件未發送（best-effort）: {}", e.getMessage(), e);
+        }
+    }
+
     public void publishPublished(Article article, List<TagInfo> tags) {
         try {
             ArticlePublishedEvent event = new ArticlePublishedEvent(
