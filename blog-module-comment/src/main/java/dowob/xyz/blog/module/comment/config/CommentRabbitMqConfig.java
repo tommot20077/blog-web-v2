@@ -15,7 +15,7 @@ import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
  * Comment 模組 RabbitMQ 設定：訂閱 {@code article.events} 的 {@code article.deleted}，
  * 於文章刪除後連動清除該文章的留言。
  *
- * <p>exchange 本身由 article 模組宣告（bean 名稱 {@code articleEventsExchange}），
+ * <p>exchange 本身由 infrastructure 的 {@code RabbitMqConfig} 宣告（bean 名稱 {@code articleEventsExchange}，ARCH-06），
  * 這裡只宣告本模組的 queue 與 binding；exchange 名稱與 routing key 取自
  * {@link ArticleEventContract}，不 import article 模組。</p>
  *
@@ -42,7 +42,7 @@ public class CommentRabbitMqConfig {
      * 將 queue 綁定到文章事件 exchange 的 {@code article.deleted} routing key。
      *
      * @param commentArticleDeletedQueue 本模組的 queue
-     * @param articleEventsExchange      article 模組宣告的文章事件 exchange
+     * @param articleEventsExchange      共用的 article.events exchange（由 infrastructure 宣告）
      * @return binding
      */
     @Bean

@@ -21,6 +21,9 @@ class FileRabbitMqConfigTest {
 
     private final FileRabbitMqConfig config = new FileRabbitMqConfig();
 
+    /** 共用的 article.events exchange（ARCH-06：只在 infrastructure 宣告一次，本模組的 binding 以參數注入） */
+    private static final TopicExchange ARTICLE_EVENTS_EXCHANGE = new TopicExchange(ArticleEventContract.EXCHANGE);
+
     @Test
     @DisplayName("user.events exchange：Topic、durable、不自動刪除；名稱取自 user 事件契約")
     void userEventsExchange_matchesContractAndIsDurableTopic() {
@@ -56,17 +59,6 @@ class FileRabbitMqConfigTest {
     }
 
     @Test
-    @DisplayName("article.events exchange（W5A）：Topic、durable、不自動刪除；名稱取自 article 事件契約")
-    void articleEventsExchange_matchesContractAndIsDurableTopic() {
-        TopicExchange exchange = config.fileArticleEventsExchange();
-
-        assertThat(exchange.getName()).isEqualTo(ArticleEventContract.EXCHANGE).isEqualTo("article.events");
-        assertThat(exchange.getType()).isEqualTo("topic");
-        assertThat(exchange.isDurable()).isTrue();
-        assertThat(exchange.isAutoDelete()).isFalse();
-    }
-
-    @Test
     @DisplayName("queue（W5A）：file.article-binding、durable，並帶 DLQ 參數")
     void articleBindingQueue_isDurableWithDlqArgs() {
         Queue queue = config.fileArticleBindingQueue();
@@ -82,7 +74,7 @@ class FileRabbitMqConfigTest {
     @Test
     @DisplayName("binding（W5A）：綁定 article.events exchange 與 article.content.changed routing key（取自契約常數）")
     void bindFileArticleBinding_bindsContentChangedContract() {
-        Binding binding = config.bindFileArticleBinding(config.fileArticleBindingQueue(), config.fileArticleEventsExchange());
+        Binding binding = config.bindFileArticleBinding(config.fileArticleBindingQueue(), ARTICLE_EVENTS_EXCHANGE);
 
         assertThat(binding.getExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
         assertThat(binding.getRoutingKey()).isEqualTo(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED)
@@ -106,7 +98,7 @@ class FileRabbitMqConfigTest {
     @Test
     @DisplayName("binding（DATA-07）：綁定 article.events exchange 與 article.deleted routing key（取自契約常數）")
     void bindFileArticleDeleted_bindsDeletedContract() {
-        Binding binding = config.bindFileArticleDeleted(config.fileArticleDeletedQueue(), config.fileArticleEventsExchange());
+        Binding binding = config.bindFileArticleDeleted(config.fileArticleDeletedQueue(), ARTICLE_EVENTS_EXCHANGE);
 
         assertThat(binding.getExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
         assertThat(binding.getRoutingKey()).isEqualTo(ArticleEventContract.ROUTING_KEY_DELETED);

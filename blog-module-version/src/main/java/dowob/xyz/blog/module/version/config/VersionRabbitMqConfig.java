@@ -57,7 +57,7 @@ public class VersionRabbitMqConfig {
      * 將 queue 綁定到文章事件 exchange 的 {@code article.deleted} routing key。
      *
      * @param versionArticleDeletedQueue 本模組的 queue
-     * @param articleEventsExchange      article 模組宣告的文章事件 exchange
+     * @param articleEventsExchange      共用的 article.events exchange（由 infrastructure 宣告）
      * @return binding
      */
     @Bean

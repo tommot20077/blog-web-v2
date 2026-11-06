@@ -130,4 +130,22 @@ class MqTopologySnapshotTest {
 
         assertThat(actual).containsExactlyElementsOf(MqTopologySnapshotData.BINDINGS);
     }
+
+    @Test
+    @DisplayName("ARCH-06：全 context 只有一個名為 article.events 的 Exchange bean，且為 durable、非 autoDelete 的 topic")
+    void articleEventsExchange_isDeclaredExactlyOnce() {
+        Map<String, Exchange> beans = context.getBeansOfType(Exchange.class);
+
+        List<Map.Entry<String, Exchange>> articleEvents = beans.entrySet().stream()
+                .filter(e -> "article.events".equals(e.getValue().getName())).toList();
+
+        assertThat(articleEvents).as("名為 article.events 的 Exchange bean：%s", articleEvents.stream().map(Map.Entry::getKey).toList())
+                .hasSize(1);
+        Exchange exchange = articleEvents.get(0).getValue();
+        assertThat(exchange.getType()).isEqualTo("topic");
+        assertThat(exchange.isDurable()).isTrue();
+        assertThat(exchange.isAutoDelete()).isFalse();
+        assertThat(exchange.isInternal()).isFalse();
+        assertThat(exchange.getArguments()).isEmpty();
+    }
 }

@@ -8,6 +8,7 @@ import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -56,16 +57,6 @@ public class TagRabbitMqConfig {
     public static final String ROUTING_KEY_ARTICLE_TAGGED = ArticleEventContract.ROUTING_KEY_TAGGED;
 
     /**
-     * 建立文章事件 Topic Exchange（宣告式，若已存在則共用）
-     *
-     * @return TopicExchange 實例
-     */
-    @Bean
-    public TopicExchange tagArticleEventsExchange() {
-        return new TopicExchange(ARTICLE_EVENTS_EXCHANGE);
-    }
-
-    /**
      * 建立標籤模組消費用 Queue（持久化，含 DLQ 設定）
      *
      * @return Queue 實例
@@ -91,26 +82,28 @@ public class TagRabbitMqConfig {
      * 建立文章刪除 Queue 與 Exchange 的綁定（routing key 取自共用事件契約
      * {@link ArticleEventContract#ROUTING_KEY_DELETED}，不 import article 模組）
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding bindTagArticleDeleted() {
+    public Binding bindTagArticleDeleted(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(tagArticleDeletedQueue())
-                .to(tagArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ArticleEventContract.ROUTING_KEY_DELETED);
     }
 
     /**
      * 建立 Queue 與 Exchange 的綁定
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding tagArticleTaggedBinding() {
+    public Binding tagArticleTaggedBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(tagArticleTaggedQueue())
-                .to(tagArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ROUTING_KEY_ARTICLE_TAGGED);
     }
 
@@ -147,36 +140,39 @@ public class TagRabbitMqConfig {
     /**
      * 綁定文章發布 routing key（取自共用事件契約 {@link ArticleEventContract#ROUTING_KEY_PUBLISHED}）
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding bindTagUsageArticlePublished() {
+    public Binding bindTagUsageArticlePublished(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder.bind(tagUsageArticlePublishedQueue())
-                .to(tagArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ArticleEventContract.ROUTING_KEY_PUBLISHED);
     }
 
     /**
      * 綁定文章更新 routing key（取自共用事件契約 {@link ArticleEventContract#ROUTING_KEY_UPDATED}）
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding bindTagUsageArticleUpdated() {
+    public Binding bindTagUsageArticleUpdated(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder.bind(tagUsageArticleUpdatedQueue())
-                .to(tagArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ArticleEventContract.ROUTING_KEY_UPDATED);
     }
 
     /**
      * 綁定文章下架 routing key（取自共用事件契約 {@link ArticleEventContract#ROUTING_KEY_ARCHIVED}）
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding bindTagUsageArticleArchived() {
+    public Binding bindTagUsageArticleArchived(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder.bind(tagUsageArticleArchivedQueue())
-                .to(tagArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ArticleEventContract.ROUTING_KEY_ARCHIVED);
     }
 

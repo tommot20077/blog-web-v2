@@ -42,16 +42,6 @@ public class ArticleRabbitMqConfig {
     public static final String ROUTING_KEY_VIEWED = "article.viewed";
 
     /**
-     * 建立文章事件 Topic Exchange
-     *
-     * @return TopicExchange 實例
-     */
-    @Bean
-    public TopicExchange articleEventsExchange() {
-        return new TopicExchange(ArticleEventContract.EXCHANGE);
-    }
-
-    /**
      * 建立文章瀏覽計數 Queue（持久化，含 DLQ 設定）
      *
      * @return Queue 實例
@@ -64,13 +54,14 @@ public class ArticleRabbitMqConfig {
     /**
      * 建立文章瀏覽計數 Queue 與 Exchange 的綁定
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding articleViewCountBinding() {
+    public Binding articleViewCountBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(articleViewCountQueue())
-                .to(articleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ROUTING_KEY_VIEWED);
     }
 
