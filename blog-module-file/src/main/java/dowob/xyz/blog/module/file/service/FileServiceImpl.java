@@ -137,8 +137,9 @@ public class FileServiceImpl implements FileService {
             throw new BusinessException(FileErrorCode.FILE_TOO_LARGE);
         }
         long quota = resolveQuota(uploaderRole);
-        long used = fileMetadataRepository.sumSizeByUploaderId(uploaderId);
-        if (quota != Long.MAX_VALUE && (used + fileBytes.length) > quota) {
+        boolean quotaLimited = quota != Long.MAX_VALUE;
+        /* RACE-12：不加鎖的快速預檢，明顯超額就直接拒絕（省一次 MinIO 上傳）；權威檢查在下方交易內加鎖後重做 */
+        if (quotaLimited && (fileMetadataRepository.sumSizeByUploaderId(uploaderId) + fileBytes.length) > quota) {
             throw new BusinessException(FileErrorCode.QUOTA_EXCEEDED);
         }
         UUID fileId = UUID.randomUUID();
@@ -196,9 +197,25 @@ public class FileServiceImpl implements FileService {
          * MEDIUM 1：先驗證擁有權，非本人文章一律存 null（fail-safe）。
          */
         metadata.setArticleUuid(resolveOwnedArticleUuid(articleUuid, uploaderId));
-        /** F-3: 僅 DB 操作在事務內；DB 失敗時補償刪除 MinIO 檔案 */
+        /**
+         * F-3: 僅 DB 操作在事務內；DB 失敗（或配額重檢超額）時補償刪除 MinIO 檔案。
+         *
+         * <p>RACE-12：MinIO 上傳已在交易外完成（上傳期間不持有 DB 連線或鎖）。交易內先取得以上傳者為鍵的
+         * advisory lock，再重新加總並比較——同一使用者的並發上傳在此序列化，後者會看到前者已 commit 的列，
+         * 超額就丟 QUOTA_EXCEEDED、rollback，並由下方 catch 於交易外刪除剛上傳的物件。不同使用者鎖鍵不同，互不阻塞。
+         * 無上限（ADMIN）者不需要配額檢查，也就不取鎖。</p>
+         */
         try {
-            transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.save(metadata));
+            transactionTemplate.executeWithoutResult(status -> {
+                if (quotaLimited) {
+                    fileMetadataRepository.acquireQuotaLock(FileMetadataRepository.QUOTA_LOCK_KEY_PREFIX + uploaderId);
+                    long usedNow = fileMetadataRepository.sumSizeByUploaderId(uploaderId);
+                    if ((usedNow + fileBytes.length) > quota) {
+                        throw new BusinessException(FileErrorCode.QUOTA_EXCEEDED);
+                    }
+                }
+                fileMetadataRepository.save(metadata);
+            });
         } catch (Exception e) {
             compensateMinioDelete(storagePath);
             throw e;

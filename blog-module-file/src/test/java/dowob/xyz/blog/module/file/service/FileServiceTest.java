@@ -1796,4 +1796,73 @@ class FileServiceTest {
             assertThat(key).matches("articles/\\d{4}/\\d{2}/\\d{2}/[0-9a-f-]{36}\\.png");
         }
     }
+
+    /** RACE-12：配額 check-then-act —— 交易內加鎖後重新加總，超額則 rollback 並於交易外刪除剛上傳的物件 */
+    @Nested
+    @DisplayName("uploadFile 配額並發保護（RACE-12）")
+    class UploadFileQuotaRaceTests {
+
+        @Test
+        @DisplayName("uploadFile_whenRecheckInsideLockExceedsQuota_deletesUploadedObjectAndDoesNotSave")
+        void uploadFile_whenRecheckInsideLockExceedsQuota_deletesUploadedObjectAndDoesNotSave() throws Exception {
+            MockMultipartFile file = new MockMultipartFile("file", "a.jpg", "image/jpeg", minimalJpegBytes());
+            UUID uploaderId = UUID.randomUUID();
+            /* 第一次（不加鎖的快速預檢）看起來還有空間；加鎖後重新加總發現已被並發上傳占滿 */
+            when(fileMetadataRepository.sumSizeByUploaderId(uploaderId)).thenReturn(0L, 10L * 1024 * 1024);
+
+            assertThatThrownBy(() -> fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, uploaderId, "USER"))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(FileErrorCode.QUOTA_EXCEEDED.getMessage());
+
+            ArgumentCaptor<PutObjectArgs> put = ArgumentCaptor.forClass(PutObjectArgs.class);
+            ArgumentCaptor<RemoveObjectArgs> remove = ArgumentCaptor.forClass(RemoveObjectArgs.class);
+            verify(minioClient).putObject(put.capture());
+            verify(minioClient).removeObject(remove.capture());
+            assertThat(remove.getValue().object()).isEqualTo(put.getValue().object());
+            verify(fileMetadataRepository, never()).save(any());
+            verify(rabbitTemplate, never()).convertAndSend(any(String.class), any(String.class), any(Object.class));
+        }
+
+        @Test
+        @DisplayName("uploadFile_acquiresUploaderLockBeforeRecheckAndAfterMinioUpload")
+        void uploadFile_acquiresUploaderLockBeforeRecheckAndAfterMinioUpload() throws Exception {
+            MockMultipartFile file = new MockMultipartFile("file", "a.jpg", "image/jpeg", minimalJpegBytes());
+            UUID uploaderId = UUID.randomUUID();
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, uploaderId, "USER");
+
+            org.mockito.InOrder order = org.mockito.Mockito.inOrder(minioClient, fileMetadataRepository);
+            order.verify(minioClient).putObject(any(PutObjectArgs.class));
+            order.verify(fileMetadataRepository).acquireQuotaLock(
+                    FileMetadataRepository.QUOTA_LOCK_KEY_PREFIX + uploaderId);
+            order.verify(fileMetadataRepository).sumSizeByUploaderId(uploaderId);
+            order.verify(fileMetadataRepository).save(any(FileMetadata.class));
+        }
+
+        @Test
+        @DisplayName("uploadFile_withAdminRole_doesNotTakeQuotaLock")
+        void uploadFile_withAdminRole_doesNotTakeQuotaLock() throws Exception {
+            MockMultipartFile file = new MockMultipartFile("file", "a.jpg", "image/jpeg", minimalJpegBytes());
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "ADMIN");
+
+            verify(fileMetadataRepository, never()).acquireQuotaLock(any());
+        }
+
+        @Test
+        @DisplayName("uploadFile_quotaPreCheckRejectsObviousOverage_beforeAnyMinioUpload")
+        void uploadFile_quotaPreCheckRejectsObviousOverage_beforeAnyMinioUpload() throws Exception {
+            MockMultipartFile file = new MockMultipartFile("file", "a.jpg", "image/jpeg", minimalJpegBytes());
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(10L * 1024 * 1024);
+
+            assertThatThrownBy(() -> fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "USER"))
+                    .isInstanceOf(BusinessException.class);
+
+            verify(minioClient, never()).putObject(any(PutObjectArgs.class));
+            verify(fileMetadataRepository, never()).acquireQuotaLock(any());
+        }
+    }
 }

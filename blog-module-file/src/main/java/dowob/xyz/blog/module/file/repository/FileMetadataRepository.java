@@ -21,6 +21,22 @@ import java.util.UUID;
  */
 public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUID> {
 
+    /** 配額檢查 advisory lock 的鍵前綴（以上傳者為鍵，不同使用者互不阻塞） */
+    String QUOTA_LOCK_KEY_PREFIX = "file-quota:";
+
+    /**
+     * 取得以上傳者為鍵的交易層級 advisory lock（{@code pg_advisory_xact_lock}），交易結束時自動釋放
+     *
+     * <p>供 {@code uploadFile} 在交易內「重新加總配額 + 寫入 metadata」之前序列化同一使用者的並發上傳
+     * （RACE-12）。必須在交易內呼叫；不同鍵（不同使用者）互不阻塞。{@code hashtext} 的碰撞只會造成
+     * 不相干使用者多一次序列化，不影響正確性。</p>
+     *
+     * @param key 鎖鍵，格式為 {@link #QUOTA_LOCK_KEY_PREFIX} + 上傳者 UUID
+     * @return 固定回傳 1（僅為讓查詢有純量結果可映射）
+     */
+    @Query("SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtext(:key))) AS l")
+    int acquireQuotaLock(@Param("key") String key);
+
     /**
      * 依上傳者 ID 查詢所有檔案，並依建立時間降序排列
      *
