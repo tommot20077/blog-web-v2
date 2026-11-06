@@ -56,6 +56,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -601,7 +602,7 @@ class ArticleCommandSubServiceTest {
             when(articleRepository.save(any(Article.class))).thenReturn(article);
 
             UUID nonExistentUuid = UUID.randomUUID();
-            when(categoryRepository.findByUuid(nonExistentUuid)).thenReturn(Optional.empty());
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of());
 
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setCategoryIds(List.of(nonExistentUuid));
@@ -630,7 +631,7 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
-        @DisplayName("異常：insertArticleCategory 拋出 DataIntegrityViolationException 時，syncCategories 應往外傳播")
+        @DisplayName("異常：insertArticleCategories 拋出 DataIntegrityViolationException 時，syncCategories 應往外傳播")
         void updateArticle_propagatesException_whenInsertCategoryFails() {
             Article article = buildArticle(ArticleStatus.DRAFT);
             when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
@@ -640,9 +641,9 @@ class ArticleCommandSubServiceTest {
             Category category = new Category();
             category.setId(5L);
             category.setUuid(catUuid);
-            when(categoryRepository.findByUuid(catUuid)).thenReturn(Optional.of(category));
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of(category));
             doThrow(new DataIntegrityViolationException("duplicate key"))
-                    .when(categoryMapper).insertArticleCategory(anyLong(), anyLong());
+                    .when(categoryMapper).insertArticleCategories(anyLong(), any());
 
             UpdateArticleRequest request = new UpdateArticleRequest();
             request.setCategoryIds(List.of(catUuid));
@@ -754,6 +755,131 @@ class ArticleCommandSubServiceTest {
             ArgumentCaptor<Article> captor = ArgumentCaptor.forClass(Article.class);
             verify(articleRepository).save(captor.capture());
             assertThat(captor.getValue().getCoverImageUrl()).isEqualTo("https://example.com/cover.jpg");
+        }
+    }
+
+    @Nested
+    @DisplayName("分類關聯同步改為差集＋批次（PERF-27）")
+    class SyncCategoriesDiffTests {
+
+        private Category category(long id) {
+            Category c = new Category();
+            c.setId(id);
+            c.setUuid(new UUID(0L, id));
+            return c;
+        }
+
+        private UpdateArticleRequest requestWith(UUID... categoryUuids) {
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setCategoryIds(List.of(categoryUuids));
+            return request;
+        }
+
+        private void givenDraftArticleWithExistingCategories(Long... existingIds) {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenReturn(article);
+            when(categoryMapper.findCategoryIdsByArticleId(article.getId())).thenReturn(List.of(existingIds));
+        }
+
+        @Test
+        @DisplayName("[2,3] → [1,2]：只刪被移除的 3、只增新加入的 1；2 不被碰；不再整批清空重建")
+        void updateArticle_categories_onlyTouchesTheDifference() {
+            givenDraftArticleWithExistingCategories(2L, 3L);
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of(category(1L), category(2L)));
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID,
+                    requestWith(new UUID(0L, 1L), new UUID(0L, 2L)));
+
+            verify(categoryMapper).deleteArticleCategories(1L, List.of(3L));
+            verify(categoryMapper).insertArticleCategories(1L, List.of(1L));
+            verify(categoryMapper, never()).deleteArticleCategoriesByArticleId(anyLong());
+            verify(categoryMapper, never()).insertArticleCategory(anyLong(), anyLong());
+        }
+
+        @Test
+        @DisplayName("分類以單一批次查詢讀出（findAllByUuidIn 一次），不再逐個 findByUuid")
+        void updateArticle_categories_resolvedWithOneBatchRead() {
+            givenDraftArticleWithExistingCategories();
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of(category(1L), category(2L), category(3L)));
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID,
+                    requestWith(new UUID(0L, 1L), new UUID(0L, 2L), new UUID(0L, 3L)));
+
+            verify(categoryRepository, times(1)).findAllByUuidIn(any());
+            verify(categoryRepository, never()).findByUuid(any());
+            verify(categoryMapper, times(1)).insertArticleCategories(1L, List.of(1L, 2L, 3L));
+        }
+
+        @Test
+        @DisplayName("新舊分類相同 → 零寫入")
+        void updateArticle_categories_sameSet_noWrites() {
+            givenDraftArticleWithExistingCategories(1L, 2L);
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of(category(1L), category(2L)));
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID,
+                    requestWith(new UUID(0L, 2L), new UUID(0L, 1L)));
+
+            verify(categoryMapper, never()).deleteArticleCategories(anyLong(), any());
+            verify(categoryMapper, never()).insertArticleCategories(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("空列表 = 清除全部：一次批次刪除既有分類，不新增")
+        void updateArticle_categories_emptyList_removesAllExisting() {
+            givenDraftArticleWithExistingCategories(1L, 2L);
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, requestWith());
+
+            verify(categoryMapper).deleteArticleCategories(1L, List.of(1L, 2L));
+            verify(categoryMapper, never()).insertArticleCategories(anyLong(), any());
+            verify(categoryRepository, never()).findAllByUuidIn(any());
+        }
+
+        @Test
+        @DisplayName("有任一分類 UUID 不存在 → CATEGORY_NOT_FOUND，且不寫入任何關聯")
+        void updateArticle_categories_oneMissing_throwsAndWritesNothing() {
+            givenDraftArticleWithExistingCategories(5L);
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of(category(1L)));
+
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID,
+                    requestWith(new UUID(0L, 1L), new UUID(0L, 99L))))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.CATEGORY_NOT_FOUND.getMessage());
+
+            verify(categoryMapper, never()).deleteArticleCategories(anyLong(), any());
+            verify(categoryMapper, never()).insertArticleCategories(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("寫入依分類主鍵固定順序（輸入順序不同，結果相同）")
+        void updateArticle_categories_writesInStableIdOrder() {
+            givenDraftArticleWithExistingCategories(9L, 8L);
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of(category(7L), category(6L)));
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID,
+                    requestWith(new UUID(0L, 7L), new UUID(0L, 6L)));
+
+            verify(categoryMapper).deleteArticleCategories(1L, List.of(8L, 9L));
+            verify(categoryMapper).insertArticleCategories(1L, List.of(6L, 7L));
+        }
+
+        @Test
+        @DisplayName("建立文章：新文章沒有既有關聯，不查既有分類，一次批次新增")
+        void createArticle_categories_batchInsertWithoutReadingExisting() {
+            CreateArticleRequest request = new CreateArticleRequest();
+            request.setTitle("新文章");
+            request.setContent("內容");
+            request.setCategoryIds(List.of(new UUID(0L, 1L), new UUID(0L, 2L)));
+            Article saved = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.save(any(Article.class))).thenReturn(saved);
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of(category(1L), category(2L)));
+
+            commandSubService.createArticle(AUTHOR_UUID, request);
+
+            verify(categoryMapper, never()).findCategoryIdsByArticleId(anyLong());
+            verify(categoryMapper).insertArticleCategories(1L, List.of(1L, 2L));
+            verify(categoryMapper, never()).deleteArticleCategories(anyLong(), any());
         }
     }
 

@@ -24,9 +24,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -112,7 +114,7 @@ class ArticleCommandSubService {
 
             /** 同步文章分類 */
             if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
-                syncCategories(saved.getId(), request.getCategoryIds());
+                syncCategories(saved.getId(), request.getCategoryIds(), Set.of());
             }
 
             /** 同步文章標籤 */
@@ -232,7 +234,8 @@ class ArticleCommandSubService {
 
             /** 同步文章分類（null 表示不更新，空列表表示清除） */
             if (request.getCategoryIds() != null) {
-                syncCategories(updated.getId(), request.getCategoryIds());
+                syncCategories(updated.getId(), request.getCategoryIds(),
+                        categoryMapper.findCategoryIdsByArticleId(updated.getId()));
             }
 
             /** 同步文章標籤（null 表示不更新，空列表表示清除所有標籤） */
@@ -759,24 +762,36 @@ class ArticleCommandSubService {
 
 
     /**
-     * 同步文章分類關聯
+     * 同步文章分類關聯（差集＋批次，PERF-27）
      *
      * <p>
-     * 先刪除文章現有所有分類關聯，再根據傳入的 UUID 列表重新建立。
-     * 空列表表示清除所有分類，null 由呼叫端決定是否進入此方法。
+     * 與文章目前的分類比對：只刪除被移除的、只新增新加入的，各以單一批次語句完成，未變動的關聯完全不碰。
+     * 傳入的分類 UUID 以單一 {@code findAllByUuidIn} 讀出，任一不存在即 {@code CATEGORY_NOT_FOUND}（此時尚未寫入任何關聯）。
+     * 空列表表示清除所有分類，null 由呼叫端決定是否進入此方法。寫入依分類主鍵升冪，順序固定。
      * </p>
      *
      * @param articleId   文章資料庫主鍵
      * @param categoryIds 分類 UUID 列表（空列表表示清除所有）
+     * @param existingIds 文章目前已掛的分類主鍵（新文章傳空集合，免一次必為空的查詢）
      */
-    private void syncCategories(Long articleId, List<UUID> categoryIds) {
-        categoryMapper.deleteArticleCategoriesByArticleId(articleId);
+    private void syncCategories(Long articleId, List<UUID> categoryIds, Collection<Long> existingIds) {
+        Set<Long> target = new TreeSet<>();
         if (categoryIds != null && !categoryIds.isEmpty()) {
-            for (UUID categoryUuid : categoryIds) {
-                Category category = categoryRepository.findByUuid(categoryUuid)
-                        .orElseThrow(() -> new BusinessException(ArticleErrorCode.CATEGORY_NOT_FOUND));
-                categoryMapper.insertArticleCategory(articleId, category.getId());
+            List<UUID> distinctUuids = categoryIds.stream().distinct().toList();
+            List<Category> found = categoryRepository.findAllByUuidIn(distinctUuids);
+            if (found.size() != distinctUuids.size()) {
+                throw new BusinessException(ArticleErrorCode.CATEGORY_NOT_FOUND);
             }
+            found.forEach(category -> target.add(category.getId()));
+        }
+        Set<Long> existing = new TreeSet<>(existingIds);
+        List<Long> toDelete = existing.stream().filter(id -> !target.contains(id)).toList();
+        List<Long> toInsert = target.stream().filter(id -> !existing.contains(id)).toList();
+        if (!toDelete.isEmpty()) {
+            categoryMapper.deleteArticleCategories(articleId, toDelete);
+        }
+        if (!toInsert.isEmpty()) {
+            categoryMapper.insertArticleCategories(articleId, toInsert);
         }
     }
 }

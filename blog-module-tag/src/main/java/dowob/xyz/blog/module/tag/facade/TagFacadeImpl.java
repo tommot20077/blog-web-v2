@@ -18,6 +18,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -80,6 +81,10 @@ public class TagFacadeImpl implements TagFacade {
      * 若不排序，兩個交易以相反順序建立同一組全新標籤時，會互相等待對方尚未提交的 INSERT 而死結
      * （PostgreSQL 40P01，其中一個交易被中止，發文回 500）；全部交易都用同一個順序取得鎖就不會形成環。</p>
      *
+     * <p><b>批次讀取（PERF-27）</b>：已存在的標籤以 {@link TagNormalizationService#findExistingBySlugs} 單一查詢讀出，
+     * 只有缺少的標籤才逐一 {@code findOrCreate}（沿用其 {@code INSERT ... ON CONFLICT DO NOTHING} 併發處理），
+     * 建立順序仍為上述固定順序。</p>
+     *
      * <p><b>行為改變</b>：blank 名稱（{@code normalize} 拋出 {@code BusinessException}）現在在建立任何標籤
      * <b>之前</b>就失敗；以前會先建立排在它前面的標籤，之後才失敗。整體仍在呼叫端交易內，結果上沒有差別。</p>
      */
@@ -99,9 +104,16 @@ public class TagFacadeImpl implements TagFacade {
                 .sorted(Comparator.<Integer, String>comparing(i -> slugs[i]).thenComparing(i -> normalized[i]))
                 .toList();
 
+        /* PERF-27：已存在的標籤一次批次讀出（單一查詢），只對缺少的才逐一 findOrCreate；
+         * findOrCreate 內的 ON CONFLICT 併發處理與固定建立順序（creationOrder）完全保留。 */
+        Map<String, Tag> existing = tagNormalizationService.findExistingBySlugs(Arrays.asList(slugs));
+
         TagInfo[] result = new TagInfo[size];
         for (int index : creationOrder) {
-            Tag tag = tagNormalizationService.findOrCreate(tagNames.get(index));
+            Tag tag = existing.get(slugs[index]);
+            if (tag == null) {
+                tag = tagNormalizationService.findOrCreate(tagNames.get(index));
+            }
             result[index] = new TagInfo(tag.getId(), tag.getName(), tag.getSlug());
         }
         return Arrays.asList(result);
@@ -110,28 +122,32 @@ public class TagFacadeImpl implements TagFacade {
     /**
      * {@inheritDoc}
      *
-     * <p><b>插入順序固定</b>：依 tag id 的 uuid 位元組無號順序（與 Postgres {@code ORDER BY id} 一致）插入，
-     * 讓持有 {@code tags} 列 {@code KEY SHARE}（FK 檢查）的取鎖順序與其他依 id 排序取鎖的交易一致。</p>
+     * <p><b>差集寫入（PERF-27）</b>：與目前關聯比對，只刪除被移除的標籤、只新增新加入的標籤，各以單一批次語句完成；
+     * 未變動的標籤列完全不被刪除重插。</p>
+     *
+     * <p><b>順序固定</b>：新增與刪除都依 tag id 的 uuid 位元組無號順序（與 Postgres {@code ORDER BY id} 一致），
+     * 讓持有 {@code tags} 列 {@code KEY SHARE}（FK 檢查）的取鎖順序與其他依 id 排序取鎖的交易一致（RACE-08）。</p>
      *
      * <p><b>被移除的標籤</b>：新舊集合的差集（舊有、新無）沒有任何事件會帶它，於外層交易 commit 後
      * 對其重算使用計數（見 {@link #recalculateAfterCommit}）；新增的標籤維持由 {@code article.tagged} 事件重算。</p>
      */
     @Override
     public void syncArticleTags(UUID articleUuid, List<UUID> tagIds) {
-        /** 先清除舊關聯 */
-        List<Tag> existingTags = articleTagRepository.findTagsByArticleId(articleUuid);
-        existingTags.forEach(tag -> articleTagRepository.deleteByArticleIdAndTagId(articleUuid, tag.getId()));
-        /** 建立新關聯 */
-        if (tagIds == null) {
-            tagIds = Collections.emptyList();
-        }
-        List<UUID> insertOrder = tagIds.stream().distinct().sorted(UNSIGNED_UUID_ORDER).toList();
-        insertOrder.forEach(tagId -> articleTagRepository.save(articleUuid, tagId));
+        List<UUID> requested = tagIds == null ? Collections.emptyList() : tagIds;
+        Set<UUID> existing = new LinkedHashSet<>(articleTagRepository.findTagIdsByArticleId(articleUuid));
+        Set<UUID> target = new LinkedHashSet<>(requested);
 
-        Set<UUID> removed = new LinkedHashSet<>();
-        existingTags.forEach(tag -> removed.add(tag.getId()));
-        removed.removeAll(insertOrder);
-        recalculateAfterCommit(removed);
+        /* 差集（PERF-27）：只刪被移除的、只增新加入的；未變動的列完全不碰。兩邊都依同一個 uuid 無號順序處理。 */
+        List<UUID> toDelete = existing.stream().filter(id -> !target.contains(id)).sorted(UNSIGNED_UUID_ORDER).toList();
+        List<UUID> toInsert = target.stream().filter(id -> !existing.contains(id)).sorted(UNSIGNED_UUID_ORDER).toList();
+        if (!toDelete.isEmpty()) {
+            articleTagRepository.deleteByArticleIdAndTagIds(articleUuid, toDelete);
+        }
+        if (!toInsert.isEmpty()) {
+            articleTagRepository.saveAll(articleUuid, toInsert);
+        }
+
+        recalculateAfterCommit(new LinkedHashSet<>(toDelete));
     }
 
     /**

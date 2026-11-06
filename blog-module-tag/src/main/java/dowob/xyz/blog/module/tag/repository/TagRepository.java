@@ -67,6 +67,15 @@ public interface TagRepository extends CrudRepository<Tag, UUID> {
     List<Tag> findByNameIn(@Param("names") String[] names);
 
     /**
+     * 依 slug 批量查詢標籤（文章存檔時一次讀出已存在的標籤，只對缺少的才 findOrCreate，PERF-27）
+     *
+     * @param slugs slug 陣列
+     * @return 符合的標籤列表
+     */
+    @Query("SELECT * FROM tags WHERE slug = ANY(:slugs)")
+    List<Tag> findBySlugIn(@Param("slugs") String[] slugs);
+
+    /**
      * 新增標籤；name 或 slug 任一已存在時不動作（RACE-08）。
      *
      * <p>{@code ON CONFLICT DO NOTHING} 不指定衝突目標，涵蓋 {@code tags_name_key} 與 {@code tags_slug_key}

@@ -13,8 +13,12 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 標籤正規化服務實作
@@ -99,5 +103,18 @@ public class TagNormalizationServiceImpl implements TagNormalizationService {
             }
         }
         throw new IllegalStateException("標籤建立衝突後仍讀不到既有標籤 slug=" + slug);
+    }
+
+    @Override
+    public Map<String, Tag> findExistingBySlugs(Collection<String> slugs) {
+        if (slugs == null || slugs.isEmpty()) {
+            return Map.of();
+        }
+        String[] distinct = slugs.stream().filter(StringUtils::isNotBlank).distinct().toArray(String[]::new);
+        if (distinct.length == 0) {
+            return Map.of();
+        }
+        return tagRepository.findBySlugIn(distinct).stream()
+                .collect(Collectors.toMap(Tag::getSlug, Function.identity(), (first, second) -> first));
     }
 }
