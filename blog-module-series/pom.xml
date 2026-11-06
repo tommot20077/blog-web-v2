@@ -11,21 +11,6 @@
 
     <artifactId>blog-module-series</artifactId>
 
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <configuration>
-                    <includes>
-                        <include>**/*Test.java</include>
-                        <include>**/*Tests.java</include>
-                        <include>**/*IT.java</include>
-                    </includes>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 
     <!-- Jacoco 棘輪下限（2026-11-05 現值減 2pp 無條件捨去；只可上調不可下調，Q13） -->
     <properties>

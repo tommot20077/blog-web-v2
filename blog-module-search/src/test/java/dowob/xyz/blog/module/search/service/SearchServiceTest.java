@@ -810,6 +810,23 @@ class SearchServiceTest {
         }
 
         @Test
+        @DisplayName("重建寫入的 document 應帶頂層 uuid（舊文件藉此補上幽靈校正所需的排序欄位）")
+        void reindexAll_documentsCarryTopLevelUuid() {
+            UUID uuid = UUID.randomUUID();
+            ArticleIndexData data = new ArticleIndexData(uuid, "t", "s", "summary", "content", "Yuan",
+                    LocalDateTime.now(), 0L, 0L, List.of(), null);
+            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
+            SearchHits<ArticleDocument> emptyHits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(emptyHits);
+
+            searchService.reindexAll();
+
+            org.mockito.ArgumentCaptor<Iterable<ArticleDocument>> saved = org.mockito.ArgumentCaptor.forClass(Iterable.class);
+            verify(articleSearchRepository).saveAll(saved.capture());
+            assertThat(saved.getValue()).extracting(ArticleDocument::getUuid).containsExactly(uuid.toString());
+        }
+
+        @Test
         @DisplayName("重建後應刪除「ES 有但 DB 已非 PUBLISHED」的幽靈 document")
         void reindexAll_removesGhostDocumentsMissingFromDatabase() {
             UUID liveUuid = UUID.randomUUID();

@@ -46,6 +46,15 @@ public class ArticleDocument {
     private String id;
 
     /**
+     * 文章公開 UUID 字串（與 {@link #id} 同值的 keyword 欄位）。
+     *
+     * <p>ES 的 {@code _id} 預設停用 fielddata，不能拿來排序；每日幽靈校正需要依穩定欄位做
+     * {@code search_after} keyset 分頁，故冗餘一份可排序的 keyword。</p>
+     */
+    @Field(type = FieldType.Keyword)
+    private String uuid;
+
+    /**
      * 文章標題（全文檢索，boost 3.0）
      */
     @Field(type = FieldType.Text)

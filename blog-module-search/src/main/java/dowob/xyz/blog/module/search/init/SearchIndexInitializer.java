@@ -3,8 +3,7 @@ package dowob.xyz.blog.module.search.init;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.stereotype.Component;
@@ -27,19 +26,55 @@ import java.util.Map;
  * </ol>
  * 重建後資料會清空，admin 需主動觸發 {@code POST /api/v1/admin/search/reindex} 灌回。
  *
+ * <h3>啟動時序</h3>
+ * <p>實作 {@link SmartLifecycle} 而非 {@code ApplicationRunner}：Rabbit 的 listener 容器在 context refresh 內
+ * （SmartLifecycle，phase 預設 {@link Integer#MAX_VALUE}，javap 查證 {@code AbstractMessageListenerContainer}
+ * 與 {@code RabbitListenerEndpointRegistry}）就開始消費，而 {@code ApplicationRunner} 要等 refresh 完成後才跑，
+ * listener 可能搶先把文件寫進尚未就緒的索引，讓 ES 動態把欄位建成 text。本類別的 {@link #PHASE} 低於 Rabbit，
+ * 因此先於任何 listener 容器 start。選 SmartLifecycle 而不是 {@code @PostConstruct}／{@code InitializingBean}：
+ * phase 讓「早於 listener」成為可斷言的契約，且網路 I/O 不放在 bean 建立階段。</p>
+ *
+ * <p>ES 不可用時 {@link #start()} 的例外會使 context refresh 失敗，與原 {@code ApplicationRunner} 讓啟動失敗的
+ * 行為一致（本類別不吞例外）。</p>
+ *
  * @author Yuan
- * @version 1.0
+ * @version 1.1
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class SearchIndexInitializer implements ApplicationRunner {
+public class SearchIndexInitializer implements SmartLifecycle {
+
+    /**
+     * 啟動 phase：低於 Rabbit listener 容器與 {@code RabbitListenerEndpointRegistry}（皆為 {@link Integer#MAX_VALUE}），
+     * 使索引初始化先完成，listener 才開始消費。
+     */
+    public static final int PHASE = Integer.MAX_VALUE - 1000;
 
     private final ElasticsearchOperations elasticsearchOperations;
 
+    private volatile boolean running;
+
+    /** 啟動時確保索引與 mapping 就緒；例外原樣往外拋（ES 不可用 → 啟動失敗）。 */
     @Override
-    public void run(ApplicationArguments args) {
+    public void start() {
         ensureCorrectMapping();
+        running = true;
+    }
+
+    @Override
+    public void stop() {
+        running = false;
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    @Override
+    public int getPhase() {
+        return PHASE;
     }
 
     /**
@@ -60,6 +95,7 @@ public class SearchIndexInitializer implements ApplicationRunner {
         }
         warnIfLegacyAuthorMapping(indexOps);
         if (isMappingValid(indexOps)) {
+            putTopLevelUuidMappingIfMissing(indexOps);
             log.debug("Elasticsearch index 'blog_articles' mapping 已對齊");
             return;
         }
@@ -109,6 +145,43 @@ public class SearchIndexInitializer implements ApplicationRunner {
             log.warn("Elasticsearch index 'blog_articles' 的 author mapping 為舊版（缺少 author.uuid keyword），"
                     + "不影響搜尋，索引不會被刪除；需執行 POST /api/v1/admin/search/reindex 以移除舊作者欄位");
         }
+    }
+
+    /**
+     * 既有索引缺頂層 {@code uuid} keyword 時，以 putMapping 增補（只新增欄位，不刪不重建、不影響既有文件）。
+     *
+     * <p>幽靈校正排程依此欄位做 search_after 排序。若不先補 mapping，ES 會在第一個帶 {@code uuid} 的文件寫入時
+     * 動態建成 text，之後就無法排序。putMapping 失敗記 ERROR（含復原方式），不阻擋應用程式啟動。</p>
+     *
+     * @param indexOps 索引操作
+     */
+    private void putTopLevelUuidMappingIfMissing(IndexOperations indexOps) {
+        Map<String, Object> mapping = indexOps.getMapping();
+        if (mapping != null && mapping.get("properties") instanceof Map<?, ?> properties
+                && properties.get("uuid") instanceof Map<?, ?> uuidField
+                && "keyword".equals(uuidField.get("type"))) {
+            return;
+        }
+        try {
+            if (indexOps.putMapping()) {
+                log.info("Elasticsearch index 'blog_articles' 已增補頂層 uuid keyword mapping；"
+                        + "舊文件需 POST /api/v1/admin/search/reindex 補上該欄位後才會被幽靈校正掃到");
+                return;
+            }
+            logPutMappingFailure("putMapping 未被 ES 接受", null);
+        } catch (Exception e) {
+            logPutMappingFailure("putMapping 失敗", e);
+        }
+    }
+
+    /**
+     * putMapping 失敗最常見的原因是 uuid 已被動態建成 text（型別衝突，無法原地修正），記 ERROR 並寫明復原方式。
+     */
+    private void logPutMappingFailure(String what, Exception cause) {
+        log.error("Elasticsearch index 'blog_articles' 增補頂層 uuid keyword mapping 失敗（{}），"
+                        + "常見原因是 uuid 已被動態建成 text，幽靈校正排程在修復前會持續 failed。"
+                        + "復原方式：刪除索引後重啟應用程式以 annotation mapping 重建，再執行 POST /api/v1/admin/search/reindex。原因：{}",
+                what, cause == null ? "-" : cause.getMessage());
     }
 
     /**

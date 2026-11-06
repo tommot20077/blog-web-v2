@@ -161,6 +161,7 @@ public class ArticleSearchListener {
 
         return ArticleDocument.builder()
                 .id(message.getArticleUuid().toString())
+                .uuid(message.getArticleUuid().toString())
                 .title(message.getTitle())
                 .summary(message.getSummary())
                 .content(message.getContentText())

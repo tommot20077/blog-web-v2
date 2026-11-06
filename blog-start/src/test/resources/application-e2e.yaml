@@ -2,8 +2,6 @@
 # 所有外部服務連線（DB/Redis/RabbitMQ/MinIO/ES）由 @DynamicPropertySource 注入，不在此設定
 
 spring:
-  main:
-    allow-bean-definition-overriding: true
   flyway:
     enabled: true
     baseline-on-migrate: true

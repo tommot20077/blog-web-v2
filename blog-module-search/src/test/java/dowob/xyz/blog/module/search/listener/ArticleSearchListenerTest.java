@@ -138,6 +138,20 @@ class ArticleSearchListenerTest {
         }
 
         @Test
+        @DisplayName("正常：ES 文件的頂層 uuid 欄位應等於文章 UUID（與 id 同值，供幽靈校正排序）")
+        void onArticlePublished_shouldSetTopLevelUuid() throws Exception {
+            ArticlePublishedMessage message = buildPublishedMessage();
+            stubCurrentNickname("Yuan");
+
+            listener.onArticlePublished(message);
+
+            ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
+            verify(searchService).indexArticle(captor.capture());
+            assertThat(captor.getValue().getUuid()).isEqualTo(message.getArticleUuid().toString());
+            assertThat(captor.getValue().getUuid()).isEqualTo(captor.getValue().getId());
+        }
+
+        @Test
         @DisplayName("正常：標籤為 null 時，應正常建立索引（不拋出例外）")
         void onArticlePublished_withNullTags_shouldIndexAndAck() throws IOException {
             ArticlePublishedMessage message = buildPublishedMessage();

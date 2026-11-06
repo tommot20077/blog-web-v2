@@ -93,6 +93,73 @@ class SearchIndexInitializerTest {
     }
 
     @Test
+    @DisplayName("既有索引缺頂層 uuid keyword：以 putMapping 增補（不刪不重建），否則動態 mapping 會把它建成 text")
+    void ensureCorrectMapping_missingTopLevelUuid_shouldPutMappingWithoutRecreate() {
+        ElasticsearchOperations operations = mock(ElasticsearchOperations.class);
+        IndexOperations indexOps = mock(IndexOperations.class);
+        when(operations.indexOps(ArticleDocument.class)).thenReturn(indexOps);
+        when(indexOps.exists()).thenReturn(true);
+        when(indexOps.getMapping()).thenReturn(mapping(Map.of(
+                "uuid", Map.of("type", "keyword"), "nickname", Map.of("type", "text"))));
+
+        new SearchIndexInitializer(operations).ensureCorrectMapping();
+
+        verify(indexOps).putMapping();
+        verify(indexOps, never()).delete();
+        verify(indexOps, never()).createWithMapping();
+    }
+
+    @Test
+    @DisplayName("putMapping 失敗（例如 uuid 已被動態建成 text 而型別衝突）：記 ERROR 寫明復原方式，不拋例外、不刪索引")
+    void ensureCorrectMapping_putMappingFails_shouldLogActionableError() {
+        ElasticsearchOperations operations = mock(ElasticsearchOperations.class);
+        IndexOperations indexOps = mock(IndexOperations.class);
+        when(operations.indexOps(ArticleDocument.class)).thenReturn(indexOps);
+        when(indexOps.exists()).thenReturn(true);
+        when(indexOps.getMapping()).thenReturn(mapping(Map.of(
+                "uuid", Map.of("type", "keyword"), "nickname", Map.of("type", "text"))));
+        when(indexOps.putMapping()).thenThrow(new RuntimeException("mapper [uuid] cannot be changed from type [text] to [keyword]"));
+        Logger logger = (Logger) LogManager.getLogger(SearchIndexInitializer.class);
+        CapturingAppender appender = new CapturingAppender();
+        appender.start();
+        logger.addAppender(appender);
+        Level previous = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        try {
+            new SearchIndexInitializer(operations).ensureCorrectMapping();
+        } finally {
+            logger.removeAppender(appender);
+            logger.setLevel(previous);
+            appender.stop();
+        }
+
+        verify(indexOps, never()).delete();
+        assertThat(appender.events).anySatisfy(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(e.getMessage().getFormattedMessage()).contains("刪除索引").contains("reindex");
+        });
+    }
+
+    @Test
+    @DisplayName("既有索引已有頂層 uuid keyword：不需要 putMapping")
+    void ensureCorrectMapping_topLevelUuidPresent_shouldNotPutMapping() {
+        ElasticsearchOperations operations = mock(ElasticsearchOperations.class);
+        IndexOperations indexOps = mock(IndexOperations.class);
+        when(operations.indexOps(ArticleDocument.class)).thenReturn(indexOps);
+        when(indexOps.exists()).thenReturn(true);
+        Map<String, Object> properties = new java.util.HashMap<>();
+        properties.put("status", Map.of("type", "keyword"));
+        properties.put("tags", Map.of("type", "nested"));
+        properties.put("uuid", Map.of("type", "keyword"));
+        properties.put("author", Map.of("properties", Map.of("uuid", Map.of("type", "keyword"))));
+        when(indexOps.getMapping()).thenReturn(Map.of("properties", properties));
+
+        new SearchIndexInitializer(operations).ensureCorrectMapping();
+
+        verify(indexOps, never()).putMapping();
+    }
+
+    @Test
     @DisplayName("status 非 keyword：仍砍掉重建（既有行為保持）")
     void ensureCorrectMapping_wrongStatus_shouldStillRecreate() {
         ElasticsearchOperations operations = mock(ElasticsearchOperations.class);

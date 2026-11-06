@@ -564,6 +564,7 @@ public class SearchServiceImpl implements SearchService {
                         .collect(Collectors.toList());
         return ArticleDocument.builder()
                 .id(data.articleUuid().toString())
+                .uuid(data.articleUuid().toString())
                 .title(data.title())
                 .summary(data.summary())
                 .content(data.contentText())
