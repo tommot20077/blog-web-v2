@@ -19,6 +19,7 @@ import dowob.xyz.blog.module.comment.config.CommentRabbitMqConfig;
 import dowob.xyz.blog.module.comment.consumer.CommentArticleDeletedConsumer;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
 import dowob.xyz.blog.module.file.consumer.FileArticleContentChangedConsumer;
+import dowob.xyz.blog.module.file.consumer.FileArticleDeletedConsumer;
 import dowob.xyz.blog.module.file.consumer.FileUserDeletedConsumer;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.reading.config.ReadingRabbitMqConfig;
@@ -81,7 +82,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * exchange＋routing key，逐一斷言：</p>
  * <ul>
  *   <li>article 刪除 → {@code comment.article-deleted}、{@code reading.article-deleted}、{@code series.article-deleted}、
- *       {@code tag.article-deleted}、{@code version.article-deleted}、{@code search.index.delete} 各收到一則</li>
+ *       {@code tag.article-deleted}、{@code version.article-deleted}、{@code file.article-deleted}（DATA-07）、{@code search.index.delete} 各收到一則</li>
  *   <li>series 刪除 → {@code article.series-deleted} 收到一則</li>
  *   <li>user 刪除帳號（DATA-02）→ {@code article.user-deleted}、{@code reading.user-deleted}、{@code version.user-deleted}、
  *       {@code tag.user-deleted}、{@code series.user-deleted}、{@code file.user-deleted}、{@code search.user-deleted} 各收到一則</li>
@@ -113,6 +114,7 @@ class DeleteCascadeQueueBindingIT {
             SeriesRabbitMqConfig.QUEUE_SERIES_ARTICLE_DELETED, SeriesArticleDeletedConsumer.class,
             TagRabbitMqConfig.QUEUE_TAG_ARTICLE_DELETED, TagArticleDeletedConsumer.class,
             VersionRabbitMqConfig.QUEUE_VERSION_ARTICLE_DELETED, VersionArticleDeletedConsumer.class,
+            FileRabbitMqConfig.QUEUE_ARTICLE_DELETED, FileArticleDeletedConsumer.class,
             SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_DELETE, ArticleSearchListener.class);
 
     /** 每個「使用者刪帳」queue 與其 consumer 類別（DATA-02） */

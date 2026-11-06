@@ -62,4 +62,18 @@ public interface ArticleAuthorCleanupMapper {
     })
     List<String> findReferencedFileUuidsByAuthorAndStatuses(@Param("authorUuid") UUID authorUuid,
                                                             @Param("statuses") List<String> statuses);
+
+    /**
+     * 查詢給定文章 UUID 中仍存在於 articles 表者（不分狀態）。
+     *
+     * <p>供 {@code ArticleLookupFacadeImpl#filterExistingUuids} 使用；呼叫端須先切批（見 {@code BatchedQuery}）。</p>
+     *
+     * @param uuids 文章 UUID（非空，大小需在 bind parameter 安全範圍內）
+     * @return 仍存在的 UUID 字串
+     */
+    @Select("<script>"
+            + "SELECT uuid::text FROM articles WHERE uuid IN "
+            + "<foreach collection='list' item='u' open='(' separator=',' close=')'>#{u}::uuid</foreach>"
+            + "</script>")
+    List<String> findExistingUuidsIn(@Param("list") List<UUID> uuids);
 }

@@ -1,17 +1,13 @@
 package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
-import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -47,7 +43,6 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class FileUserCleanupService {
@@ -77,31 +72,10 @@ public class FileUserCleanupService {
         /* 保留文章內文／封面實際引用的檔案：不論 article_uuid 綁到哪（封面不會被 binder 綁定；同圖可能只綁到草稿） */
         Set<UUID> referencedFileIds = articleLookupFacade.findFileUuidsReferencedByRetainedArticles(uploaderId);
 
-        int deleted = 0;
-        List<RuntimeException> failures = new ArrayList<>();
-        for (FileMetadata file : files) {
-            if (isReferencedByRetainedArticle(file, retainedArticles, referencedFileIds)) {
-                continue;
-            }
-            try {
-                fileService.deleteFile(file.getId(), uploaderId, false);
-                deleted++;
-            } catch (BusinessException e) {
-                if (!FileErrorCode.FILE_NOT_FOUND.getCode().equals(e.getCode())) {
-                    failures.add(e);
-                }
-            } catch (RuntimeException e) {
-                failures.add(e);
-            }
-        }
-        log.info("使用者刪除連動：已刪除未被保留文章引用的檔案 uploaderId={} total={} deleted={} failed={}",
-                uploaderId, files.size(), deleted, failures.size());
-        if (!failures.isEmpty()) {
-            RuntimeException first = failures.get(0);
-            failures.stream().skip(1).forEach(first::addSuppressed);
-            throw first;
-        }
-        return deleted;
+        List<FileMetadata> toDelete = files.stream()
+                .filter(file -> !isReferencedByRetainedArticle(file, retainedArticles, referencedFileIds))
+                .toList();
+        return FileCleanupSupport.deleteAll(fileService, toDelete, "（使用者刪除連動）uploaderId=" + uploaderId);
     }
 
     /**

@@ -63,4 +63,40 @@ class ArticleReferencedFilesIT extends ArticleSeriesITSupport {
         assertThat(articleLookupFacade.findFileUuidsReferencedByRetainedArticles(author)).isEmpty();
         assertThat(articleLookupFacade.findFileUuidsReferencedByRetainedArticles(UUID.randomUUID())).isEmpty();
     }
+
+    @Test
+    @DisplayName("findFileUuidsReferencedByAuthorArticles：不分狀態——草稿、待審、已發布的內文與封面引用都收集；他人文章不算")
+    void authorArticles_collectsReferencesOfEveryStatus() {
+        UUID author = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        UUID inDraft = UUID.randomUUID();
+        UUID draftCover = UUID.randomUUID();
+        UUID inPending = UUID.randomUUID();
+        UUID inPublished = UUID.randomUUID();
+        UUID inOthers = UUID.randomUUID();
+        insertArticle(author, "DRAFT", contentRef(inDraft), "/api/v1/files/" + draftCover + "/content");
+        insertArticle(author, "PENDING_REVIEW", contentRef(inPending), null);
+        insertArticle(author, "PUBLISHED", contentRef(inPublished) + contentRef(inPublished), null);
+        insertArticle(other, "DRAFT", contentRef(inOthers), null);
+
+        assertThat(articleLookupFacade.findFileUuidsReferencedByAuthorArticles(author))
+                .containsExactlyInAnyOrder(inDraft, draftCover, inPending, inPublished);
+        assertThat(articleLookupFacade.findFileUuidsReferencedByAuthorArticles(UUID.randomUUID())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("filterExistingUuids：不分狀態回傳仍存在者，已不存在與 null 被排除")
+    void filterExistingUuids_returnsExistingRegardlessOfStatus() {
+        UUID author = UUID.randomUUID();
+        insertArticle(author, "DRAFT", "x", null);
+        insertArticle(author, "PUBLISHED", "y", null);
+        java.util.List<UUID> real = jdbc.queryForList("SELECT uuid FROM articles WHERE author_uuid = ?", UUID.class, author);
+        UUID gone = UUID.randomUUID();
+        java.util.List<UUID> query = new java.util.ArrayList<>(real);
+        query.add(gone);
+        query.add(null);
+
+        assertThat(articleLookupFacade.filterExistingUuids(query)).containsExactlyInAnyOrderElementsOf(real);
+        assertThat(articleLookupFacade.filterExistingUuids(java.util.List.of())).isEmpty();
+    }
 }

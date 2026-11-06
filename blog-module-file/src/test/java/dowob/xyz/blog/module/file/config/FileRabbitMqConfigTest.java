@@ -89,4 +89,27 @@ class FileRabbitMqConfigTest {
                 .isEqualTo("article.content.changed");
         assertThat(binding.getDestination()).isEqualTo("file.article-binding");
     }
+
+    @Test
+    @DisplayName("queue（DATA-07）：file.article-deleted、durable，並帶 DLQ 參數")
+    void articleDeletedQueue_isDurableWithDlqArgs() {
+        Queue queue = config.fileArticleDeletedQueue();
+
+        assertThat(FileRabbitMqConfig.QUEUE_ARTICLE_DELETED).isEqualTo("file.article-deleted");
+        assertThat(queue.getName()).isEqualTo("file.article-deleted");
+        assertThat(queue.isDurable()).isTrue();
+        assertThat(queue.getArguments())
+                .containsEntry("x-dead-letter-exchange", "blog.dlq")
+                .containsEntry("x-dead-letter-routing-key", "dead-letter");
+    }
+
+    @Test
+    @DisplayName("binding（DATA-07）：綁定 article.events exchange 與 article.deleted routing key（取自契約常數）")
+    void bindFileArticleDeleted_bindsDeletedContract() {
+        Binding binding = config.bindFileArticleDeleted(config.fileArticleDeletedQueue(), config.fileArticleEventsExchange());
+
+        assertThat(binding.getExchange()).isEqualTo(ArticleEventContract.EXCHANGE);
+        assertThat(binding.getRoutingKey()).isEqualTo(ArticleEventContract.ROUTING_KEY_DELETED);
+        assertThat(binding.getDestination()).isEqualTo("file.article-deleted");
+    }
 }

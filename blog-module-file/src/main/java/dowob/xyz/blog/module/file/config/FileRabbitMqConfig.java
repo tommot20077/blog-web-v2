@@ -18,7 +18,8 @@ import org.springframework.context.annotation.Configuration;
  * <p>
  * 宣告圖片上傳相關的 Exchange、Queue 與 Binding；另訂閱 {@code user.events} 的 {@code user.deleted}，
  * 於使用者刪除帳號後清除其未被保留文章引用的檔案（DATA-02）；訂閱 {@code article.events} 的
- * {@code article.content.changed}，依文章最新內文回填「檔案 → 文章」綁定（Q12）。
+ * {@code article.content.changed}，依文章最新內文回填「檔案 → 文章」綁定（Q12）；訂閱 {@code article.deleted}，
+ * 清理綁定該文章的檔案（DATA-07）。
  * </p>
  *
  * @author Yuan
@@ -162,5 +163,35 @@ public class FileRabbitMqConfig {
                                           @Qualifier("fileArticleEventsExchange") TopicExchange fileArticleEventsExchange) {
         return BindingBuilder.bind(fileArticleBindingQueue).to(fileArticleEventsExchange)
                 .with(ArticleEventContract.ROUTING_KEY_CONTENT_CHANGED);
+    }
+
+    /** 文章刪除事件（清理綁定該文章的檔案，DATA-07）Queue 名稱 */
+    public static final String QUEUE_ARTICLE_DELETED = "file.article-deleted";
+
+    /**
+     * 宣告 file.article-deleted Queue（持久化，含 DLQ 設定）：消費文章刪除事件，清理綁定該文章的檔案（DATA-07）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue fileArticleDeletedQueue() {
+        return QueueBuilder.durable(QUEUE_ARTICLE_DELETED)
+                .withArgument("x-dead-letter-exchange", "blog.dlq")
+                .withArgument("x-dead-letter-routing-key", "dead-letter")
+                .build();
+    }
+
+    /**
+     * 將 fileArticleDeletedQueue 綁定至 article.events 的 {@code article.deleted} routing key
+     *
+     * @param fileArticleDeletedQueue   文章刪除 Queue
+     * @param fileArticleEventsExchange 文章事件 Topic Exchange 的宣告
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding bindFileArticleDeleted(Queue fileArticleDeletedQueue,
+                                          @Qualifier("fileArticleEventsExchange") TopicExchange fileArticleEventsExchange) {
+        return BindingBuilder.bind(fileArticleDeletedQueue).to(fileArticleEventsExchange)
+                .with(ArticleEventContract.ROUTING_KEY_DELETED);
     }
 }
