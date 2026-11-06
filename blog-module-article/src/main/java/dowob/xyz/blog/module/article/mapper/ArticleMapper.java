@@ -230,7 +230,7 @@ public interface ArticleMapper {
      *
      * @return 所有已發布文章列表
      */
-    @Select("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC")
+    @Select("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC NULLS LAST")
     List<Article> findAllPublished();
 
     /**
