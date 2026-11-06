@@ -279,6 +279,49 @@ class SearchServiceTest {
     class SearchTests {
 
         /**
+         * PERF-12：NativeQuery 必須帶 _source excludes content（結果 DTO 不用 content，省下大欄位傳輸）
+         */
+        @Test
+        @DisplayName("PERF-12：查詢帶 _source 過濾，排除 content")
+        void search_excludesContentFromSource() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(buildTestDocument()));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            searchService.search(null, null, "relevance", 1, 10, null);
+
+            ArgumentCaptor<Query> captor = ArgumentCaptor.forClass(Query.class);
+            verify(elasticsearchOperations).search(captor.capture(), eq(ArticleDocument.class));
+            var sourceFilter = ((org.springframework.data.elasticsearch.client.elc.NativeQuery) captor.getValue()).getSourceFilter();
+            assertThat(sourceFilter).isNotNull();
+            assertThat(sourceFilter.getExcludes()).contains("content");
+        }
+
+        /**
+         * PERF-12：from + size 超過 ES max_result_window(10000) 時回 400，而不是讓 ES 拒絕後變成 500
+         */
+        @Test
+        @DisplayName("PERF-12：page*size 超過 10000 → BusinessException(PARAM_VALID_ERROR)，不呼叫 ES")
+        void search_deepPagination_rejectedWith400() {
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> searchService.search("java", null, "relevance", 101, 100, null))
+                    .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.BusinessException.class,
+                            e -> assertThat(e.getCode()).isEqualTo(
+                                    dowob.xyz.blog.common.api.errorcode.CommonErrorCode.PARAM_VALID_ERROR.getCode()));
+            verifyNoInteractions(elasticsearchOperations);
+        }
+
+        @Test
+        @DisplayName("PERF-12：page*size 恰為 10000（邊界）仍可查詢")
+        void search_pagingAtWindowBoundary_isAllowed() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            searchService.search(null, null, "relevance", 100, 100, null);
+
+            verify(elasticsearchOperations).search(any(Query.class), eq(ArticleDocument.class));
+        }
+
+        /**
          * 有關鍵字時，應執行 Elasticsearch 查詢並回傳結果
          */
         @Test

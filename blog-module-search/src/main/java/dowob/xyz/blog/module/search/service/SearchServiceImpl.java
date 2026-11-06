@@ -22,7 +22,10 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.SearchHits;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import dowob.xyz.blog.common.exception.BusinessException;
 import org.springframework.data.elasticsearch.core.query.ByQueryResponse;
+import org.springframework.data.elasticsearch.core.query.FetchSourceFilterBuilder;
 import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -107,6 +110,11 @@ public class SearchServiceImpl implements SearchService {
     private static final int GHOST_SCAN_MAX_PAGES = 10;
 
     /**
+     * ES 預設的 {@code index.max_result_window}；{@code page × size} 超過時搜尋請求回 400
+     */
+    private static final int MAX_RESULT_WINDOW = 10_000;
+
+    /**
      * 幽靈清除日誌中列出的 id 樣本數上限
      *
      * <p>只記數量與前幾筆即可定位；把整份 id 塞進單行日誌，索引長期漂移後會是
@@ -120,6 +128,12 @@ public class SearchServiceImpl implements SearchService {
     @Override
     public PageResult<SearchResultResponse> search(
             String q, String tag, String sort, int page, int size, UUID userUuid) {
+
+        /* from + size 超過 ES index.max_result_window 會被 ES 拒絕並變成 500，這裡提前以 400 拒絕 */
+        if ((long) page * size > MAX_RESULT_WINDOW) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR,
+                    "搜尋結果深度超出上限：page × size 不可超過 " + MAX_RESULT_WINDOW);
+        }
 
         BoolQuery.Builder boolQuery = new BoolQuery.Builder();
 
@@ -148,7 +162,9 @@ public class SearchServiceImpl implements SearchService {
 
         var queryBuilder = NativeQuery.builder()
                 .withQuery(Query.of(q2 -> q2.bool(boolQuery.build())))
-                .withPageable(PageRequest.of(page - 1, size));
+                .withPageable(PageRequest.of(page - 1, size))
+                /* 結果 DTO 不使用 content，排除以省下大欄位的傳輸與反序列化 */
+                .withSourceFilter(new FetchSourceFilterBuilder().withExcludes("content").build());
 
         /** 排序策略 */
         if ("latest".equalsIgnoreCase(sort)) {
