@@ -60,6 +60,7 @@ class ArticleIndexOrphanReconciliationJobTest {
         for (String id : ids) {
             SearchHit<ArticleDocument> hit = mock(SearchHit.class);
             when(hit.getId()).thenReturn(id);
+            when(hit.getSortValues()).thenReturn(List.of(id));
             list.add(hit);
         }
         when(hits.getSearchHits()).thenReturn(list);
@@ -130,6 +131,61 @@ class ArticleIndexOrphanReconciliationJobTest {
     }
 
     @Test
+    @DisplayName("fetchReferencedUuids：只掃有 uuid 欄位的文件（exists 過濾），缺欄位的舊文件等 reindex 後才納入")
+    void fetchReferencedUuids_filtersDocumentsWithoutUuidField() {
+        SearchHits<ArticleDocument> hits = hitsOf();
+        when(operations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+        job.fetchReferencedUuids(null, 10);
+
+        var esQuery = captureQuery().getQuery();
+        assertThat(esQuery.isExists()).isTrue();
+        assertThat(esQuery.exists().field()).isEqualTo(ArticleIndexOrphanReconciliationJob.SORT_FIELD);
+    }
+
+    @Test
+    @DisplayName("fetchReferencedUuids：略過垃圾 id 後不足 limit，繼續以 ES 原始 sort 值往下取，直到湊滿（短頁只在 ES 真的沒資料時發生）")
+    void fetchReferencedUuids_skippedGarbage_keepsFetchingUntilLimitOrExhausted() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        SearchHits<ArticleDocument> firstPage = hitsOf("garbage", a.toString(), b.toString());
+        SearchHits<ArticleDocument> secondPage = hitsOf(c.toString());
+        when(operations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(firstPage, secondPage);
+
+        List<UUID> result = job.fetchReferencedUuids(null, 3);
+
+        assertThat(result).containsExactly(a, b, c);
+        ArgumentCaptor<Query> captor = ArgumentCaptor.forClass(Query.class);
+        verify(operations, org.mockito.Mockito.times(2)).search(captor.capture(), eq(ArticleDocument.class));
+        NativeQuery second = (NativeQuery) captor.getAllValues().get(1);
+        assertThat(second.getSearchAfter()).as("續取以最後一筆的原始 sort 值為游標").containsExactly(b.toString());
+        assertThat(second.getPageable().getPageSize()).as("只補缺的筆數").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("fetchReferencedUuids：整頁都是垃圾 id 也不會回短頁，會繼續往下取")
+    void fetchReferencedUuids_wholePageGarbage_continues() {
+        UUID a = UUID.randomUUID();
+        SearchHits<ArticleDocument> firstPage = hitsOf("g1", "g2");
+        SearchHits<ArticleDocument> secondPage = hitsOf(a.toString());
+        when(operations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(firstPage, secondPage);
+
+        assertThat(job.fetchReferencedUuids(null, 2)).containsExactly(a);
+    }
+
+    @Test
+    @DisplayName("fetchReferencedUuids：ES 沒有更多資料（回傳少於請求筆數）時才停止")
+    void fetchReferencedUuids_exhausted_stops() {
+        UUID a = UUID.randomUUID();
+        SearchHits<ArticleDocument> page = hitsOf(a.toString());
+        when(operations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(page);
+
+        assertThat(job.fetchReferencedUuids(null, 5)).containsExactly(a);
+        verify(operations, org.mockito.Mockito.times(1)).search(any(Query.class), eq(ArticleDocument.class));
+    }
+
+    @Test
     @DisplayName("filterExisting：委派 filterPublishedUuids（「仍為 PUBLISHED」），不使用不分狀態的 filterExistingUuids")
     void filterExisting_delegatesToFilterPublishedUuids() {
         UUID a = UUID.randomUUID();
@@ -194,6 +250,6 @@ class ArticleIndexOrphanReconciliationJobTest {
         Method method = ArticleIndexOrphanReconciliationJob.class.getDeclaredMethod("scheduledRun");
 
         assertThat(method.getAnnotation(Scheduled.class).cron()).isEqualTo(ArticleIndexOrphanReconciliationJob.CRON);
-        assertThat(ArticleIndexOrphanReconciliationJob.CRON).isEqualTo("0 23 4 * * *");
+        assertThat(ArticleIndexOrphanReconciliationJob.CRON).isEqualTo("0 29 4 * * *");
     }
 }

@@ -116,7 +116,7 @@ public class SearchIndexInitializer implements ApplicationRunner {
      * 既有索引缺頂層 {@code uuid} keyword 時，以 putMapping 增補（只新增欄位，不刪不重建、不影響既有文件）。
      *
      * <p>幽靈校正排程依此欄位做 search_after 排序。若不先補 mapping，ES 會在第一個帶 {@code uuid} 的文件寫入時
-     * 動態建成 text，之後就無法排序。putMapping 失敗只記 warn，不阻擋應用程式啟動。</p>
+     * 動態建成 text，之後就無法排序。putMapping 失敗記 ERROR（含復原方式），不阻擋應用程式啟動。</p>
      *
      * @param indexOps 索引操作
      */
@@ -128,13 +128,25 @@ public class SearchIndexInitializer implements ApplicationRunner {
             return;
         }
         try {
-            indexOps.putMapping();
-            log.info("Elasticsearch index 'blog_articles' 已增補頂層 uuid keyword mapping；"
-                    + "舊文件需 POST /api/v1/admin/search/reindex 補上該欄位後才會被幽靈校正掃到");
+            if (indexOps.putMapping()) {
+                log.info("Elasticsearch index 'blog_articles' 已增補頂層 uuid keyword mapping；"
+                        + "舊文件需 POST /api/v1/admin/search/reindex 補上該欄位後才會被幽靈校正掃到");
+                return;
+            }
+            logPutMappingFailure("putMapping 未被 ES 接受", null);
         } catch (Exception e) {
-            log.warn("增補 Elasticsearch index 'blog_articles' 的 uuid mapping 失敗，幽靈校正排程將無法掃描：{}",
-                    e.getMessage());
+            logPutMappingFailure("putMapping 失敗", e);
         }
+    }
+
+    /**
+     * putMapping 失敗最常見的原因是 uuid 已被動態建成 text（型別衝突，無法原地修正），記 ERROR 並寫明復原方式。
+     */
+    private void logPutMappingFailure(String what, Exception cause) {
+        log.error("Elasticsearch index 'blog_articles' 增補頂層 uuid keyword mapping 失敗（{}），"
+                        + "常見原因是 uuid 已被動態建成 text，幽靈校正排程在修復前會持續 failed。"
+                        + "復原方式：刪除索引後重啟應用程式以 annotation mapping 重建，再執行 POST /api/v1/admin/search/reindex。原因：{}",
+                what, cause == null ? "-" : cause.getMessage());
     }
 
     /**

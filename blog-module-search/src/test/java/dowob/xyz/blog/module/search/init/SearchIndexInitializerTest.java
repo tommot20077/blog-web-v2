@@ -110,6 +110,37 @@ class SearchIndexInitializerTest {
     }
 
     @Test
+    @DisplayName("putMapping 失敗（例如 uuid 已被動態建成 text 而型別衝突）：記 ERROR 寫明復原方式，不拋例外、不刪索引")
+    void ensureCorrectMapping_putMappingFails_shouldLogActionableError() {
+        ElasticsearchOperations operations = mock(ElasticsearchOperations.class);
+        IndexOperations indexOps = mock(IndexOperations.class);
+        when(operations.indexOps(ArticleDocument.class)).thenReturn(indexOps);
+        when(indexOps.exists()).thenReturn(true);
+        when(indexOps.getMapping()).thenReturn(mapping(Map.of(
+                "uuid", Map.of("type", "keyword"), "nickname", Map.of("type", "text"))));
+        when(indexOps.putMapping()).thenThrow(new RuntimeException("mapper [uuid] cannot be changed from type [text] to [keyword]"));
+        Logger logger = (Logger) LogManager.getLogger(SearchIndexInitializer.class);
+        CapturingAppender appender = new CapturingAppender();
+        appender.start();
+        logger.addAppender(appender);
+        Level previous = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        try {
+            new SearchIndexInitializer(operations).ensureCorrectMapping();
+        } finally {
+            logger.removeAppender(appender);
+            logger.setLevel(previous);
+            appender.stop();
+        }
+
+        verify(indexOps, never()).delete();
+        assertThat(appender.events).anySatisfy(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+            assertThat(e.getMessage().getFormattedMessage()).contains("刪除索引").contains("reindex");
+        });
+    }
+
+    @Test
     @DisplayName("既有索引已有頂層 uuid keyword：不需要 putMapping")
     void ensureCorrectMapping_topLevelUuidPresent_shouldNotPutMapping() {
         ElasticsearchOperations operations = mock(ElasticsearchOperations.class);

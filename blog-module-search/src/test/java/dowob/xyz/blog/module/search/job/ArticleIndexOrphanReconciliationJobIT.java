@@ -8,6 +8,12 @@ import dowob.xyz.blog.infrastructure.reconciliation.OrphanReconciliationJob.Resu
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.repository.ArticleSearchRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -116,6 +122,44 @@ class ArticleIndexOrphanReconciliationJobIT {
         });
     }
 
+    /** 捕捉日誌事件的測試用 appender */
+    private static final class CapturingAppender extends AbstractAppender {
+        private final List<LogEvent> events = new ArrayList<>();
+
+        private CapturingAppender() {
+            super("job-it-capture", null, null, true, Property.EMPTY_ARRAY);
+        }
+
+        @Override
+        public void append(LogEvent event) {
+            events.add(event.toImmutable());
+        }
+    }
+
+    private static List<String> runCapturing(Class<?> loggerClass, Runnable action, Level level) {
+        Logger logger = (Logger) LogManager.getLogger(loggerClass);
+        CapturingAppender appender = new CapturingAppender();
+        appender.start();
+        logger.addAppender(appender);
+        Level previous = logger.getLevel();
+        logger.setLevel(Level.INFO);
+        try {
+            action.run();
+        } finally {
+            logger.removeAppender(appender);
+            logger.setLevel(previous);
+            appender.stop();
+        }
+        return appender.events.stream().filter(e -> e.getLevel() == level)
+                .map(e -> e.getMessage().getFormattedMessage()).toList();
+    }
+
+    private void saveRaw(String id, String uuidOrNull) {
+        repository.save(ArticleDocument.builder().id(id).uuid(uuidOrNull).title("t-" + id).slug("s-" + id)
+                .status("PUBLISHED").build());
+        template.indexOps(ArticleDocument.class).refresh();
+    }
+
     private ArticleIndexOrphanReconciliationJob newJob(int pageSize) {
         return new ArticleIndexOrphanReconciliationJob(redis, registry, template, repository, articleFacade,
                 pageSize, 200);
@@ -181,6 +225,71 @@ class ArticleIndexOrphanReconciliationJobIT {
         assertThat(result).isEqualTo(Result.COMPLETED);
         assertThat(indexedIds()).containsExactly(a.toString());
         assertThat(b).isNotNull();
+    }
+
+    @Test
+    @DisplayName("同一頁混入非 UUID 的垃圾 id：掃描仍走完全部文件，幽靈全數清除，垃圾文件不被刪（留給全量重建）")
+    void run_garbageIdsInPages_stillScansEverything() {
+        List<UUID> keep = new ArrayList<>();
+        List<UUID> ghosts = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            (i % 4 == 3 ? ghosts : keep).add(indexArticle());
+        }
+        saveRaw("0-garbage", "0-garbage");
+        saveRaw("g-garbage", "g-garbage");
+        dbPublishedOnly(keep);
+
+        Result result = newJob(2).run();
+
+        assertThat(result).isEqualTo(Result.COMPLETED);
+        Set<String> expected = new HashSet<>(Set.of("0-garbage", "g-garbage"));
+        keep.forEach(u -> expected.add(u.toString()));
+        assertThat(indexedIds()).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("混入沒有 uuid 欄位的舊文件：掃描不會卡住，這些文件不被掃描也不被刪除，其餘幽靈照常清除")
+    void run_documentsWithoutUuidField_areSkippedAndNeverDeleted() {
+        UUID keep = indexArticle();
+        UUID ghost = indexArticle();
+        UUID legacyA = UUID.randomUUID();
+        UUID legacyB = UUID.randomUUID();
+        saveRaw(legacyA.toString(), null);
+        saveRaw(legacyB.toString(), null);
+        dbPublishedOnly(Set.of(keep));
+
+        Result result = newJob(2).run();
+
+        assertThat(result).isEqualTo(Result.COMPLETED);
+        assertThat(indexedIds()).containsExactlyInAnyOrder(keep.toString(), legacyA.toString(), legacyB.toString());
+        assertThat(indexedIds()).doesNotContain(ghost.toString());
+    }
+
+    @Test
+    @DisplayName("舊索引的 uuid 已被動態建成 text：initializer 的 putMapping 衝突記 ERROR（不拋例外）；校正 FAILED 並記可行動 ERROR，ES 零刪除")
+    void run_uuidDynamicallyMappedAsText_logsActionableErrorsAndDeletesNothing() {
+        IndexOperations indexOps = template.indexOps(ArticleDocument.class);
+        indexOps.delete();
+        indexOps.create();
+        indexOps.putMapping(org.springframework.data.elasticsearch.core.document.Document.parse(
+                "{\"properties\":{\"status\":{\"type\":\"keyword\"},\"tags\":{\"type\":\"nested\"},"
+                        + "\"author\":{\"properties\":{\"uuid\":{\"type\":\"keyword\"}}}}}"));
+        /* 新版程式在 initializer 補 mapping 之前就寫入帶 uuid 的文件 → ES 動態建成 text */
+        UUID a = indexArticle();
+        UUID b = indexArticle();
+        dbPublishedOnly(Set.of());
+
+        List<String> initializerErrors = runCapturing(dowob.xyz.blog.module.search.init.SearchIndexInitializer.class,
+                () -> new dowob.xyz.blog.module.search.init.SearchIndexInitializer(template).ensureCorrectMapping(),
+                Level.ERROR);
+        Result[] result = new Result[1];
+        List<String> jobErrors = runCapturing(ArticleIndexOrphanReconciliationJob.class,
+                () -> result[0] = newJob(500).run(), Level.ERROR);
+
+        assertThat(initializerErrors).anySatisfy(m -> assertThat(m).contains("刪除索引").contains("reindex"));
+        assertThat(result[0]).isEqualTo(Result.FAILED);
+        assertThat(jobErrors).anySatisfy(m -> assertThat(m).contains("刪除索引").contains("reindex"));
+        assertThat(indexedIds()).containsExactlyInAnyOrder(a.toString(), b.toString());
     }
 
     @Test
