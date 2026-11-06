@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.version.config;
 
+import dowob.xyz.blog.infrastructure.config.DeadLetterTopology;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
@@ -113,14 +114,17 @@ public class VersionRabbitMqConfig {
     }
 
     /**
-     * 對齊全站 DLQ 慣例：失敗訊息經 blog.dlq exchange + dead-letter routing key
-     * 進入 infrastructure 宣告的共用死信佇列，避免訊息靜默丟失。
+     * Version 模組 queue 的 DLQ 參數：全站共用的 {@link DeadLetterTopology#dlqArgs()} 再加上 {@code x-message-ttl=600000}（10 分鐘）。
+     *
+     * <p><b>TTL 是否保留待 Yuan 決策（findings ARCH-18）</b>：全站其他 queue 都沒有 TTL，唯獨 version 的三個 queue
+     * （snapshot、article-deleted、user-deleted）會讓 10 分鐘內未被消費的訊息過期並進 DLQ。ARCH-19 收斂 DLQ 常數時
+     * <b>刻意完整保留此行為</b>（queue 參數不變，否則既有 queue 重新宣告會 406、需先刪再建）；移除 TTL 屬 ARCH-18 的獨立變更。</p>
+     *
+     * @return 含 DLQ 與 TTL 的新 Map
      */
     private Map<String, Object> dlqArgs() {
-        return Map.of(
-            "x-dead-letter-exchange", "blog.dlq",
-            "x-dead-letter-routing-key", "dead-letter",
-            "x-message-ttl", 600_000
-        );
+        Map<String, Object> args = DeadLetterTopology.dlqArgs();
+        args.put("x-message-ttl", 600_000);
+        return args;
     }
 }

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.file.config;
 
+import dowob.xyz.blog.infrastructure.config.DeadLetterTopology;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
@@ -61,9 +62,7 @@ public class FileRabbitMqConfig {
      */
     @Bean
     public Queue thumbnailQueue() {
-        return QueueBuilder.durable(THUMBNAIL_QUEUE)
-                .withArgument("x-dead-letter-exchange", "blog.dlq")
-                .withArgument("x-dead-letter-routing-key", "dead-letter")
+        return DeadLetterTopology.withDeadLetter(QueueBuilder.durable(THUMBNAIL_QUEUE))
                 .build();
     }
 
@@ -102,9 +101,7 @@ public class FileRabbitMqConfig {
      */
     @Bean
     public Queue fileUserDeletedQueue() {
-        return QueueBuilder.durable(QUEUE_USER_DELETED)
-                .withArgument("x-dead-letter-exchange", "blog.dlq")
-                .withArgument("x-dead-letter-routing-key", "dead-letter")
+        return DeadLetterTopology.withDeadLetter(QueueBuilder.durable(QUEUE_USER_DELETED))
                 .build();
     }
 
@@ -145,9 +142,7 @@ public class FileRabbitMqConfig {
      */
     @Bean
     public Queue fileArticleBindingQueue() {
-        return QueueBuilder.durable(QUEUE_ARTICLE_CONTENT_CHANGED)
-                .withArgument("x-dead-letter-exchange", "blog.dlq")
-                .withArgument("x-dead-letter-routing-key", "dead-letter")
+        return DeadLetterTopology.withDeadLetter(QueueBuilder.durable(QUEUE_ARTICLE_CONTENT_CHANGED))
                 .build();
     }
 
@@ -175,9 +170,7 @@ public class FileRabbitMqConfig {
      */
     @Bean
     public Queue fileArticleDeletedQueue() {
-        return QueueBuilder.durable(QUEUE_ARTICLE_DELETED)
-                .withArgument("x-dead-letter-exchange", "blog.dlq")
-                .withArgument("x-dead-letter-routing-key", "dead-letter")
+        return DeadLetterTopology.withDeadLetter(QueueBuilder.durable(QUEUE_ARTICLE_DELETED))
                 .build();
     }
 

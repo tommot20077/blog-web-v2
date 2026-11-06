@@ -9,7 +9,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * Comment 模組 RabbitMQ 設定：訂閱 {@code article.events} 的 {@code article.deleted}，
@@ -53,17 +53,5 @@ public class CommentRabbitMqConfig {
                 .bind(commentArticleDeletedQueue)
                 .to(articleEventsExchange)
                 .with(ArticleEventContract.ROUTING_KEY_DELETED);
-    }
-
-    /**
-     * 死信參數（與其他模組的寫法一致）：失敗訊息交給 {@code blog.dlq} exchange。
-     *
-     * @return queue 參數
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter"
-        );
     }
 }

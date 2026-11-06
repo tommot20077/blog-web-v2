@@ -8,7 +8,7 @@ import org.springframework.amqp.core.TopicExchange;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * 推薦模組 RabbitMQ 設定
@@ -40,18 +40,6 @@ public class RecommendRabbitMqConfig {
      * 文章已發布 Routing Key
      */
     public static final String ROUTING_KEY_ARTICLE_PUBLISHED = ArticleEventContract.ROUTING_KEY_PUBLISHED;
-
-    /**
-     * 建立死信隊列（DLQ）參數
-     *
-     * @return 包含死信交換器與路由 Key 的 Map
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter"
-        );
-    }
 
     /**
      * 參照文章事件 TopicExchange（已由 article 模組定義，此處僅宣告參照）

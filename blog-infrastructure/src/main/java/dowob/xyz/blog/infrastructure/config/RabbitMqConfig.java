@@ -68,13 +68,13 @@ public class RabbitMqConfig {
     private static final Logger log = LoggerFactory.getLogger(RabbitMqConfig.class);
 
     /** DLQ Exchange 名稱 */
-    private static final String DLQ_EXCHANGE = "blog.dlq";
+    private static final String DLQ_EXCHANGE = DeadLetterTopology.DLQ_EXCHANGE;
 
     /** DLQ Queue 名稱 */
-    private static final String DLQ_QUEUE = "queue.dead-letter";
+    private static final String DLQ_QUEUE = DeadLetterTopology.DLQ_QUEUE;
 
     /** DLQ Routing Key */
-    private static final String DLQ_ROUTING_KEY = "dead-letter";
+    private static final String DLQ_ROUTING_KEY = DeadLetterTopology.DLQ_ROUTING_KEY;
 
     /** 最大重試次數（含首次嘗試） */
     private static final int MAX_ATTEMPTS = 3;

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.tag.config;
 
+import dowob.xyz.blog.infrastructure.config.DeadLetterTopology;
 import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
@@ -71,9 +72,7 @@ public class TagRabbitMqConfig {
      */
     @Bean
     public Queue tagArticleTaggedQueue() {
-        return QueueBuilder.durable(QUEUE_TAG_ARTICLE_TAGGED)
-                .withArgument("x-dead-letter-exchange", "blog.dlq")
-                .withArgument("x-dead-letter-routing-key", "dead-letter")
+        return DeadLetterTopology.withDeadLetter(QueueBuilder.durable(QUEUE_TAG_ARTICLE_TAGGED))
                 .build();
     }
 
@@ -84,9 +83,7 @@ public class TagRabbitMqConfig {
      */
     @Bean
     public Queue tagArticleDeletedQueue() {
-        return QueueBuilder.durable(QUEUE_TAG_ARTICLE_DELETED)
-                .withArgument("x-dead-letter-exchange", "blog.dlq")
-                .withArgument("x-dead-letter-routing-key", "dead-letter")
+        return DeadLetterTopology.withDeadLetter(QueueBuilder.durable(QUEUE_TAG_ARTICLE_DELETED))
                 .build();
     }
 
@@ -190,9 +187,7 @@ public class TagRabbitMqConfig {
      * @return Queue 實例
      */
     private static Queue durableQueueWithDlq(String name) {
-        return QueueBuilder.durable(name)
-                .withArgument("x-dead-letter-exchange", "blog.dlq")
-                .withArgument("x-dead-letter-routing-key", "dead-letter")
+        return DeadLetterTopology.withDeadLetter(QueueBuilder.durable(name))
                 .build();
     }
 

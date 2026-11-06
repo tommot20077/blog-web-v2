@@ -9,7 +9,7 @@ import org.springframework.amqp.core.TopicExchange;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * 搜尋模組 RabbitMQ 設定
@@ -78,17 +78,6 @@ public class SearchRabbitMqConfig {
      * 搜尋索引下架移除 Queue 名稱
      */
     public static final String QUEUE_SEARCH_INDEX_ARCHIVE = "queue.search.index.archive";
-
-    /**
-     * 建立死信隊列（DLQ）參數
-     *
-     * @return 包含死信交換器與路由 Key 的 Map
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter");
-    }
 
     /**
      * 宣告搜尋索引 Queue（持久化，含 DLQ 設定）

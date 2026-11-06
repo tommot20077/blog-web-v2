@@ -11,7 +11,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * 文章模組 RabbitMQ 設定
@@ -40,17 +40,6 @@ public class ArticleRabbitMqConfig {
      * 文章被瀏覽 Routing Key
      */
     public static final String ROUTING_KEY_VIEWED = "article.viewed";
-
-    /**
-     * 建立死信隊列（DLQ）參數
-     *
-     * @return 包含死信交換器與路由 Key 的 Map
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter");
-    }
 
     /**
      * 建立文章事件 Topic Exchange
@@ -181,5 +170,4 @@ public class ArticleRabbitMqConfig {
                 .to(articleUserEventsExchange)
                 .with(UserEventContract.ROUTING_KEY_DELETED);
     }
-
 }
