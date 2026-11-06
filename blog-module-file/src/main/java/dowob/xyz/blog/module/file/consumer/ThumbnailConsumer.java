@@ -7,6 +7,7 @@ import dowob.xyz.blog.module.file.service.AllowedImageTypes;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.coobird.thumbnailator.Thumbnails;
@@ -116,12 +117,33 @@ public class ThumbnailConsumer {
             /*
              * 只做單欄位 UPDATE，不 save 開頭讀出的舊實體：縮圖處理耗時，save 會以舊值覆寫所有欄位，
              * 把處理期間 bindToArticle 寫入的 article_uuid 蓋回 null（已發布文章的圖片變 403）。
-             * 檔案若在處理期間被刪除，影響 0 列，屬正常 no-op。
+             * 檔案若在處理期間被刪除，影響 0 列，屬正常 no-op——但此時剛寫入的縮圖物件已無 metadata
+             * 指向，必須補刪，否則成為孤兒（DATA-14）。補刪失敗只記 WARN，不拋例外（重試也無法讓
+             * 已刪除的檔案復活，進 DLQ 沒有意義）。
              */
-            fileMetadataRepository.markThumbnailGenerated(event.fileId());
+            int updated = fileMetadataRepository.markThumbnailGenerated(event.fileId());
+            if (updated == 0) {
+                removeOrphanThumbnail(thumbPath, event.fileId());
+                return;
+            }
 
             log.info("縮圖產生成功: {}", thumbPath);
         });
+    }
+
+    /**
+     * 補刪孤兒縮圖物件（檔案在縮圖處理期間已被刪除）；失敗僅記 WARN，不拋例外。
+     *
+     * @param thumbPath 剛寫入的縮圖物件鍵
+     * @param fileId    對應（已不存在的）檔案 UUID
+     */
+    private void removeOrphanThumbnail(String thumbPath, java.util.UUID fileId) {
+        try {
+            minioClient.removeObject(RemoveObjectArgs.builder().bucket(bucketName).object(thumbPath).build());
+            log.info("檔案已於縮圖處理期間被刪除，已補刪縮圖物件: fileId={}, thumbPath={}", fileId, thumbPath);
+        } catch (Exception e) {
+            log.warn("補刪孤兒縮圖失敗（物件可能殘留）: fileId={}, thumbPath={}", fileId, thumbPath, e);
+        }
     }
 
     /**

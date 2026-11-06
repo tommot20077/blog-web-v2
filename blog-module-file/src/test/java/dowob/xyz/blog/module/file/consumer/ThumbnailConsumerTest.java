@@ -247,6 +247,78 @@ class ThumbnailConsumerTest {
         verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
     }
 
+    /** 建立回傳真實 JPEG 的 getObject 串流 mock，並讓 mark 回傳指定列數 */
+    private void stubDownloadAndMark(UUID fileId, int markResult) throws Exception {
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+        byte[] jpegBytes = getClass().getResourceAsStream("/test.jpg").readAllBytes();
+        GetObjectResponse mockResponse = org.mockito.Mockito.mock(GetObjectResponse.class);
+        ByteArrayInputStream bais = new ByteArrayInputStream(jpegBytes);
+        when(mockResponse.read(any(byte[].class), any(int.class), any(int.class)))
+                .thenAnswer(inv -> bais.read(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        when(mockResponse.read()).thenAnswer(inv -> bais.read());
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
+        when(fileMetadataRepository.markThumbnailGenerated(fileId)).thenReturn(markResult);
+    }
+
+    /**
+     * DATA-14：檔案在縮圖處理期間被刪除（mark 影響 0 列）→ 補刪剛寫入的縮圖物件，不留孤兒
+     */
+    @Test
+    @DisplayName("handleImageUploaded_whenMarkAffectsZeroRows_removesJustWrittenThumbnail")
+    void handleImageUploaded_whenMarkAffectsZeroRows_removesJustWrittenThumbnail() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        stubDownloadAndMark(fileId, 0);
+
+        thumbnailConsumer.handleImageUploaded(event);
+
+        org.mockito.ArgumentCaptor<PutObjectArgs> put = org.mockito.ArgumentCaptor.forClass(PutObjectArgs.class);
+        org.mockito.ArgumentCaptor<io.minio.RemoveObjectArgs> remove =
+                org.mockito.ArgumentCaptor.forClass(io.minio.RemoveObjectArgs.class);
+        verify(minioClient).putObject(put.capture());
+        verify(minioClient).removeObject(remove.capture());
+        assertThat(remove.getValue().object()).isEqualTo(put.getValue().object())
+                .isEqualTo("articles/2024/01/01/uuid_thumb.jpg");
+        assertThat(remove.getValue().bucket()).isEqualTo("test-bucket");
+    }
+
+    /**
+     * DATA-14：補刪失敗只記 WARN、不拋例外（避免無意義進 DLQ）
+     */
+    @Test
+    @DisplayName("handleImageUploaded_whenCleanupRemoveFails_doesNotThrow")
+    void handleImageUploaded_whenCleanupRemoveFails_doesNotThrow() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        stubDownloadAndMark(fileId, 0);
+        doThrow(new RuntimeException("minio down")).when(minioClient).removeObject(any(io.minio.RemoveObjectArgs.class));
+
+        org.assertj.core.api.Assertions.assertThatCode(() -> thumbnailConsumer.handleImageUploaded(event))
+                .doesNotThrowAnyException();
+        verify(minioClient).removeObject(any(io.minio.RemoveObjectArgs.class));
+    }
+
+    /**
+     * DATA-14：mark 成功（影響 1 列）時不得刪除縮圖
+     */
+    @Test
+    @DisplayName("handleImageUploaded_whenMarkSucceeds_doesNotRemoveThumbnail")
+    void handleImageUploaded_whenMarkSucceeds_doesNotRemoveThumbnail() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        stubDownloadAndMark(fileId, 1);
+
+        thumbnailConsumer.handleImageUploaded(event);
+
+        verify(minioClient, never()).removeObject(any(io.minio.RemoveObjectArgs.class));
+    }
+
     /**
      * 情境：成功處理 → 經 ConsumerExecutor 計入 processed 指標（consumer tag 為 CONSUMER_NAME）
      *
