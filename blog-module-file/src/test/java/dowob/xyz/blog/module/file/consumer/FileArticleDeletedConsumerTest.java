@@ -98,12 +98,12 @@ class FileArticleDeletedConsumerTest {
     }
 
     @Test
-    @DisplayName("監聽 file.article-deleted，並發度固定為 1（連線池預算：見 application.yaml hikari 註解）")
+    @DisplayName("監聽 file.article-deleted，並發度固定為 1（1-1，連線池預算：見 application.yaml hikari 註解）")
     void listener_bindsToQueueWithConcurrencyOne() throws Exception {
         Method method = FileArticleDeletedConsumer.class.getMethod("onArticleDeleted", ArticleDeletedEvent.class);
         RabbitListener listener = method.getAnnotation(RabbitListener.class);
 
         assertThat(listener.queues()).containsExactly("file.article-deleted");
-        assertThat(listener.concurrency()).isEqualTo("1");
+        assertThat(listener.concurrency()).isEqualTo("1-1");
     }
 }

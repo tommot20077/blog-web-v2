@@ -28,6 +28,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -90,7 +91,7 @@ class FileArticleDeletedConsumerIT {
     @Autowired private FileArticleDeletedConsumer consumer;
     @Autowired private FileMetadataRepository fileMetadataRepository;
     @Autowired private JdbcTemplate jdbc;
-    @Autowired private MinioClient minioClient;
+    @MockitoSpyBean private MinioClient minioClient;
 
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
@@ -253,5 +254,33 @@ class FileArticleDeletedConsumerIT {
         consumer.onArticleDeleted(eventOf(UUID.randomUUID(), null));
 
         assertThat(metadataExists(file)).isTrue();
+    }
+
+    @Test
+    @DisplayName("部分失敗後重試收斂：A 的 MinIO 刪除成功、B 失敗 → 整批 rollback（A 物件已無但 DB 列還在）；重試時 A 的 removeObject 為 no-op、DB 列被刪，B 也完成，最終一致")
+    void onArticleDeleted_partialFailureThenRetry_converges() throws Exception {
+        UUID fileA = insertFileWithObjects(author, UsageType.ARTICLE_CONTENT, deletedArticle);
+        UUID fileB = insertFileWithObjects(author, UsageType.ARTICLE_CONTENT, deletedArticle);
+        when(articleLookupFacade.findFileUuidsReferencedByAuthorArticles(author)).thenReturn(Set.of());
+        ArticleDeletedEvent event = eventOf(UUID.randomUUID(), deletedArticle);
+        /* 對 B 的原檔刪除失敗；A 的物件不受影響，會被真正刪除 */
+        Mockito.doThrow(new RuntimeException("MinIO hiccup")).when(minioClient)
+                .removeObject(Mockito.argThat(a -> a != null && a.object().equals(pathOf(fileB))));
+
+        assertThatThrownBy(() -> consumer.onArticleDeleted(event)).isInstanceOf(RuntimeException.class);
+
+        /* 此時最容易出錯的中間態：A 的物件已被刪、DB 列還在（先刪物件後刪 DB 的刻意順序）；B 物件與列都在 */
+        assertThat(metadataExists(fileA)).isTrue();
+        assertThat(objectExists(pathOf(fileA))).isFalse();
+        assertThat(metadataExists(fileB)).isTrue();
+        assertThat(objectExists(pathOf(fileB))).isTrue();
+
+        Mockito.reset(minioClient);
+        consumer.onArticleDeleted(event);
+
+        assertThat(metadataExists(fileA)).isFalse();
+        assertThat(metadataExists(fileB)).isFalse();
+        assertThat(objectExists(pathOf(fileA))).isFalse();
+        assertThat(objectExists(pathOf(fileB))).isFalse();
     }
 }

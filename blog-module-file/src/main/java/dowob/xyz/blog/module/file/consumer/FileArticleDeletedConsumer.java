@@ -19,7 +19,7 @@ import java.util.function.Supplier;
  * 失敗（含 MinIO 刪除失敗）→ 標記一起 rollback → 容器重試時真的重做，耗盡進 DLQ。清理本身亦冪等
  * （已刪除的檔案重送時不再出現；併發刪除的 {@code FILE_NOT_FOUND} 視為已完成），所以舊訊息沒有 eventId 時略過去重照常處理亦安全。</p>
  *
- * <p><b>並行度固定為 1</b>（{@code concurrency = "1"}，覆蓋全域預設的 2）：{@code executeIdempotent} 在整個 body
+ * <p><b>並行度固定為 1</b>（{@code concurrency = "1-1"}，覆蓋全域預設的 2；必須寫成 min-max，只寫 "1" 時 spring-rabbit 只設 concurrentConsumers，max 仍沿用 factory 的 2）：{@code executeIdempotent} 在整個 body
  * 期間持有一條 DB 連線，而本 consumer 的 body 含 MinIO 網路呼叫；固定 1 條使連線池預算只多佔 1 條
  * （見 application.yaml 的 hikari 註解與 {@code RabbitListenerYamlBindingTest}）。文章刪除不頻繁，單一 consumer 足夠。</p>
  *
@@ -48,7 +48,7 @@ public class FileArticleDeletedConsumer {
      *
      * @param event 文章刪除事件
      */
-    @RabbitListener(queues = FileRabbitMqConfig.QUEUE_ARTICLE_DELETED, concurrency = "1")
+    @RabbitListener(queues = FileRabbitMqConfig.QUEUE_ARTICLE_DELETED, concurrency = "1-1")
     public void onArticleDeleted(ArticleDeletedEvent event) {
         Supplier<String> logContext = () -> "articleUuid=" + event.articleUuid() + ", eventId=" + event.eventId();
         if (event.articleUuid() == null) {

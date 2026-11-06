@@ -22,7 +22,7 @@ import java.util.function.Supplier;
  * （{@code FileService#bindToArticle} 為 REQUIRED，會加入此交易）；失敗 → 標記一起 rollback → 重試時真的重做。
  * 回填本身也冪等（完整替換），所以舊訊息沒有 eventId 時略過去重照常處理亦安全。</p>
  *
- * <p><b>並行度固定為 1</b>（{@code concurrency = "1"}，覆蓋全域預設的 2）：回填是「讀最新內文 → 完整替換綁定」，
+ * <p><b>並行度固定為 1</b>（{@code concurrency = "1-1"}，覆蓋全域預設的 2；必須寫成 min-max，只寫 "1" 時 spring-rabbit 只設 concurrentConsumers，max 仍沿用 factory 的 2）：回填是「讀最新內文 → 完整替換綁定」，
  * 同一篇文章的兩個事件若由兩條執行緒同時處理，讀內文與寫綁定的順序可能交錯，讓綁定停在舊內文；
  * 單一 consumer 依序處理即可收斂。另外也讓連線池預算只多佔 1 條（見 application.yaml 的 hikari 註解）。</p>
  *
@@ -51,7 +51,7 @@ public class FileArticleContentChangedConsumer {
      *
      * @param event 文章內容變更事件
      */
-    @RabbitListener(queues = FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED, concurrency = "1")
+    @RabbitListener(queues = FileRabbitMqConfig.QUEUE_ARTICLE_CONTENT_CHANGED, concurrency = "1-1")
     public void onContentChanged(ArticleContentChangedEvent event) {
         Supplier<String> logContext = () -> "articleUuid=" + event.articleUuid()
                 + ", action=" + event.action() + ", eventId=" + event.eventId();
