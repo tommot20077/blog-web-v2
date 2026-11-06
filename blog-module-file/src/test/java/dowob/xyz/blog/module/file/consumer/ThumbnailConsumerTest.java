@@ -207,6 +207,47 @@ class ThumbnailConsumerTest {
     }
 
     /**
+     * FILE-03：縮圖輸出格式來自 contentType 白名單，storagePath 副檔名（如 .php）不得進入 outputFormat
+     */
+    @Test
+    @DisplayName("handleImageUploaded_withHostileExtensionInPath_usesWhitelistedFormatFromContentType")
+    void handleImageUploaded_withHostileExtensionInPath_usesWhitelistedFormatFromContentType() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.php", "image/jpeg");
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+        byte[] jpegBytes = getClass().getResourceAsStream("/test.jpg").readAllBytes();
+        GetObjectResponse mockResponse = org.mockito.Mockito.mock(GetObjectResponse.class);
+        ByteArrayInputStream bais = new ByteArrayInputStream(jpegBytes);
+        when(mockResponse.read(any(byte[].class), any(int.class), any(int.class)))
+                .thenAnswer(inv -> bais.read(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        when(mockResponse.read()).thenAnswer(inv -> bais.read());
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
+
+        thumbnailConsumer.handleImageUploaded(event);
+
+        verify(minioClient).putObject(any(PutObjectArgs.class));
+        verify(fileMetadataRepository).markThumbnailGenerated(fileId);
+    }
+
+    /**
+     * FILE-03：contentType 不在圖片白名單（如 image/svg+xml）時直接跳過，不下載也不產生縮圖
+     */
+    @Test
+    @DisplayName("handleImageUploaded_withNonWhitelistedImageType_skipsWithoutDownload")
+    void handleImageUploaded_withNonWhitelistedImageType_skipsWithoutDownload() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), UUID.randomUUID(), "articles/2024/01/01/uuid.svg", "image/svg+xml");
+
+        thumbnailConsumer.handleImageUploaded(event);
+
+        verify(minioClient, never()).getObject(any(GetObjectArgs.class));
+        verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
+    }
+
+    /**
      * 情境：成功處理 → 經 ConsumerExecutor 計入 processed 指標（consumer tag 為 CONSUMER_NAME）
      *
      * @throws Exception 測試過程中的例外

@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.file.consumer;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
+import dowob.xyz.blog.module.file.service.AllowedImageTypes;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -67,8 +68,10 @@ public class ThumbnailConsumer {
     @RabbitListener(queues = "file.thumbnail")
     public void handleImageUploaded(ImageUploadedEvent event) {
         consumerExecutor.execute(CONSUMER_NAME, () -> "fileId=" + event.fileId() + ", eventId=" + event.eventId(), () -> {
-            if (!event.contentType().startsWith("image/")) {
-                log.debug("非圖片類型，跳過縮圖處理: {}", event.contentType());
+            /* FILE-03：輸出格式只取自 contentType 白名單，不採用 storagePath 的副檔名 */
+            String outputFormat = AllowedImageTypes.extensionFor(event.contentType()).orElse(null);
+            if (outputFormat == null) {
+                log.debug("非白名單圖片類型，跳過縮圖處理: {}", event.contentType());
                 return;
             }
 
@@ -85,7 +88,6 @@ public class ThumbnailConsumer {
                 return;
             }
 
-            String ext = extractExtension(event.storagePath());
             String thumbPath = buildThumbPath(event.storagePath());
 
             try (InputStream inputStream = minioClient.getObject(
@@ -98,7 +100,7 @@ public class ThumbnailConsumer {
                 Thumbnails.of(inputStream)
                         .width(300)
                         .keepAspectRatio(true)
-                        .outputFormat(ext)
+                        .outputFormat(outputFormat)
                         .toOutputStream(outputStream);
 
                 byte[] thumbBytes = outputStream.toByteArray();
@@ -120,19 +122,6 @@ public class ThumbnailConsumer {
 
             log.info("縮圖產生成功: {}", thumbPath);
         });
-    }
-
-    /**
-     * 從路徑提取副檔名
-     *
-     * @param path 檔案路徑
-     * @return 副檔名（不含點），若無則返回 "jpg"
-     */
-    private String extractExtension(String path) {
-        if (path == null || !path.contains(".")) {
-            return "jpg";
-        }
-        return path.substring(path.lastIndexOf('.') + 1).toLowerCase();
     }
 
     /**

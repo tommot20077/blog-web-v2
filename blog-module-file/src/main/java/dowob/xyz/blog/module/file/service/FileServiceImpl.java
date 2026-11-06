@@ -127,8 +127,10 @@ public class FileServiceImpl implements FileService {
             throw new SystemException(CommonErrorCode.FILE_IO_ERROR);
         }
 
-        String detectedMimeType = detectMimeType(fileBytes, file.getOriginalFilename());
-        if (!fileProperties.allowedMimeTypes().contains(detectedMimeType)) {
+        String detectedMimeType = detectMimeType(fileBytes);
+        /* FILE-03：副檔名只來自白名單（由偵測出的 MIME 對應），不在白名單的 MIME 一律視為不支援 */
+        String ext = AllowedImageTypes.extensionFor(detectedMimeType).orElse(null);
+        if (ext == null || !fileProperties.allowedMimeTypes().contains(detectedMimeType)) {
             throw new BusinessException(FileErrorCode.INVALID_FILE_TYPE);
         }
         if (fileBytes.length > MAX_FILE_SIZE) {
@@ -139,7 +141,6 @@ public class FileServiceImpl implements FileService {
         if (quota != Long.MAX_VALUE && (used + fileBytes.length) > quota) {
             throw new BusinessException(FileErrorCode.QUOTA_EXCEEDED);
         }
-        String ext = extractExtension(file.getOriginalFilename());
         UUID fileId = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
         String prefix = (usageType == UsageType.AVATAR) ? "avatars" : "articles";
@@ -493,15 +494,16 @@ public class FileServiceImpl implements FileService {
     /**
      * 使用 Apache Tika 偵測 MIME 類型（F-2：改用 byte[] 避免重複消耗 InputStream）
      *
+     * <p>FILE-03：只看內容 magic bytes，不把使用者檔名當提示傳給 Tika。</p>
+     *
      * @param fileBytes 檔案位元組陣列
-     * @param filename  原始檔案名稱（供 Tika 輔助判斷）
      * @return 偵測到的 MIME 類型字串
      */
-    private String detectMimeType(byte[] fileBytes, String filename) {
+    private String detectMimeType(byte[] fileBytes) {
         try {
-            return tika.detect(new ByteArrayInputStream(fileBytes), filename);
+            return tika.detect(new ByteArrayInputStream(fileBytes));
         } catch (IOException e) {
-            log.error("MIME 類型偵測失敗: {}", filename, e);
+            log.error("MIME 類型偵測失敗", e);
             throw new SystemException(CommonErrorCode.FILE_IO_ERROR);
         }
     }
@@ -561,19 +563,6 @@ public class FileServiceImpl implements FileService {
         DataSize dataSize = fileProperties.quotas().getOrDefault(key,
                 fileProperties.quotas().getOrDefault("USER", DataSize.ofMegabytes(10)));
         return dataSize.toBytes();
-    }
-
-    /**
-     * 從檔案名稱提取副檔名
-     *
-     * @param filename 原始檔案名稱
-     * @return 副檔名（不含點）
-     */
-    private String extractExtension(String filename) {
-        if (filename == null || !filename.contains(".")) {
-            return "bin";
-        }
-        return filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
     }
 
     /**

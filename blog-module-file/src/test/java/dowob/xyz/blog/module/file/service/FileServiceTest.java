@@ -24,6 +24,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -532,7 +534,7 @@ class FileServiceTest {
             MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", jpegBytes);
             /** 注入會拋 IOException 的 Tika mock，觸發 detectMimeType 的 catch 分支 */
             Tika brokenTika = org.mockito.Mockito.mock(Tika.class);
-            when(brokenTika.detect(any(InputStream.class), any(String.class)))
+            when(brokenTika.detect(any(InputStream.class)))
                     .thenThrow(new IOException("tika detect error"));
             ReflectionTestUtils.setField(fileService, "tika", brokenTika);
 
@@ -619,14 +621,14 @@ class FileServiceTest {
         }
     }
 
-    /** uploadFile：filename 無副檔名 → extractExtension 返回 "bin" */
+    /** uploadFile：filename 無副檔名 → 副檔名取自偵測出的 MIME（FILE-03） */
     @Nested
     @DisplayName("uploadFile 無副檔名 extractExtension 測試")
     class UploadFileNoExtensionTests {
 
         @Test
-        @DisplayName("uploadFile_withNoExtensionFilename_usesBinExtension")
-        void uploadFile_withNoExtensionFilename_usesBinExtension() throws Exception {
+        @DisplayName("uploadFile_withNoExtensionFilename_usesDetectedMimeExtension")
+        void uploadFile_withNoExtensionFilename_usesDetectedMimeExtension() throws Exception {
             byte[] jpegBytes = minimalJpegBytes();
             /** filename 無 dot */
             MockMultipartFile file = new MockMultipartFile("file", "testfile", "image/jpeg", jpegBytes);
@@ -637,12 +639,12 @@ class FileServiceTest {
 
             ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
             verify(fileMetadataRepository).save(captor.capture());
-            assertThat(captor.getValue().getStoragePath()).endsWith(".bin");
+            assertThat(captor.getValue().getStoragePath()).endsWith(".jpg");
         }
 
         @Test
-        @DisplayName("uploadFile_withNullFilenameForExtension_usesBinExtension")
-        void uploadFile_withNullFilenameForExtension_usesBinExtension() throws Exception {
+        @DisplayName("uploadFile_withNullFilenameForExtension_usesDetectedMimeExtension")
+        void uploadFile_withNullFilenameForExtension_usesDetectedMimeExtension() throws Exception {
             byte[] jpegBytes = minimalJpegBytes();
             MockMultipartFile file = new MockMultipartFile("file", null, "image/jpeg", jpegBytes);
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
@@ -652,7 +654,7 @@ class FileServiceTest {
 
             ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
             verify(fileMetadataRepository).save(captor.capture());
-            assertThat(captor.getValue().getStoragePath()).endsWith(".bin");
+            assertThat(captor.getValue().getStoragePath()).endsWith(".jpg");
         }
     }
 
@@ -1644,6 +1646,34 @@ class FileServiceTest {
                 throw new IOException("InputStream already consumed - single read only");
             }
             return super.getInputStream();
+        }
+    }
+
+    /** FILE-03：storage key 的副檔名只來自偵測出的 MIME 白名單，完全忽略使用者檔名 */
+    @Nested
+    @DisplayName("uploadFile 副檔名白名單（FILE-03）")
+    class UploadFileExtensionWhitelistTests {
+
+        private byte[] pngBytes() {
+            return new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+                    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52};
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"x.php", "../../a.png", "a.png%00.exe", "noext", "a.PNG.jsp", "evil.png/../../etc"})
+        @DisplayName("uploadFile_withHostileFilenameButRealPng_storageKeyEndsWithPngAndHasNoDotDot")
+        void uploadFile_withHostileFilenameButRealPng_storageKeyEndsWithPngAndHasNoDotDot(String filename) {
+            MockMultipartFile file = new MockMultipartFile("file", filename, "image/png", pngBytes());
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            ArgumentCaptor<FileMetadata> captor = ArgumentCaptor.forClass(FileMetadata.class);
+            verify(fileMetadataRepository).save(captor.capture());
+            String key = captor.getValue().getStoragePath();
+            assertThat(key).endsWith(".png").doesNotContain("..").doesNotContain("%").doesNotContain("php");
+            assertThat(key).matches("articles/\\d{4}/\\d{2}/\\d{2}/[0-9a-f-]{36}\\.png");
         }
     }
 }
