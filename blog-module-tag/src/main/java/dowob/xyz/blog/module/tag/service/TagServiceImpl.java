@@ -15,6 +15,8 @@ import org.springframework.data.redis.connection.Limit;
 import org.springframework.data.redis.connection.RedisZSetCommands;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -79,6 +81,16 @@ public class TagServiceImpl implements TagService {
     private static final int MAX_HOT_TAGS_LIMIT = 20;
 
     /**
+     * 熱門標籤原子回填腳本：ARGV[1]=TTL 秒，其後為成對的 score、member。
+     */
+    private static final RedisScript<Long> HOT_TAGS_BACKFILL_SCRIPT = new DefaultRedisScript<>(
+            "redis.call('DEL', KEYS[1]) "
+                    + "for i = 2, #ARGV, 2 do redis.call('ZADD', KEYS[1], ARGV[i], ARGV[i + 1]) end "
+                    + "redis.call('EXPIRE', KEYS[1], ARGV[1]) "
+                    + "return 1",
+            Long.class);
+
+    /**
      * 標籤自動補全單次回傳筆數上限（SEC-04）。
      *
      * <p>{@code GET /api/v1/tags/suggest} 為匿名端點，筆數直接成為 Redis
@@ -115,20 +127,42 @@ public class TagServiceImpl implements TagService {
                 .reverseRangeWithScores(RedisKeyConstant.TAG_HOT_KEY, 0L, (long) boundedLimit - 1);
 
         if (cached != null && !cached.isEmpty()) {
-            return cached.stream()
-                    .map(tuple -> {
-                        UUID id = UUID.fromString(tuple.getValue());
-                        return tagRepository.findById(id).orElse(null);
-                    })
+            /* 單次 findAllById 取代逐筆 findById；findAllById 不保證順序，依 ZSET 原排序重排，DB 已不存在的 id 略過 */
+            List<UUID> orderedIds = cached.stream()
+                    .map(tuple -> UUID.fromString(tuple.getValue()))
+                    .toList();
+            Map<UUID, Tag> byId = new HashMap<>();
+            tagRepository.findAllById(orderedIds).forEach(tag -> byId.put(tag.getId(), tag));
+            return orderedIds.stream()
+                    .map(byId::get)
                     .filter(Objects::nonNull)
                     .collect(Collectors.toList());
         }
 
         List<Tag> tags = tagRepository.findTop20ByOrderByUsageCountDesc();
-        tags.forEach(tag -> stringRedisTemplate.opsForZSet()
-                .add(RedisKeyConstant.TAG_HOT_KEY, tag.getId().toString(), tag.getUsageCount()));
-        stringRedisTemplate.expire(RedisKeyConstant.TAG_HOT_KEY, HOT_TAGS_TTL_HOURS, TimeUnit.HOURS);
+        backfillHotTags(tags);
         return tags.subList(0, Math.min(boundedLimit, tags.size()));
+    }
+
+    /**
+     * 以單一 Lua 腳本原子回填熱門標籤 ZSET（DEL + ZADD + EXPIRE）。
+     *
+     * <p>選擇 Lua 而非 MULTI：腳本在 Redis 單執行緒內不可分割，讀者不會看到「已刪未寫」的空窗，
+     * 也不會看到「已寫未設 TTL」的永不過期 key；同時只需一次 round-trip。</p>
+     *
+     * @param tags 要回填的標籤（空列表則不動快取）
+     */
+    private void backfillHotTags(List<Tag> tags) {
+        if (tags.isEmpty()) {
+            return;
+        }
+        List<Object> args = new ArrayList<>(1 + tags.size() * 2);
+        args.add(String.valueOf(TimeUnit.HOURS.toSeconds(HOT_TAGS_TTL_HOURS)));
+        for (Tag tag : tags) {
+            args.add(String.valueOf(tag.getUsageCount()));
+            args.add(tag.getId().toString());
+        }
+        stringRedisTemplate.execute(HOT_TAGS_BACKFILL_SCRIPT, List.of(RedisKeyConstant.TAG_HOT_KEY), args.toArray());
     }
 
     @Override
