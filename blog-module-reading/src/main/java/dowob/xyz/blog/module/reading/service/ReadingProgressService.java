@@ -8,6 +8,8 @@ import dowob.xyz.blog.module.reading.model.dto.response.ProgressResponse;
 import dowob.xyz.blog.module.reading.repository.UserReadingProgressRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisOperations;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -151,7 +153,7 @@ public class ReadingProgressService {
     }
 
     /**
-     * 批次查詢閱讀進度：Redis 命中的直接用，沒命中的以單一 DB 查詢補齊。
+     * 批次查詢閱讀進度：以單次 pipeline 取回全部 Redis hash，命中的直接用，沒命中的以單一 DB 查詢補齊。
      *
      * <p>以呼叫端給的文章 UUID 直接組 Redis key 與查 DB，不經 {@link ArticleFacade}（不再做 id↔uuid 轉換）。
      * 呼叫端傳入的本來就是已存在的文章；不存在的文章只會是「沒有進度」，結果中不含該 key。</p>
@@ -165,11 +167,27 @@ public class ReadingProgressService {
             return Collections.emptyMap();
         }
 
+        /* 一次 pipeline 取回全部 hash（1 個 round-trip），取代逐篇 entries 的 N 個 round-trip */
+        List<String> keys = articleUuids.stream()
+                .map(u -> RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + u)
+                .toList();
+        List<Object> hashes = redisTemplate.executePipelined(new SessionCallback<Object>() {
+            @Override
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            public Object execute(RedisOperations operations) {
+                for (String key : keys) {
+                    operations.opsForHash().entries(key);
+                }
+                return null;
+            }
+        });
+
         Map<UUID, BigDecimal> result = new HashMap<>();
         List<UUID> missingUuids = new ArrayList<>();
-        for (UUID articleUuid : articleUuids) {
-            String key = RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + articleUuid;
-            Map<Object, Object> hash = redisTemplate.opsForHash().entries(key);
+        for (int i = 0; i < articleUuids.size(); i++) {
+            UUID articleUuid = articleUuids.get(i);
+            Object raw = hashes.get(i);
+            Map<?, ?> hash = raw instanceof Map<?, ?> m ? m : Map.of();
             if (!hash.isEmpty()) {
                 Object pVal = hash.get("progress");
                 if (pVal != null) {

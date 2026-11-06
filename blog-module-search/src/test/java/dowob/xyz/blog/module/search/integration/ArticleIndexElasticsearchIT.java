@@ -220,6 +220,59 @@ class ArticleIndexElasticsearchIT {
         });
     }
 
+    @Test
+    @DisplayName("PERF-12：搜尋查詢的 _source 不含 content，但搜尋仍命中 content 內容、結果 DTO 欄位正常")
+    void search_sourceExcludesContent_butFullTextStillMatchesContent() {
+        initializer.ensureCorrectMapping();
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        repository.save(ArticleDocument.builder().id(articleUuid.toString()).title("無關標題").slug("s-" + articleUuid)
+                .summary("無關摘要").content("zebrafishuniquetoken 內文專屬字詞").status("PUBLISHED")
+                .publishedAt(LocalDateTime.of(2026, 10, 24, 12, 0))
+                .author(new ArticleDocument.AuthorInfo(authorUuid.toString(), "愛麗絲")).build());
+        template.indexOps(ArticleDocument.class).refresh();
+        org.springframework.data.elasticsearch.core.ElasticsearchOperations spied = org.mockito.Mockito.spy(template);
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        when(redis.opsForValue()).thenReturn(mock(ValueOperations.class));
+        when(redis.opsForZSet()).thenReturn(mock(ZSetOperations.class));
+        SearchServiceImpl service = new SearchServiceImpl(spied, repository, redis, articleFacade, userFacade);
+
+        PageResult<SearchResultResponse> result = service.search("zebrafishuniquetoken", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).singleElement().satisfies(r -> {
+            assertThat(r.getArticleUuid()).isEqualTo(articleUuid);
+            assertThat(r.getAuthorUuid()).isEqualTo(authorUuid);
+        });
+        var captor = org.mockito.ArgumentCaptor.forClass(org.springframework.data.elasticsearch.core.query.Query.class);
+        org.mockito.Mockito.verify(spied).search(captor.capture(), org.mockito.ArgumentMatchers.eq(ArticleDocument.class));
+        var hits = template.search(captor.getValue(), ArticleDocument.class);
+        assertThat(hits.getSearchHits()).singleElement().satisfies(h -> {
+            assertThat(h.getContent().getContent()).as("_source 已排除 content").isNull();
+            assertThat(h.getContent().getTitle()).isEqualTo("無關標題");
+        });
+    }
+
+    @Test
+    @DisplayName("PERF-12：深分頁（page*size > 10000）回 BusinessException(400)，不是 ES 拒絕後的 500")
+    void search_deepPagination_throwsBusinessException() {
+        initializer.ensureCorrectMapping();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> searchService.search(null, null, "relevance", 101, 100, null))
+                .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(
+                                dowob.xyz.blog.common.api.errorcode.CommonErrorCode.PARAM_VALID_ERROR.getCode()));
+    }
+
+    @Test
+    @DisplayName("PERF-12：page*size 恰為 10000（邊界）可正常查詢，不被 ES 拒絕")
+    void search_pagingAtWindowBoundary_succeedsAgainstRealEs() {
+        initializer.ensureCorrectMapping();
+
+        PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 100, 100, null);
+
+        assertThat(result.getRecords()).isEmpty();
+    }
+
     /**
      * 直接寫入一份已發布文件（作者暱稱為原值）。
      *
