@@ -19,6 +19,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import dowob.xyz.blog.module.user.redis.UserRedisAtomicOps;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -33,6 +34,7 @@ import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -100,6 +102,10 @@ class AuthServiceTest {
     /** Mock：Session 撤銷服務 */
     @Mock
     private SessionRevoker sessionRevoker;
+
+    /** Mock：Redis 原子操作（計數 + TTL、登入裝置數修剪；Lua 行為由 UserRedisAtomicOpsIntegrationTest 以真 Redis 驗證） */
+    @Mock
+    private UserRedisAtomicOps userRedisAtomicOps;
 
     /** 受測物件，由 Mockito 自動注入所有 @Mock */
     @InjectMocks
@@ -596,7 +602,7 @@ class AuthServiceTest {
     @DisplayName("register → 重複 email 仍受 IP 限流約束（超限拋 RATE_LIMIT_EXCEEDED，不查 email）")
     void register_withDuplicateEmail_stillSubjectToIpRateLimit() {
         stubExistingEmailOwner();
-        when(valueOperations.increment(RedisKeyConstant.getRegisterIpKey("203.0.113.9")))
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getRegisterIpKey("203.0.113.9")), any(Duration.class)))
                 .thenReturn((long) RedisKeyConstant.REGISTER_IP_MAX + 1);
 
         assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME,
@@ -709,7 +715,8 @@ class AuthServiceTest {
         assertThat(result.refreshToken()).isEqualTo(MOCK_REFRESH_TOKEN);
         verify(hashOperations).putAll(eq("user:auth:" + USER_UUID), anyMap());
         verify(hashOperations, never()).put(anyString(), anyString(), anyString());
-        verify(zSetOps).add(anyString(), eq(MOCK_REFRESH_TOKEN), anyDouble());
+        verify(userRedisAtomicOps).registerRefreshToken(anyString(), eq(MOCK_REFRESH_TOKEN), anyLong(), eq(3),
+                eq(Duration.ofDays(7)));
     }
 
     /**
@@ -961,7 +968,7 @@ class AuthServiceTest {
     @DisplayName("verifyEmailCode → 驗證碼不符 → 應拋出 TOKEN_INVALID")
     void verifyEmailCode_withInvalidCode_shouldThrowTokenInvalid() {
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
 
         assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
                 .isInstanceOf(BusinessException.class)
@@ -998,12 +1005,12 @@ class AuthServiceTest {
         String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
         when(valueOperations.get(failKey)).thenReturn(null);
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
-        when(valueOperations.increment(failKey)).thenReturn(2L);
+        when(userRedisAtomicOps.incrementWithTtl(eq(failKey), any(Duration.class))).thenReturn(2L);
 
         assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
                 .isInstanceOf(BusinessException.class);
 
-        verify(valueOperations).increment(failKey);
+        verify(userRedisAtomicOps).incrementWithTtl(eq(failKey), any(Duration.class));
     }
 
     /**
@@ -1015,12 +1022,13 @@ class AuthServiceTest {
         String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
         when(valueOperations.get(failKey)).thenReturn(null);
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
-        when(valueOperations.increment(failKey)).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(eq(failKey), any(Duration.class))).thenReturn(1L);
 
         assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
                 .isInstanceOf(BusinessException.class);
 
-        verify(redisTemplate).expire(eq(failKey), eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES), eq(TimeUnit.MINUTES));
+        verify(userRedisAtomicOps).incrementWithTtl(eq(failKey),
+                eq(Duration.ofMinutes(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES)));
     }
 
     /**
@@ -1073,7 +1081,7 @@ class AuthServiceTest {
     @DisplayName("forgotPassword → 信箱存在 → 應儲存驗證 Token 並發布事件")
     void forgotPassword_shouldSaveVerificationTokenAndPublishEvent() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
@@ -1091,7 +1099,7 @@ class AuthServiceTest {
     @DisplayName("forgotPassword → 事件帶 userUuid 與非 null 的 eventId")
     void forgotPassword_event_carriesUserUuidAndEventId() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(buildActiveUser()));
         when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
 
@@ -1113,7 +1121,7 @@ class AuthServiceTest {
     @DisplayName("forgotPassword → 信箱不存在 → 應靜默忽略，不發布任何事件")
     void forgotPassword_withUnknownEmail_shouldDoNothing() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
 
         authService.forgotPassword(TEST_EMAIL);
@@ -1129,7 +1137,7 @@ class AuthServiceTest {
     @DisplayName("forgotPassword → 每分鐘超過限制 → 應拋出 RATE_LIMIT_EXCEEDED")
     void forgotPassword_exceedMinuteLimit_shouldThrow() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(2L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(2L);
 
         assertThatThrownBy(() -> authService.forgotPassword(TEST_EMAIL))
                 .isInstanceOf(BusinessException.class)
@@ -1146,7 +1154,7 @@ class AuthServiceTest {
     @DisplayName("forgotPassword → 每日超過限制 → 應拋出 RATE_LIMIT_EXCEEDED")
     void forgotPassword_exceedDailyLimit_shouldThrow() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString()))
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class)))
                 .thenReturn(1L)
                 .thenReturn(6L);
 
@@ -1165,7 +1173,7 @@ class AuthServiceTest {
     @DisplayName("forgotPassword → 未超過限制 → 應正常儲存 Token 並發布事件")
     void forgotPassword_withinLimit_shouldProceedNormally() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString()))
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class)))
                 .thenReturn(1L)
                 .thenReturn(1L);
         User mockUser = buildActiveUser();
@@ -1257,7 +1265,7 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
                 .isInstanceOf(BusinessException.class);
 
-        verify(valueOperations).increment(contains("login:fail:"));
+        verify(userRedisAtomicOps).incrementWithTtl(contains("login:fail:"), any(Duration.class));
     }
 
     /**
@@ -1324,30 +1332,8 @@ class AuthServiceTest {
 
         authService.login(TEST_EMAIL, TEST_PASSWORD);
 
-        verify(zSetOps).add(anyString(), eq(MOCK_REFRESH_TOKEN), anyDouble());
-    }
-
-    /**
-     * 驗證：超過 3 裝置上限時應移除最舊的 Token。
-     */
-    @Test
-    @DisplayName("login → 超過 3 裝置 → 應移除最舊的 Token")
-    void login_moreThan3Devices_shouldEvictOldestToken() {
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(anyString())).thenReturn(null);
-        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
-        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
-        when(zSetOps.zCard(anyString())).thenReturn(4L);
-        User mockUser = buildActiveUser();
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
-        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
-
-        authService.login(TEST_EMAIL, TEST_PASSWORD);
-
-        verify(zSetOps).popMin(anyString());
+        verify(userRedisAtomicOps).registerRefreshToken(anyString(), eq(MOCK_REFRESH_TOKEN), anyLong(), eq(3),
+                eq(Duration.ofDays(7)));
     }
 
     /**
@@ -1375,7 +1361,7 @@ class AuthServiceTest {
     @DisplayName("resendVerification → 有效 PENDING 用戶 → 應發送驗證信")
     void resendVerification_validPendingUser_shouldSendEmail() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         User mockUser = buildActiveUser();
         mockUser.setStatus(UserStatus.PENDING_VERIFICATION);
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
@@ -1405,7 +1391,7 @@ class AuthServiceTest {
     @DisplayName("resendVerification → 事件帶 userUuid；連續兩次重發的 eventId 不同（不被 consumer 去重吃掉）")
     void resendVerification_event_carriesUserUuidAndFreshEventIdEachTime() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         User mockUser = buildActiveUser();
         mockUser.setStatus(UserStatus.PENDING_VERIFICATION);
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
@@ -1431,7 +1417,7 @@ class AuthServiceTest {
     @DisplayName("resendVerification → 已啟用帳號 → 應靜默忽略")
     void resendVerification_alreadyActive_shouldSilentlyIgnore() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
 
@@ -1448,7 +1434,7 @@ class AuthServiceTest {
     @DisplayName("resendVerification → 不存在的信箱 → 應靜默忽略")
     void resendVerification_unknownEmail_shouldSilentlyIgnore() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
 
         authService.resendVerification(TEST_EMAIL);
@@ -1464,7 +1450,7 @@ class AuthServiceTest {
     @DisplayName("resendVerification → 每分鐘超過限制 → 應拋出 RATE_LIMIT_EXCEEDED")
     void resendVerification_exceedMinuteLimit_shouldThrow() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(2L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(2L);
 
         assertThatThrownBy(() -> authService.resendVerification(TEST_EMAIL))
                 .isInstanceOf(BusinessException.class)
@@ -1487,7 +1473,7 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
-        when(valueOperations.increment(anyString())).thenReturn(5L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(5L);
 
         assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
                 .isInstanceOf(BusinessException.class)
@@ -1510,81 +1496,18 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
 
         assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
                 .isInstanceOf(BusinessException.class);
 
-        verify(redisTemplate).expire(contains("login:fail:"), eq(15L), eq(java.util.concurrent.TimeUnit.MINUTES));
-    }
-
-    /**
-     * 驗證：非首次密碼錯誤（increment 回傳 > 1L）不應呼叫 expire。
-     */
-    @Test
-    @DisplayName("login → 非首次密碼錯誤（count > 1） → 不應呼叫 expire")
-    void login_subsequentPasswordFailure_shouldNotSetExpire() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(anyString())).thenReturn(null);
-        User mockUser = buildActiveUser();
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
-        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
-        when(valueOperations.increment(anyString())).thenReturn(3L);
-
-        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
-                .isInstanceOf(BusinessException.class);
-
-        verify(redisTemplate, never()).expire(contains("login:fail:"), anyLong(), any());
-    }
-
-    /**
-     * 驗證：increment 回傳 null 時不應呼叫 expire，且拋出 USER_PASSWORD_ERROR。
-     */
-    @Test
-    @DisplayName("login → increment 回傳 null → 不應呼叫 expire，拋出 USER_PASSWORD_ERROR")
-    void login_incrementReturnsNull_shouldNotSetExpire() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(anyString())).thenReturn(null);
-        User mockUser = buildActiveUser();
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
-        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(false);
-        when(valueOperations.increment(anyString())).thenReturn(null);
-
-        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).getCode())
-                        .isEqualTo(UserErrorCode.USER_PASSWORD_ERROR.getCode()));
-
-        verify(redisTemplate, never()).expire(contains("login:fail:"), anyLong(), any());
+        verify(userRedisAtomicOps).incrementWithTtl(contains("login:fail:"),
+                eq(Duration.ofMinutes(RedisKeyConstant.LOGIN_FAIL_TTL_MINUTES)));
     }
 
     /* =========================================================================
        login 邊界：deviceCount 為 null 時不移除最舊 Token
        ========================================================================= */
-
-    /**
-     * 驗證：zCard 回傳 null 時，不應呼叫 popMin 移除最舊 Token。
-     */
-    @Test
-    @DisplayName("login → zCard 回傳 null → 不應呼叫 popMin")
-    void login_zCardReturnsNull_shouldNotEvict() {
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(anyString())).thenReturn(null);
-        ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
-        when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
-        when(zSetOps.zCard(anyString())).thenReturn(null);
-        User mockUser = buildActiveUser();
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
-        when(passwordEncoder.matches(TEST_PASSWORD, mockUser.getPasswordHash())).thenReturn(true);
-        when(jwtService.generateAccessToken(any(UUID.class), anyString(), anyString())).thenReturn(MOCK_ACCESS_TOKEN);
-        when(jwtService.generateRefreshToken(any(UUID.class))).thenReturn(MOCK_REFRESH_TOKEN);
-
-        LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD);
-
-        assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
-        verify(zSetOps, never()).popMin(anyString());
-    }
 
     /* =========================================================================
        logout 邊界：null 與 blank refreshToken 應刪除整個 ZSet Key
@@ -1642,47 +1565,13 @@ class AuthServiceTest {
        ========================================================================= */
 
     /**
-     * 驗證：forgotPassword 的 minCount increment 回傳 null 時，不設 TTL 但繼續執行。
-     */
-    @Test
-    @DisplayName("forgotPassword → minCount increment 回傳 null → 不設 TTL，靜默繼續執行")
-    void forgotPassword_minCountIncrementNull_shouldNotSetTtlAndProceed() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(null);
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
-
-        authService.forgotPassword(TEST_EMAIL);
-
-        verify(redisTemplate, never()).expire(contains("rate:forgot-pwd:min:"), anyLong(), any());
-        verify(verificationTokenRepository, never()).save(any());
-    }
-
-    /**
-     * 驗證：forgotPassword 的 dayCount increment 回傳 null 時，不設 TTL 且繼續執行（信箱存在則發送）。
-     */
-    @Test
-    @DisplayName("forgotPassword → dayCount increment 回傳 null → 不設 TTL，繼續執行")
-    void forgotPassword_dayCountIncrementNull_shouldNotSetDayTtlAndProceed() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString()))
-                .thenReturn(1L)   // minCount = 1
-                .thenReturn(null); // dayCount = null
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
-
-        authService.forgotPassword(TEST_EMAIL);
-
-        verify(redisTemplate, never()).expire(contains("rate:forgot-pwd:day:"), anyLong(), any());
-        verify(verificationTokenRepository, never()).save(any());
-    }
-
-    /**
      * 驗證：forgotPassword 每日計數恰好達到上限（5 次）時，應正常執行不拋出 RATE_LIMIT_EXCEEDED。
      */
     @Test
     @DisplayName("forgotPassword → dayCount 恰好為 5 → 仍應正常執行，不拋出 RATE_LIMIT_EXCEEDED")
     void forgotPassword_dayCountExactlyAtLimit_shouldProceed() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString()))
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class)))
                 .thenReturn(1L)  // minCount = 1
                 .thenReturn(5L); // dayCount = 5 (not > 5)
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
@@ -1697,47 +1586,13 @@ class AuthServiceTest {
        ========================================================================= */
 
     /**
-     * 驗證：resendVerification 的 minCount increment 回傳 null 時，不設 TTL 但繼續執行。
-     */
-    @Test
-    @DisplayName("resendVerification → minCount increment 回傳 null → 不設 TTL，靜默繼續執行")
-    void resendVerification_minCountIncrementNull_shouldNotSetTtlAndProceed() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(null);
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
-
-        authService.resendVerification(TEST_EMAIL);
-
-        verify(redisTemplate, never()).expire(contains("rate:resend-verify:min:"), anyLong(), any());
-        verify(verificationTokenRepository, never()).save(any());
-    }
-
-    /**
-     * 驗證：resendVerification 的 dayCount increment 回傳 null 時，不設 TTL 且繼續執行。
-     */
-    @Test
-    @DisplayName("resendVerification → dayCount increment 回傳 null → 不設 TTL，繼續執行")
-    void resendVerification_dayCountIncrementNull_shouldNotSetDayTtlAndProceed() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString()))
-                .thenReturn(1L)   // minCount = 1
-                .thenReturn(null); // dayCount = null
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
-
-        authService.resendVerification(TEST_EMAIL);
-
-        verify(redisTemplate, never()).expire(contains("rate:resend-verify:day:"), anyLong(), any());
-        verify(verificationTokenRepository, never()).save(any());
-    }
-
-    /**
      * 驗證：resendVerification 每日計數超過 5 次，應拋出 RATE_LIMIT_EXCEEDED。
      */
     @Test
     @DisplayName("resendVerification → 每日超過限制（dayCount > 5） → 應拋出 RATE_LIMIT_EXCEEDED")
     void resendVerification_exceedDailyLimit_shouldThrow() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString()))
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class)))
                 .thenReturn(1L)  // minCount = 1
                 .thenReturn(6L); // dayCount = 6
 
@@ -1756,7 +1611,7 @@ class AuthServiceTest {
     @DisplayName("resendVerification → dayCount 恰好為 5 → 仍應正常執行，不拋出 RATE_LIMIT_EXCEEDED")
     void resendVerification_dayCountExactlyAtLimit_shouldProceed() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString()))
+        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class)))
                 .thenReturn(1L)  // minCount = 1
                 .thenReturn(5L); // dayCount = 5 (not > 5)
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
@@ -1806,7 +1661,7 @@ class AuthServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(anyString())).thenReturn(null);
         // IP 計數 increment 回傳低於上限
-        when(valueOperations.increment(RedisKeyConstant.getLoginIpKey(TEST_IP))).thenReturn(3L);
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getLoginIpKey(TEST_IP)), any(Duration.class))).thenReturn(3L);
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.zCard(anyString())).thenReturn(1L);
@@ -1819,7 +1674,7 @@ class AuthServiceTest {
         LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP);
 
         assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
-        verify(valueOperations).increment(RedisKeyConstant.getLoginIpKey(TEST_IP));
+        verify(userRedisAtomicOps).incrementWithTtl(eq(RedisKeyConstant.getLoginIpKey(TEST_IP)), any(Duration.class));
     }
 
     /**
@@ -1830,7 +1685,7 @@ class AuthServiceTest {
     @DisplayName("login(ip) → IP 計數超過上限 → 應拋出 RATE_LIMIT_EXCEEDED 且不查用戶")
     void login_whenIpRateLimitExceeded_shouldThrowRateLimitExceeded() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(RedisKeyConstant.getLoginIpKey(TEST_IP)))
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getLoginIpKey(TEST_IP)), any(Duration.class)))
                 .thenReturn((long) (RedisKeyConstant.LOGIN_IP_MAX + 1));
 
         assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP))
@@ -1851,7 +1706,7 @@ class AuthServiceTest {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(anyString())).thenReturn(null);
-        when(valueOperations.increment(RedisKeyConstant.getLoginIpKey(TEST_IP)))
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getLoginIpKey(TEST_IP)), any(Duration.class)))
                 .thenReturn((long) RedisKeyConstant.LOGIN_IP_MAX);
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
@@ -1876,7 +1731,7 @@ class AuthServiceTest {
         when(redisTemplate.opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.get(anyString())).thenReturn(null);
-        when(valueOperations.increment(RedisKeyConstant.getLoginIpKey(TEST_IP))).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getLoginIpKey(TEST_IP)), any(Duration.class))).thenReturn(1L);
         ZSetOperations<String, String> zSetOps = mock(ZSetOperations.class);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOps);
         when(zSetOps.zCard(anyString())).thenReturn(1L);
@@ -1888,8 +1743,8 @@ class AuthServiceTest {
 
         authService.login(TEST_EMAIL, TEST_PASSWORD, TEST_IP);
 
-        verify(redisTemplate).expire(eq(RedisKeyConstant.getLoginIpKey(TEST_IP)),
-                eq(RedisKeyConstant.LOGIN_IP_TTL_MINUTES), eq(TimeUnit.MINUTES));
+        verify(userRedisAtomicOps).incrementWithTtl(eq(RedisKeyConstant.getLoginIpKey(TEST_IP)),
+                eq(Duration.ofMinutes(RedisKeyConstant.LOGIN_IP_TTL_MINUTES)));
     }
 
     /**
@@ -1913,7 +1768,7 @@ class AuthServiceTest {
         LoginResult result = authService.login(TEST_EMAIL, TEST_PASSWORD, null);
 
         assertThat(result.accessToken()).isEqualTo(MOCK_ACCESS_TOKEN);
-        verify(valueOperations, never()).increment(startsWith(RedisKeyConstant.LOGIN_IP_PREFIX));
+        verify(userRedisAtomicOps, never()).incrementWithTtl(startsWith(RedisKeyConstant.LOGIN_IP_PREFIX), any(Duration.class));
     }
 
     /**
@@ -1923,7 +1778,7 @@ class AuthServiceTest {
     @DisplayName("register(ip) → IP 計數未達上限 → 應正常儲存用戶")
     void register_whenIpRateLimitNotExceeded_shouldSaveUser() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(RedisKeyConstant.getRegisterIpKey(TEST_IP))).thenReturn(2L);
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getRegisterIpKey(TEST_IP)), any(Duration.class))).thenReturn(2L);
         when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(false);
         when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
         when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
@@ -1934,7 +1789,7 @@ class AuthServiceTest {
         authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME, TEST_IP);
 
         verify(userRepository).save(any(User.class));
-        verify(valueOperations).increment(RedisKeyConstant.getRegisterIpKey(TEST_IP));
+        verify(userRedisAtomicOps).incrementWithTtl(eq(RedisKeyConstant.getRegisterIpKey(TEST_IP)), any(Duration.class));
     }
 
     /**
@@ -1945,7 +1800,7 @@ class AuthServiceTest {
     @DisplayName("register(ip) → IP 計數超過上限 → 應拋出 RATE_LIMIT_EXCEEDED 且不儲存")
     void register_whenIpRateLimitExceeded_shouldThrowRateLimitExceeded() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(RedisKeyConstant.getRegisterIpKey(TEST_IP)))
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getRegisterIpKey(TEST_IP)), any(Duration.class)))
                 .thenReturn((long) (RedisKeyConstant.REGISTER_IP_MAX + 1));
 
         assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME, TEST_IP))
@@ -1964,7 +1819,7 @@ class AuthServiceTest {
     @DisplayName("register(ip) → 首次 IP 計數（count == 1） → 應設定 IP 限流 TTL")
     void register_firstIpHit_shouldSetIpKeyTtl() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(RedisKeyConstant.getRegisterIpKey(TEST_IP))).thenReturn(1L);
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getRegisterIpKey(TEST_IP)), any(Duration.class))).thenReturn(1L);
         when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(false);
         when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
         when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
@@ -1974,8 +1829,8 @@ class AuthServiceTest {
 
         authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME, TEST_IP);
 
-        verify(redisTemplate).expire(eq(RedisKeyConstant.getRegisterIpKey(TEST_IP)),
-                eq(RedisKeyConstant.REGISTER_IP_TTL_MINUTES), eq(TimeUnit.MINUTES));
+        verify(userRedisAtomicOps).incrementWithTtl(eq(RedisKeyConstant.getRegisterIpKey(TEST_IP)),
+                eq(Duration.ofMinutes(RedisKeyConstant.REGISTER_IP_TTL_MINUTES)));
     }
 
     /**
@@ -1995,7 +1850,7 @@ class AuthServiceTest {
         authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME, null);
 
         verify(userRepository).save(any(User.class));
-        verify(valueOperations, never()).increment(startsWith(RedisKeyConstant.REGISTER_IP_PREFIX));
+        verify(userRedisAtomicOps, never()).incrementWithTtl(startsWith(RedisKeyConstant.REGISTER_IP_PREFIX), any(Duration.class));
     }
 
     /* =========================================================================
@@ -2151,7 +2006,8 @@ class AuthServiceTest {
 
         verify(jwtService).generateAccessToken(USER_UUID, "USER", "v1");
         verify(jwtService).generateRefreshToken(USER_UUID);
-        verify(zSetOps).add(eq("user:refresh:" + USER_UUID), eq(MOCK_REFRESH_TOKEN), anyDouble());
+        verify(userRedisAtomicOps).registerRefreshToken(eq("user:refresh:" + USER_UUID), eq(MOCK_REFRESH_TOKEN),
+                anyLong(), eq(3), eq(Duration.ofDays(7)));
     }
 
     /**
@@ -2169,7 +2025,7 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
                 .isInstanceOf(BusinessException.class);
 
-        verify(valueOperations).increment("login:fail:" + USER_UUID);
+        verify(userRedisAtomicOps).incrementWithTtl(eq("login:fail:" + USER_UUID), any(Duration.class));
     }
 
     /**

@@ -15,6 +15,7 @@ import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
 import dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent;
 import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
+import dowob.xyz.blog.module.user.redis.UserRedisAtomicOps;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
 import dowob.xyz.blog.module.user.validation.UserNicknamePolicy;
@@ -28,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Optional;
@@ -71,6 +73,12 @@ public class AuthService {
 
     /** Session 撤銷服務（重設密碼後撤銷所有既有 session，使被盜 Token 立即失效） */
     private final SessionRevoker sessionRevoker;
+
+    /** Redis 原子操作（計數 + TTL、登入裝置數修剪） */
+    private final UserRedisAtomicOps userRedisAtomicOps;
+
+    /** 每位使用者最多同時保留的登入裝置（refresh token）數，超過時踢掉最舊的 */
+    private static final int MAX_LOGIN_DEVICES = 3;
 
     /**
      * 用戶註冊
@@ -376,10 +384,8 @@ public class AuthService {
         }
 
         if (!passwordEncoder.matches(password, user.getPasswordHash())) {
-            Long count = redisTemplate.opsForValue().increment(loginFailKey);
-            if (count != null && count == 1L) {
-                redisTemplate.expire(loginFailKey, RedisKeyConstant.LOGIN_FAIL_TTL_MINUTES, TimeUnit.MINUTES);
-            }
+            userRedisAtomicOps.incrementWithTtl(loginFailKey,
+                    Duration.ofMinutes(RedisKeyConstant.LOGIN_FAIL_TTL_MINUTES));
             throw new BusinessException(UserErrorCode.USER_PASSWORD_ERROR);
         }
 
@@ -406,12 +412,8 @@ public class AuthService {
         redisTemplate.expire(authKey, RedisKeyConstant.USER_AUTH_TTL_DAYS, TimeUnit.DAYS);
 
         String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());
-        redisTemplate.opsForZSet().add(refreshKey, refreshToken, System.currentTimeMillis());
-        Long deviceCount = redisTemplate.opsForZSet().zCard(refreshKey);
-        if (deviceCount != null && deviceCount > 3) {
-            redisTemplate.opsForZSet().popMin(refreshKey);
-        }
-        redisTemplate.expire(refreshKey, 7, TimeUnit.DAYS);
+        userRedisAtomicOps.registerRefreshToken(refreshKey, refreshToken, System.currentTimeMillis(),
+                MAX_LOGIN_DEVICES, Duration.ofDays(7));
 
         return new LoginResult(accessToken, refreshToken);
     }
@@ -483,10 +485,8 @@ public class AuthService {
         String codeKey = RedisKeyConstant.getEmailVerifyCodeKey(email);
         String storedCode = redisTemplate.opsForValue().get(codeKey);
         if (storedCode == null || !storedCode.equals(code)) {
-            Long count = redisTemplate.opsForValue().increment(failKey);
-            if (count != null && count == 1L) {
-                redisTemplate.expire(failKey, RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES, TimeUnit.MINUTES);
-            }
+            userRedisAtomicOps.incrementWithTtl(failKey,
+                    Duration.ofMinutes(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES));
             throw new BusinessException(UserErrorCode.TOKEN_INVALID);
         }
 
@@ -529,19 +529,13 @@ public class AuthService {
         String minKey = RedisKeyConstant.getForgotPwdMinKey(email);
         String dayKey = RedisKeyConstant.getForgotPwdDayKey(email);
 
-        Long minCount = redisTemplate.opsForValue().increment(minKey);
-        if (minCount != null && minCount == 1L) {
-            redisTemplate.expire(minKey, 60, TimeUnit.SECONDS);
-        }
-        if (minCount != null && minCount > 1L) {
+        long minCount = userRedisAtomicOps.incrementWithTtl(minKey, Duration.ofSeconds(60));
+        if (minCount > 1L) {
             throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
         }
 
-        Long dayCount = redisTemplate.opsForValue().increment(dayKey);
-        if (dayCount != null && dayCount == 1L) {
-            redisTemplate.expire(dayKey, 86400, TimeUnit.SECONDS);
-        }
-        if (dayCount != null && dayCount > 5L) {
+        long dayCount = userRedisAtomicOps.incrementWithTtl(dayKey, Duration.ofSeconds(86400));
+        if (dayCount > 5L) {
             throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
         }
 
@@ -588,19 +582,13 @@ public class AuthService {
         String minKey = RedisKeyConstant.getResendVerifyMinKey(email);
         String dayKey = RedisKeyConstant.getResendVerifyDayKey(email);
 
-        Long minCount = redisTemplate.opsForValue().increment(minKey);
-        if (minCount != null && minCount == 1L) {
-            redisTemplate.expire(minKey, 60, TimeUnit.SECONDS);
-        }
-        if (minCount != null && minCount > 1L) {
+        long minCount = userRedisAtomicOps.incrementWithTtl(minKey, Duration.ofSeconds(60));
+        if (minCount > 1L) {
             throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
         }
 
-        Long dayCount = redisTemplate.opsForValue().increment(dayKey);
-        if (dayCount != null && dayCount == 1L) {
-            redisTemplate.expire(dayKey, 86400, TimeUnit.SECONDS);
-        }
-        if (dayCount != null && dayCount > 5L) {
+        long dayCount = userRedisAtomicOps.incrementWithTtl(dayKey, Duration.ofSeconds(86400));
+        if (dayCount > 5L) {
             throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
         }
 
@@ -707,11 +695,8 @@ public class AuthService {
         if (key == null) {
             return;
         }
-        Long count = redisTemplate.opsForValue().increment(key);
-        if (count != null && count == 1L) {
-            redisTemplate.expire(key, ttlMinutes, TimeUnit.MINUTES);
-        }
-        if (count != null && count > max) {
+        long count = userRedisAtomicOps.incrementWithTtl(key, Duration.ofMinutes(ttlMinutes));
+        if (count > max) {
             throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
         }
     }
