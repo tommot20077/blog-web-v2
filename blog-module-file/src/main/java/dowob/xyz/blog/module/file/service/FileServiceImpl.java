@@ -5,10 +5,12 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -39,7 +41,8 @@ import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.io.IOException;
 import java.time.LocalDateTime;
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
@@ -57,8 +60,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class FileServiceImpl implements FileService {
 
-    /** 單檔最大大小：5MB */
-    private static final long MAX_FILE_SIZE = 5L * 1024 * 1024;
+    /** 單檔最大大小：5MB（與 application.yaml 的 spring.servlet.multipart.max-file-size 對齊，由 MultipartYamlBindingTest 守住） */
+    public static final long MAX_FILE_SIZE = 5L * 1024 * 1024;
 
     /** 檔案模組設定（配額、允許的 MIME 類型） */
     private final FileProperties fileProperties;
@@ -127,19 +130,21 @@ public class FileServiceImpl implements FileService {
             throw new SystemException(CommonErrorCode.FILE_IO_ERROR);
         }
 
-        String detectedMimeType = detectMimeType(fileBytes, file.getOriginalFilename());
-        if (!fileProperties.allowedMimeTypes().contains(detectedMimeType)) {
+        String detectedMimeType = detectMimeType(fileBytes);
+        /* FILE-03：副檔名只來自白名單（由偵測出的 MIME 對應），不在白名單的 MIME 一律視為不支援 */
+        String ext = AllowedImageTypes.extensionFor(detectedMimeType).orElse(null);
+        if (ext == null || !fileProperties.allowedMimeTypes().contains(detectedMimeType)) {
             throw new BusinessException(FileErrorCode.INVALID_FILE_TYPE);
         }
         if (fileBytes.length > MAX_FILE_SIZE) {
             throw new BusinessException(FileErrorCode.FILE_TOO_LARGE);
         }
         long quota = resolveQuota(uploaderRole);
-        long used = fileMetadataRepository.sumSizeByUploaderId(uploaderId);
-        if (quota != Long.MAX_VALUE && (used + fileBytes.length) > quota) {
+        boolean quotaLimited = quota != Long.MAX_VALUE;
+        /* RACE-12：不加鎖的快速預檢，明顯超額就直接拒絕（省一次 MinIO 上傳）；權威檢查在下方交易內加鎖後重做 */
+        if (quotaLimited && (fileMetadataRepository.sumSizeByUploaderId(uploaderId) + fileBytes.length) > quota) {
             throw new BusinessException(FileErrorCode.QUOTA_EXCEEDED);
         }
-        String ext = extractExtension(file.getOriginalFilename());
         UUID fileId = UUID.randomUUID();
         LocalDateTime now = LocalDateTime.now();
         String prefix = (usageType == UsageType.AVATAR) ? "avatars" : "articles";
@@ -195,9 +200,25 @@ public class FileServiceImpl implements FileService {
          * MEDIUM 1：先驗證擁有權，非本人文章一律存 null（fail-safe）。
          */
         metadata.setArticleUuid(resolveOwnedArticleUuid(articleUuid, uploaderId));
-        /** F-3: 僅 DB 操作在事務內；DB 失敗時補償刪除 MinIO 檔案 */
+        /**
+         * F-3: 僅 DB 操作在事務內；DB 失敗（或配額重檢超額）時補償刪除 MinIO 檔案。
+         *
+         * <p>RACE-12：MinIO 上傳已在交易外完成（上傳期間不持有 DB 連線或鎖）。交易內先取得以上傳者為鍵的
+         * advisory lock，再重新加總並比較——同一使用者的並發上傳在此序列化，後者會看到前者已 commit 的列，
+         * 超額就丟 QUOTA_EXCEEDED、rollback，並由下方 catch 於交易外刪除剛上傳的物件。不同使用者鎖鍵不同，互不阻塞。
+         * 無上限（ADMIN）者不需要配額檢查，也就不取鎖。</p>
+         */
         try {
-            transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.save(metadata));
+            transactionTemplate.executeWithoutResult(status -> {
+                if (quotaLimited) {
+                    fileMetadataRepository.acquireQuotaLock(FileMetadataRepository.QUOTA_LOCK_KEY_PREFIX + uploaderId);
+                    long usedNow = fileMetadataRepository.sumSizeByUploaderId(uploaderId);
+                    if ((usedNow + fileBytes.length) > quota) {
+                        throw new BusinessException(FileErrorCode.QUOTA_EXCEEDED);
+                    }
+                }
+                fileMetadataRepository.save(metadata);
+            });
         } catch (Exception e) {
             compensateMinioDelete(storagePath);
             throw e;
@@ -224,11 +245,24 @@ public class FileServiceImpl implements FileService {
     /**
      * 刪除指定檔案
      *
+     * <p>
+     * <b>順序（RACE-16／PERF-28）</b>：(1) 載入 metadata 並做授權檢查；(2) 在<b>交易外</b>刪除 MinIO 原檔與縮圖
+     * （縮圖路徑一律嘗試，不看 {@code hasThumbnail}——縮圖 consumer 可能在刪除競態中剛寫入但 flag 尚未寫入，見 DATA-14；
+     * S3 的 DeleteObject 對不存在的物件視為成功）；(3) MinIO 都成功後，才用<b>短交易</b>刪 DB 列。
+     * 本方法刻意<b>不標註 {@code @Transactional}</b>，否則外層交易會再次橫跨 MinIO 網路呼叫。
+     * </p>
+     *
+     * <p>
+     * 任一 MinIO 刪除失敗即拋 {@code STORAGE_ERROR}，DB 列<b>不刪</b>：API 回錯，帳號刪除連動等 consumer 路徑
+     * 交給 MQ 重試或進 DLQ，因此不會產生孤兒物件。
+     * <b>已知代價</b>：MinIO 已刪但 DB 刪除失敗時，metadata 會短暫指向不存在的物件；使用者重試刪除時 MinIO 端為
+     * no-op、DB 列被刪掉，consumer 則由 MQ 重試達成相同結果。
+     * </p>
+     *
      * @param fileId      要刪除的檔案 UUID
      * @param requesterId 請求刪除的使用者 UUID
      * @param isAdmin     是否為管理員
      */
-    @Transactional
     @Override
     public void deleteFile(UUID fileId, UUID requesterId, boolean isAdmin) {
         FileMetadata metadata = fileMetadataRepository.findById(fileId)
@@ -236,23 +270,25 @@ public class FileServiceImpl implements FileService {
         if (!isAdmin && !metadata.belongsTo(requesterId)) {
             throw new BusinessException(FileErrorCode.FILE_ACCESS_DENIED);
         }
-        fileMetadataRepository.deleteById(fileId);
+        removeObjectOrThrow(metadata.getStoragePath());
+        removeObjectOrThrow(buildThumbPath(metadata.getStoragePath()));
+        transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.deleteById(fileId));
+    }
+
+    /**
+     * 刪除單一 MinIO 物件；失敗記 ERROR（含 storage path）並拋 {@code STORAGE_ERROR}。
+     *
+     * @param objectPath 物件鍵
+     */
+    private void removeObjectOrThrow(String objectPath) {
         try {
             minioClient.removeObject(
                     RemoveObjectArgs.builder()
                             .bucket(bucketName)
-                            .object(metadata.getStoragePath())
+                            .object(objectPath)
                             .build());
-            if (Boolean.TRUE.equals(metadata.getHasThumbnail())) {
-                String thumbPath = buildThumbPath(metadata.getStoragePath());
-                minioClient.removeObject(
-                        RemoveObjectArgs.builder()
-                                .bucket(bucketName)
-                                .object(thumbPath)
-                                .build());
-            }
         } catch (Exception e) {
-            log.error("MinIO 刪除失敗: {}", metadata.getStoragePath(), e);
+            log.error("MinIO 刪除失敗: {}", objectPath, e);
             throw new SystemException(CommonErrorCode.STORAGE_ERROR);
         }
     }
@@ -284,16 +320,31 @@ public class FileServiceImpl implements FileService {
                 .orElseThrow(() -> new BusinessException(FileErrorCode.FILE_NOT_FOUND));
     }
 
+    /** 未提供分頁（unpaged）時的預設每頁筆數，與 Spring Data 的預設一致 */
+    private static final int DEFAULT_PAGE_SIZE = 20;
+
     /**
-     * 取得使用者上傳的所有檔案
+     * 分頁取得使用者上傳的檔案（最新在前）
+     *
+     * <p>AUTH-11（b）：先前收了 {@link Pageable} 卻忽略，一次載入該使用者全部檔案。現在真正套用
+     * page／size（沿用 Spring {@code Pageable} 的 0 起算頁碼與回應形狀，避免改動前端契約）。
+     * {@code size} 上限同 {@link PageQuery#MAX_SIZE}，超過一律拒絕（SEC-04：不靜默夾界）。
+     * 排序固定為建立時間新到舊，不接受 client 指定的 sort 屬性。</p>
      *
      * @param uploaderId 使用者 UUID
-     * @param pageable   分頁參數
-     * @return 檔案元資料列表
+     * @param pageable   分頁參數；unpaged 時取第一頁、預設筆數
+     * @return 該頁的檔案元資料列表
+     * @throws BusinessException size 超過 {@link PageQuery#MAX_SIZE}（{@code PARAM_VALID_ERROR}，HTTP 400）
      */
     @Override
     public List<FileMetadata> getUserFiles(UUID uploaderId, Pageable pageable) {
-        return fileMetadataRepository.findByUploaderIdOrderByCreatedAtDesc(uploaderId);
+        int size = (pageable == null || pageable.isUnpaged()) ? DEFAULT_PAGE_SIZE : pageable.getPageSize();
+        long offset = (pageable == null || pageable.isUnpaged()) ? 0L : pageable.getOffset();
+        if (size < 1 || size > PageQuery.MAX_SIZE) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR,
+                    "size 必須介於 1 與 " + PageQuery.MAX_SIZE + " 之間");
+        }
+        return fileMetadataRepository.findPageByUploaderId(uploaderId, size, offset);
     }
 
     /**
@@ -346,35 +397,54 @@ public class FileServiceImpl implements FileService {
             }
         }
 
-        Set<UUID> targetIdSet = new HashSet<>(targetIds);
-        List<FileMetadata> currentlyBound = fileMetadataRepository.findByArticleUuid(articleUuid);
-        for (FileMetadata bound : currentlyBound) {
-            if (!targetIdSet.contains(bound.getId())) {
-                bound.setArticleUuid(null);
-                fileMetadataRepository.save(bound);
-            }
-        }
+        /*
+         * PERF-23：固定次數的批次存取取代逐檔 findById + save（2N+1 次）：
+         * 讀 = findByArticleUuid（1 次）+ findAllById（每 BatchedQuery.BATCH_SIZE 筆 1 次）；
+         * 寫 = 單欄位 UPDATE（每批 1 次）。單欄位 UPDATE 同時避免整列 save 以舊值覆寫並發寫入的其他欄位。
+         */
+        Set<UUID> targetIdSet = new LinkedHashSet<>(targetIds);
+        List<UUID> toUnbind = fileMetadataRepository.findByArticleUuid(articleUuid).stream()
+                .map(FileMetadata::getId)
+                .filter(id -> !targetIdSet.contains(id))
+                .toList();
+        updateInBatches(toUnbind, batch -> fileMetadataRepository.unbindFilesFromArticle(articleUuid, batch));
 
         if (targetIds.isEmpty()) {
             return;
         }
 
-        /* lambda 需要 effectively final 的擷取變數 */
         final UUID articleAuthorUuid = authorUuid;
-        for (UUID fileUuid : targetIds) {
-            fileMetadataRepository.findById(fileUuid).ifPresent(metadata -> {
-                if (articleUuid.equals(metadata.getArticleUuid())) {
-                    return;
-                }
-                if (!articleAuthorUuid.equals(metadata.getUploaderId())) {
-                    log.warn("bindToArticle：拒絕綁定非本文章作者上傳的檔案（可疑嘗試）。"
-                                    + "fileUuid={}, articleUuid={}, uploaderId={}, articleAuthorUuid={}",
-                            fileUuid, articleUuid, metadata.getUploaderId(), articleAuthorUuid);
-                    return;
-                }
-                metadata.setArticleUuid(articleUuid);
-                fileMetadataRepository.save(metadata);
-            });
+        List<FileMetadata> candidates = BatchedQuery.queryInBatches(targetIdSet,
+                batch -> {
+                    List<FileMetadata> found = new ArrayList<>();
+                    fileMetadataRepository.findAllById(batch).forEach(found::add);
+                    return found;
+                });
+        List<UUID> toBind = new ArrayList<>();
+        for (FileMetadata metadata : candidates) {
+            if (articleUuid.equals(metadata.getArticleUuid())) {
+                continue;
+            }
+            if (!articleAuthorUuid.equals(metadata.getUploaderId())) {
+                log.warn("bindToArticle：拒絕綁定非本文章作者上傳的檔案（可疑嘗試）。"
+                                + "fileUuid={}, articleUuid={}, uploaderId={}, articleAuthorUuid={}",
+                        metadata.getId(), articleUuid, metadata.getUploaderId(), articleAuthorUuid);
+                continue;
+            }
+            toBind.add(metadata.getId());
+        }
+        updateInBatches(toBind, batch -> fileMetadataRepository.bindFilesToArticle(articleUuid, articleAuthorUuid, batch));
+    }
+
+    /**
+     * 把 id 清單依 {@link BatchedQuery#BATCH_SIZE} 切批後逐批執行 UPDATE（空清單不執行，避免非法的 {@code IN ()}）。
+     *
+     * @param ids    要更新的檔案 UUID
+     * @param update 單批更新動作
+     */
+    private void updateInBatches(List<UUID> ids, java.util.function.Consumer<List<UUID>> update) {
+        for (int from = 0; from < ids.size(); from += BatchedQuery.BATCH_SIZE) {
+            update.accept(ids.subList(from, Math.min(from + BatchedQuery.BATCH_SIZE, ids.size())));
         }
     }
 
@@ -493,15 +563,16 @@ public class FileServiceImpl implements FileService {
     /**
      * 使用 Apache Tika 偵測 MIME 類型（F-2：改用 byte[] 避免重複消耗 InputStream）
      *
+     * <p>FILE-03：只看內容 magic bytes，不把使用者檔名當提示傳給 Tika。</p>
+     *
      * @param fileBytes 檔案位元組陣列
-     * @param filename  原始檔案名稱（供 Tika 輔助判斷）
      * @return 偵測到的 MIME 類型字串
      */
-    private String detectMimeType(byte[] fileBytes, String filename) {
+    private String detectMimeType(byte[] fileBytes) {
         try {
-            return tika.detect(new ByteArrayInputStream(fileBytes), filename);
+            return tika.detect(new ByteArrayInputStream(fileBytes));
         } catch (IOException e) {
-            log.error("MIME 類型偵測失敗: {}", filename, e);
+            log.error("MIME 類型偵測失敗", e);
             throw new SystemException(CommonErrorCode.FILE_IO_ERROR);
         }
     }
@@ -561,19 +632,6 @@ public class FileServiceImpl implements FileService {
         DataSize dataSize = fileProperties.quotas().getOrDefault(key,
                 fileProperties.quotas().getOrDefault("USER", DataSize.ofMegabytes(10)));
         return dataSize.toBytes();
-    }
-
-    /**
-     * 從檔案名稱提取副檔名
-     *
-     * @param filename 原始檔案名稱
-     * @return 副檔名（不含點）
-     */
-    private String extractExtension(String filename) {
-        if (filename == null || !filename.contains(".")) {
-            return "bin";
-        }
-        return filename.substring(filename.lastIndexOf('.') + 1).toLowerCase();
     }
 
     /**

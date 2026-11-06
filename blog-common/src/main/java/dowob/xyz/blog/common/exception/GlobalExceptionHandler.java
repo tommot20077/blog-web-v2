@@ -6,6 +6,7 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -61,6 +63,27 @@ public class GlobalExceptionHandler {
                 : HttpStatus.BAD_REQUEST;
         return ResponseEntity.status(status)
                 .body(ApiResponse.failed(e.getCode(), e.getMessage()));
+    }
+
+    /**
+     * 處理 multipart 上傳超過框架上限（{@code spring.servlet.multipart.*}），回傳既有的檔案過大錯誤碼
+     *
+     * <p>
+     * 此例外在請求進入 Controller 之前由 multipart 解析拋出，若不處理會落到兜底 handler 變成 500。
+     * 錯誤碼與 HTTP 狀態沿用 service 層 5MB 檢查的 {@link FileErrorCode#FILE_TOO_LARGE}
+     * （{@link BusinessException} 的現行對應：HTTP 400），前端不需區分兩道防線。
+     * </p>
+     *
+     * @param e       上傳超過上限例外
+     * @param request 當前 HTTP 請求
+     * @return HTTP 400 回應，body 含 {@code FILE_TOO_LARGE} 錯誤碼
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMaxUploadSizeExceeded(
+            MaxUploadSizeExceededException e, HttpServletRequest request) {
+        log.warn("Upload exceeds multipart limit: {} at {}", e.getMessage(), request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failed(FileErrorCode.FILE_TOO_LARGE.getCode(), FileErrorCode.FILE_TOO_LARGE.getMessage()));
     }
 
     /**

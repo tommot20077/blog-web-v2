@@ -15,8 +15,9 @@ import java.util.Set;
  * </p>
  *
  * <p>
- * 注意：單檔大小限制（MAX_FILE_SIZE）由 Spring Boot
- * {@code spring.servlet.multipart.max-file-size} 管控，此處不重複設定。
+ * 注意：單檔大小限制以程式常數 {@code FileServiceImpl.MAX_FILE_SIZE}（5MB）為準，並由
+ * {@code spring.servlet.multipart.max-file-size}（application.yaml，同為 5MB）在請求進入 service 前先擋一道；
+ * 兩者一致性由 blog-start 的 {@code MultipartYamlBindingTest} 守住，此處不重複設定。
  * </p>
  *
  * @author Yuan
