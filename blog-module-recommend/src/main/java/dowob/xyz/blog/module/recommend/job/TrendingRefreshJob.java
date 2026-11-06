@@ -60,6 +60,18 @@ public class TrendingRefreshJob {
     private static final long LOCK_TTL_SECONDS = 600L;
 
     /**
+     * 暫存 key 的安全 TTL（分鐘），僅用於程序崩潰時避免殘留
+     */
+    private static final long TMP_KEY_TTL_MINUTES = 10L;
+
+    /**
+     * 原子 RENAME 並移除 TTL：KEYS[1]=tmp，KEYS[2]=正式 key
+     */
+    private static final RedisScript<Long> RENAME_AND_PERSIST_SCRIPT = new DefaultRedisScript<>(
+            "redis.call('RENAME', KEYS[1], KEYS[2]) return redis.call('PERSIST', KEYS[2])",
+            Long.class);
+
+    /**
      * 各週期配置：period 名稱 → 查詢天數範圍（天）與半衰期（天）
      */
     private static final Map<String, long[]> PERIOD_CONFIG = Map.of(
@@ -133,9 +145,16 @@ public class TrendingRefreshJob {
         String tmpKey = key + ":tmp:" + UUID.randomUUID();
         try {
             stringRedisTemplate.opsForZSet().add(tmpKey, tuples);
-            stringRedisTemplate.rename(tmpKey, key);
+            /* JVM 被 kill／OOM 時 finally 不會執行，帶 UUID 的 tmp 會永久殘留；先設短 TTL 讓它自行過期 */
+            stringRedisTemplate.expire(tmpKey, TMP_KEY_TTL_MINUTES, TimeUnit.MINUTES);
+            /* RENAME 會把 tmp 的 TTL 一併帶到正式 key；正式 key 原本無 TTL，故同一腳本內 PERSIST，保持原語意且原子 */
+            stringRedisTemplate.execute(RENAME_AND_PERSIST_SCRIPT, List.of(tmpKey, key));
         } finally {
-            stringRedisTemplate.delete(tmpKey);
+            try {
+                stringRedisTemplate.delete(tmpKey);
+            } catch (Exception e) {
+                log.warn("清除熱門排行暫存 key 失敗（tmp 帶 TTL，會自行過期），tmpKey={}: {}", tmpKey, e.getMessage());
+            }
         }
         log.debug("熱門排行更新完成，period={}，文章數={}", period, articles.size());
     }

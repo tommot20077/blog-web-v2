@@ -102,4 +102,30 @@ class TrendingRefreshJobLockIT {
         assertThat(redis.opsForValue().get(RedisKeyConstant.LOCK_TRENDING_REFRESH)).isEqualTo("other-instance-token");
         org.mockito.Mockito.verifyNoInteractions(articleFacade);
     }
+
+    @Test
+    @DisplayName("refreshPeriod：正式 key 沿用原行為（無 TTL），RENAME 不會把 tmp 的短 TTL 帶過去；不留 tmp key")
+    void refreshPeriod_formalKeyHasNoTtlAfterRename() {
+        when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of(article()));
+        String key = RedisKeyConstant.getTrendingKey("7d");
+
+        job.refreshPeriod("7d", 7L, 4L);
+
+        assertThat(redis.getExpire(key)).as("-1 代表無 TTL").isEqualTo(-1L);
+        assertThat(redis.opsForZSet().zCard(key)).isEqualTo(1L);
+        assertThat(redis.keys("*:tmp*")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("refreshPeriod：舊的無 TTL 正式 key 被新資料取代後仍無 TTL")
+    void refreshPeriod_replacesExistingKeyAndStillNoTtl() {
+        String key = RedisKeyConstant.getTrendingKey("7d");
+        redis.opsForZSet().add(key, "old-member", 1);
+        when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of(article()));
+
+        job.refreshPeriod("7d", 7L, 4L);
+
+        assertThat(redis.getExpire(key)).isEqualTo(-1L);
+        assertThat(redis.opsForZSet().score(key, "old-member")).isNull();
+    }
 }

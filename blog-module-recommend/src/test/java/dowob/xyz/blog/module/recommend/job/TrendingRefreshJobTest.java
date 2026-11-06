@@ -89,11 +89,26 @@ class TrendingRefreshJobTest {
             String key = "recommend:trending:7d";
             ArgumentCaptor<String> tmpKey = ArgumentCaptor.forClass(String.class);
 
-            /** 寫入 tmp key，最後 rename 到正式 key（tmp 名稱每次唯一，不再需要先 delete 舊的共用 tmp） */
+            /** 寫入 tmp key → 立刻設短 TTL（防崩潰殘留）→ 以 Lua 原子 RENAME＋PERSIST 切到正式 key */
             org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(stringRedisTemplate, zSetOperations);
             inOrder.verify(zSetOperations).add(tmpKey.capture(), anySet());
-            inOrder.verify(stringRedisTemplate).rename(tmpKey.getValue(), key);
+            inOrder.verify(stringRedisTemplate).expire(eq(tmpKey.getValue()), eq(10L), eq(TimeUnit.MINUTES));
+            inOrder.verify(stringRedisTemplate).execute(any(RedisScript.class),
+                    eq(List.of(tmpKey.getValue(), key)));
             assertThat(tmpKey.getValue()).startsWith(key + ":tmp:");
+        }
+
+        @Test
+        @DisplayName("RACE-17：finally 的 delete 失敗時不蓋掉原本的例外")
+        void whenCleanupAlsoFails_originalExceptionPropagates() {
+            ArticleTrendingData data = new ArticleTrendingData(
+                    UUID.randomUUID(), 100L, 10L, LocalDateTime.now().minusDays(1));
+            when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of(data));
+            when(zSetOperations.add(anyString(), anySet())).thenThrow(new IllegalStateException("redis down"));
+            when(stringRedisTemplate.delete(anyString())).thenThrow(new IllegalArgumentException("cleanup failed"));
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> job.refreshPeriod("7d", 7L, 4L))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("redis down");
         }
 
         @Test
@@ -127,7 +142,7 @@ class TrendingRefreshJobTest {
             org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(stringRedisTemplate, zSetOperations);
             inOrder.verify(zSetOperations).add(written.capture(), anySet());
             inOrder.verify(stringRedisTemplate).delete(written.getValue());
-            verify(stringRedisTemplate, never()).rename(anyString(), anyString());
+            verify(stringRedisTemplate, never()).execute(any(RedisScript.class), eq(List.of(written.getValue(), "recommend:trending:7d")));
         }
 
         @Test

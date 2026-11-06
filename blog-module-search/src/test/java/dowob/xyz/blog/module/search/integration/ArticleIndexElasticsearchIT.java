@@ -258,7 +258,19 @@ class ArticleIndexElasticsearchIT {
         initializer.ensureCorrectMapping();
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> searchService.search(null, null, "relevance", 101, 100, null))
-                .isInstanceOf(dowob.xyz.blog.common.exception.BusinessException.class);
+                .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(
+                                dowob.xyz.blog.common.api.errorcode.CommonErrorCode.PARAM_VALID_ERROR.getCode()));
+    }
+
+    @Test
+    @DisplayName("PERF-12：page*size 恰為 10000（邊界）可正常查詢，不被 ES 拒絕")
+    void search_pagingAtWindowBoundary_succeedsAgainstRealEs() {
+        initializer.ensureCorrectMapping();
+
+        PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 100, 100, null);
+
+        assertThat(result.getRecords()).isEmpty();
     }
 
     /**
