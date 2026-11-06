@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.search.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import dowob.xyz.blog.infrastructure.event.UserEventContract;
@@ -21,6 +22,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SearchRabbitMqConfigTest {
 
     private final SearchRabbitMqConfig config = new SearchRabbitMqConfig();
+
+    /** 共用的 article.events exchange（ARCH-06：只在 infrastructure 宣告一次，本模組的 binding 以參數注入） */
+    private static final TopicExchange ARTICLE_EVENTS_EXCHANGE = new TopicExchange(ArticleEventContract.EXCHANGE);
 
     @Test
     @DisplayName("searchIndexQueue 包含 DLQ x-dead-letter-exchange 設定")
@@ -60,9 +64,9 @@ class SearchRabbitMqConfigTest {
         assertThat(SearchRabbitMqConfig.ROUTING_KEY_ARCHIVED).isEqualTo("article.archived");
         assertThat(SearchRabbitMqConfig.ROUTING_KEY_ARCHIVED)
                 .isNotEqualTo(SearchRabbitMqConfig.ROUTING_KEY_DELETED);
-        assertThat(config.searchIndexArchiveBinding().getRoutingKey())
+        assertThat(config.searchIndexArchiveBinding(ARTICLE_EVENTS_EXCHANGE).getRoutingKey())
                 .isEqualTo(SearchRabbitMqConfig.ROUTING_KEY_ARCHIVED);
-        assertThat(config.searchIndexArchiveBinding().getDestination())
+        assertThat(config.searchIndexArchiveBinding(ARTICLE_EVENTS_EXCHANGE).getDestination())
                 .isEqualTo(SearchRabbitMqConfig.QUEUE_SEARCH_INDEX_ARCHIVE);
     }
 

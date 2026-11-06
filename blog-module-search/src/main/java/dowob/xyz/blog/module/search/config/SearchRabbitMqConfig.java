@@ -6,10 +6,11 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * 搜尋模組 RabbitMQ 設定
@@ -80,17 +81,6 @@ public class SearchRabbitMqConfig {
     public static final String QUEUE_SEARCH_INDEX_ARCHIVE = "queue.search.index.archive";
 
     /**
-     * 建立死信隊列（DLQ）參數
-     *
-     * @return 包含死信交換器與路由 Key 的 Map
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter");
-    }
-
-    /**
      * 宣告搜尋索引 Queue（持久化，含 DLQ 設定）
      *
      * @return Queue 實例
@@ -131,69 +121,58 @@ public class SearchRabbitMqConfig {
     }
 
     /**
-     * 宣告文章事件 Exchange（與 blog-module-article 共用同一 Exchange）
-     *
-     * <p>
-     * Spring AMQP 會在 Exchange 已存在時跳過建立，
-     * 此宣告僅確保 Binding 有依賴的 Exchange Bean。
-     * </p>
-     *
-     * @return TopicExchange 實例
-     */
-    @Bean
-    public TopicExchange searchArticleEventsExchange() {
-        return new TopicExchange(ARTICLE_EVENTS_EXCHANGE);
-    }
-
-    /**
      * 將搜尋索引 Queue 綁定至文章事件 Exchange（Published）
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding searchIndexBinding() {
+    public Binding searchIndexBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(searchIndexQueue())
-                .to(searchArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ROUTING_KEY_PUBLISHED);
     }
 
     /**
      * 將搜尋索引更新 Queue 綁定至文章事件 Exchange（Updated）
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding searchIndexUpdateBinding() {
+    public Binding searchIndexUpdateBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(searchIndexUpdateQueue())
-                .to(searchArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ROUTING_KEY_UPDATED);
     }
 
     /**
      * 將搜尋索引刪除 Queue 綁定至文章事件 Exchange（Deleted）
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding searchIndexDeleteBinding() {
+    public Binding searchIndexDeleteBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(searchIndexDeleteQueue())
-                .to(searchArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ROUTING_KEY_DELETED);
     }
 
     /**
      * 將搜尋索引下架移除 Queue 綁定至文章事件 Exchange（Archived）
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding searchIndexArchiveBinding() {
+    public Binding searchIndexArchiveBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(searchIndexArchiveQueue())
-                .to(searchArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ROUTING_KEY_ARCHIVED);
     }
 

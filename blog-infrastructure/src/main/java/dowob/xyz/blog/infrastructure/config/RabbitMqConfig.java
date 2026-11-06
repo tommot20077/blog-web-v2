@@ -1,5 +1,6 @@
 package dowob.xyz.blog.infrastructure.config;
 
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.mq.BoundedRetryContextCache;
 import dowob.xyz.blog.infrastructure.mq.DeadLetterCountingErrorHandler;
 import dowob.xyz.blog.infrastructure.mq.EventIdJackson2JsonMessageConverter;
@@ -11,6 +12,7 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.config.RetryInterceptorBuilder;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
@@ -68,13 +70,13 @@ public class RabbitMqConfig {
     private static final Logger log = LoggerFactory.getLogger(RabbitMqConfig.class);
 
     /** DLQ Exchange 名稱 */
-    private static final String DLQ_EXCHANGE = "blog.dlq";
+    private static final String DLQ_EXCHANGE = DeadLetterTopology.DLQ_EXCHANGE;
 
     /** DLQ Queue 名稱 */
-    private static final String DLQ_QUEUE = "queue.dead-letter";
+    private static final String DLQ_QUEUE = DeadLetterTopology.DLQ_QUEUE;
 
     /** DLQ Routing Key */
-    private static final String DLQ_ROUTING_KEY = "dead-letter";
+    private static final String DLQ_ROUTING_KEY = DeadLetterTopology.DLQ_ROUTING_KEY;
 
     /** 最大重試次數（含首次嘗試） */
     private static final int MAX_ATTEMPTS = 3;
@@ -104,6 +106,27 @@ public class RabbitMqConfig {
     @Bean
     public MessageConverter messageConverter() {
         return new EventIdJackson2JsonMessageConverter();
+    }
+
+    /**
+     * 文章事件 Topic Exchange（{@code article.events}）——全站<b>唯一</b>的宣告點（ARCH-06）
+     *
+     * <p>article 是 producer，series／version／tag／search／recommend／comment／reading／file 各自宣告 queue 並綁定到它。
+     * 過去 article、file、recommend、search、tag 五個模組各自 {@code new TopicExchange(...)}，exchange 參數若有一處漂移
+     * 就會在 broker 上 406；現在只在這裡宣告，各模組的 binding 以 {@code @Qualifier("articleEventsExchange")} 注入同一個 bean。</p>
+     *
+     * <p><b>為什麼放 infrastructure 而不是 article 模組</b>：模組之間不得互相依賴（{@code ModulePomDependencyTest}），
+     * consumer 模組拿不到 article 模組的 bean；exchange 名稱與 routing key 契約本來就在 infrastructure 的
+     * {@link ArticleEventContract}，宣告放在同一個共用層與 DLQ exchange（{@link #dlqExchange()}）一致。</p>
+     *
+     * <p>參數（topic、durable、非 autoDelete）與重構前各模組的宣告相同；
+     * blog-start 的 {@code MqTopologySnapshotTest} 守衛全 context 只有一個此 exchange bean。</p>
+     *
+     * @return 名稱為 {@value ArticleEventContract#EXCHANGE} 的持久性 TopicExchange
+     */
+    @Bean
+    public TopicExchange articleEventsExchange() {
+        return new TopicExchange(ArticleEventContract.EXCHANGE);
     }
 
     /**

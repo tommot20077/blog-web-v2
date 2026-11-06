@@ -130,4 +130,18 @@ public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUI
     @Modifying
     @Query("UPDATE file_metadata SET article_uuid = NULL WHERE article_uuid = :articleUuid AND id IN (:ids)")
     int unbindFilesFromArticle(@Param("articleUuid") UUID articleUuid, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * 以 keyset 分頁取得被檔案綁定的不重複文章 UUID（升冪），供每日孤兒校正使用（DATA-07）
+     *
+     * <p>排序與游標比較都由資料庫決定（PostgreSQL uuid 以位元組序比較），不可在 Java 端排序後當游標。</p>
+     *
+     * @param after 游標（不含）；null 表示從頭
+     * @param limit 本頁筆數上限
+     * @return 升冪、去重的文章 UUID；無則為空清單
+     */
+    @Query("SELECT DISTINCT article_uuid FROM file_metadata WHERE article_uuid IS NOT NULL "
+            + "AND (CAST(:after AS uuid) IS NULL OR article_uuid > CAST(:after AS uuid)) "
+            + "ORDER BY article_uuid LIMIT :limit")
+    List<UUID> findDistinctArticleUuidsAfter(@Param("after") UUID after, @Param("limit") int limit);
 }

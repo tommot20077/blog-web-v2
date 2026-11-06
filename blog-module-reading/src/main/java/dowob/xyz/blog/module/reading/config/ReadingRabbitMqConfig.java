@@ -10,14 +10,14 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * Reading 模組 RabbitMQ 設定：訂閱 {@code article.events} 的 {@code article.deleted}，
  * 於文章刪除後連動清除該文章的按讚、收藏、劃線與閱讀進度；另訂閱 {@code user.events} 的 {@code user.deleted}，
  * 於使用者刪除帳號後清除該使用者的收藏、劃線與閱讀進度（DATA-02）。
  *
- * <p>exchange 本身由 article 模組宣告（bean 名稱 {@code articleEventsExchange}），
+ * <p>exchange 本身由 infrastructure 的 {@code RabbitMqConfig} 宣告（bean 名稱 {@code articleEventsExchange}，ARCH-06），
  * 這裡只宣告本模組的 queue 與 binding；exchange 名稱與 routing key 取自
  * {@link ArticleEventContract}，不 import article 模組。</p>
  *
@@ -48,7 +48,7 @@ public class ReadingRabbitMqConfig {
      * 將 queue 綁定到文章事件 exchange 的 {@code article.deleted} routing key。
      *
      * @param readingArticleDeletedQueue 本模組的 queue
-     * @param articleEventsExchange      article 模組宣告的文章事件 exchange
+     * @param articleEventsExchange      共用的 article.events exchange（由 infrastructure 宣告）
      * @return binding
      */
     @Bean
@@ -102,17 +102,5 @@ public class ReadingRabbitMqConfig {
                 .bind(readingUserDeletedQueue)
                 .to(readingUserEventsExchange)
                 .with(UserEventContract.ROUTING_KEY_DELETED);
-    }
-
-    /**
-     * 死信參數（與其他模組的寫法一致）：失敗訊息交給 {@code blog.dlq} exchange。
-     *
-     * @return queue 參數
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter"
-        );
     }
 }

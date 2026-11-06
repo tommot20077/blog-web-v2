@@ -10,6 +10,7 @@ import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
@@ -26,6 +27,7 @@ import org.springframework.amqp.support.converter.MessageConversionException;
 import org.springframework.retry.RetryContext;
 import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.test.util.ReflectionTestUtils;
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.mq.DeadLetterCountingErrorHandler;
 import dowob.xyz.blog.infrastructure.mq.EventIdJackson2JsonMessageConverter;
 import dowob.xyz.blog.infrastructure.mq.MessageIdAwareRetryInterceptor;
@@ -61,6 +63,22 @@ class RabbitMqConfigTest {
     @BeforeEach
     void setUp() {
         config = new RabbitMqConfig();
+    }
+
+    /**
+     * ARCH-06：article.events 共用 exchange 只在 infrastructure 宣告一次，其餘模組注入同一個 bean
+     */
+    @Test
+    @DisplayName("articleEventsExchange 應為名稱 article.events、durable、非 autoDelete 的 TopicExchange（參數與重構前各模組的宣告相同）")
+    void articleEventsExchange_isDurableTopicNamedFromContract() {
+        TopicExchange exchange = config.articleEventsExchange();
+
+        assertThat(exchange.getName()).isEqualTo(ArticleEventContract.EXCHANGE).isEqualTo("article.events");
+        assertThat(exchange.getType()).isEqualTo("topic");
+        assertThat(exchange.isDurable()).isTrue();
+        assertThat(exchange.isAutoDelete()).isFalse();
+        assertThat(exchange.isInternal()).isFalse();
+        assertThat(exchange.getArguments()).isEmpty();
     }
 
     /**

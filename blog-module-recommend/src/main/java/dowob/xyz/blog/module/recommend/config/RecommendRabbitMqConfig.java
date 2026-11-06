@@ -5,10 +5,11 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.TopicExchange;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * 推薦模組 RabbitMQ 設定
@@ -42,28 +43,6 @@ public class RecommendRabbitMqConfig {
     public static final String ROUTING_KEY_ARTICLE_PUBLISHED = ArticleEventContract.ROUTING_KEY_PUBLISHED;
 
     /**
-     * 建立死信隊列（DLQ）參數
-     *
-     * @return 包含死信交換器與路由 Key 的 Map
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter"
-        );
-    }
-
-    /**
-     * 參照文章事件 TopicExchange（已由 article 模組定義，此處僅宣告參照）
-     *
-     * @return TopicExchange 實例
-     */
-    @Bean
-    public TopicExchange recommendArticleEventsExchange() {
-        return new TopicExchange(ARTICLE_EVENTS_EXCHANGE);
-    }
-
-    /**
      * 建立推薦模組專屬的文章發布事件 Queue（持久化，含 DLQ 設定）
      *
      * @return Queue 實例
@@ -76,13 +55,14 @@ public class RecommendRabbitMqConfig {
     /**
      * 將推薦模組的 Queue 綁定至文章事件 Exchange
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding recommendArticlePublishedBinding() {
+    public Binding recommendArticlePublishedBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(recommendArticlePublishedQueue())
-                .to(recommendArticleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ROUTING_KEY_ARTICLE_PUBLISHED);
     }
 }

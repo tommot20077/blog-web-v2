@@ -8,7 +8,7 @@ import org.springframework.amqp.core.TopicExchange;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * 用戶模組 RabbitMQ 設定
@@ -57,18 +57,6 @@ public class UserRabbitMqConfig {
      * 重複信箱註冊通知 Routing Key
      */
     public static final String ROUTING_KEY_REGISTRATION_ATTEMPT = "user.registration.duplicate-email";
-
-    /**
-     * 建立死信佇列（DLQ）參數
-     *
-     * @return 包含 x-dead-letter-exchange 與 x-dead-letter-routing-key 的 Map
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter"
-        );
-    }
 
     /**
      * 建立用戶事件 Topic Exchange

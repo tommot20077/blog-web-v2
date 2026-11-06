@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.facade;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.module.article.mapper.ArticleAuthorCleanupMapper;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
@@ -9,7 +10,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -91,5 +94,33 @@ public class ArticleLookupFacadeImpl implements ArticleLookupFacade {
         }
         return articleRepository.findByUuid(articleUuid)
                 .map(article -> article.getContent() == null ? "" : article.getContent());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Set<UUID> findFileUuidsReferencedByAuthorArticles(UUID authorUuid) {
+        if (authorUuid == null) {
+            return Set.of();
+        }
+        /* 單篇刪除後作者其餘文章都還在：不分狀態，凡引用即不可刪 */
+        List<String> allStatuses = Arrays.stream(ArticleStatus.values()).map(Enum::name).toList();
+        return articleAuthorCleanupMapper.findReferencedFileUuidsByAuthorAndStatuses(authorUuid, allStatuses)
+                .stream().map(UUID::fromString).collect(Collectors.toSet());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Set<UUID> filterExistingUuids(Collection<UUID> uuids) {
+        if (uuids == null) {
+            return Set.of();
+        }
+        List<UUID> distinct = uuids.stream().filter(Objects::nonNull).distinct().toList();
+        return BatchedQuery.queryInBatches(distinct, articleAuthorCleanupMapper::findExistingUuidsIn).stream()
+                .map(UUID::fromString)
+                .collect(Collectors.toSet());
     }
 }
