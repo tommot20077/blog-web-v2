@@ -43,6 +43,15 @@ class ArticleDocumentTest {
     }
 
     @Test
+    @DisplayName("ArticleDocument 有頂層 uuid 欄位：Keyword／String（供每日幽靈校正 search_after 排序；_id 不可排序）")
+    void articleDocument_topLevelUuid_shouldBeKeywordString() throws NoSuchFieldException {
+        java.lang.reflect.Field field = ArticleDocument.class.getDeclaredField("uuid");
+
+        assertThat(field.getType()).isEqualTo(String.class);
+        assertThat(field.getAnnotation(Field.class).type()).isEqualTo(FieldType.Keyword);
+    }
+
+    @Test
     @DisplayName("uuid 欄位型別為 String（ES 存 UUID 字串）")
     void authorInfo_uuid_shouldBeString() throws NoSuchFieldException {
         assertThat(ArticleDocument.AuthorInfo.class.getDeclaredField("uuid").getType()).isEqualTo(String.class);

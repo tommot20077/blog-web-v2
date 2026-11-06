@@ -93,6 +93,42 @@ class SearchIndexInitializerTest {
     }
 
     @Test
+    @DisplayName("既有索引缺頂層 uuid keyword：以 putMapping 增補（不刪不重建），否則動態 mapping 會把它建成 text")
+    void ensureCorrectMapping_missingTopLevelUuid_shouldPutMappingWithoutRecreate() {
+        ElasticsearchOperations operations = mock(ElasticsearchOperations.class);
+        IndexOperations indexOps = mock(IndexOperations.class);
+        when(operations.indexOps(ArticleDocument.class)).thenReturn(indexOps);
+        when(indexOps.exists()).thenReturn(true);
+        when(indexOps.getMapping()).thenReturn(mapping(Map.of(
+                "uuid", Map.of("type", "keyword"), "nickname", Map.of("type", "text"))));
+
+        new SearchIndexInitializer(operations).ensureCorrectMapping();
+
+        verify(indexOps).putMapping();
+        verify(indexOps, never()).delete();
+        verify(indexOps, never()).createWithMapping();
+    }
+
+    @Test
+    @DisplayName("既有索引已有頂層 uuid keyword：不需要 putMapping")
+    void ensureCorrectMapping_topLevelUuidPresent_shouldNotPutMapping() {
+        ElasticsearchOperations operations = mock(ElasticsearchOperations.class);
+        IndexOperations indexOps = mock(IndexOperations.class);
+        when(operations.indexOps(ArticleDocument.class)).thenReturn(indexOps);
+        when(indexOps.exists()).thenReturn(true);
+        Map<String, Object> properties = new java.util.HashMap<>();
+        properties.put("status", Map.of("type", "keyword"));
+        properties.put("tags", Map.of("type", "nested"));
+        properties.put("uuid", Map.of("type", "keyword"));
+        properties.put("author", Map.of("properties", Map.of("uuid", Map.of("type", "keyword"))));
+        when(indexOps.getMapping()).thenReturn(Map.of("properties", properties));
+
+        new SearchIndexInitializer(operations).ensureCorrectMapping();
+
+        verify(indexOps, never()).putMapping();
+    }
+
+    @Test
     @DisplayName("status 非 keyword：仍砍掉重建（既有行為保持）")
     void ensureCorrectMapping_wrongStatus_shouldStillRecreate() {
         ElasticsearchOperations operations = mock(ElasticsearchOperations.class);

@@ -60,6 +60,7 @@ public class SearchIndexInitializer implements ApplicationRunner {
         }
         warnIfLegacyAuthorMapping(indexOps);
         if (isMappingValid(indexOps)) {
+            putTopLevelUuidMappingIfMissing(indexOps);
             log.debug("Elasticsearch index 'blog_articles' mapping 已對齊");
             return;
         }
@@ -108,6 +109,31 @@ public class SearchIndexInitializer implements ApplicationRunner {
         if (!isAuthorUuidKeyword(properties)) {
             log.warn("Elasticsearch index 'blog_articles' 的 author mapping 為舊版（缺少 author.uuid keyword），"
                     + "不影響搜尋，索引不會被刪除；需執行 POST /api/v1/admin/search/reindex 以移除舊作者欄位");
+        }
+    }
+
+    /**
+     * 既有索引缺頂層 {@code uuid} keyword 時，以 putMapping 增補（只新增欄位，不刪不重建、不影響既有文件）。
+     *
+     * <p>幽靈校正排程依此欄位做 search_after 排序。若不先補 mapping，ES 會在第一個帶 {@code uuid} 的文件寫入時
+     * 動態建成 text，之後就無法排序。putMapping 失敗只記 warn，不阻擋應用程式啟動。</p>
+     *
+     * @param indexOps 索引操作
+     */
+    private void putTopLevelUuidMappingIfMissing(IndexOperations indexOps) {
+        Map<String, Object> mapping = indexOps.getMapping();
+        if (mapping != null && mapping.get("properties") instanceof Map<?, ?> properties
+                && properties.get("uuid") instanceof Map<?, ?> uuidField
+                && "keyword".equals(uuidField.get("type"))) {
+            return;
+        }
+        try {
+            indexOps.putMapping();
+            log.info("Elasticsearch index 'blog_articles' 已增補頂層 uuid keyword mapping；"
+                    + "舊文件需 POST /api/v1/admin/search/reindex 補上該欄位後才會被幽靈校正掃到");
+        } catch (Exception e) {
+            log.warn("增補 Elasticsearch index 'blog_articles' 的 uuid mapping 失敗，幽靈校正排程將無法掃描：{}",
+                    e.getMessage());
         }
     }
 
