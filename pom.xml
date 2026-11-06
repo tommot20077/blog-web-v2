@@ -369,6 +369,26 @@
     </dependencies>
 
     <build>
+        <!--
+          surefire 的 includes 統一在此（ARCH-12）：各模組不再各自複製。
+          *Test／*Tests 為單元測試，*IT 為整合測試（Testcontainers）；blog-start 另外排除 *E2E
+          （見其 pom 與 -Pe2e／-Pred-e2e profile 對 includes 的覆寫）。
+        -->
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <includes>
+                            <include>**/*Test.java</include>
+                            <include>**/*Tests.java</include>
+                            <include>**/*IT.java</include>
+                        </includes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
