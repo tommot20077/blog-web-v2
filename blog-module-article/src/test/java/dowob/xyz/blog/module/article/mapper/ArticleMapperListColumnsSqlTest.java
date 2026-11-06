@@ -115,9 +115,10 @@ class ArticleMapperListColumnsSqlTest {
     }
 
     @Test
-    @DisplayName("ES 索引用的 findAllPublished 維持原樣（需要正文，不在列表投影範圍）")
-    void findAllPublished_staysUntouched() {
+    @DisplayName("ES 索引用的 findAllPublished 需要正文：明寫 content_md AS content，且不撈 content_html／toc")
+    void findAllPublished_selectsBodyAsContent() {
         String sql = render("findAllPublished");
-        assertThat(sql).startsWith("SELECT * FROM articles WHERE status = 'PUBLISHED'");
+        assertThat(sql).contains("content_md AS content");
+        assertThat(sql).doesNotContainPattern("\\bcontent_html\\b").doesNotContainPattern("\\btoc\\b");
     }
 }

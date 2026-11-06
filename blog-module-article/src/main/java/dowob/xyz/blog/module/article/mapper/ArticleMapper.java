@@ -228,9 +228,14 @@ public interface ArticleMapper {
     /**
      * 查詢所有已發布文章（供全量重建 Elasticsearch 索引使用）
      *
+     * <p>需要正文（{@code content}），但不需要 {@code content_html}／{@code toc}。MyBatis 以欄名自動映射，
+     * 而實體欄位叫 {@code content}、資料庫欄位叫 {@code content_md}，必須明寫 {@code content_md AS content}，
+     * 否則 content 恆為 null，全量重建會把內文索引成空字串。</p>
+     *
      * @return 所有已發布文章列表
      */
-    @Select("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC NULLS LAST")
+    @Select("SELECT " + LIST_COLUMNS + ", content_md AS content FROM articles WHERE status = 'PUBLISHED' "
+            + "ORDER BY published_at DESC NULLS LAST")
     List<Article> findAllPublished();
 
     /**
