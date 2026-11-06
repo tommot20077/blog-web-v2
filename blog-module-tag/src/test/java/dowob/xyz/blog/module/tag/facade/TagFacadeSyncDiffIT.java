@@ -162,6 +162,15 @@ class TagFacadeSyncDiffIT extends TagCleanupITSupport {
     }
 
     @Test
+    @DisplayName("findExistingBySlugs：null 或全為空白的 slug 時回空 Map，不報錯")
+    void findExistingBySlugs_nullOrBlankOnly_returnsEmpty() {
+        insertTag("alpha", 0);
+
+        assertThat(tagNormalizationService.findExistingBySlugs(null)).isEmpty();
+        assertThat(tagNormalizationService.findExistingBySlugs(List.of(" ", ""))).isEmpty();
+    }
+
+    @Test
     @DisplayName("findOrCreateTags：既有標籤直接讀出（不新增列），缺少的才建立；回傳順序與輸入一致")
     void findOrCreateTags_mixedExistingAndNew_createsOnlyMissing() {
         UUID existing = insertTag("alpha", 0);
