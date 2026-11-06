@@ -6,6 +6,7 @@ import org.springframework.data.jdbc.repository.query.Query;
 import org.springframework.data.repository.CrudRepository;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -80,4 +81,32 @@ public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUI
     @Modifying
     @Query("UPDATE file_metadata SET has_thumbnail = TRUE WHERE id = :id")
     int markThumbnailGenerated(@Param("id") UUID id);
+
+    /**
+     * 批次綁定：把指定檔案的 {@code article_uuid} 設為該文章（單欄位 UPDATE，不覆寫其他欄位）
+     *
+     * <p>供 {@code bindToArticle}（PERF-23）取代逐檔 {@code findById + save}。單欄位 UPDATE 另有好處：
+     * 不會像整列 {@code save} 那樣以舊值蓋掉並發寫入的 {@code has_thumbnail}。
+     * 呼叫端須自行切批（{@code ids} 不可為空，且大小需在 bind parameter 安全範圍內）。</p>
+     *
+     * @param articleUuid 要綁定的文章 UUID
+     * @param ids         要綁定的檔案 UUID（非空）
+     * @return 受影響列數
+     */
+    @Modifying
+    @Query("UPDATE file_metadata SET article_uuid = :articleUuid WHERE id IN (:ids)")
+    int bindFilesToArticle(@Param("articleUuid") UUID articleUuid, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * 批次解除綁定：把指定檔案的 {@code article_uuid} 設回 null，但僅限目前仍綁定在該文章者
+     *
+     * <p>多帶 {@code article_uuid = :articleUuid} 條件，避免讀取後、更新前檔案已被改綁到別篇文章時誤解除。</p>
+     *
+     * @param articleUuid 原綁定的文章 UUID
+     * @param ids         要解除的檔案 UUID（非空）
+     * @return 受影響列數
+     */
+    @Modifying
+    @Query("UPDATE file_metadata SET article_uuid = NULL WHERE article_uuid = :articleUuid AND id IN (:ids)")
+    int unbindFilesFromArticle(@Param("articleUuid") UUID articleUuid, @Param("ids") Collection<UUID> ids);
 }

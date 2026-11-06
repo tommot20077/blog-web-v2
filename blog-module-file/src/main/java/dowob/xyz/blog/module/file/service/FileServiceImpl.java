@@ -5,6 +5,7 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.exception.SystemException;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
@@ -39,7 +40,8 @@ import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.io.IOException;
 import java.time.LocalDateTime;
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
@@ -379,35 +381,54 @@ public class FileServiceImpl implements FileService {
             }
         }
 
-        Set<UUID> targetIdSet = new HashSet<>(targetIds);
-        List<FileMetadata> currentlyBound = fileMetadataRepository.findByArticleUuid(articleUuid);
-        for (FileMetadata bound : currentlyBound) {
-            if (!targetIdSet.contains(bound.getId())) {
-                bound.setArticleUuid(null);
-                fileMetadataRepository.save(bound);
-            }
-        }
+        /*
+         * PERF-23：固定次數的批次存取取代逐檔 findById + save（2N+1 次）：
+         * 讀 = findByArticleUuid（1 次）+ findAllById（每 BatchedQuery.BATCH_SIZE 筆 1 次）；
+         * 寫 = 單欄位 UPDATE（每批 1 次）。單欄位 UPDATE 同時避免整列 save 以舊值覆寫並發寫入的其他欄位。
+         */
+        Set<UUID> targetIdSet = new LinkedHashSet<>(targetIds);
+        List<UUID> toUnbind = fileMetadataRepository.findByArticleUuid(articleUuid).stream()
+                .map(FileMetadata::getId)
+                .filter(id -> !targetIdSet.contains(id))
+                .toList();
+        updateInBatches(toUnbind, batch -> fileMetadataRepository.unbindFilesFromArticle(articleUuid, batch));
 
         if (targetIds.isEmpty()) {
             return;
         }
 
-        /* lambda 需要 effectively final 的擷取變數 */
         final UUID articleAuthorUuid = authorUuid;
-        for (UUID fileUuid : targetIds) {
-            fileMetadataRepository.findById(fileUuid).ifPresent(metadata -> {
-                if (articleUuid.equals(metadata.getArticleUuid())) {
-                    return;
-                }
-                if (!articleAuthorUuid.equals(metadata.getUploaderId())) {
-                    log.warn("bindToArticle：拒絕綁定非本文章作者上傳的檔案（可疑嘗試）。"
-                                    + "fileUuid={}, articleUuid={}, uploaderId={}, articleAuthorUuid={}",
-                            fileUuid, articleUuid, metadata.getUploaderId(), articleAuthorUuid);
-                    return;
-                }
-                metadata.setArticleUuid(articleUuid);
-                fileMetadataRepository.save(metadata);
-            });
+        List<FileMetadata> candidates = BatchedQuery.queryInBatches(targetIdSet,
+                batch -> {
+                    List<FileMetadata> found = new ArrayList<>();
+                    fileMetadataRepository.findAllById(batch).forEach(found::add);
+                    return found;
+                });
+        List<UUID> toBind = new ArrayList<>();
+        for (FileMetadata metadata : candidates) {
+            if (articleUuid.equals(metadata.getArticleUuid())) {
+                continue;
+            }
+            if (!articleAuthorUuid.equals(metadata.getUploaderId())) {
+                log.warn("bindToArticle：拒絕綁定非本文章作者上傳的檔案（可疑嘗試）。"
+                                + "fileUuid={}, articleUuid={}, uploaderId={}, articleAuthorUuid={}",
+                        metadata.getId(), articleUuid, metadata.getUploaderId(), articleAuthorUuid);
+                continue;
+            }
+            toBind.add(metadata.getId());
+        }
+        updateInBatches(toBind, batch -> fileMetadataRepository.bindFilesToArticle(articleUuid, batch));
+    }
+
+    /**
+     * 把 id 清單依 {@link BatchedQuery#BATCH_SIZE} 切批後逐批執行 UPDATE（空清單不執行，避免非法的 {@code IN ()}）。
+     *
+     * @param ids    要更新的檔案 UUID
+     * @param update 單批更新動作
+     */
+    private void updateInBatches(List<UUID> ids, java.util.function.Consumer<List<UUID>> update) {
+        for (int from = 0; from < ids.size(); from += BatchedQuery.BATCH_SIZE) {
+            update.accept(ids.subList(from, Math.min(from + BatchedQuery.BATCH_SIZE, ids.size())));
         }
     }
 
