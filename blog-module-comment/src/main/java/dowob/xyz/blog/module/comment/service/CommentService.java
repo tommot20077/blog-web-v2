@@ -20,6 +20,7 @@ import dowob.xyz.blog.common.api.dto.AuthorSummary;
 import dowob.xyz.blog.module.comment.model.dto.response.CommentResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +47,7 @@ import java.util.stream.Collectors;
  * @author Yuan
  * @version 2.0
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CommentService {
@@ -170,6 +172,10 @@ public class CommentService {
         c.setEditedAt(LocalDateTime.now());
         commentRepo.save(c);
 
+        if (isAdmin && !c.getUserUuid().equals(currentUserUuid)) {
+            logAdminAudit("ADMIN_EDIT_COMMENT", currentUserUuid, c);
+        }
+
         CommentResponse resp = new CommentResponse();
         resp.setUuid(c.getUuid());
         resp.setContent(c.getContent());
@@ -210,7 +216,26 @@ public class CommentService {
         int affected = commentMapper.softDelete(c.getId(), role);
         if (affected == 1) {
             articleFacade.decrementCommentCount(c.getArticleUuid());
+            if ("ADMIN".equals(role)) {
+                logAdminAudit("ADMIN_DELETE_COMMENT", currentUserUuid, c);
+            }
         }
+    }
+
+    /**
+     * 寫入 admin 操作他人留言的稽核 log（AUTH-11a）。
+     *
+     * <p>comments 表只有 {@code deleted_by_role}、沒有操作者欄位，新增欄位屬 schema 設計（需 migration），
+     * 因此先以一行 INFO log 留下軌跡；只記 uuid，不記留言內容。格式為 {@code [AUDIT] key=value ...}，
+     * 方便以 {@code [AUDIT]} 或 {@code action=} grep。</p>
+     *
+     * @param action       動作名稱（ADMIN_DELETE_COMMENT／ADMIN_EDIT_COMMENT）
+     * @param operatorUuid 操作的 admin UUID
+     * @param comment      被操作的留言
+     */
+    private void logAdminAudit(String action, UUID operatorUuid, Comment comment) {
+        log.info("[AUDIT] action={} operatorUuid={} commentUuid={} articleUuid={}",
+                action, operatorUuid, comment.getUuid(), comment.getArticleUuid());
     }
 
     /**

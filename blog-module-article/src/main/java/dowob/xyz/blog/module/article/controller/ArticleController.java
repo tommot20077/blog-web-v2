@@ -323,7 +323,7 @@ public class ArticleController {
     @PostMapping("/{uuid}/reject")
     public ApiResponse<ArticleResponse> rejectArticle(
             @PathVariable UUID uuid,
-            @RequestBody RejectArticleRequest request,
+            @Valid @RequestBody RejectArticleRequest request,
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication) {
         Role operatorRole = SecurityUtils.resolveRole(authentication);

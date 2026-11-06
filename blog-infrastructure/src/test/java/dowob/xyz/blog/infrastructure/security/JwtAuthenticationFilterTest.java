@@ -289,7 +289,7 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    @DisplayName("用戶狀態為 PENDING_VERIFICATION 時，維持現行行為：可通過認證")
+    @DisplayName("用戶狀態為 PENDING_VERIFICATION 時，仍可通過認證（可讀自己的 profile、走驗證流程）")
     void pendingVerification_shouldAuthenticate() throws Exception {
         FilterChain chain = mock(FilterChain.class);
 
@@ -298,6 +298,31 @@ class JwtAuthenticationFilterTest {
 
         verify(chain).doFilter(any(), any());
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("AUTH-06：PENDING_VERIFICATION 的 authorities 不得含任何 Permission（含 COMMENT_WRITE、ARTICLE_CREATE）")
+    void pendingVerification_shouldNotGrantAnyPermission() throws Exception {
+        performFilter(Role.AUTHOR, TOKEN_VERSION, state(UserStatus.PENDING_VERIFICATION, Role.AUTHOR, TOKEN_VERSION),
+                mock(FilterChain.class));
+
+        Set<String> authorities = SecurityContextHolder.getContext().getAuthentication().getAuthorities().stream()
+                .map(a -> a.getAuthority()).collect(Collectors.toSet());
+        assertThat(authorities)
+                .doesNotContain(Permission.COMMENT_WRITE.name(), Permission.COMMENT_DELETE.name(),
+                        Permission.ARTICLE_CREATE.name(), Permission.FILE_UPLOAD.name())
+                .containsExactly(Role.AUTHOR.getSpringSecurityRole());
+    }
+
+    @Test
+    @DisplayName("AUTH-06：ACTIVE 使用者仍取得角色對應的完整 Permission（對照組）")
+    void activeUser_shouldStillGrantRolePermissions() throws Exception {
+        performFilter(Role.USER, TOKEN_VERSION, state(UserStatus.ACTIVE, Role.USER, TOKEN_VERSION),
+                mock(FilterChain.class));
+
+        Set<String> authorities = SecurityContextHolder.getContext().getAuthentication().getAuthorities().stream()
+                .map(a -> a.getAuthority()).collect(Collectors.toSet());
+        assertThat(authorities).contains(Permission.COMMENT_WRITE.name(), Permission.COMMENT_DELETE.name());
     }
 
     @Test

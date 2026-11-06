@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.tag.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.exception.GlobalExceptionHandler;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
 import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
@@ -13,6 +14,8 @@ import dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest;
 import dowob.xyz.blog.module.tag.service.TagService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -34,6 +37,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -57,6 +61,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         excludeAutoConfiguration = EnableAutoConfiguration.class)
 @ContextConfiguration(classes = {
         AdminTagController.class,
+        GlobalExceptionHandler.class,
         SecurityConfig.class,
         JwtAuthenticationFilter.class
 })
@@ -164,6 +169,92 @@ class AdminTagControllerTest {
                 .andExpect(jsonPath("$.data.description").value("Updated description"));
 
         verify(tagService).adminUpdateTag(eq(TAG_ID), any(UpdateTagRequest.class));
+    }
+
+    // =========================================================================
+    // PUT /api/v1/admin/tags/{id} 輸入驗證（SEC-24）
+    // =========================================================================
+
+    @ParameterizedTest(name = "非法 color「{0}」→ 400")
+    @ValueSource(strings = {"red", "#FFF", "#12345678", "#GGGGGG", "FF0000", "#FF0000;background:url(x)",
+            "expression(alert(1))", "", " "})
+    @DisplayName("PUT /api/v1/admin/tags/{id} — color 非 #RRGGBB 回傳 400 且不呼叫 service")
+    void updateTag_invalidColor_returns400(String color) throws Exception {
+        UpdateTagRequest request = new UpdateTagRequest();
+        request.setColor(color);
+
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
+                        .with(asAdmin())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("color")));
+
+        verify(tagService, never()).adminUpdateTag(any(), any());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/admin/tags/{id} — icon 超過 100 字（對齊 tags.icon VARCHAR(100)）回傳 400")
+    void updateTag_iconTooLong_returns400() throws Exception {
+        UpdateTagRequest request = new UpdateTagRequest();
+        request.setIcon("i".repeat(101));
+
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
+                        .with(asAdmin())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("icon")));
+
+        verify(tagService, never()).adminUpdateTag(any(), any());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/admin/tags/{id} — description 超過 200 字（沿用分類描述上限）回傳 400")
+    void updateTag_descriptionTooLong_returns400() throws Exception {
+        UpdateTagRequest request = new UpdateTagRequest();
+        request.setDescription("d".repeat(201));
+
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
+                        .with(asAdmin())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("description")));
+
+        verify(tagService, never()).adminUpdateTag(any(), any());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/admin/tags/{id} — 邊界合法值（#1a2B3c、icon 100 字、description 200 字）回傳 200")
+    void updateTag_boundaryValidValues_returns200() throws Exception {
+        UpdateTagRequest request = new UpdateTagRequest();
+        request.setColor("#1a2B3c");
+        request.setIcon("i".repeat(100));
+        request.setDescription("d".repeat(200));
+        when(tagService.adminUpdateTag(eq(TAG_ID), any(UpdateTagRequest.class))).thenReturn(new Tag());
+
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
+                        .with(asAdmin())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/admin/tags/{id} — 欄位全為 null（不更新）維持合法")
+    void updateTag_allNull_returns200() throws Exception {
+        when(tagService.adminUpdateTag(eq(TAG_ID), any(UpdateTagRequest.class))).thenReturn(new Tag());
+
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
+                        .with(asAdmin())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
     }
 
     // =========================================================================
