@@ -14,6 +14,7 @@ import dowob.xyz.blog.infrastructure.web.ClientIpResolver;
 import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.LoginRequest;
 import dowob.xyz.blog.module.user.model.dto.request.RegisterRequest;
+import dowob.xyz.blog.module.user.validation.ProfileFieldLimits;
 import dowob.xyz.blog.module.user.model.dto.request.ResetPasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
 import dowob.xyz.blog.module.user.service.AuthService;
@@ -165,6 +166,48 @@ class AuthControllerTest {
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 驗證（SEC-25a）：暱稱超過 50 字（users.nickname VARCHAR(50)）時應在驗證層回 400，
+     * 不得讓請求走到 DB 才以 500 失敗。
+     */
+    @Test
+    @DisplayName("POST /register → 暱稱 51 字元 → 400 且不呼叫 service（SEC-25a）")
+    void register_nicknameTooLong_shouldReturn400() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
+        request.setNickname("n".repeat(ProfileFieldLimits.NICKNAME_MAX_LENGTH + 1));
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("nickname")));
+
+        verifyNoInteractions(authService);
+    }
+
+    /**
+     * 驗證（SEC-25a）：暱稱剛好 50 字仍合法。
+     */
+    @Test
+    @DisplayName("POST /register → 暱稱剛好 50 字元 → 200（SEC-25a 邊界）")
+    void register_nicknameAtLimit_shouldReturn200() throws Exception {
+        RegisterRequest request = new RegisterRequest();
+        request.setEmail(TEST_EMAIL);
+        request.setPassword(TEST_PASSWORD);
+        request.setUsername(TEST_USERNAME);
+        request.setNickname("n".repeat(ProfileFieldLimits.NICKNAME_MAX_LENGTH));
+        doNothing().when(authService).register(anyString(), anyString(), anyString(), anyString(), nullable(String.class));
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
     }
 
     /**
