@@ -326,6 +326,30 @@ class ReadingProgressServiceTest {
         assertThat(result).isEmpty();
     }
 
+    /**
+     * 讓 {@code executePipelined(SessionCallback)} 真的執行傳入的 callback（對 mock 的 RedisOperations），
+     * 並回傳依序對應的 hash 結果；同時把 callback 內發出的 key 記錄下來。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private List<String> stubPipeline(List<Object> pipelineResults) {
+        List<String> issuedKeys = new java.util.ArrayList<>();
+        org.springframework.data.redis.core.RedisOperations<String, String> ops =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.RedisOperations.class);
+        HashOperations<String, Object, Object> pipelinedHashOps = org.mockito.Mockito.mock(HashOperations.class);
+        org.mockito.Mockito.lenient().when(ops.opsForHash()).thenReturn((HashOperations) pipelinedHashOps);
+        org.mockito.Mockito.lenient().when(pipelinedHashOps.entries(anyString())).thenAnswer(inv -> {
+            issuedKeys.add(inv.getArgument(0));
+            return null; // pipeline 模式下指令回傳 null
+        });
+        when(redisTemplate.executePipelined(any(org.springframework.data.redis.core.SessionCallback.class)))
+                .thenAnswer(inv -> {
+                    org.springframework.data.redis.core.SessionCallback<?> cb = inv.getArgument(0);
+                    cb.execute(ops);
+                    return pipelineResults;
+                });
+        return issuedKeys;
+    }
+
     @Test
     @DisplayName("batchGetProgress：Redis 命中的直接用，沒命中的只用一次 DB 查詢補齊；全程不呼叫 ArticleFacade")
     void batchGetProgress_mixesRedisAndDb_withoutCallingArticleFacade() {
@@ -334,9 +358,7 @@ class ReadingProgressServiceTest {
         UUID none = UUID.randomUUID();
         Map<Object, Object> hash = new HashMap<>();
         hash.put("progress", "0.30");
-        when(hashOps.entries(RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + cached)).thenReturn(hash);
-        when(hashOps.entries(RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + inDb)).thenReturn(Map.of());
-        when(hashOps.entries(RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + none)).thenReturn(Map.of());
+        stubPipeline(List.of(hash, Map.of(), Map.of()));
         UserReadingProgress row = new UserReadingProgress();
         row.setUserUuid(userUuid);
         row.setArticleUuid(inDb);
@@ -350,5 +372,24 @@ class ReadingProgressServiceTest {
         assertThat(result.get(cached)).isEqualByComparingTo("0.30");
         assertThat(result.get(inDb)).isEqualByComparingTo("0.97");
         verifyNoInteractions(articleFacade);
+    }
+
+    @Test
+    @DisplayName("PERF-03：N 篇只有 1 次 pipeline 呼叫，pipeline 內依序發出 N 個 key，且不再逐篇直接呼叫 entries")
+    void batchGetProgress_nArticles_singlePipelineCall() {
+        List<UUID> uuids = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+        Map<Object, Object> hit = new HashMap<>();
+        hit.put("progress", "0.10");
+        List<String> issued = stubPipeline(List.of(hit, hit, hit, hit));
+
+        Map<UUID, BigDecimal> result = service.batchGetProgress(userUuid, uuids);
+
+        verify(redisTemplate, org.mockito.Mockito.times(1))
+                .executePipelined(any(org.springframework.data.redis.core.SessionCallback.class));
+        assertThat(issued).containsExactlyElementsOf(uuids.stream()
+                .map(u -> RedisKeyConstant.READING_PROGRESS_PREFIX + userUuid + ":" + u).toList());
+        verify(hashOps, never()).entries(anyString());
+        assertThat(result).containsOnlyKeys(uuids);
+        verifyNoInteractions(progressRepo);
     }
 }

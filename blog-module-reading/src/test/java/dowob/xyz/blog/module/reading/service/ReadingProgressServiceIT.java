@@ -23,6 +23,8 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -452,5 +454,31 @@ class ReadingProgressServiceIT extends ReadingCleanupITSupport {
         assertThat(dbProgress(articleUuid)).isEqualByComparingTo("0.50");
         assertThat(dbUpdatedAt(articleUuid)).isEqualTo(at(t1 + 9_000));
         assertThat(isDirty(articleUuid)).isFalse();
+    }
+
+    @Test
+    @DisplayName("PERF-03：batchGetProgress（pipeline）與逐筆 get 結果一致：Redis 命中、只在 DB、完全沒有、hash 缺 progress 欄位")
+    void batchGetProgress_pipelined_matchesPerKeyLookup() {
+        UUID inRedisA = newArticle();
+        UUID inRedisB = newArticle();
+        UUID onlyInDb = newArticle();
+        UUID noRecord = newArticle();
+        long ts = System.currentTimeMillis() - 5_000;
+        progressService.update(USER_UUID, inRedisA, new BigDecimal("0.40"), "a", ts);
+        progressService.update(USER_UUID, inRedisB, new BigDecimal("0.60"), "b", ts);
+        insertProgress(USER_UUID, onlyInDb);
+        List<UUID> all = List.of(inRedisA, onlyInDb, noRecord, inRedisB);
+
+        Map<UUID, BigDecimal> batch = progressService.batchGetProgress(USER_UUID, all);
+
+        assertThat(batch).containsOnlyKeys(inRedisA, onlyInDb, inRedisB);
+        assertThat(batch.get(inRedisA)).isEqualByComparingTo("0.40");
+        assertThat(batch.get(inRedisB)).isEqualByComparingTo("0.60");
+        assertThat(batch.get(onlyInDb)).as("Redis 沒有 → 走 DB fallback").isEqualByComparingTo("0.5");
+        for (UUID u : all) {
+            Optional<ProgressResponse> single = progressService.get(USER_UUID, u);
+            assertThat(single.isPresent()).as("逐筆 get 與批次的有無一致：%s", u).isEqualTo(batch.containsKey(u));
+            single.ifPresent(r -> assertThat(r.getProgress()).isEqualByComparingTo(batch.get(u)));
+        }
     }
 }
