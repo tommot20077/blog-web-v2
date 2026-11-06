@@ -517,6 +517,77 @@ class ArticleControllerIT {
                 .andExpect(jsonPath("$.data.status").value("REJECTED"));
     }
 
+    /**
+     * 建立一篇文章並送審，回傳其 uuid（供駁回驗證測試使用）。
+     *
+     * @return PENDING_REVIEW 文章的 uuid 字串
+     * @throws Exception MockMvc 執行失敗
+     */
+    private String createPendingReviewArticle() throws Exception {
+        stubUserFacade();
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("待審文章");
+        createRequest.setContent("內容");
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+        UpdateArticleRequest submitRequest = new UpdateArticleRequest();
+        submitRequest.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PENDING_REVIEW);
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(submitRequest)))
+                .andExpect(status().isOk());
+        return uuid;
+    }
+
+    @Test
+    @DisplayName("SEC-24 POST /reject - reason 超過 500 字 → 400 且文章維持待審")
+    void rejectArticle_reasonTooLong_returns400() throws Exception {
+        String uuid = createPendingReviewArticle();
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("r".repeat(501));
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("reason")));
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"));
+    }
+
+    @Test
+    @DisplayName("SEC-24 POST /reject - reason 剛好 500 字、或未帶 reason（現行允許空值）→ 仍可駁回")
+    void rejectArticle_reasonAtLimitOrAbsent_stillAccepted() throws Exception {
+        String atLimit = createPendingReviewArticle();
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("r".repeat(500));
+        mockMvc.perform(post("/api/v1/articles/" + atLimit + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+
+        String absent = createPendingReviewArticle();
+        mockMvc.perform(post("/api/v1/articles/" + absent + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+    }
+
     @Test
     @DisplayName("GET /api/admin/articles/pending - ADMIN 取得待審列表成功（200）")
     void getPendingArticles_adminSuccess() throws Exception {

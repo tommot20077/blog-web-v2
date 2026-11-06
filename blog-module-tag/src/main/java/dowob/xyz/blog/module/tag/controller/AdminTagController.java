@@ -5,6 +5,7 @@ import dowob.xyz.blog.module.tag.model.Tag;
 import dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest;
 import dowob.xyz.blog.module.tag.service.TagService;
 import lombok.RequiredArgsConstructor;
+import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,7 +47,7 @@ public class AdminTagController {
     @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
     public ApiResponse<Tag> updateTag(
             @PathVariable UUID id,
-            @RequestBody UpdateTagRequest request) {
+            @Valid @RequestBody UpdateTagRequest request) {
         return ApiResponse.success(tagService.adminUpdateTag(id, request));
     }
 
