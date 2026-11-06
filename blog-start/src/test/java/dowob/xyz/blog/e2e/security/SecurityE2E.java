@@ -194,6 +194,49 @@ class SecurityE2E extends AbstractE2ETest {
         }
     }
 
+    // ========== Pending Verification ==========
+
+    @Nested
+    @DisplayName("未驗證信箱帳號（AUTH-06）")
+    class PendingVerificationAccess {
+
+        /**
+         * 建立 AUTHOR token 後把帳號改回 PENDING_VERIFICATION，並清除 Redis 認證快取，
+         * 模擬「持有有效 token 的未驗證帳號」（login 本身會擋 PENDING，這裡驗證 filter 縱深）。
+         */
+        private String pendingAuthorToken() throws Exception {
+            String token = authHelper.createUserWithRole(
+                    "pending@test.com", "Password1!", "pending1", "Pending", Role.AUTHOR);
+            jdbcTemplate.update("UPDATE users SET status = 'PENDING_VERIFICATION' WHERE email = ?",
+                    "pending@test.com");
+            UUID userUuid = jdbcTemplate.queryForObject(
+                    "SELECT uuid FROM users WHERE email = ?", UUID.class, "pending@test.com");
+            redisTemplate.delete(RedisKeyConstant.getUserAuthKey(userUuid));
+            return token;
+        }
+
+        @Test
+        @DisplayName("PENDING 的 AUTHOR 無法建立文章 — POST /api/v1/articles 回傳 403")
+        void pendingAuthorCannotCreateArticle() throws Exception {
+            String token = pendingAuthorToken();
+
+            mockMvc.perform(post("/api/v1/articles")
+                            .with(bearerToken(token))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(article("Test", "Content"))))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("PENDING 仍可讀自己的 profile — GET /api/v1/users/me 回傳 200")
+        void pendingUserCanReadOwnProfile() throws Exception {
+            String token = pendingAuthorToken();
+
+            mockMvc.perform(get("/api/v1/users/me").with(bearerToken(token)))
+                    .andExpect(status().isOk());
+        }
+    }
+
     // ========== Token Validation ==========
 
     @Nested
