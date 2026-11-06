@@ -73,6 +73,7 @@ class ArticleQuerySubService {
      * @param size  每頁筆數
      * @return 分頁文章摘要
      */
+    @Transactional(readOnly = true)
     PageResult<ArticleSummaryResponse> getPublishedArticles(ArticleListQuery query, int page, int size) {
         PublishedArticleCriteria criteria = PublishedArticleCriteria.of(query, LocalDateTime.now());
         long offset = (long) (page - 1) * size;
@@ -81,6 +82,7 @@ class ArticleQuerySubService {
         return PageResult.of(page, size, total, toSummaryResponses(articles));
     }
 
+    @Transactional(readOnly = true)
     PageResult<ArticleSummaryResponse> getMyArticles(UUID authorUuid, int page, int size, ArticleStatus status) {
         long offset = (long) (page - 1) * size;
         List<Article> articles;
@@ -96,6 +98,7 @@ class ArticleQuerySubService {
         return PageResult.of(page, size, total, list);
     }
 
+    @Transactional(readOnly = true)
     PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size) {
         long offset = (long) (page - 1) * size;
         List<Article> articles = articleMapper.findPendingReviewPage(offset, size);
