@@ -61,11 +61,8 @@ public class ArticleVersionConsumer {
          * VersioningService 的 @Transactional 為 REQUIRED，會加入這個交易，快照失敗時標記一起 rollback */
         consumerExecutor.executeIdempotent(CONSUMER_NAME, logContext, event.eventId(), () -> {
             switch (event.action()) {
-                case SAVED -> {
-                    if (autoSnapshotPolicy.shouldSnapshot(event.articleUuid())) {
-                        versioningService.recordAutoSnapshot(event.articleUuid());
-                    }
-                }
+                case SAVED -> autoSnapshotPolicy.plan(event.articleUuid())
+                        .ifPresent(versioningService::recordAutoSnapshot);
                 case PUBLISHED -> versioningService.freezePublished(event.articleUuid());
                 default -> { }
             }

@@ -56,13 +56,9 @@ public class VersioningService {
     }
 
     /**
-     * 記錄自動快照並套用滾動保留策略。
-     * <p>若文章不存在則靜默返回（冪等）。</p>
-     *
-     * <p>V28 起 {@code article_versions} 沒有指向 {@code articles} 的 FK：若文章在「查內容」與「寫快照」之間
-     * 被刪除，這裡不會再被資料庫拒絕，而是留下一筆孤兒快照；此情況由 {@code VersionArticleDeletedConsumer}
-     * （文章刪除事件）與 {@code ArticleVersionOrphanReconciliationJob}（每日校正）清除。
-     * 寫入時的 {@code DataIntegrityViolationException} 因此一律是真正的錯誤，不再吞掉。</p>
+     * 記錄自動快照並套用滾動保留策略（自行查文章內容與設定；沒有現成 {@link AutoSnapshotPlan} 時使用）。
+     * <p>若文章不存在則靜默返回（冪等）。consumer 的 SAVED 流程改走 {@link #recordAutoSnapshot(AutoSnapshotPlan)}，
+     * 不重複查詢（PERF-21）。</p>
      *
      * @param articleUuid 文章公開 UUID
      * @throws IllegalStateException 文章作者 UUID 缺失（資料異常）
@@ -73,10 +69,28 @@ public class VersioningService {
         if (article == null) return;
 
         AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(requireAuthorUuid(article));
+        recordAutoSnapshot(new AutoSnapshotPlan(article, cfg));
+    }
+
+    /**
+     * 依 {@link AutoSnapshotPlan} 記錄自動快照並套用滾動保留策略——文章內容與設定沿用 policy 判斷時查到的，不重查（PERF-21）。
+     *
+     * <p>V28 起 {@code article_versions} 沒有指向 {@code articles} 的 FK：若文章在「查內容」與「寫快照」之間
+     * 被刪除，這裡不會再被資料庫拒絕，而是留下一筆孤兒快照；此情況由 {@code VersionArticleDeletedConsumer}
+     * （文章刪除事件）與 {@code ArticleVersionOrphanReconciliationJob}（每日校正）清除。
+     * 寫入時的 {@code DataIntegrityViolationException} 因此一律是真正的錯誤，不再吞掉。</p>
+     *
+     * @param plan policy 判斷通過時交出的文章內容與生效設定
+     * @throws IllegalStateException 文章作者 UUID 缺失（資料異常）
+     */
+    @Transactional
+    public void recordAutoSnapshot(AutoSnapshotPlan plan) {
+        ArticleContentData article = plan.article();
+        requireAuthorUuid(article);
 
         versionRepo.save(snapshotFromContent(article, TYPE_AUTO, null));
 
-        versionMapper.retainAuto(articleUuid, cfg.retain());
+        versionMapper.retainAuto(article.uuid(), plan.config().retain());
     }
 
     /**

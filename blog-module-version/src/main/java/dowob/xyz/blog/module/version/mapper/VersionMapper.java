@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.version.mapper;
 
+import dowob.xyz.blog.module.version.model.LatestSnapshotMeta;
 import dowob.xyz.blog.module.version.model.dto.response.VersionSummaryResponse;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -7,6 +8,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -45,6 +47,31 @@ public interface VersionMapper {
      */
     @Select("SELECT COUNT(*) FROM article_versions WHERE article_uuid = #{articleUuid}::uuid AND type = 'PUBLISHED'")
     int countPublished(@Param("articleUuid") UUID articleUuid);
+
+    /**
+     * 取某文章最新一筆指定類型快照的「建立時間＋內容長度」（不撈內容本身，PERF-21）。
+     *
+     * <p>供 {@code AutoSnapshotPolicy} 判斷時間間隔與字元差距。長度須與 Java {@code String.length()} 一致：
+     * PostgreSQL {@code length()} 以字元（code point）計，補充平面字元（emoji 等，U+10000 以上）算 1，
+     * Java 的 UTF-16 code unit 算 2，故額外加上補充平面字元的個數（以正規表示式刪去其他字元後計長），
+     * 使兩邊對任何內容結果相同，快照觸發的邊界行為與改寫前完全一致。</p>
+     *
+     * <p>SELECT 欄位順序（created_at, content_length）必須與 {@link LatestSnapshotMeta} 的元件順序一致，不可調整。</p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param type        快照類型（AUTO／MANUAL／PUBLISHED）
+     * @return 最新一筆的投影；沒有快照時為 empty
+     */
+    @Select({
+        "SELECT created_at,",
+        "       coalesce(length(content), 0)",
+        "       + coalesce(length(regexp_replace(content, '[^\\U00010000-\\U0010FFFF]', '', 'g')), 0) AS content_length",
+        "  FROM article_versions",
+        " WHERE article_uuid = #{articleUuid}::uuid AND type = #{type}",
+        " ORDER BY created_at DESC",
+        " LIMIT 1"
+    })
+    Optional<LatestSnapshotMeta> findLatestMeta(@Param("articleUuid") UUID articleUuid, @Param("type") String type);
 
     /**
      * 分頁查詢版本 summary（不含 content，給列表頁輕量用）。

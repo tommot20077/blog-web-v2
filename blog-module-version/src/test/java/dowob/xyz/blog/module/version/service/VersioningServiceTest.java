@@ -182,6 +182,39 @@ class VersioningServiceTest {
         verify(versionRepo, never()).save(any());
     }
 
+    @Test
+    @DisplayName("recordAutoSnapshot(plan)：直接使用 plan 內的文章與設定寫快照，不再查文章也不再解析設定（PERF-21）")
+    void recordAutoSnapshotWithPlan_usesPlanWithoutRequerying() {
+        when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        AutoSnapshotPlan plan = new AutoSnapshotPlan(
+            contentData(articleUuid, authorUuid, "Plan", "From plan"),
+            new AutoSnapshotConfig(true, 9, 60, 50));
+
+        service.recordAutoSnapshot(plan);
+
+        ArgumentCaptor<ArticleVersion> captor = ArgumentCaptor.forClass(ArticleVersion.class);
+        verify(versionRepo).save(captor.capture());
+        assertThat(captor.getValue().getContent()).isEqualTo("From plan");
+        assertThat(captor.getValue().getType()).isEqualTo("AUTO");
+        assertThat(captor.getValue().getAuthorUuid()).isEqualTo(authorUuid);
+        verify(versionMapper).retainAuto(articleUuid, 9);
+        verify(articleFacade, never()).findContentByUuid(any());
+        verify(preferenceResolver, never()).resolveForUser(any());
+    }
+
+    @Test
+    @DisplayName("recordAutoSnapshot(plan)：作者 UUID 缺失（資料異常）→ IllegalStateException，不寫快照")
+    void recordAutoSnapshotWithPlan_authorUuidMissing_throwsIllegalState() {
+        AutoSnapshotPlan plan = new AutoSnapshotPlan(
+            contentData(articleUuid, null, "T", "C"), new AutoSnapshotConfig(true, 50, 60, 50));
+
+        assertThatThrownBy(() -> service.recordAutoSnapshot(plan))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining(articleUuid.toString());
+
+        verify(versionRepo, never()).save(any());
+    }
+
     // ─── recordManualSnapshot ─────────────
 
     @Test
