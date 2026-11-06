@@ -77,7 +77,7 @@ public interface ArticleRecommendMapper {
             FROM articles a
             WHERE a.uuid != #{excludeUuid}::uuid
               AND a.status = 'PUBLISHED'
-            ORDER BY a.published_at DESC
+            ORDER BY a.published_at DESC NULLS LAST
             LIMIT #{limit}
             """)
     List<ArticleSummaryRow> findRecentPublished(

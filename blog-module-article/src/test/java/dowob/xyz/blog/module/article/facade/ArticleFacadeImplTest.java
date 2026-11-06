@@ -237,6 +237,8 @@ class ArticleFacadeImplTest {
             List<ArticleSummaryInfo> result = facade.getArticlesByTagIds(List.of(tagUuid), ARTICLE_UUID, 5);
 
             assertThat(result).isEmpty();
+            verifyNoInteractions(userFacade);
+            verify(recommendMapper, never()).findTagsByArticleUuids(anyList());
         }
 
         @Test
@@ -321,17 +323,6 @@ class ArticleFacadeImplTest {
             assertThat(result.get(0).title()).isEqualTo("Recent");
             assertThat(result.get(0).tagNames()).containsExactly("Java");
         }
-
-        @Test
-        @DisplayName("無結果時回傳空列表")
-        void whenNoResults_returnsEmptyList() {
-            when(recommendMapper.findRecentPublished(ARTICLE_UUID, 5))
-                    .thenReturn(Collections.emptyList());
-
-            List<ArticleSummaryInfo> result = facade.getRecentPublishedArticles(ARTICLE_UUID, 5);
-
-            assertThat(result).isEmpty();
-        }
     }
 
     @Nested
@@ -368,6 +359,8 @@ class ArticleFacadeImplTest {
             when(articleMapper.findAllPublished()).thenReturn(List.of());
 
             assertThat(facade.findAllPublishedForIndex()).isEmpty();
+            verifyNoInteractions(userFacade);
+            verify(articleMapper, never()).findTagsByArticleUuid(any());
         }
 
         @Test
@@ -475,16 +468,20 @@ class ArticleFacadeImplTest {
     class GetArticlesPublishedAfter {
 
         @Test
-        @DisplayName("正確呼叫 Mapper 並回傳結果")
-        void callsMapperAndReturnsResult() {
-            LocalDateTime since = LocalDateTime.now().minusDays(7);
-            ArticleTrendingData data = new ArticleTrendingData(ARTICLE_UUID, 100L, 10L, since);
-            when(recommendMapper.findPublishedAfter(since)).thenReturn(List.of(data));
+        @DisplayName("起始時間原樣交給 Mapper（不被截斷或位移），結果不過濾、不重排，也不碰 UserFacade／ArticleService")
+        void passesBoundaryUnchanged_andPreservesMapperRows() {
+            LocalDateTime since = LocalDateTime.of(2026, 11, 6, 12, 34, 56, 789_000_000);
+            UUID first = UUID.randomUUID();
+            UUID second = UUID.randomUUID();
+            ArticleTrendingData older = new ArticleTrendingData(first, 1L, 0L, since.plusMinutes(1));
+            ArticleTrendingData newer = new ArticleTrendingData(second, 999L, 9L, since.plusDays(3));
+            when(recommendMapper.findPublishedAfter(since)).thenReturn(List.of(older, newer));
 
             List<ArticleTrendingData> result = facade.getArticlesPublishedAfter(since);
 
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).uuid()).isEqualTo(ARTICLE_UUID);
+            verify(recommendMapper, times(1)).findPublishedAfter(since);
+            assertThat(result).as("不過濾、不重排（排序由 SQL 決定）").containsExactly(older, newer);
+            verifyNoInteractions(userFacade, articleService);
         }
     }
 

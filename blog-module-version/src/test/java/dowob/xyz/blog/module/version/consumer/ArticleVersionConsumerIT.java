@@ -13,6 +13,7 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.version.config.VersionTestApplication;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
+import dowob.xyz.blog.module.version.service.AutoSnapshotPlan;
 import dowob.xyz.blog.module.version.service.VersioningService;
 import dowob.xyz.blog.module.version.support.SeededVersionUsers;
 import org.junit.jupiter.api.BeforeEach;
@@ -134,7 +135,7 @@ class ArticleVersionConsumerIT {
     }
 
     /**
-     * SAVED action + shouldSnapshot() = true（無先前快照）→ 寫入一筆 AUTO。
+     * SAVED action + policy.plan() 通過（無先前快照）→ 寫入一筆 AUTO。
      */
     @Test
     @DisplayName("SAVED action: 無先前快照時應寫入 AUTO 版本")
@@ -249,9 +250,13 @@ class ArticleVersionConsumerIT {
         // 確認有 51 個 AUTO 快照
         assertThat(countAutoVersionsForArticle(testArticle.getUuid())).isEqualTo(51);
 
-        // 直接呼叫 recordAutoSnapshot（模擬 consumer SAVED 路徑中 shouldSnapshot=true 的情況）
+        // 直接呼叫 recordAutoSnapshot(plan)（模擬 consumer SAVED 路徑中 policy 判斷通過的情況）
         // 這會寫入第 52 個快照，然後 retainAuto(articleId, 50) 刪掉超過 50 的
-        versioningService.recordAutoSnapshot(testArticle.getUuid());
+        versioningService.recordAutoSnapshot(new AutoSnapshotPlan(
+                new dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData(
+                        testArticle.getUuid(), testArticle.getTitle(), testArticle.getSlug(), testArticle.getContent(),
+                        testArticle.getSummary(), null, "DRAFT", SeededVersionUsers.USER1_UUID),
+                new dowob.xyz.blog.module.version.model.dto.response.AutoSnapshotConfig(true, 50, 60, 50)));
 
         // 驗證 AUTO 快照數 ≤ 50（retention 策略生效）
         long autoCount = countAutoVersionsForArticle(testArticle.getUuid());

@@ -39,4 +39,14 @@ public interface TagNormalizationService {
      * @return 正規化後的名稱
      */
     String normalize(String rawName);
+
+    /**
+     * 批次查詢已存在的標籤（單一查詢，PERF-27）。
+     *
+     * <p>只讀不建；呼叫端對查無的 slug 再逐一 {@link #findOrCreate}，以保留 RACE-08 的併發唯一衝突處理與固定建立順序。</p>
+     *
+     * @param slugs 已正規化的 slug；null 或空集合不發查詢
+     * @return slug → 既有標籤（查無的 slug 不在結果中）
+     */
+    java.util.Map<String, Tag> findExistingBySlugs(java.util.Collection<String> slugs);
 }

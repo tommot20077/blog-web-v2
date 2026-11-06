@@ -5,6 +5,7 @@ import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent.Action;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.module.version.service.AutoSnapshotPlan;
 import dowob.xyz.blog.module.version.service.AutoSnapshotPolicy;
 import dowob.xyz.blog.module.version.service.VersioningService;
 import io.micrometer.core.instrument.Counter;
@@ -30,6 +31,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -93,23 +95,24 @@ class ArticleVersionConsumerTest {
     }
 
     @Test
-    @DisplayName("SAVED + shouldSnapshot=true: 寫入快照並正常返回")
+    @DisplayName("SAVED + 該寫快照（policy 回傳 plan）: 以同一份 plan 寫入快照並正常返回")
     void onContentChanged_savedAndShouldSnapshot_recordsAndAcks() throws IOException {
-        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(true);
+        AutoSnapshotPlan plan = new AutoSnapshotPlan(null, null);
+        when(autoSnapshotPolicy.plan(ARTICLE_UUID)).thenReturn(Optional.of(plan));
 
         consumer.onContentChanged(event(Action.SAVED));
 
-        verify(versioningService).recordAutoSnapshot(ARTICLE_UUID);
+        verify(versioningService).recordAutoSnapshot(plan);
     }
 
     @Test
-    @DisplayName("SAVED + shouldSnapshot=false: 不寫入但仍正常返回")
+    @DisplayName("SAVED + 不該寫快照（policy 回傳 empty）: 不寫入但仍正常返回")
     void onContentChanged_savedButPolicyFalse_skipsButAcks() throws IOException {
-        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(false);
+        when(autoSnapshotPolicy.plan(ARTICLE_UUID)).thenReturn(Optional.empty());
 
         consumer.onContentChanged(event(Action.SAVED));
 
-        verify(versioningService, never()).recordAutoSnapshot(ARTICLE_UUID);
+        verify(versioningService, never()).recordAutoSnapshot(any(AutoSnapshotPlan.class));
     }
 
     @Test
@@ -125,7 +128,7 @@ class ArticleVersionConsumerTest {
     void onContentChanged_restored_isNoOpButAcks() throws IOException {
         consumer.onContentChanged(event(Action.RESTORED));
 
-        verify(versioningService, never()).recordAutoSnapshot(ARTICLE_UUID);
+        verify(versioningService, never()).recordAutoSnapshot(any(AutoSnapshotPlan.class));
         verify(versioningService, never()).freezePublished(ARTICLE_UUID);
     }
 
@@ -141,8 +144,9 @@ class ArticleVersionConsumerTest {
     @Test
     @DisplayName("Service 拋例外: 例外往外拋（不重新入隊）")
     void onContentChanged_serviceThrows_callsBasicNack() throws IOException {
-        when(autoSnapshotPolicy.shouldSnapshot(ARTICLE_UUID)).thenReturn(true);
-        doThrow(new RuntimeException("DB error")).when(versioningService).recordAutoSnapshot(ARTICLE_UUID);
+        AutoSnapshotPlan plan = new AutoSnapshotPlan(null, null);
+        when(autoSnapshotPolicy.plan(ARTICLE_UUID)).thenReturn(Optional.of(plan));
+        doThrow(new RuntimeException("DB error")).when(versioningService).recordAutoSnapshot(plan);
 
         assertThatThrownBy(() -> consumer.onContentChanged(event(Action.SAVED))).isInstanceOf(RuntimeException.class);
     }
