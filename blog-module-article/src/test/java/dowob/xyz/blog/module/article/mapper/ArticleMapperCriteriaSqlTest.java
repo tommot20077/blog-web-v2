@@ -61,7 +61,7 @@ class ArticleMapperCriteriaSqlTest {
         BoundSql sql = renderPage(PublishedArticleCriteria.of(ArticleListQuery.unfiltered(), NOW), 0L, 10);
 
         String text = normalize(sql.getSql());
-        assertThat(text).startsWith("SELECT a.* FROM articles a WHERE a.status = 'PUBLISHED'");
+        assertThat(text).startsWith("SELECT id, uuid, author_uuid, title, slug, summary, cover_image_url, status, reject_reason, view_count, like_count, comment_count, version, series_uuid, series_position, published_at, created_at, updated_at FROM articles a WHERE a.status = 'PUBLISHED'");
         assertThat(text).doesNotContain("EXISTS", "HAVING", "users u", "published_at >=");
         assertThat(text).endsWith("ORDER BY a.published_at DESC NULLS LAST, a.id DESC LIMIT ? OFFSET ?");
         assertThat(parameterValues(sql)).containsExactly(10, 0L);
@@ -125,7 +125,7 @@ class ArticleMapperCriteriaSqlTest {
         countParams.put("criteria", criteria);
         String count = normalize(configuration.getMappedStatement(COUNT_STATEMENT).getBoundSql(countParams).getSql());
 
-        String pageWhere = page.substring("SELECT a.* FROM articles a ".length(), page.indexOf(" ORDER BY "));
+        String pageWhere = page.substring(page.indexOf("FROM articles a ") + "FROM articles a ".length(), page.indexOf(" ORDER BY "));
         assertThat(count).isEqualTo("SELECT COUNT(*) FROM articles a " + pageWhere);
     }
 
