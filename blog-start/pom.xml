@@ -12,6 +12,14 @@
     <artifactId>blog-start</artifactId>
     <description>Application Entry Point</description>
 
+    <!-- Jacoco 棘輪下限（2026-11-05 現值減 2pp 無條件捨去；只可上調不可下調，Q13）。
+         例外（Yuan 2026-11-05）：blog-start 自有程式幾乎都是設定類別，全模組只有 6 個分支，
+         百分比波動過大（少測 1 個即由 100% 掉到約 86%），故不設分支下限，只守 line。 -->
+    <properties>
+        <jacoco.minimum.line>0.76</jacoco.minimum.line>
+        <jacoco.minimum.branch>0</jacoco.minimum.branch>
+    </properties>
+
     <dependencies>
         <!-- Spring Boot Starter Web -->
         <dependency>
