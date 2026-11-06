@@ -15,6 +15,16 @@ spring:
     pathmatch:
       matching-strategy: ant_path_matcher
 
+  # 上傳大小上限（FILE-05）：未設定時框架預設只有 1MB，與 FileServiceImpl.MAX_FILE_SIZE（5MB）矛盾。
+  # max-file-size 必須等於程式常數（MultipartYamlBindingTest 守住）；程式內的 5MB 檢查保留為第二道防線。
+  # max-request-size = 6MB：單檔 5MB 再加 1MB 容納 multipart boundary／其他 part 的 overhead，
+  # 不放更大以免放行「多檔合計很大」的請求。前端 nginx client_max_body_size 與正式環境 ingress
+  # proxy-body-size 需 >= 此值（屬部署項，不在本 repo 設定）。
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+
   # 排程池（findings PERF-16）：預設只有 1 條執行緒，flush／trending 等 fixedDelay job 與
   # 每日孤兒校正 job 會互相等待；孤兒校正框架另有單次頁數上限避免長掃描佔住執行緒。
   task:
