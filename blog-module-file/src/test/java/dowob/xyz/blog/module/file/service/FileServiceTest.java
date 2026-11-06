@@ -1207,9 +1207,11 @@ class FileServiceTest {
         }
 
         /** 斷言 bindFilesToArticle 恰好以這組檔案 id 被呼叫一次 */
-        private void verifyBoundExactly(UUID articleUuid, UUID... ids) {
+        private void verifyBoundExactly(UUID articleUuid, UUID authorUuid, UUID... ids) {
             ArgumentCaptor<java.util.Collection<UUID>> captor = ArgumentCaptor.forClass(java.util.Collection.class);
-            verify(fileMetadataRepository).bindFilesToArticle(org.mockito.ArgumentMatchers.eq(articleUuid), captor.capture());
+            /* 縱深防護：UPDATE 帶入作者 uuid，SQL 層再比對 uploader_id */
+            verify(fileMetadataRepository).bindFilesToArticle(
+                    org.mockito.ArgumentMatchers.eq(articleUuid), org.mockito.ArgumentMatchers.eq(authorUuid), captor.capture());
             assertThat(captor.getValue()).containsExactlyInAnyOrder(ids);
         }
 
@@ -1222,7 +1224,7 @@ class FileServiceTest {
 
         /** 沒有任何寫入（綁定、解除、整列 save）發生 */
         private void verifyNoWrites() {
-            verify(fileMetadataRepository, never()).bindFilesToArticle(any(), any());
+            verify(fileMetadataRepository, never()).bindFilesToArticle(any(), any(), any());
             verify(fileMetadataRepository, never()).unbindFilesFromArticle(any(), any());
             verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
             verify(fileMetadataRepository, never()).saveAll(any());
@@ -1250,7 +1252,7 @@ class FileServiceTest {
 
             fileService.bindToArticle(articleUuid, List.of(file1, file2));
 
-            verifyBoundExactly(articleUuid, file1, file2);
+            verifyBoundExactly(articleUuid, authorUuid, file1, file2);
             verify(fileMetadataRepository, never()).unbindFilesFromArticle(any(), any());
         }
 
@@ -1274,11 +1276,11 @@ class FileServiceTest {
             fileService.bindToArticle(articleUuid, ids);
 
             verify(fileMetadataRepository, times(1)).findAllById(any());
-            verify(fileMetadataRepository, times(1)).bindFilesToArticle(any(), any());
+            verify(fileMetadataRepository, times(1)).bindFilesToArticle(any(), any(), any());
             verify(fileMetadataRepository, never()).findById(any());
             verify(fileMetadataRepository, never()).save(any(FileMetadata.class));
             verify(fileMetadataRepository, never()).saveAll(any());
-            verifyBoundExactly(articleUuid, ids.toArray(new UUID[0]));
+            verifyBoundExactly(articleUuid, authorUuid, ids.toArray(new UUID[0]));
         }
 
         /** 關鍵：重新綁定時，舊清單中不在新清單內的檔案要解除綁定（設回 null），避免權限殘留 */
@@ -1301,7 +1303,7 @@ class FileServiceTest {
             fileService.bindToArticle(articleUuid, List.of(keepFile));
 
             verifyUnboundExactly(articleUuid, removedFile);
-            verify(fileMetadataRepository, never()).bindFilesToArticle(any(), any());
+            verify(fileMetadataRepository, never()).bindFilesToArticle(any(), any(), any());
         }
 
         /** 空清單：解除該文章的所有既有綁定 */
@@ -1317,7 +1319,7 @@ class FileServiceTest {
             fileService.bindToArticle(articleUuid, List.of());
 
             verifyUnboundExactly(articleUuid, file1, file2);
-            verify(fileMetadataRepository, never()).bindFilesToArticle(any(), any());
+            verify(fileMetadataRepository, never()).bindFilesToArticle(any(), any(), any());
         }
 
         /** 傳 null 清單：等同空清單，解除所有既有綁定，不拋例外 */
@@ -1406,7 +1408,7 @@ class FileServiceTest {
 
             fileService.bindToArticle(thisArticle, List.of(file));
 
-            verifyBoundExactly(thisArticle, file);
+            verifyBoundExactly(thisArticle, author, file);
         }
 
         /** fail-safe：文章不存在 → 不綁定任何檔案、不拋錯 */

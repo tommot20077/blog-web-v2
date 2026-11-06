@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.validation.annotation.Validated;
 
 import jakarta.validation.constraints.NotBlank;
+import io.minio.http.HttpUtils;
 import okhttp3.OkHttpClient;
 
 import java.time.Duration;
@@ -87,17 +88,15 @@ public class MinioConfig {
     /**
      * 建立套用 connect／read／write 逾時的 OkHttp 客戶端（RACE-16／PERF-28）。
      *
-     * <p>OkHttp 預設為各 10 秒且 SDK 的 {@code MinioClient.builder()} 未開放設定，因此改傳入自建的 client；
-     * 數值來自 {@code minio.connect-timeout} 等屬性，預設 5s／30s／30s。</p>
+     * <p>直接沿用 SDK 自己建預設 client 的 {@link HttpUtils#newDefaultHttpClient}（固定 HTTP/1.1，
+     * 並保留 SDK 對外部憑證環境變數的支援），只替換三個逾時；數值來自 {@code minio.connect-timeout} 等屬性，
+     * 預設 5s／30s／30s。不自行 {@code new OkHttpClient}，避免與 SDK 預設行為（例如 HTTP/2 協商）分歧。</p>
      *
      * @return 套用逾時設定的 OkHttpClient
      */
     public OkHttpClient buildHttpClient() {
-        return new OkHttpClient.Builder()
-                .connectTimeout(connectTimeout)
-                .readTimeout(readTimeout)
-                .writeTimeout(writeTimeout)
-                .build();
+        return HttpUtils.newDefaultHttpClient(
+                connectTimeout.toMillis(), writeTimeout.toMillis(), readTimeout.toMillis());
     }
 
     /**

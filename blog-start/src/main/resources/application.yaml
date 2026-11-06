@@ -121,6 +121,16 @@ mybatis:
   type-aliases-package: dowob.xyz.blog.module
   type-handlers-package: dowob.xyz.blog.infrastructure.config
 
+# Tomcat 吞掉超限請求剩餘 body 的上限（FILE-05）：
+# 上傳超過 multipart 上限時，Spring 回 400 FILE_TOO_LARGE，但 Tomcat 為了讓連線可重用，會先把請求剩下的 body
+# 讀掉；剩餘量超過 max-swallow-size（Tomcat 預設 2MB）就直接斷線，前端拿不到 400。
+# 設為 10MB：略大於可預期的誤傳大小（max-request-size 6MB 之上再容許約 4MB 超量；FileUploadSizeLimitE2E 以 8MB 驗證）。
+# 不設 -1（無上限）：那會讓攻擊者以巨大 body 長時間占住連線。更大的 body 仍會被斷線，這是刻意的。
+# 部署提醒：前方 nginx／ingress 的 body 上限應再比 max-request-size 寬一點（例如 7MB），否則超限請求會先被代理以 413 擋下。
+server:
+  tomcat:
+    max-swallow-size: 10MB
+
 # MinIO Config
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}

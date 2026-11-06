@@ -139,6 +139,14 @@ class MinioConfigTest {
         org.assertj.core.api.Assertions.assertThat(client.writeTimeoutMillis()).isEqualTo(13_000);
     }
 
+    /** 與 MinIO SDK 預設一致：只用 HTTP/1.1（SDK 的 HttpUtils.newDefaultHttpClient 即如此設定；OkHttp 預設會協商 HTTP/2） */
+    @Test
+    @DisplayName("buildHttpClient：固定 HTTP/1.1，與 SDK 預設一致")
+    void buildHttpClient_pinsHttp11() {
+        org.assertj.core.api.Assertions.assertThat(new MinioConfig().buildHttpClient().protocols())
+                .containsExactly(okhttp3.Protocol.HTTP_1_1);
+    }
+
     /** 未設定時採預設：connect 5s、read／write 30s（OkHttp 預設 10s 對大檔寫入過短，且無法調整） */
     @Test
     @DisplayName("buildHttpClient：未設定時預設 connect 5s、read／write 30s")

@@ -433,7 +433,7 @@ public class FileServiceImpl implements FileService {
             }
             toBind.add(metadata.getId());
         }
-        updateInBatches(toBind, batch -> fileMetadataRepository.bindFilesToArticle(articleUuid, batch));
+        updateInBatches(toBind, batch -> fileMetadataRepository.bindFilesToArticle(articleUuid, articleAuthorUuid, batch));
     }
 
     /**

@@ -28,6 +28,21 @@ class MultipartYamlBindingTest {
             .withInitializer(new ConfigDataApplicationContextInitializer());
 
     @Test
+    @DisplayName("Tomcat max-swallow-size 明確設為 10MB（大於 max-request-size、非 -1）")
+    void yamlTomcatSwallowSize_isExplicitAndBounded() {
+        runner.run(context -> {
+            org.springframework.boot.autoconfigure.web.ServerProperties server = Binder.get(context.getEnvironment())
+                    .bind("server", org.springframework.boot.autoconfigure.web.ServerProperties.class)
+                    .orElseThrow(() -> new AssertionError("server.* 未設定"));
+            MultipartProperties props = Binder.get(context.getEnvironment())
+                    .bind("spring.servlet.multipart", MultipartProperties.class).get();
+
+            assertThat(server.getTomcat().getMaxSwallowSize()).isEqualTo(DataSize.ofMegabytes(10));
+            assertThat(server.getTomcat().getMaxSwallowSize().toBytes()).isGreaterThan(props.getMaxRequestSize().toBytes());
+        });
+    }
+
+    @Test
     @DisplayName("max-file-size 與程式單檔上限一致；max-request-size 略大以容納 multipart overhead")
     void yamlMultipart_alignsWithServiceLimit() {
         runner.run(context -> {

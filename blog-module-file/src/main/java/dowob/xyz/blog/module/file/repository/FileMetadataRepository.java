@@ -105,13 +105,18 @@ public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUI
      * 不會像整列 {@code save} 那樣以舊值蓋掉並發寫入的 {@code has_thumbnail}。
      * 呼叫端須自行切批（{@code ids} 不可為空，且大小需在 bind parameter 安全範圍內）。</p>
      *
+     * <p>縱深防護：SQL 另帶 {@code uploader_id = :uploaderId}（文章作者）。service 層已先比對過擁有權，
+     * 這裡再在 UPDATE 本身確保「只會綁定作者自己的檔案」，即使讀取與寫入之間 uploader 被改動也綁不到別人的檔案。</p>
+     *
      * @param articleUuid 要綁定的文章 UUID
+     * @param uploaderId  文章作者 UUID（僅此上傳者的檔案會被綁定）
      * @param ids         要綁定的檔案 UUID（非空）
      * @return 受影響列數
      */
     @Modifying
-    @Query("UPDATE file_metadata SET article_uuid = :articleUuid WHERE id IN (:ids)")
-    int bindFilesToArticle(@Param("articleUuid") UUID articleUuid, @Param("ids") Collection<UUID> ids);
+    @Query("UPDATE file_metadata SET article_uuid = :articleUuid WHERE uploader_id = :uploaderId AND id IN (:ids)")
+    int bindFilesToArticle(@Param("articleUuid") UUID articleUuid, @Param("uploaderId") UUID uploaderId,
+                           @Param("ids") Collection<UUID> ids);
 
     /**
      * 批次解除綁定：把指定檔案的 {@code article_uuid} 設回 null，但僅限目前仍綁定在該文章者
