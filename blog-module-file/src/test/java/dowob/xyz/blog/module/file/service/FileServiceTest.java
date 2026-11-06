@@ -1864,4 +1864,45 @@ class FileServiceTest {
             verify(fileMetadataRepository, never()).acquireQuotaLock(any());
         }
     }
+
+    /** AUTH-11（b）：getUserFiles 真正套用分頁 */
+    @Nested
+    @DisplayName("getUserFiles 分頁 (AUTH-11 b)")
+    class GetUserFilesPagingTests {
+
+        @Test
+        @DisplayName("getUserFiles_withPageable_queriesOnlyThatPage")
+        void getUserFiles_withPageable_queriesOnlyThatPage() {
+            UUID uploader = UUID.randomUUID();
+            FileMetadata a = new FileMetadata();
+            FileMetadata b = new FileMetadata();
+            when(fileMetadataRepository.findPageByUploaderId(uploader, 2, 4L)).thenReturn(List.of(a, b));
+
+            List<FileMetadata> result = fileService.getUserFiles(uploader, org.springframework.data.domain.PageRequest.of(2, 2));
+
+            assertThat(result).containsExactly(a, b);
+            verify(fileMetadataRepository, never()).findByUploaderIdOrderByCreatedAtDesc(any());
+        }
+
+        @Test
+        @DisplayName("getUserFiles_withSizeAboveMax_throwsParamValidError")
+        void getUserFiles_withSizeAboveMax_throwsParamValidError() {
+            UUID uploader = UUID.randomUUID();
+
+            assertThatThrownBy(() -> fileService.getUserFiles(uploader,
+                    org.springframework.data.domain.PageRequest.of(0, 101)))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("100");
+            verify(fileMetadataRepository, never()).findPageByUploaderId(any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyLong());
+        }
+
+        @Test
+        @DisplayName("getUserFiles_withUnpaged_usesDefaultFirstPage")
+        void getUserFiles_withUnpaged_usesDefaultFirstPage() {
+            UUID uploader = UUID.randomUUID();
+            when(fileMetadataRepository.findPageByUploaderId(uploader, 20, 0L)).thenReturn(List.of());
+
+            assertThat(fileService.getUserFiles(uploader, org.springframework.data.domain.Pageable.unpaged())).isEmpty();
+        }
+    }
 }

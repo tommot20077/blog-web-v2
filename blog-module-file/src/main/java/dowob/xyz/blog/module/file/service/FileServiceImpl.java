@@ -10,6 +10,7 @@ import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.config.FileRabbitMqConfig;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
@@ -319,16 +320,31 @@ public class FileServiceImpl implements FileService {
                 .orElseThrow(() -> new BusinessException(FileErrorCode.FILE_NOT_FOUND));
     }
 
+    /** 未提供分頁（unpaged）時的預設每頁筆數，與 Spring Data 的預設一致 */
+    private static final int DEFAULT_PAGE_SIZE = 20;
+
     /**
-     * 取得使用者上傳的所有檔案
+     * 分頁取得使用者上傳的檔案（最新在前）
+     *
+     * <p>AUTH-11（b）：先前收了 {@link Pageable} 卻忽略，一次載入該使用者全部檔案。現在真正套用
+     * page／size（沿用 Spring {@code Pageable} 的 0 起算頁碼與回應形狀，避免改動前端契約）。
+     * {@code size} 上限同 {@link PageQuery#MAX_SIZE}，超過一律拒絕（SEC-04：不靜默夾界）。
+     * 排序固定為建立時間新到舊，不接受 client 指定的 sort 屬性。</p>
      *
      * @param uploaderId 使用者 UUID
-     * @param pageable   分頁參數
-     * @return 檔案元資料列表
+     * @param pageable   分頁參數；unpaged 時取第一頁、預設筆數
+     * @return 該頁的檔案元資料列表
+     * @throws BusinessException size 超過 {@link PageQuery#MAX_SIZE}（{@code PARAM_VALID_ERROR}，HTTP 400）
      */
     @Override
     public List<FileMetadata> getUserFiles(UUID uploaderId, Pageable pageable) {
-        return fileMetadataRepository.findByUploaderIdOrderByCreatedAtDesc(uploaderId);
+        int size = (pageable == null || pageable.isUnpaged()) ? DEFAULT_PAGE_SIZE : pageable.getPageSize();
+        long offset = (pageable == null || pageable.isUnpaged()) ? 0L : pageable.getOffset();
+        if (size < 1 || size > PageQuery.MAX_SIZE) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR,
+                    "size 必須介於 1 與 " + PageQuery.MAX_SIZE + " 之間");
+        }
+        return fileMetadataRepository.findPageByUploaderId(uploaderId, size, offset);
     }
 
     /**

@@ -282,7 +282,10 @@ public class FileController {
     }
 
     /**
-     * 取得目前使用者的所有上傳檔案
+     * 分頁取得目前使用者的上傳檔案（最新在前）
+     *
+     * <p>回應形狀仍為檔案陣列（不含總數）；{@code page} 為 0 起算、{@code size} 預設 20、上限 100（超過回 400）。
+     * 排序固定，忽略 {@code sort} 參數。</p>
      *
      * @param user   當前登入者（AuthUser）
      * @param pageable 分頁參數

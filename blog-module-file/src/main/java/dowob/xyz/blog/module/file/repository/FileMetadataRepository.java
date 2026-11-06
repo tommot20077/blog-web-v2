@@ -47,6 +47,22 @@ public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUI
     List<FileMetadata> findByUploaderIdOrderByCreatedAtDesc(UUID uploaderId);
 
     /**
+     * 分頁查詢上傳者的檔案（最新在前；以 id 作為同時間戳的穩定次序）
+     *
+     * <p>供 {@code getUserFiles} 真正套用分頁（AUTH-11 b），取代一次載入該使用者全部檔案。
+     * 排序固定，不接受 client 指定的 sort 屬性。</p>
+     *
+     * @param uploaderId 上傳者 UUID
+     * @param limit      每頁筆數
+     * @param offset     略過筆數
+     * @return 該頁的檔案元資料
+     */
+    @Query("SELECT * FROM file_metadata WHERE uploader_id = :uploaderId "
+            + "ORDER BY created_at DESC, id LIMIT :limit OFFSET :offset")
+    List<FileMetadata> findPageByUploaderId(@Param("uploaderId") UUID uploaderId,
+                                            @Param("limit") int limit, @Param("offset") long offset);
+
+    /**
      * 計算指定上傳者已使用的儲存空間總量
      *
      * @param uploaderId 上傳者 UUID
