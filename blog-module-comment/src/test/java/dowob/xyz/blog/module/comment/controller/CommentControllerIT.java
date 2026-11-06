@@ -159,6 +159,19 @@ class CommentControllerIT {
     }
 
     /**
+     * 只有 ROLE_USER、沒有任何 Permission authority 的使用者（模擬 PENDING_VERIFICATION 或被撤權的帳號）。
+     *
+     * @param userUuid 使用者公開 UUID
+     * @return RequestPostProcessor
+     */
+    private RequestPostProcessor asUserWithoutPermissions(UUID userUuid) {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                new AuthUser(userUuid, Role.USER), null,
+                List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
+        return SecurityMockMvcRequestPostProcessors.authentication(auth);
+    }
+
+    /**
      * 直接透過 Repository 建立 Comment（繞過 Service，不觸發計數更新）。
      *
      * @param userUuid 留言者公開 UUID
@@ -305,6 +318,45 @@ class CommentControllerIT {
                 .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("A0006"));
+    }
+
+    // ─── AUTH-04：寫入類端點需對應 Permission ───
+
+    @Test
+    @DisplayName("AUTH-04 POST - 缺 COMMENT_WRITE 回 403 且不寫入")
+    void post_withoutCommentWrite_returns403() throws Exception {
+        CreateCommentRequest req = new CreateCommentRequest();
+        req.setContent("hello");
+        mockMvc.perform(post("/api/v1/articles/{uuid}/comments", articleUuid)
+                .with(asUserWithoutPermissions(USER_UUID))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isForbidden());
+        assertThat(commentRepo.count()).isZero();
+    }
+
+    @Test
+    @DisplayName("AUTH-04 PUT - 缺 COMMENT_WRITE 回 403 且內容不變")
+    void put_withoutCommentWrite_returns403() throws Exception {
+        UUID commentUuid = createCommentDirectly(USER_UUID, null);
+        EditCommentRequest req = new EditCommentRequest();
+        req.setContent("edited");
+        mockMvc.perform(put("/api/v1/comments/{uuid}", commentUuid)
+                .with(asUserWithoutPermissions(USER_UUID))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isForbidden());
+        assertThat(commentRepo.findByUuid(commentUuid).orElseThrow().getContent()).isEqualTo("seed");
+    }
+
+    @Test
+    @DisplayName("AUTH-04 DELETE - 缺 COMMENT_DELETE 回 403 且未軟刪")
+    void delete_withoutCommentDelete_returns403() throws Exception {
+        UUID commentUuid = createCommentDirectly(USER_UUID, null);
+        mockMvc.perform(delete("/api/v1/comments/{uuid}", commentUuid)
+                .with(asUserWithoutPermissions(USER_UUID)))
+                .andExpect(status().isForbidden());
+        assertThat(commentRepo.findByUuid(commentUuid).orElseThrow().getDeletedAt()).isNull();
     }
 
     // ─── 4. Delete ───
