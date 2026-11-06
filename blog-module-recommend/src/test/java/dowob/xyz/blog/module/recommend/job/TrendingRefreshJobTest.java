@@ -76,7 +76,7 @@ class TrendingRefreshJobTest {
         }
 
         @Test
-        @DisplayName("有文章時使用 tmp key 並 RENAME 原子切換")
+        @DisplayName("有文章時寫入「每次執行唯一」的 tmp key 並 RENAME 原子切換到正式 key")
         void whenArticlesExist_usesTmpKeyAndRenamesAtomically() {
             UUID uuid = UUID.randomUUID();
             ArticleTrendingData data = new ArticleTrendingData(
@@ -86,14 +86,48 @@ class TrendingRefreshJobTest {
 
             job.refreshPeriod("7d", 7L, 4L);
 
-            String tmpKey = "recommend:trending:7d:tmp";
             String key = "recommend:trending:7d";
+            ArgumentCaptor<String> tmpKey = ArgumentCaptor.forClass(String.class);
 
-            /** 應先清除 tmp key，寫入 tmp key，最後 rename 到正式 key */
+            /** 寫入 tmp key，最後 rename 到正式 key（tmp 名稱每次唯一，不再需要先 delete 舊的共用 tmp） */
             org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(stringRedisTemplate, zSetOperations);
-            inOrder.verify(stringRedisTemplate).delete(tmpKey);
-            inOrder.verify(zSetOperations).add(eq(tmpKey), anySet());
-            inOrder.verify(stringRedisTemplate).rename(tmpKey, key);
+            inOrder.verify(zSetOperations).add(tmpKey.capture(), anySet());
+            inOrder.verify(stringRedisTemplate).rename(tmpKey.getValue(), key);
+            assertThat(tmpKey.getValue()).startsWith(key + ":tmp:");
+        }
+
+        @Test
+        @DisplayName("RACE-17：兩次執行使用不同的 tmp key（不共用固定 :tmp，避免兩個執行互相覆蓋）")
+        void twoRuns_useDifferentTmpKeys() {
+            ArticleTrendingData data = new ArticleTrendingData(
+                    UUID.randomUUID(), 100L, 10L, LocalDateTime.now().minusDays(1));
+            when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of(data));
+
+            job.refreshPeriod("7d", 7L, 4L);
+            job.refreshPeriod("7d", 7L, 4L);
+
+            ArgumentCaptor<String> tmpKeys = ArgumentCaptor.forClass(String.class);
+            verify(zSetOperations, times(2)).add(tmpKeys.capture(), anySet());
+            assertThat(tmpKeys.getAllValues()).doesNotHaveDuplicates();
+        }
+
+        @Test
+        @DisplayName("RACE-17：執行中拋例外時 finally 清掉 tmp key，例外照常往外傳")
+        void whenWriteFails_tmpKeyIsDeletedAndExceptionPropagates() {
+            ArticleTrendingData data = new ArticleTrendingData(
+                    UUID.randomUUID(), 100L, 10L, LocalDateTime.now().minusDays(1));
+            when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of(data));
+            when(zSetOperations.add(anyString(), anySet())).thenThrow(new IllegalStateException("redis down"));
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> job.refreshPeriod("7d", 7L, 4L))
+                    .isInstanceOf(IllegalStateException.class);
+
+            /* 清除必須發生在寫入失敗「之後」（finally），而不是寫入前的預先清除 */
+            ArgumentCaptor<String> written = ArgumentCaptor.forClass(String.class);
+            org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(stringRedisTemplate, zSetOperations);
+            inOrder.verify(zSetOperations).add(written.capture(), anySet());
+            inOrder.verify(stringRedisTemplate).delete(written.getValue());
+            verify(stringRedisTemplate, never()).rename(anyString(), anyString());
         }
 
         @Test
@@ -212,6 +246,35 @@ class TrendingRefreshJobTest {
             job.refreshTrending();
 
             verify(stringRedisTemplate).execute(any(RedisScript.class), anyList(), (Object) any());
+        }
+
+        @Test
+        @DisplayName("RACE-17：鎖 TTL 至少 10 分鐘（遠大於三個週期計算的最壞耗時，避免執行中鎖過期）")
+        void lockTtl_isAtLeastTenMinutes() {
+            when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true);
+            when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of());
+
+            job.refreshTrending();
+
+            ArgumentCaptor<Long> ttl = ArgumentCaptor.forClass(Long.class);
+            ArgumentCaptor<TimeUnit> unit = ArgumentCaptor.forClass(TimeUnit.class);
+            verify(valueOperations).setIfAbsent(anyString(), anyString(), ttl.capture(), unit.capture());
+            assertThat(unit.getValue().toSeconds(ttl.getValue())).isGreaterThanOrEqualTo(600L);
+        }
+
+        @Test
+        @DisplayName("RACE-17：釋放鎖時帶的 token 就是取得鎖時寫入的 token（只刪自己的鎖）")
+        void release_usesSameTokenAsAcquire() {
+            when(valueOperations.setIfAbsent(anyString(), anyString(), anyLong(), any(TimeUnit.class)))
+                    .thenReturn(true);
+            when(articleFacade.getArticlesPublishedAfter(any())).thenReturn(List.of());
+
+            job.refreshTrending();
+
+            ArgumentCaptor<String> acquired = ArgumentCaptor.forClass(String.class);
+            verify(valueOperations).setIfAbsent(anyString(), acquired.capture(), anyLong(), any(TimeUnit.class));
+            verify(stringRedisTemplate).execute(any(RedisScript.class), anyList(), eq((Object) acquired.getValue()));
         }
 
         @Test

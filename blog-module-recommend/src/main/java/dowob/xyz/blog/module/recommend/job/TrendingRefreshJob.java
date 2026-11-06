@@ -50,8 +50,14 @@ public class TrendingRefreshJob {
 
     /**
      * 分散式鎖 TTL（秒）
+     *
+     * <p>每次執行為 3 個週期各 1 次全表範圍查詢＋1 次 ZADD，正常僅數秒，慢查詢時也遠低於一分鐘；
+     * 取 600 秒是最壞耗時的一個數量級以上緩衝（原 120 秒在 DB 變慢時有執行中過期的風險）。
+     * 排程間隔為 30 分鐘，TTL 拉長只影響「持鎖實例當機」時的恢復，最多多等 10 分鐘，仍早於下次排程。
+     * 不做續期：即使鎖仍意外過期，tmp key 每次唯一、RENAME 原子、釋放鎖只刪自己的 token，
+     * 兩個執行重疊最多是重複計算，不會互相破壞資料。</p>
      */
-    private static final long LOCK_TTL_SECONDS = 120L;
+    private static final long LOCK_TTL_SECONDS = 600L;
 
     /**
      * 各週期配置：period 名稱 → 查詢天數範圍（天）與半衰期（天）
@@ -122,10 +128,15 @@ public class TrendingRefreshJob {
             tuples.add(ZSetOperations.TypedTuple.of(data.uuid().toString(), score));
         }
 
-        String tmpKey = key + ":tmp";
-        stringRedisTemplate.delete(tmpKey);
-        stringRedisTemplate.opsForZSet().add(tmpKey, tuples);
-        stringRedisTemplate.rename(tmpKey, key);
+        /* tmp key 每次執行唯一，避免鎖意外過期時兩個執行共用同一個 tmp 而互相覆蓋；失敗時 finally 清除，
+           成功時 RENAME 已移走 tmp，delete 只是無害的 no-op */
+        String tmpKey = key + ":tmp:" + UUID.randomUUID();
+        try {
+            stringRedisTemplate.opsForZSet().add(tmpKey, tuples);
+            stringRedisTemplate.rename(tmpKey, key);
+        } finally {
+            stringRedisTemplate.delete(tmpKey);
+        }
         log.debug("熱門排行更新完成，period={}，文章數={}", period, articles.size());
     }
 }
