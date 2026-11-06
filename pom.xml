@@ -49,7 +49,7 @@
         <minio.version>8.6.0</minio.version>
         <jjwt.version>0.12.3</jjwt.version>
         <thumbnailator.version>0.4.20</thumbnailator.version>
-        <tika.version>3.1.0</tika.version>
+        <tika.version>3.3.3</tika.version>
         <flexmark.version>0.64.8</flexmark.version>
         <opencc4j.version>1.8.1</opencc4j.version>
         <owasp-java-html-sanitizer.version>20240325.1</owasp-java-html-sanitizer.version>
