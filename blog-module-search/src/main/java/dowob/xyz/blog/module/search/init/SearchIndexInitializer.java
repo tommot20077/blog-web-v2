@@ -3,8 +3,7 @@ package dowob.xyz.blog.module.search.init;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.stereotype.Component;
@@ -27,19 +26,55 @@ import java.util.Map;
  * </ol>
  * 重建後資料會清空，admin 需主動觸發 {@code POST /api/v1/admin/search/reindex} 灌回。
  *
+ * <h3>啟動時序</h3>
+ * <p>實作 {@link SmartLifecycle} 而非 {@code ApplicationRunner}：Rabbit 的 listener 容器在 context refresh 內
+ * （SmartLifecycle，phase 預設 {@link Integer#MAX_VALUE}，javap 查證 {@code AbstractMessageListenerContainer}
+ * 與 {@code RabbitListenerEndpointRegistry}）就開始消費，而 {@code ApplicationRunner} 要等 refresh 完成後才跑，
+ * listener 可能搶先把文件寫進尚未就緒的索引，讓 ES 動態把欄位建成 text。本類別的 {@link #PHASE} 低於 Rabbit，
+ * 因此先於任何 listener 容器 start。選 SmartLifecycle 而不是 {@code @PostConstruct}／{@code InitializingBean}：
+ * phase 讓「早於 listener」成為可斷言的契約，且網路 I/O 不放在 bean 建立階段。</p>
+ *
+ * <p>ES 不可用時 {@link #start()} 的例外會使 context refresh 失敗，與原 {@code ApplicationRunner} 讓啟動失敗的
+ * 行為一致（本類別不吞例外）。</p>
+ *
  * @author Yuan
- * @version 1.0
+ * @version 1.1
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class SearchIndexInitializer implements ApplicationRunner {
+public class SearchIndexInitializer implements SmartLifecycle {
+
+    /**
+     * 啟動 phase：低於 Rabbit listener 容器與 {@code RabbitListenerEndpointRegistry}（皆為 {@link Integer#MAX_VALUE}），
+     * 使索引初始化先完成，listener 才開始消費。
+     */
+    public static final int PHASE = Integer.MAX_VALUE - 1000;
 
     private final ElasticsearchOperations elasticsearchOperations;
 
+    private volatile boolean running;
+
+    /** 啟動時確保索引與 mapping 就緒；例外原樣往外拋（ES 不可用 → 啟動失敗）。 */
     @Override
-    public void run(ApplicationArguments args) {
+    public void start() {
         ensureCorrectMapping();
+        running = true;
+    }
+
+    @Override
+    public void stop() {
+        running = false;
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    @Override
+    public int getPhase() {
+        return PHASE;
     }
 
     /**
