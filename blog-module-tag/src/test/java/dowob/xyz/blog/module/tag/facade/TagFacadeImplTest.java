@@ -354,31 +354,30 @@ class TagFacadeImplTest {
     class DeleteArticleTagsTests {
 
         @Test
-        @DisplayName("正常：有兩個標籤，每個都呼叫 deleteByArticleIdAndTagId")
-        void deleteArticleTags_deletesAll() {
+        @DisplayName("正常：有兩個標籤 → 單一批次刪除（依無號 uuid 順序），不再逐筆刪除")
+        void deleteArticleTags_deletesAllInOneBatch() {
             UUID articleUuid = UUID.randomUUID();
-            UUID tagId1 = UUID.randomUUID();
-            UUID tagId2 = UUID.randomUUID();
-            Tag tag1 = buildTag(tagId1, "Tag1", "tag-1");
-            Tag tag2 = buildTag(tagId2, "Tag2", "tag-2");
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(tag1, tag2));
+            UUID low = new UUID(1L, 0L);
+            UUID high = new UUID(-1L, 0L);
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(high, low));
 
             tagFacadeImpl.deleteArticleTags(articleUuid);
 
-            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, tagId1);
-            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, tagId2);
-            verify(articleTagRepository, times(2)).deleteByArticleIdAndTagId(
+            verify(articleTagRepository, times(1)).deleteByArticleIdAndTagIds(articleUuid, List.of(low, high));
+            verify(articleTagRepository, never()).deleteByArticleIdAndTagId(
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
 
         @Test
-        @DisplayName("邊界：無標籤時，不呼叫 deleteByArticleIdAndTagId")
+        @DisplayName("邊界：無標籤時，不發出任何刪除")
         void deleteArticleTags_noTags_doesNothing() {
             UUID articleUuid = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of());
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of());
 
             tagFacadeImpl.deleteArticleTags(articleUuid);
 
+            verify(articleTagRepository, never()).deleteByArticleIdAndTagIds(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyCollection());
             verify(articleTagRepository, never()).deleteByArticleIdAndTagId(
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
@@ -505,8 +504,8 @@ class TagFacadeImplTest {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
             UUID b = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid))
-                    .thenReturn(List.of(buildTag(a, "A", "a"), buildTag(b, "B", "b")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid))
+                    .thenReturn(List.of(a, b));
 
             List<TransactionSynchronization> syncs =
                     withSynchronization(() -> tagFacadeImpl.deleteArticleTags(articleUuid));
@@ -520,7 +519,7 @@ class TagFacadeImplTest {
         void recalculationFailureAfterCommit_isSwallowed() {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(a));
             when(tagUsageRecalculator.recalculateInNewTransaction(org.mockito.ArgumentMatchers.anyCollection()))
                     .thenThrow(new RuntimeException("DB down"));
 
@@ -536,7 +535,7 @@ class TagFacadeImplTest {
         void withoutTransactionSynchronization_recalculatesImmediately() {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(a));
 
             tagFacadeImpl.deleteArticleTags(articleUuid);
 

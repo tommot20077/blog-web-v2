@@ -129,7 +129,6 @@ class ArticleVersionConsumerTest {
         consumer.onContentChanged(event(Action.RESTORED));
 
         verify(versioningService, never()).recordAutoSnapshot(any(AutoSnapshotPlan.class));
-        verify(versioningService, never()).recordAutoSnapshot(ARTICLE_UUID);
         verify(versioningService, never()).freezePublished(ARTICLE_UUID);
     }
 

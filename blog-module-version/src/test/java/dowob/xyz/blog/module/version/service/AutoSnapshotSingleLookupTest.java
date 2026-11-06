@@ -10,7 +10,7 @@ import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.version.consumer.ArticleVersionConsumer;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
-import dowob.xyz.blog.module.version.model.LatestSnapshotMeta;
+import dowob.xyz.blog.module.version.model.LatestSnapshotRef;
 import dowob.xyz.blog.module.version.model.dto.response.AutoSnapshotConfig;
 import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>以真實的 consumer、policy、service 串起來（只 mock 外部邊界），驗證 SAVED 事件經過「判斷＋寫入」兩段後：
  * 文章內容只查 1 次、使用者設定只解析 1 次、上次快照只走輕量投影（不整列查詢）。
- * 舊流程 {@code shouldSnapshot} 與 {@code recordAutoSnapshot} 各自查一次文章與設定，共 2 次。</p>
+ * 舊流程 判斷與寫入 各自查一次文章與設定，共 2 次。</p>
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -92,13 +92,13 @@ class AutoSnapshotSingleLookupTest {
     @DisplayName("SAVED 且該寫快照：文章內容 1 次、設定 1 次；快照以判斷當下的內容寫入；retain 用同一份設定")
     void saved_shouldSnapshot_queriesArticleAndConfigOnce() {
         givenArticleAndConfig();
-        when(versionMapper.findLatestMeta(articleUuid, "AUTO")).thenReturn(Optional.empty());
+        when(versionMapper.findLatestRef(articleUuid, "AUTO")).thenReturn(Optional.empty());
 
         consumer.onContentChanged(saved());
 
         verify(articleFacade, times(1)).findContentByUuid(articleUuid);
         verify(preferenceResolver, times(1)).resolveForUser(authorUuid);
-        verify(versionMapper, times(1)).findLatestMeta(articleUuid, "AUTO");
+        verify(versionMapper, times(1)).findLatestRef(articleUuid, "AUTO");
         org.mockito.ArgumentCaptor<ArticleVersion> saved = org.mockito.ArgumentCaptor.forClass(ArticleVersion.class);
         verify(versionRepo).save(saved.capture());
         assertThat(saved.getValue().getContent()).isEqualTo("a".repeat(200));
@@ -110,13 +110,14 @@ class AutoSnapshotSingleLookupTest {
     @DisplayName("SAVED 但未達門檻：文章內容 1 次、設定 1 次，不寫快照")
     void saved_belowThreshold_queriesOnce_noWrite() {
         givenArticleAndConfig();
-        when(versionMapper.findLatestMeta(articleUuid, "AUTO"))
-                .thenReturn(Optional.of(new LatestSnapshotMeta(LocalDateTime.now().minusSeconds(5), 190)));
+        when(versionMapper.findLatestRef(articleUuid, "AUTO"))
+                .thenReturn(Optional.of(new LatestSnapshotRef(9L, LocalDateTime.now().minusSeconds(5))));
 
         consumer.onContentChanged(saved());
 
         verify(articleFacade, times(1)).findContentByUuid(articleUuid);
         verify(preferenceResolver, times(1)).resolveForUser(authorUuid);
+        verify(versionMapper, never()).findContentLength(any());
         verify(versionRepo, never()).save(any());
         verify(versionMapper, never()).retainAuto(any(), org.mockito.ArgumentMatchers.anyInt());
     }

@@ -1,6 +1,6 @@
 package dowob.xyz.blog.module.version.mapper;
 
-import dowob.xyz.blog.module.version.model.LatestSnapshotMeta;
+import dowob.xyz.blog.module.version.model.LatestSnapshotRef;
 import dowob.xyz.blog.module.version.model.dto.response.VersionSummaryResponse;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -49,29 +49,45 @@ public interface VersionMapper {
     int countPublished(@Param("articleUuid") UUID articleUuid);
 
     /**
-     * 取某文章最新一筆指定類型快照的「建立時間＋內容長度」（不撈內容本身，PERF-21）。
+     * 取某文章最新一筆指定類型快照的主鍵與建立時間（不碰內容，PERF-21 第一步）。
      *
-     * <p>供 {@code AutoSnapshotPolicy} 判斷時間間隔與字元差距。長度須與 Java {@code String.length()} 一致：
-     * PostgreSQL {@code length()} 以字元（code point）計，補充平面字元（emoji 等，U+10000 以上）算 1，
-     * Java 的 UTF-16 code unit 算 2，故額外加上補充平面字元的個數（以正規表示式刪去其他字元後計長），
-     * 使兩邊對任何內容結果相同，快照觸發的邊界行為與改寫前完全一致。</p>
+     * <p>先查本投影檢查時間間隔：連續存檔時大多數事件在這一步就被擋下，不必計算任何內容長度。
+     * 選擇「分兩個查詢」而非單一 SQL 的 {@code CASE}：Java 端的間隔判斷用 JVM 時鐘
+     * （共通規則：時間來源維持 {@code LocalDateTime.now()}），若要在 SQL 內跳過計算就得把間隔門檻與時鐘傳進 SQL，
+     * 耦合較深；兩段式第二段以主鍵點查，成本固定，邏輯也留在 policy 一處。</p>
      *
-     * <p>SELECT 欄位順序（created_at, content_length）必須與 {@link LatestSnapshotMeta} 的元件順序一致，不可調整。</p>
+     * <p>SELECT 欄位順序（id, created_at）必須與 {@link LatestSnapshotRef} 的元件順序一致，不可調整。</p>
      *
      * @param articleUuid 文章公開 UUID
      * @param type        快照類型（AUTO／MANUAL／PUBLISHED）
-     * @return 最新一筆的投影；沒有快照時為 empty
+     * @return 最新一筆的參照；沒有快照時為 empty
      */
     @Select({
-        "SELECT created_at,",
-        "       coalesce(length(content), 0)",
-        "       + coalesce(length(regexp_replace(content, '[^\\U00010000-\\U0010FFFF]', '', 'g')), 0) AS content_length",
+        "SELECT id, created_at",
         "  FROM article_versions",
         " WHERE article_uuid = #{articleUuid}::uuid AND type = #{type}",
-        " ORDER BY created_at DESC",
+        " ORDER BY created_at DESC, id DESC",
         " LIMIT 1"
     })
-    Optional<LatestSnapshotMeta> findLatestMeta(@Param("articleUuid") UUID articleUuid, @Param("type") String type);
+    Optional<LatestSnapshotRef> findLatestRef(@Param("articleUuid") UUID articleUuid, @Param("type") String type);
+
+    /**
+     * 以主鍵取一筆快照的內容長度（PERF-21 第二步；只在時間間隔通過後才呼叫）。
+     *
+     * <p>長度須與 Java {@code String.length()} 一致：PostgreSQL {@code length()} 以字元（code point）計，
+     * 補充平面字元（emoji 等，U+10000 以上）算 1，Java 的 UTF-16 code unit 算 2，故額外加上補充平面字元的個數
+     * （以正規表示式刪去其他字元後計長），使兩邊對任何內容結果相同，快照觸發的邊界行為與改寫前完全一致。</p>
+     *
+     * @param id 快照主鍵
+     * @return UTF-16 code unit 數；該列已不存在（例如剛被滾動保留刪掉）時為 empty
+     */
+    @Select({
+        "SELECT coalesce(length(content), 0)",
+        "       + coalesce(length(regexp_replace(content, '[^\\U00010000-\\U0010FFFF]', '', 'g')), 0)",
+        "  FROM article_versions",
+        " WHERE id = #{id}"
+    })
+    Optional<Integer> findContentLength(@Param("id") Long id);
 
     /**
      * 分頁查詢版本 summary（不含 content，給列表頁輕量用）。

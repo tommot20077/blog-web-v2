@@ -865,6 +865,21 @@ class ArticleCommandSubServiceTest {
         }
 
         @Test
+        @DisplayName("行為變更：同一分類 UUID 重複傳入 → 去重後成功（原本撞主鍵拋 DataIntegrityViolation）")
+        void updateArticle_categories_duplicateInput_isDeduplicated() {
+            givenDraftArticleWithExistingCategories();
+            when(categoryRepository.findAllByUuidIn(any())).thenReturn(List.of(category(1L), category(2L)));
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID,
+                    requestWith(new UUID(0L, 1L), new UUID(0L, 2L), new UUID(0L, 1L), new UUID(0L, 2L)));
+
+            ArgumentCaptor<java.util.Collection<UUID>> queried = ArgumentCaptor.forClass(java.util.Collection.class);
+            verify(categoryRepository).findAllByUuidIn(queried.capture());
+            assertThat(queried.getValue()).containsExactly(new UUID(0L, 1L), new UUID(0L, 2L));
+            verify(categoryMapper).insertArticleCategories(1L, List.of(1L, 2L));
+        }
+
+        @Test
         @DisplayName("建立文章：新文章沒有既有關聯，不查既有分類，一次批次新增")
         void createArticle_categories_batchInsertWithoutReadingExisting() {
             CreateArticleRequest request = new CreateArticleRequest();

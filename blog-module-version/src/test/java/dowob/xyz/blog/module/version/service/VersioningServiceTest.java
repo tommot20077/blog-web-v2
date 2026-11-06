@@ -114,16 +114,17 @@ class VersioningServiceTest {
 
     // ─── recordAutoSnapshot ─────────────
 
+    private AutoSnapshotPlan planFor(UUID authorUuid, String title, String content) {
+        return new AutoSnapshotPlan(contentData(articleUuid, authorUuid, title, content),
+            new AutoSnapshotConfig(true, 50, 60, 50));
+    }
+
     @Test
-    @DisplayName("recordAutoSnapshot：存檔時帶文章與作者 UUID，並以文章 UUID 執行滾動保留")
+    @DisplayName("recordAutoSnapshot(plan)：存檔時帶文章與作者 UUID，並以文章 UUID 與 plan 的 retain 執行滾動保留")
     void recordAutoSnapshot_savesAndAppliesRetention() {
-        when(articleFacade.findContentByUuid(articleUuid))
-            .thenReturn(Optional.of(contentData(articleUuid, authorUuid, "Test", "Hello world")));
-        when(preferenceResolver.resolveForUser(authorUuid))
-            .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.recordAutoSnapshot(articleUuid);
+        service.recordAutoSnapshot(planFor(authorUuid, "Test", "Hello world"));
 
         ArgumentCaptor<ArticleVersion> captor = ArgumentCaptor.forClass(ArticleVersion.class);
         verify(versionRepo).save(captor.capture());
@@ -138,48 +139,20 @@ class VersioningServiceTest {
         verify(versionMapper).retainAuto(articleUuid, 50);
     }
 
-    @Test
-    @DisplayName("recordAutoSnapshot：文章不存在 → 靜默返回，不寫快照也不做保留")
-    void recordAutoSnapshot_articleNotFound_doesNothing() {
-        when(articleFacade.findContentByUuid(articleUuid)).thenReturn(Optional.empty());
-
-        service.recordAutoSnapshot(articleUuid);
-
-        verify(versionRepo, never()).save(any());
-        verify(versionMapper, never()).retainAuto(any(), anyInt());
-    }
-
     /**
      * V28 起 article_versions 沒有指向 articles 的 FK，原本以「FK 違反＝快照期間文章被刪」判斷的吞例外邏輯
      * 成為死碼並已移除：寫入時的資料完整性例外一律是真正的錯誤，不得被吞掉
      * （「快照期間文章被刪」留下的孤兒快照由刪除連動 consumer 與每日校正清除）。
      */
     @Test
-    @DisplayName("recordAutoSnapshot：存檔拋 DataIntegrityViolationException → 原樣往外拋，不做保留")
+    @DisplayName("recordAutoSnapshot(plan)：存檔拋 DataIntegrityViolationException → 原樣往外拋，不做保留")
     void recordAutoSnapshot_saveThrowsIntegrityViolation_propagates() {
-        when(articleFacade.findContentByUuid(articleUuid))
-            .thenReturn(Optional.of(contentData(articleUuid, authorUuid, "Test", "Hello world")));
-        when(preferenceResolver.resolveForUser(authorUuid))
-            .thenReturn(new AutoSnapshotConfig(true, 50, 60, 50));
         when(versionRepo.save(any())).thenThrow(new DataIntegrityViolationException("boom"));
 
-        assertThatThrownBy(() -> service.recordAutoSnapshot(articleUuid))
+        assertThatThrownBy(() -> service.recordAutoSnapshot(planFor(authorUuid, "Test", "Hello world")))
             .isInstanceOf(DataIntegrityViolationException.class);
 
         verify(versionMapper, never()).retainAuto(any(), anyInt());
-    }
-
-    @Test
-    @DisplayName("recordAutoSnapshot：作者 UUID 缺失（資料異常）→ 明確拋 IllegalStateException，不寫快照")
-    void recordAutoSnapshot_authorUuidMissing_throwsIllegalState() {
-        when(articleFacade.findContentByUuid(articleUuid))
-            .thenReturn(Optional.of(contentData(articleUuid, null, "Test", "Hello world")));
-
-        assertThatThrownBy(() -> service.recordAutoSnapshot(articleUuid))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining(articleUuid.toString());
-
-        verify(versionRepo, never()).save(any());
     }
 
     @Test

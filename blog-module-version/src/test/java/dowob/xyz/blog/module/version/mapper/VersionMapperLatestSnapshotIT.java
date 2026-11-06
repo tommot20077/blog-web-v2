@@ -1,6 +1,6 @@
 package dowob.xyz.blog.module.version.mapper;
 
-import dowob.xyz.blog.module.version.model.LatestSnapshotMeta;
+import dowob.xyz.blog.module.version.model.LatestSnapshotRef;
 import dowob.xyz.blog.module.version.support.SeededVersionUsers;
 import dowob.xyz.blog.module.version.support.VersionCleanupITSupport;
 import org.apache.ibatis.annotations.Select;
@@ -18,15 +18,15 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@link VersionMapper#findLatestMeta} 整合測試（真實 Postgres，PERF-21）。
+ * {@link VersionMapper#findLatestRef} 與 {@link VersionMapper#findContentLength} 整合測試（真實 Postgres，PERF-21）。
  *
  * <p>重點是長度語意：自動快照的字元差距門檻原本以 Java {@code String.length()}（UTF-16 code unit）比較，
  * PostgreSQL {@code length()} 以 code point 計，兩者對補充平面字元（emoji 等）不同。
  * 本測試對一組代表性字串（ASCII、CJK、emoji、混合、空字串、組合字元）逐一斷言資料庫算出的長度
  * <b>等於</b> Java {@code String.length()}，確保改寫後快照觸發的邊界行為與舊行為完全一致。</p>
  */
-@DisplayName("VersionMapper.findLatestMeta 整合測試（PERF-21）")
-class VersionMapperLatestMetaIT extends VersionCleanupITSupport {
+@DisplayName("VersionMapper 最新快照參照／內容長度 整合測試（PERF-21）")
+class VersionMapperLatestSnapshotIT extends VersionCleanupITSupport {
 
     @Autowired private VersionMapper versionMapper;
 
@@ -34,6 +34,12 @@ class VersionMapperLatestMetaIT extends VersionCleanupITSupport {
         jdbc.update("INSERT INTO article_versions (uuid, article_uuid, author_uuid, type, title, slug, content, status, created_at) "
                         + "VALUES (?, ?, ?, ?, 't', 's', ?, 'DRAFT', ?)",
                 UUID.randomUUID(), articleUuid, SeededVersionUsers.USER1_UUID, type, content, Timestamp.valueOf(createdAt));
+    }
+
+    /** 兩步合成：最新一筆的（參照, 長度）。 */
+    private int lengthOfLatest(UUID article, String type) {
+        LatestSnapshotRef ref = versionMapper.findLatestRef(article, type).orElseThrow();
+        return versionMapper.findContentLength(ref.id()).orElseThrow();
     }
 
     @ParameterizedTest(name = "[{index}] 長度等於 Java String.length()：{0}")
@@ -53,9 +59,7 @@ class VersionMapperLatestMetaIT extends VersionCleanupITSupport {
         UUID article = UUID.randomUUID();
         insert(article, "AUTO", content, LocalDateTime.of(2026, 1, 1, 0, 0));
 
-        LatestSnapshotMeta meta = versionMapper.findLatestMeta(article, "AUTO").orElseThrow();
-
-        assertThat(meta.contentLength()).isEqualTo(content.length());
+        assertThat(lengthOfLatest(article, "AUTO")).isEqualTo(content.length());
     }
 
     @Test
@@ -65,8 +69,7 @@ class VersionMapperLatestMetaIT extends VersionCleanupITSupport {
         String content = ("段落 paragraph 😀 \n").repeat(5000);
         insert(article, "AUTO", content, LocalDateTime.of(2026, 1, 1, 0, 0));
 
-        assertThat(versionMapper.findLatestMeta(article, "AUTO").orElseThrow().contentLength())
-                .isEqualTo(content.length());
+        assertThat(lengthOfLatest(article, "AUTO")).isEqualTo(content.length());
     }
 
     @Test
@@ -79,10 +82,10 @@ class VersionMapperLatestMetaIT extends VersionCleanupITSupport {
         insert(article, "MANUAL", "manual-is-newest-but-other-type", LocalDateTime.of(2026, 1, 3, 0, 0));
         insert(other, "AUTO", "other-article-newest", LocalDateTime.of(2026, 1, 4, 0, 0));
 
-        LatestSnapshotMeta meta = versionMapper.findLatestMeta(article, "AUTO").orElseThrow();
+        LatestSnapshotRef ref = versionMapper.findLatestRef(article, "AUTO").orElseThrow();
 
-        assertThat(meta.createdAt()).isEqualTo(LocalDateTime.of(2026, 1, 2, 0, 0));
-        assertThat(meta.contentLength()).isEqualTo("newer-auto".length());
+        assertThat(ref.createdAt()).isEqualTo(LocalDateTime.of(2026, 1, 2, 0, 0));
+        assertThat(versionMapper.findContentLength(ref.id()).orElseThrow()).isEqualTo("newer-auto".length());
     }
 
     @Test
@@ -91,21 +94,24 @@ class VersionMapperLatestMetaIT extends VersionCleanupITSupport {
         UUID article = UUID.randomUUID();
         insert(article, "MANUAL", "x", LocalDateTime.of(2026, 1, 1, 0, 0));
 
-        Optional<LatestSnapshotMeta> meta = versionMapper.findLatestMeta(article, "AUTO");
+        Optional<LatestSnapshotRef> ref = versionMapper.findLatestRef(article, "AUTO");
 
-        assertThat(meta).isEmpty();
+        assertThat(ref).isEmpty();
+        assertThat(versionMapper.findContentLength(-1L)).as("不存在的主鍵").isEmpty();
     }
 
     @Test
-    @DisplayName("SQL 形狀：不 SELECT * 也不單獨選出 content 欄（只回建立時間與長度）")
-    void sqlDoesNotSelectContentColumn() throws Exception {
-        String sql = String.join(" ", VersionMapper.class
-                .getMethod("findLatestMeta", UUID.class, String.class)
-                .getAnnotation(Select.class).value());
-        String select = sql.substring(0, sql.indexOf(" FROM "));
+    @DisplayName("SQL 形狀：取參照的查詢完全不碰 content；取長度的查詢是主鍵點查且不單獨選出 content")
+    void sqlShapes() throws Exception {
+        String refSql = String.join(" ", VersionMapper.class
+                .getMethod("findLatestRef", UUID.class, String.class).getAnnotation(Select.class).value());
+        assertThat(refSql).doesNotContain("*").doesNotContain("content");
 
+        String lenSql = String.join(" ", VersionMapper.class
+                .getMethod("findContentLength", Long.class).getAnnotation(Select.class).value());
+        String select = lenSql.substring(0, lenSql.indexOf(" FROM "));
         assertThat(select).doesNotContain("*");
         assertThat(select).doesNotContainPattern("(?i)(^|,)\\s*content\\s*(,|$)");
-        assertThat(select).contains("length(content)");
+        assertThat(lenSql).contains("WHERE id = ?".replace("?", "#{id}"));
     }
 }

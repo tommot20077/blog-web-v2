@@ -125,8 +125,9 @@ public class TagFacadeImpl implements TagFacade {
      * <p><b>差集寫入（PERF-27）</b>：與目前關聯比對，只刪除被移除的標籤、只新增新加入的標籤，各以單一批次語句完成；
      * 未變動的標籤列完全不被刪除重插。</p>
      *
-     * <p><b>順序固定</b>：新增與刪除都依 tag id 的 uuid 位元組無號順序（與 Postgres {@code ORDER BY id} 一致），
-     * 讓持有 {@code tags} 列 {@code KEY SHARE}（FK 檢查）的取鎖順序與其他依 id 排序取鎖的交易一致（RACE-08）。</p>
+     * <p><b>順序固定</b>：新增依 tag id 的 uuid 位元組無號順序（與 Postgres {@code ORDER BY id} 一致），
+     * 讓持有 {@code tags} 列 {@code KEY SHARE}（FK 檢查）的取鎖順序與其他依 id 排序取鎖的交易一致（RACE-08）。
+     * 刪除不鎖 {@code tags} 列，順序只是為了輸出穩定。</p>
      *
      * <p><b>被移除的標籤</b>：新舊集合的差集（舊有、新無）沒有任何事件會帶它，於外層交易 commit 後
      * 對其重算使用計數（見 {@link #recalculateAfterCommit}）；新增的標籤維持由 {@code article.tagged} 事件重算。</p>
@@ -157,10 +158,12 @@ public class TagFacadeImpl implements TagFacade {
      */
     @Override
     public void deleteArticleTags(UUID articleUuid) {
-        List<Tag> existingTags = articleTagRepository.findTagsByArticleId(articleUuid);
-        existingTags.forEach(tag -> articleTagRepository.deleteByArticleIdAndTagId(articleUuid, tag.getId()));
-        Set<UUID> removed = new LinkedHashSet<>();
-        existingTags.forEach(tag -> removed.add(tag.getId()));
+        Set<UUID> removed = new LinkedHashSet<>(articleTagRepository.findTagIdsByArticleId(articleUuid));
+        if (!removed.isEmpty()) {
+            /* 單一批次語句（PERF-27），依 uuid 無號順序與 syncArticleTags 一致 */
+            articleTagRepository.deleteByArticleIdAndTagIds(articleUuid,
+                    removed.stream().sorted(UNSIGNED_UUID_ORDER).toList());
+        }
         recalculateAfterCommit(removed);
     }
 

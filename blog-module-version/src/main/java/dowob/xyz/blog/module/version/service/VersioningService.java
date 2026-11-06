@@ -56,24 +56,7 @@ public class VersioningService {
     }
 
     /**
-     * 記錄自動快照並套用滾動保留策略（自行查文章內容與設定；沒有現成 {@link AutoSnapshotPlan} 時使用）。
-     * <p>若文章不存在則靜默返回（冪等）。consumer 的 SAVED 流程改走 {@link #recordAutoSnapshot(AutoSnapshotPlan)}，
-     * 不重複查詢（PERF-21）。</p>
-     *
-     * @param articleUuid 文章公開 UUID
-     * @throws IllegalStateException 文章作者 UUID 缺失（資料異常）
-     */
-    @Transactional
-    public void recordAutoSnapshot(UUID articleUuid) {
-        ArticleContentData article = articleFacade.findContentByUuid(articleUuid).orElse(null);
-        if (article == null) return;
-
-        AutoSnapshotConfig cfg = preferenceResolver.resolveForUser(requireAuthorUuid(article));
-        recordAutoSnapshot(new AutoSnapshotPlan(article, cfg));
-    }
-
-    /**
-     * 依 {@link AutoSnapshotPlan} 記錄自動快照並套用滾動保留策略——文章內容與設定沿用 policy 判斷時查到的，不重查（PERF-21）。
+     * 記錄自動快照並套用滾動保留策略——依 {@link AutoSnapshotPlan}，文章內容與設定沿用 policy 判斷時查到的，不重查（PERF-21）。
      *
      * <p>V28 起 {@code article_versions} 沒有指向 {@code articles} 的 FK：若文章在「查內容」與「寫快照」之間
      * 被刪除，這裡不會再被資料庫拒絕，而是留下一筆孤兒快照；此情況由 {@code VersionArticleDeletedConsumer}

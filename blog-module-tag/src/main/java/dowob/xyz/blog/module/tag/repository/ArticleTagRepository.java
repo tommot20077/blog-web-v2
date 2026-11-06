@@ -56,8 +56,10 @@ public interface ArticleTagRepository extends Repository<ArticleTag, UUID> {
     /**
      * 批次刪除指定文章與多個標籤的關聯（單一語句；文章存檔時只刪被移除的標籤，PERF-27）。
      *
-     * <p>{@code tag_id = ANY(array)} 走主鍵 {@code (article_id, tag_id)} 索引時，PostgreSQL 會將陣列排序後依索引順序
-     * 逐一刪除，與插入端「依 uuid 位元組無號順序」一致（RACE-08 防死結設計）。呼叫端須保證集合非空。</p>
+     * <p>刪除 {@code article_tags} 的列只鎖這些關聯列本身，<b>不會鎖 {@code tags} 列</b>，因此與 RACE-08
+     * （FK 檢查對 {@code tags} 取 {@code KEY SHARE} 的取鎖順序）無關，也就不需要依特定順序刪除。
+     * 同一篇文章的併發存檔，已由 article 的 {@code @Version} 樂觀鎖 UPDATE 行鎖序列化，不會有兩個交易同時改同一篇的標籤關聯。
+     * 呼叫端須保證集合非空。</p>
      *
      * @param articleId 文章 UUID
      * @param tagIds    要移除的標籤 UUID（字串形式，見 {@link #deleteByArticleIdAndTagIds}）

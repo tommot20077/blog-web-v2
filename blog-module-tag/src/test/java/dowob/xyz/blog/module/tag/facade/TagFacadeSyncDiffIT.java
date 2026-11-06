@@ -172,4 +172,25 @@ class TagFacadeSyncDiffIT extends TagCleanupITSupport {
         assertThat(result.get(1).id()).isEqualTo(existing);
         assertThat(countTags()).isEqualTo(2);
     }
+
+    @Test
+    @DisplayName("deleteArticleTags：單一語句刪光（1 次批次、N 筆刪除），他篇文章不受影響")
+    void deleteArticleTags_removesAllInOneStatement_othersUntouched() {
+        UUID a = insertTag("tag-a", 0);
+        UUID b = insertTag("tag-b", 0);
+        UUID c = insertTag("tag-c", 0);
+        UUID article = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        insertArticleTag(article, a);
+        insertArticleTag(article, b);
+        insertArticleTag(article, c);
+        insertArticleTag(other, a);
+
+        long[] writes = writesDuring(() -> tagFacade.deleteArticleTags(article));
+
+        assertThat(writes[0]).isZero();
+        assertThat(writes[1]).isEqualTo(3);
+        assertThat(countArticleTags(article)).isZero();
+        assertThat(countArticleTags(other)).isEqualTo(1);
+    }
 }
