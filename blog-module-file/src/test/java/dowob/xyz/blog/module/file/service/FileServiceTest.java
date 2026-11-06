@@ -96,6 +96,12 @@ class FileServiceTest {
     @InjectMocks
     private FileServiceImpl fileService;
 
+    /** 目前是否位於（mock）交易 callback 之內，用來驗證 MinIO 呼叫發生在 commit 之後 */
+    private boolean inTransaction;
+
+    /** 紀錄「交易內／交易外」的 removeObject 呼叫次數 */
+    private int removeObjectCallsInsideTx;
+
     /**
      * 測試前設定 bucketName 及 FileProperties 真實實例。
      *
@@ -110,9 +116,24 @@ class FileServiceTest {
         doAnswer(inv -> {
             @SuppressWarnings("unchecked")
             Consumer<TransactionStatus> consumer = inv.getArgument(0);
-            consumer.accept(null);
+            inTransaction = true;
+            try {
+                consumer.accept(null);
+            } finally {
+                inTransaction = false;
+            }
             return null;
         }).when(transactionTemplate).executeWithoutResult(any());
+        try {
+            doAnswer(inv -> {
+                if (inTransaction) {
+                    removeObjectCallsInsideTx++;
+                }
+                return null;
+            }).when(minioClient).removeObject(any(RemoveObjectArgs.class));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** 上傳相關測試 */
@@ -263,23 +284,122 @@ class FileServiceTest {
                     .hasMessageContaining(FileErrorCode.FILE_ACCESS_DENIED.getMessage());
         }
 
-        /** 驗證 MinIO 刪除失敗時拋出 SystemException（→HTTP 500），讓 @Transactional 可回滾 DB */
+        /** RACE-16（修正版）：MinIO 刪除失敗 → 拋 STORAGE_ERROR，且 DB 列沒有被刪（交由呼叫端／MQ 重試） */
         @Test
-        @DisplayName("deleteFile_whenMinioFails_throwsSystemException")
-        void deleteFile_whenMinioFails_throwsSystemException() throws Exception {
+        @DisplayName("deleteFile_whenMinioFails_throwsAndDbRowNotDeleted")
+        void deleteFile_whenMinioFails_throwsAndDbRowNotDeleted() throws Exception {
             UUID ownerId = UUID.randomUUID();
             UUID fileId = UUID.randomUUID();
             FileMetadata metadata = new FileMetadata();
             metadata.setId(fileId);
             metadata.setStoragePath("articles/2024/01/01/test.jpg");
             metadata.setUploaderId(ownerId);
-            metadata.setHasThumbnail(false);
             when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
             doThrow(new RuntimeException("MinIO error")).when(minioClient).removeObject(any(RemoveObjectArgs.class));
 
             assertThatThrownBy(() -> fileService.deleteFile(fileId, ownerId, false))
                     .isInstanceOf(SystemException.class)
                     .hasMessageContaining(CommonErrorCode.STORAGE_ERROR.getMessage());
+
+            verify(fileMetadataRepository, never()).deleteById(any());
+        }
+
+        /** RACE-16（修正版）：MinIO 刪除（原檔 + 縮圖）在 DB 交易之外，且先於 DB 刪除 */
+        @Test
+        @DisplayName("deleteFile_removesMinioObjectsOutsideAndBeforeDbTransaction")
+        void deleteFile_removesMinioObjectsOutsideAndBeforeDbTransaction() throws Exception {
+            UUID ownerId = UUID.randomUUID();
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/test.jpg");
+            metadata.setUploaderId(ownerId);
+            metadata.setHasThumbnail(true);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            java.util.concurrent.atomic.AtomicBoolean dbDeleteInsideTx = new java.util.concurrent.atomic.AtomicBoolean();
+            doAnswer(inv -> {
+                dbDeleteInsideTx.set(inTransaction);
+                return null;
+            }).when(fileMetadataRepository).deleteById(fileId);
+
+            fileService.deleteFile(fileId, ownerId, false);
+
+            org.mockito.InOrder order = org.mockito.Mockito.inOrder(minioClient, fileMetadataRepository);
+            order.verify(minioClient, times(2)).removeObject(any(RemoveObjectArgs.class));
+            order.verify(fileMetadataRepository).deleteById(fileId);
+            assertThat(removeObjectCallsInsideTx).as("MinIO 呼叫不得在交易內").isZero();
+            assertThat(dbDeleteInsideTx).as("DB 刪除在短交易內").isTrue();
+        }
+
+        /** 已知代價：MinIO 已刪、DB 刪除失敗 → 拋錯；重試時 MinIO 端為 no-op，DB 列被刪掉 */
+        @Test
+        @DisplayName("deleteFile_whenDbDeleteFailsAfterMinio_retrySucceedsAndDeletesRow")
+        void deleteFile_whenDbDeleteFailsAfterMinio_retrySucceedsAndDeletesRow() throws Exception {
+            UUID ownerId = UUID.randomUUID();
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/test.jpg");
+            metadata.setUploaderId(ownerId);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+            doThrow(new RuntimeException("db down")).doNothing().when(fileMetadataRepository).deleteById(fileId);
+
+            assertThatThrownBy(() -> fileService.deleteFile(fileId, ownerId, false))
+                    .hasMessageContaining("db down");
+            verify(minioClient, times(2)).removeObject(any(RemoveObjectArgs.class));
+
+            assertThatCode(() -> fileService.deleteFile(fileId, ownerId, false)).doesNotThrowAnyException();
+            verify(fileMetadataRepository, times(2)).deleteById(fileId);
+            verify(minioClient, times(4)).removeObject(any(RemoveObjectArgs.class));
+        }
+
+        /** 授權失敗時不得碰 MinIO 或 DB 刪除 */
+        @Test
+        @DisplayName("deleteFile_whenAccessDenied_touchesNeitherMinioNorDb")
+        void deleteFile_whenAccessDenied_touchesNeitherMinioNorDb() throws Exception {
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/test.jpg");
+            metadata.setUploaderId(UUID.randomUUID());
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            assertThatThrownBy(() -> fileService.deleteFile(fileId, UUID.randomUUID(), false))
+                    .isInstanceOf(BusinessException.class);
+
+            verify(minioClient, never()).removeObject(any(RemoveObjectArgs.class));
+            verify(fileMetadataRepository, never()).deleteById(any());
+        }
+
+        /** RACE-16：deleteFile 不得再標註 @Transactional（否則外層代理仍會讓交易橫跨 MinIO 呼叫） */
+        @Test
+        @DisplayName("deleteFile_isNotAnnotatedTransactional")
+        void deleteFile_isNotAnnotatedTransactional() throws Exception {
+            java.lang.reflect.Method m = FileServiceImpl.class.getMethod(
+                    "deleteFile", UUID.class, UUID.class, boolean.class);
+            assertThat(m.isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class)).isFalse();
+            assertThat(FileServiceImpl.class.isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class)).isFalse();
+        }
+
+        /** DATA-14：即使 hasThumbnail=false 也一律嘗試刪縮圖路徑（縮圖可能剛好在刪除競態中寫入） */
+        @Test
+        @DisplayName("deleteFile_withoutThumbnailFlag_stillAttemptsThumbnailRemoval")
+        void deleteFile_withoutThumbnailFlag_stillAttemptsThumbnailRemoval() throws Exception {
+            UUID ownerId = UUID.randomUUID();
+            UUID fileId = UUID.randomUUID();
+            FileMetadata metadata = new FileMetadata();
+            metadata.setId(fileId);
+            metadata.setStoragePath("articles/2024/01/01/uuid.jpg");
+            metadata.setUploaderId(ownerId);
+            metadata.setHasThumbnail(false);
+            when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.of(metadata));
+
+            fileService.deleteFile(fileId, ownerId, false);
+
+            ArgumentCaptor<RemoveObjectArgs> captor = ArgumentCaptor.forClass(RemoveObjectArgs.class);
+            verify(minioClient, times(2)).removeObject(captor.capture());
+            assertThat(captor.getAllValues()).extracting(RemoveObjectArgs::object)
+                    .containsExactly("articles/2024/01/01/uuid.jpg", "articles/2024/01/01/uuid_thumb.jpg");
         }
 
         /** 驗證刪除有縮圖的檔案時同時刪除縮圖 */

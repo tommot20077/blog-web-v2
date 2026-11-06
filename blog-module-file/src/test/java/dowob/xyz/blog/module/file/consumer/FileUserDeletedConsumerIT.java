@@ -159,15 +159,17 @@ class FileUserDeletedConsumerIT {
         assertThat(exists(boundToArchived)).as("仍被已下架（保留）文章引用").isTrue();
         assertThat(exists(others)).as("他人的檔案不動").isTrue();
         ArgumentCaptor<RemoveObjectArgs> removed = ArgumentCaptor.forClass(RemoveObjectArgs.class);
-        verify(minioClient, Mockito.times(3)).removeObject(removed.capture());
+        /* 3 個檔案 × (原檔 + 縮圖路徑)：deleteFile 現在一律嘗試刪縮圖路徑（RACE-16／DATA-14），不看 hasThumbnail */
+        verify(minioClient, Mockito.times(6)).removeObject(removed.capture());
         assertThat(removed.getAllValues()).extracting(RemoveObjectArgs::object)
                 .anyMatch(path -> path.contains(unbound.toString()))
                 .anyMatch(path -> path.contains(avatar.toString()))
-                .anyMatch(path -> path.contains(boundToDraft.toString()));
+                .anyMatch(path -> path.contains(boundToDraft.toString()))
+                .filteredOn(path -> path.contains("_thumb")).hasSize(3);
     }
 
     @Test
-    @DisplayName("MinIO 刪除失敗：該檔案的 metadata 刪除回滾（不留下「物件還在、紀錄沒了」的孤兒），例外往外拋由容器重試")
+    @DisplayName("MinIO 刪除失敗：先刪物件後刪 DB，故 metadata 保留（物件還在、紀錄還在），例外往外拋由容器重試")
     void onUserDeleted_minioFailure_keepsMetadataAndRethrows() throws Exception {
         UUID unbound = insertFile(deletedUser, UsageType.ARTICLE_CONTENT, null);
         Mockito.doThrow(new RuntimeException("MinIO down")).when(minioClient).removeObject(any(RemoveObjectArgs.class));

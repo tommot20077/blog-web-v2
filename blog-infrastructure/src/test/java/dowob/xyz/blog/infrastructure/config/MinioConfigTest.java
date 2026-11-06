@@ -122,6 +122,35 @@ class MinioConfigTest {
     }
 
     /**
+     * RACE-16／PERF-28：MinIO 客戶端必須套用 connect／read／write 逾時，否則物件儲存無回應時
+     * 呼叫端執行緒（與其持有的資源）會無限期卡住。
+     */
+    @Test
+    @DisplayName("buildHttpClient：套用設定的 connect／read／write 逾時")
+    void buildHttpClient_appliesConfiguredTimeouts() {
+        config.setConnectTimeout(java.time.Duration.ofSeconds(3));
+        config.setReadTimeout(java.time.Duration.ofSeconds(11));
+        config.setWriteTimeout(java.time.Duration.ofSeconds(13));
+
+        okhttp3.OkHttpClient client = config.buildHttpClient();
+
+        org.assertj.core.api.Assertions.assertThat(client.connectTimeoutMillis()).isEqualTo(3_000);
+        org.assertj.core.api.Assertions.assertThat(client.readTimeoutMillis()).isEqualTo(11_000);
+        org.assertj.core.api.Assertions.assertThat(client.writeTimeoutMillis()).isEqualTo(13_000);
+    }
+
+    /** 未設定時採預設：connect 5s、read／write 30s（OkHttp 預設 10s 對大檔寫入過短，且無法調整） */
+    @Test
+    @DisplayName("buildHttpClient：未設定時預設 connect 5s、read／write 30s")
+    void buildHttpClient_defaults() {
+        okhttp3.OkHttpClient client = new MinioConfig().buildHttpClient();
+
+        org.assertj.core.api.Assertions.assertThat(client.connectTimeoutMillis()).isEqualTo(5_000);
+        org.assertj.core.api.Assertions.assertThat(client.readTimeoutMillis()).isEqualTo(30_000);
+        org.assertj.core.api.Assertions.assertThat(client.writeTimeoutMillis()).isEqualTo(30_000);
+    }
+
+    /**
      * 攔截所有對 {@code setBucketPolicy} 的呼叫（若有），解析其 policy JSON，
      * 斷言其中沒有任何 statement 同時符合
      * {@code Effect=Allow} + {@code Principal=*}（或等價全體匿名） +

@@ -127,6 +127,10 @@ minio:
   access-key: ${MINIO_ACCESS_KEY:}
   secret-key: ${MINIO_SECRET_KEY:}
   bucket-name: ${MINIO_BUCKET:blog-files}
+  # 逾時（RACE-16／PERF-28）：避免物件儲存無回應時呼叫端無限期卡住。read／write 為「兩次資料之間的閒置」逾時。
+  connect-timeout: ${MINIO_CONNECT_TIMEOUT:5s}
+  read-timeout: ${MINIO_READ_TIMEOUT:30s}
+  write-timeout: ${MINIO_WRITE_TIMEOUT:30s}
 
 # 檔案模組設定
 blog:

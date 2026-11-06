@@ -225,11 +225,24 @@ public class FileServiceImpl implements FileService {
     /**
      * 刪除指定檔案
      *
+     * <p>
+     * <b>順序（RACE-16／PERF-28）</b>：(1) 載入 metadata 並做授權檢查；(2) 在<b>交易外</b>刪除 MinIO 原檔與縮圖
+     * （縮圖路徑一律嘗試，不看 {@code hasThumbnail}——縮圖 consumer 可能在刪除競態中剛寫入但 flag 尚未寫入，見 DATA-14；
+     * S3 的 DeleteObject 對不存在的物件視為成功）；(3) MinIO 都成功後，才用<b>短交易</b>刪 DB 列。
+     * 本方法刻意<b>不標註 {@code @Transactional}</b>，否則外層交易會再次橫跨 MinIO 網路呼叫。
+     * </p>
+     *
+     * <p>
+     * 任一 MinIO 刪除失敗即拋 {@code STORAGE_ERROR}，DB 列<b>不刪</b>：API 回錯，帳號刪除連動等 consumer 路徑
+     * 交給 MQ 重試或進 DLQ，因此不會產生孤兒物件。
+     * <b>已知代價</b>：MinIO 已刪但 DB 刪除失敗時，metadata 會短暫指向不存在的物件；使用者重試刪除時 MinIO 端為
+     * no-op、DB 列被刪掉，consumer 則由 MQ 重試達成相同結果。
+     * </p>
+     *
      * @param fileId      要刪除的檔案 UUID
      * @param requesterId 請求刪除的使用者 UUID
      * @param isAdmin     是否為管理員
      */
-    @Transactional
     @Override
     public void deleteFile(UUID fileId, UUID requesterId, boolean isAdmin) {
         FileMetadata metadata = fileMetadataRepository.findById(fileId)
@@ -237,23 +250,25 @@ public class FileServiceImpl implements FileService {
         if (!isAdmin && !metadata.belongsTo(requesterId)) {
             throw new BusinessException(FileErrorCode.FILE_ACCESS_DENIED);
         }
-        fileMetadataRepository.deleteById(fileId);
+        removeObjectOrThrow(metadata.getStoragePath());
+        removeObjectOrThrow(buildThumbPath(metadata.getStoragePath()));
+        transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.deleteById(fileId));
+    }
+
+    /**
+     * 刪除單一 MinIO 物件；失敗記 ERROR（含 storage path）並拋 {@code STORAGE_ERROR}。
+     *
+     * @param objectPath 物件鍵
+     */
+    private void removeObjectOrThrow(String objectPath) {
         try {
             minioClient.removeObject(
                     RemoveObjectArgs.builder()
                             .bucket(bucketName)
-                            .object(metadata.getStoragePath())
+                            .object(objectPath)
                             .build());
-            if (Boolean.TRUE.equals(metadata.getHasThumbnail())) {
-                String thumbPath = buildThumbPath(metadata.getStoragePath());
-                minioClient.removeObject(
-                        RemoveObjectArgs.builder()
-                                .bucket(bucketName)
-                                .object(thumbPath)
-                                .build());
-            }
         } catch (Exception e) {
-            log.error("MinIO 刪除失敗: {}", metadata.getStoragePath(), e);
+            log.error("MinIO 刪除失敗: {}", objectPath, e);
             throw new SystemException(CommonErrorCode.STORAGE_ERROR);
         }
     }
