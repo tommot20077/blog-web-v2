@@ -10,14 +10,18 @@ import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.amqp.RabbitAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import org.springframework.boot.autoconfigure.task.TaskSchedulingAutoConfiguration;
 import org.springframework.boot.test.context.ConfigDataApplicationContextInitializer;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 正式 {@code application.yaml} 的 MQ 監聽容器與連線池設定守衛（PERF-15／PERF-30）。
+ * 正式 {@code application.yaml} 的 MQ 監聽容器、連線池與排程池設定守衛（PERF-15／PERF-30／PERF-16）。
  *
  * <p>以真實 yaml 載入 {@code RabbitAutoConfiguration}＋{@link RabbitMqConfig}，對實際產生的容器斷言
  * concurrency／prefetch／ack 模式——yaml 寫了卻沒套用（PERF-15）或被誤改（例如 prefetch 改回大值使
@@ -62,5 +66,26 @@ class RabbitListenerYamlBindingTest {
             assertThat(dataSource.getMaximumPoolSize()).isEqualTo(32);
             assertThat(dataSource.getMinimumIdle()).isEqualTo(10);
         });
+    }
+
+    @Test
+    @DisplayName("yaml 的 spring.task.scheduling.pool.size=4 套用到實際的 ThreadPoolTaskScheduler（PERF-16：預設 1 條會讓 fixedDelay job 互相等待）")
+    void yamlSchedulingPoolSize_isFour() {
+        new ApplicationContextRunner()
+                .withInitializer(new ConfigDataApplicationContextInitializer())
+                .withConfiguration(AutoConfigurations.of(TaskSchedulingAutoConfiguration.class))
+                .withUserConfiguration(SchedulingEnabledConfig.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    ThreadPoolTaskScheduler scheduler = context.getBean(ThreadPoolTaskScheduler.class);
+
+                    assertThat(scheduler.getScheduledThreadPoolExecutor().getCorePoolSize()).isEqualTo(4);
+                });
+    }
+
+    /** 提供 {@code @EnableScheduling}，讓 {@code TaskSchedulingAutoConfiguration} 建立 ThreadPoolTaskScheduler */
+    @Configuration(proxyBeanMethods = false)
+    @EnableScheduling
+    static class SchedulingEnabledConfig {
     }
 }
