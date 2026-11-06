@@ -72,7 +72,7 @@ public abstract class ArticleSeriesITSupport {
     @MockitoBean private ConnectionFactory connectionFactory;
     @MockitoBean private RabbitTemplate rabbitTemplate;
     @MockitoBean private TagFacade tagFacade;
-    @MockitoBean private UserFacade userFacade;
+    @MockitoBean protected UserFacade userFacade;
     @MockitoBean private UserAuthService userAuthService;
     @MockitoBean private ReadingFacade readingFacade;
     /** series 模組的 facade（article 不依賴 series 模組，以 mock 取代；各測試自行設定行為） */

@@ -29,6 +29,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -143,6 +144,19 @@ class FileArticleContentChangedConsumerIT {
     private int processedCount(UUID eventId) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM processed_events WHERE event_id = ? AND consumer_name = ?",
                 Integer.class, eventId, FileArticleContentChangedConsumer.CONSUMER_NAME);
+    }
+
+    @Test
+    @DisplayName("縱深防護：bindFilesToArticle 的 SQL 帶 uploader_id 條件——即使 service 判斷後 uploader 被換成別人（等同傳入的 ids 含他人檔案），真 SQL 也綁不到")
+    void bindFilesToArticle_sqlRequiresMatchingUploader() {
+        UUID mine = insertUnboundFile();
+        UUID someoneElsesNow = insertFile(UUID.randomUUID(), null);
+
+        int updated = fileMetadataRepository.bindFilesToArticle(articleUuid, author, List.of(mine, someoneElsesNow));
+
+        assertThat(updated).isEqualTo(1);
+        assertThat(boundArticleOf(mine)).isEqualTo(articleUuid);
+        assertThat(boundArticleOf(someoneElsesNow)).as("uploader 不符的檔案不得被綁定").isNull();
     }
 
     @Test

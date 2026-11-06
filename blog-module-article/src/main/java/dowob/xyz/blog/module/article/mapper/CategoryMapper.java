@@ -96,6 +96,35 @@ public interface CategoryMapper {
     void deleteArticleCategoriesByArticleId(@Param("articleId") Long articleId);
 
     /**
+     * 查詢文章目前掛的分類主鍵（文章存檔時與新集合比對差集，PERF-27）
+     *
+     * @param articleId 文章資料庫主鍵
+     * @return 分類主鍵列表（無分類為空）
+     */
+    @Select("SELECT category_id FROM article_categories WHERE article_id = #{articleId}")
+    List<Long> findCategoryIdsByArticleId(@Param("articleId") Long articleId);
+
+    /**
+     * 批次新增文章-分類關聯（單一語句；PERF-27）。呼叫端須保證集合非空且不含重複。
+     *
+     * @param articleId   文章資料庫主鍵
+     * @param categoryIds 分類主鍵，至少一筆
+     */
+    @Insert("<script>INSERT INTO article_categories (article_id, category_id) VALUES "
+            + "<foreach item='cid' collection='categoryIds' separator=','>(#{articleId}, #{cid})</foreach></script>")
+    void insertArticleCategories(@Param("articleId") Long articleId, @Param("categoryIds") List<Long> categoryIds);
+
+    /**
+     * 批次刪除文章與指定分類的關聯（單一語句；只刪被移除的分類，PERF-27）。呼叫端須保證集合非空。
+     *
+     * @param articleId   文章資料庫主鍵
+     * @param categoryIds 要移除的分類主鍵，至少一筆
+     */
+    @Delete("<script>DELETE FROM article_categories WHERE article_id = #{articleId} AND category_id IN "
+            + "<foreach item='cid' collection='categoryIds' open='(' separator=',' close=')'>#{cid}</foreach></script>")
+    void deleteArticleCategories(@Param("articleId") Long articleId, @Param("categoryIds") List<Long> categoryIds);
+
+    /**
      * 根據分類 slug 查詢分類 ID（用於篩選）
      *
      * @param slug 分類 slug

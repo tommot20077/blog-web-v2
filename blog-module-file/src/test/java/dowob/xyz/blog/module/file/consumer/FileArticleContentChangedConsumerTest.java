@@ -92,7 +92,7 @@ class FileArticleContentChangedConsumerTest {
                         .getMethod("onContentChanged", ArticleContentChangedEvent.class)
                         .getAnnotation(org.springframework.amqp.rabbit.annotation.RabbitListener.class);
 
-        org.assertj.core.api.Assertions.assertThat(listener.concurrency()).isEqualTo("1");
+        org.assertj.core.api.Assertions.assertThat(listener.concurrency()).isEqualTo("1-1");
     }
 
     @Test

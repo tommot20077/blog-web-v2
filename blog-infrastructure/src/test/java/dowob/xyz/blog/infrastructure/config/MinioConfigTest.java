@@ -122,6 +122,43 @@ class MinioConfigTest {
     }
 
     /**
+     * RACE-16／PERF-28：MinIO 客戶端必須套用 connect／read／write 逾時，否則物件儲存無回應時
+     * 呼叫端執行緒（與其持有的資源）會無限期卡住。
+     */
+    @Test
+    @DisplayName("buildHttpClient：套用設定的 connect／read／write 逾時")
+    void buildHttpClient_appliesConfiguredTimeouts() {
+        config.setConnectTimeout(java.time.Duration.ofSeconds(3));
+        config.setReadTimeout(java.time.Duration.ofSeconds(11));
+        config.setWriteTimeout(java.time.Duration.ofSeconds(13));
+
+        okhttp3.OkHttpClient client = config.buildHttpClient();
+
+        org.assertj.core.api.Assertions.assertThat(client.connectTimeoutMillis()).isEqualTo(3_000);
+        org.assertj.core.api.Assertions.assertThat(client.readTimeoutMillis()).isEqualTo(11_000);
+        org.assertj.core.api.Assertions.assertThat(client.writeTimeoutMillis()).isEqualTo(13_000);
+    }
+
+    /** 與 MinIO SDK 預設一致：只用 HTTP/1.1（SDK 的 HttpUtils.newDefaultHttpClient 即如此設定；OkHttp 預設會協商 HTTP/2） */
+    @Test
+    @DisplayName("buildHttpClient：固定 HTTP/1.1，與 SDK 預設一致")
+    void buildHttpClient_pinsHttp11() {
+        org.assertj.core.api.Assertions.assertThat(new MinioConfig().buildHttpClient().protocols())
+                .containsExactly(okhttp3.Protocol.HTTP_1_1);
+    }
+
+    /** 未設定時採預設：connect 5s、read／write 30s（OkHttp 預設 10s 對大檔寫入過短，且無法調整） */
+    @Test
+    @DisplayName("buildHttpClient：未設定時預設 connect 5s、read／write 30s")
+    void buildHttpClient_defaults() {
+        okhttp3.OkHttpClient client = new MinioConfig().buildHttpClient();
+
+        org.assertj.core.api.Assertions.assertThat(client.connectTimeoutMillis()).isEqualTo(5_000);
+        org.assertj.core.api.Assertions.assertThat(client.readTimeoutMillis()).isEqualTo(30_000);
+        org.assertj.core.api.Assertions.assertThat(client.writeTimeoutMillis()).isEqualTo(30_000);
+    }
+
+    /**
      * 攔截所有對 {@code setBucketPolicy} 的呼叫（若有），解析其 policy JSON，
      * 斷言其中沒有任何 statement 同時符合
      * {@code Effect=Allow} + {@code Principal=*}（或等價全體匿名） +

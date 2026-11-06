@@ -77,10 +77,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         return;
                     }
 
-                    /** Token 有效且狀態正常：組合角色字串與所有對應 Permission 為 GrantedAuthority 列表 */
+                    /**
+                     * Token 有效且狀態正常：組合角色字串為 GrantedAuthority。
+                     * 只有 ACTIVE 帳號才展開角色對應的 Permission；PENDING_VERIFICATION 仍通過認證
+                     * （可讀自己的 profile、走驗證流程），但不授予任何 Permission（AUTH-06：未驗證信箱不可寫入）。
+                     */
                     List<SimpleGrantedAuthority> authorities = new ArrayList<>();
                     authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
-                    role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
+                    if (currentStatus == UserStatus.ACTIVE) {
+                        role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
+                    }
 
                     /** principal 的 role 與 authorities 同源（皆取自 token 的 role claim） */
                     AuthUser principal = new AuthUser(authState.uuid(), role);

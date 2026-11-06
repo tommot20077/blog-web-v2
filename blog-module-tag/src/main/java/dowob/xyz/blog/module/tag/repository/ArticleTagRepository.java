@@ -54,6 +54,76 @@ public interface ArticleTagRepository extends Repository<ArticleTag, UUID> {
     void save(@Param("articleId") UUID articleId, @Param("tagId") UUID tagId);
 
     /**
+     * 批次刪除指定文章與多個標籤的關聯（單一語句；文章存檔時只刪被移除的標籤，PERF-27）。
+     *
+     * <p>刪除 {@code article_tags} 的列只鎖這些關聯列本身，<b>不會鎖 {@code tags} 列</b>，因此與 RACE-08
+     * （FK 檢查對 {@code tags} 取 {@code KEY SHARE} 的取鎖順序）無關，也就不需要依特定順序刪除。
+     * 同一篇文章的併發存檔，已由 article 的 {@code @Version} 樂觀鎖 UPDATE 行鎖序列化，不會有兩個交易同時改同一篇的標籤關聯。
+     * 呼叫端須保證集合非空。</p>
+     *
+     * @param articleId 文章 UUID
+     * @param tagIds    要移除的標籤 UUID（字串形式，見 {@link #deleteByArticleIdAndTagIds}）
+     * @return 刪除的關聯筆數
+     */
+    @Modifying
+    @Query("DELETE FROM article_tags WHERE article_id = :articleId AND tag_id = ANY(CAST(:tagIds AS uuid[]))")
+    int deleteByArticleIdAndTagIdArray(@Param("articleId") UUID articleId, @Param("tagIds") String[] tagIds);
+
+    /**
+     * 批次刪除指定文章與多個標籤的關聯（單一語句）。集合為空時不發查詢。
+     *
+     * @param articleId 文章 UUID
+     * @param tagIds    要移除的標籤 UUID
+     * @return 刪除的關聯筆數
+     */
+    default int deleteByArticleIdAndTagIds(UUID articleId, Collection<UUID> tagIds) {
+        if (tagIds == null || tagIds.isEmpty()) {
+            return 0;
+        }
+        return deleteByArticleIdAndTagIdArray(articleId, toUuidStrings(tagIds));
+    }
+
+    /**
+     * 批次新增文章與多個標籤的關聯（單一 {@code INSERT ... SELECT}，內部使用）。
+     *
+     * <p>{@code WITH ORDINALITY ... ORDER BY ord} 保證<b>依傳入順序</b>插入，呼叫端傳入依 uuid 無號位元組順序排序的清單，
+     * 使 FK 檢查對 {@code tags} 列取 {@code KEY SHARE} 的順序與其他依 id 排序取鎖的交易一致（RACE-08）。</p>
+     *
+     * @param articleId 文章 UUID
+     * @param tagIds    標籤 UUID（字串形式，由 {@link #saveAll} 轉換）
+     * @return 新增的筆數
+     */
+    @Modifying
+    @Query("INSERT INTO article_tags (article_id, tag_id) "
+            + "SELECT :articleId, u.tag_id FROM unnest(CAST(:tagIds AS uuid[])) WITH ORDINALITY AS u(tag_id, ord) "
+            + "ORDER BY u.ord")
+    int saveAllArray(@Param("articleId") UUID articleId, @Param("tagIds") String[] tagIds);
+
+    /**
+     * 批次新增文章與多個標籤的關聯（單一語句，依傳入順序插入）。集合為空時不發查詢。
+     *
+     * @param articleId 文章 UUID
+     * @param tagIds    標籤 UUID，需已去重並依 uuid 無號位元組順序排序；主鍵衝突會拋例外
+     * @return 新增的筆數
+     */
+    default int saveAll(UUID articleId, List<UUID> tagIds) {
+        if (tagIds == null || tagIds.isEmpty()) {
+            return 0;
+        }
+        return saveAllArray(articleId, toUuidStrings(tagIds));
+    }
+
+    /**
+     * UUID 集合轉字串陣列（JDBC 陣列參數以 text[] 傳入，SQL 端 {@code CAST(... AS uuid[])}）。
+     *
+     * @param ids UUID 集合
+     * @return 字串陣列，保留迭代順序
+     */
+    private static String[] toUuidStrings(Collection<UUID> ids) {
+        return ids.stream().map(UUID::toString).toArray(String[]::new);
+    }
+
+    /**
      * 計算指定標籤被文章使用的次數（含草稿等未發布文章；刪除標籤的守衛用）
      *
      * @param tagId 標籤 ID

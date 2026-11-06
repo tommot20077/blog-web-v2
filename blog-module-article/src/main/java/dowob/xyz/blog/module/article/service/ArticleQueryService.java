@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.HashSet;
@@ -64,6 +65,8 @@ public class ArticleQueryService {
      * @param size  每頁筆數
      * @return 分頁文章摘要列表（liked 已填充）
      */
+    // 純讀列表（不發 MQ、不寫 Redis 計數）：唯讀交易讓含 enrich 在內的多次查詢共用同一條連線（PERF-29）；詳情路徑刻意不開交易
+    @Transactional(readOnly = true)
     public PageResult<ArticleSummaryResponse> getPublishedArticles(ArticleListQuery query, int page, int size) {
         PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(query, page, size);
         enrich(result.getRecords());
@@ -79,6 +82,8 @@ public class ArticleQueryService {
      * @param status   文章狀態篩選（null 表示查詢全部）
      * @return 分頁文章摘要列表（liked 已填充）
      */
+    // 純讀列表（不發 MQ、不寫 Redis 計數）：唯讀交易讓含 enrich 在內的多次查詢共用同一條連線（PERF-29）；詳情路徑刻意不開交易
+    @Transactional(readOnly = true)
     public PageResult<ArticleSummaryResponse> getMyArticles(
             UUID authorUuid, int page, int size, ArticleStatus status) {
         PageResult<ArticleSummaryResponse> result =
@@ -94,6 +99,8 @@ public class ArticleQueryService {
      * @param size 每頁筆數
      * @return 分頁文章摘要列表（liked 已填充）
      */
+    // 純讀列表（不發 MQ、不寫 Redis 計數）：唯讀交易讓含 enrich 在內的多次查詢共用同一條連線（PERF-29）；詳情路徑刻意不開交易
+    @Transactional(readOnly = true)
     public PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size) {
         PageResult<ArticleSummaryResponse> result = articleService.getPendingArticles(page, size);
         enrich(result.getRecords());

@@ -37,6 +37,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -134,7 +135,7 @@ class TagServiceTest {
         tag.setId(tagId);
         tag.setName("java");
         tag.setSlug("java");
-        when(tagRepository.findById(tagId)).thenReturn(Optional.of(tag));
+        when(tagRepository.findAllById(any())).thenReturn(List.of(tag));
 
         List<Tag> result = tagService.getHotTags(20);
 
@@ -159,7 +160,10 @@ class TagServiceTest {
 
         assertThat(result).hasSize(1);
         verify(tagRepository).findTop20ByOrderByUsageCountDesc();
-        verify(zSetOps).add(eq("tag:hot"), anyString(), any(Double.class));
+        /* PERF-17：回填改走單一原子腳本（DEL+ZADD+EXPIRE），不再逐筆 ZADD */
+        verify(stringRedisTemplate).execute(any(org.springframework.data.redis.core.script.RedisScript.class),
+                eq(List.of("tag:hot")), any(Object[].class));
+        verify(zSetOps, never()).add(anyString(), anyString(), any(Double.class));
     }
 
     @Test
@@ -186,7 +190,7 @@ class TagServiceTest {
     }
 
     @Test
-    @DisplayName("getHotTags: limit 超過上限時，Redis 讀取範圍夾在上限（SEC-04，每筆各一條 findById）")
+    @DisplayName("getHotTags: limit 超過上限時，Redis 讀取範圍夾在上限（SEC-04，）")
     @SuppressWarnings("unchecked")
     void getHotTags_limitAboveMax_clampsRedisRangeToMax() {
         when(zSetOps.reverseRangeWithScores(anyString(), anyLong(), anyLong())).thenReturn(Set.of());
@@ -407,11 +411,84 @@ class TagServiceTest {
         };
         when(zSetOps.reverseRangeWithScores(eq("tag:hot"), eq(0L), eq(9L)))
                 .thenReturn(Set.of(tuple));
-        when(tagRepository.findById(orphanId)).thenReturn(Optional.empty());
+        when(tagRepository.findAllById(any())).thenReturn(List.of());
 
         List<Tag> result = tagService.getHotTags(10);
 
         assertThat(result).isEmpty();
+    }
+
+    /** ─── PERF-17：getHotTags 批次查詢與原子回填 ───────────────────────────────── */
+
+    private static ZSetOperations.TypedTuple<String> tuple(UUID id, double score) {
+        return ZSetOperations.TypedTuple.of(id.toString(), score);
+    }
+
+    private static Tag tag(UUID id, String name) {
+        Tag t = new Tag();
+        t.setId(id);
+        t.setName(name);
+        t.setSlug(name);
+        return t;
+    }
+
+    @Test
+    @DisplayName("getHotTags: 快取命中 N 個標籤只做 1 次 repository 查詢（findAllById），且依 ZSET 原排序回傳")
+    @SuppressWarnings("unchecked")
+    void getHotTags_cacheHit_singleBatchQueryKeepsZsetOrder() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        UUID c = UUID.randomUUID();
+        Set<ZSetOperations.TypedTuple<String>> ordered = new java.util.LinkedHashSet<>(
+                List.of(tuple(b, 9), tuple(c, 5), tuple(a, 1)));
+        when(zSetOps.reverseRangeWithScores(eq("tag:hot"), eq(0L), eq(19L))).thenReturn(ordered);
+        /* findAllById 不保證順序，故意回傳打亂的順序 */
+        when(tagRepository.findAllById(any())).thenReturn(List.of(tag(a, "a"), tag(b, "b"), tag(c, "c")));
+
+        List<Tag> result = tagService.getHotTags(20);
+
+        assertThat(result).extracting(Tag::getName).containsExactly("b", "c", "a");
+        verify(tagRepository, times(1)).findAllById(any());
+        verify(tagRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("getHotTags: 快取命中但其中一個 id 已不在 DB，略過該筆其餘照常回傳")
+    @SuppressWarnings("unchecked")
+    void getHotTags_cacheHit_skipsMissingIds() {
+        UUID a = UUID.randomUUID();
+        UUID gone = UUID.randomUUID();
+        Set<ZSetOperations.TypedTuple<String>> ordered = new java.util.LinkedHashSet<>(
+                List.of(tuple(gone, 9), tuple(a, 1)));
+        when(zSetOps.reverseRangeWithScores(eq("tag:hot"), eq(0L), eq(19L))).thenReturn(ordered);
+        when(tagRepository.findAllById(any())).thenReturn(List.of(tag(a, "a")));
+
+        List<Tag> result = tagService.getHotTags(20);
+
+        assertThat(result).extracting(Tag::getName).containsExactly("a");
+    }
+
+    @Test
+    @DisplayName("getHotTags: 快取未命中時回填以單一原子腳本執行（參數含 TTL 與全部 score/member），不逐筆 ZADD")
+    @SuppressWarnings("unchecked")
+    void getHotTags_cacheMiss_backfillsWithSingleAtomicScript() {
+        when(zSetOps.reverseRangeWithScores(anyString(), anyLong(), anyLong())).thenReturn(null);
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        Tag ta = tag(a, "a");
+        ta.setUsageCount(7);
+        Tag tb = tag(b, "b");
+        tb.setUsageCount(3);
+        when(tagRepository.findTop20ByOrderByUsageCountDesc()).thenReturn(List.of(ta, tb));
+
+        tagService.getHotTags(20);
+
+        ArgumentCaptor<Object[]> args = ArgumentCaptor.forClass(Object[].class);
+        verify(stringRedisTemplate, times(1)).execute(
+                any(org.springframework.data.redis.core.script.RedisScript.class), eq(List.of("tag:hot")), args.capture());
+        assertThat(args.getValue()).containsExactly("3600", "7", a.toString(), "3", b.toString());
+        verify(zSetOps, never()).add(anyString(), anyString(), any(Double.class));
+        verify(stringRedisTemplate, never()).expire(anyString(), anyLong(), any());
     }
 
     /** ─── getAllTags ───────────────────────────────────────────────────────────── */

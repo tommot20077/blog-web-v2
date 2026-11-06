@@ -15,6 +15,12 @@ import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.request.EditCommentRequest;
 import dowob.xyz.blog.module.comment.model.dto.response.ArticleCommentListResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -387,6 +393,172 @@ class CommentServiceTest {
         assertThatThrownBy(() -> service.editComment(commentUuid, userUuid, false, req))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining(CommentErrorCode.COMMENT_DELETED.getMessage());
+    }
+
+    // ── AUTH-11(a)：admin 操作他人留言的稽核 log ─────────────────────────────
+
+    /**
+     * 擷取 {@link CommentService} logger 輸出的 log4j2 appender（沿用 GlobalExceptionHandlerConflictTest 的作法）。
+     */
+    private static final class AuditLogCaptor extends AbstractAppender {
+
+        private final List<LogEvent> captured = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final org.apache.logging.log4j.core.Logger logger;
+        private final Level originalLevel;
+
+        private AuditLogCaptor(org.apache.logging.log4j.core.Logger logger) {
+            super("comment-audit-captor-" + System.nanoTime(), null, null, true, Property.EMPTY_ARRAY);
+            this.logger = logger;
+            this.originalLevel = logger.getLevel();
+        }
+
+        static AuditLogCaptor attach() {
+            LoggerContext context = (LoggerContext) LogManager.getContext(false);
+            AuditLogCaptor captor = new AuditLogCaptor(context.getLogger(CommentService.class.getName()));
+            captor.start();
+            captor.logger.addAppender(captor);
+            // 測試環境沒有 log4j2 設定檔時預設只輸出 ERROR，須明確打開 INFO 才擷取得到
+            captor.logger.setLevel(Level.INFO);
+            return captor;
+        }
+
+        void detach() {
+            logger.removeAppender(this);
+            logger.setLevel(originalLevel);
+            stop();
+        }
+
+        void clear() {
+            captured.clear();
+        }
+
+        /** 只取 INFO 且以 [AUDIT] 開頭的訊息 */
+        List<String> auditMessages() {
+            return captured.stream()
+                    .filter(e -> e.getLevel() == Level.INFO)
+                    .map(e -> e.getMessage().getFormattedMessage())
+                    .filter(m -> m.startsWith("[AUDIT]"))
+                    .toList();
+        }
+
+        @Override
+        public void append(LogEvent event) {
+            captured.add(event.toImmutable());
+        }
+    }
+
+    private Comment commentOwnedBy(UUID commentUuid, UUID ownerUuid) {
+        Comment c = new Comment();
+        c.setId(1L);
+        c.setUuid(commentUuid);
+        c.setArticleUuid(articleUuid);
+        c.setUserUuid(ownerUuid);
+        c.setCreatedAt(LocalDateTime.now().minusMinutes(1));
+        return c;
+    }
+
+    @Test
+    @DisplayName("AUTH-11a：admin 刪除他人留言 → 寫一行 INFO 稽核 log（operator／comment／article uuid、動作）")
+    void deleteComment_byAdminOnOthersComment_writesAuditLog() {
+        UUID commentUuid = UUID.randomUUID();
+        UUID adminUuid = UUID.randomUUID();
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(commentOwnedBy(commentUuid, otherUserUuid)));
+        when(commentMapper.softDelete(1L, "ADMIN")).thenReturn(1);
+        AuditLogCaptor appender = AuditLogCaptor.attach();
+        try {
+            service.deleteComment(commentUuid, adminUuid, true);
+
+            assertThat(appender.auditMessages()).singleElement().satisfies(m -> assertThat(m)
+                    .contains("action=ADMIN_DELETE_COMMENT")
+                    .contains("operatorUuid=" + adminUuid)
+                    .contains("commentUuid=" + commentUuid)
+                    .contains("articleUuid=" + articleUuid));
+        } finally {
+            appender.detach();
+        }
+    }
+
+    @Test
+    @DisplayName("AUTH-11a：本人刪除自己的留言 → 不寫稽核 log")
+    void deleteComment_byOwner_writesNoAuditLog() {
+        UUID commentUuid = UUID.randomUUID();
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(commentOwnedBy(commentUuid, userUuid)));
+        when(commentMapper.softDelete(1L, "AUTHOR")).thenReturn(1);
+        AuditLogCaptor appender = AuditLogCaptor.attach();
+        try {
+            service.deleteComment(commentUuid, userUuid, false);
+
+            assertThat(appender.auditMessages()).isEmpty();
+        } finally {
+            appender.detach();
+        }
+    }
+
+    @Test
+    @DisplayName("AUTH-11a：admin 刪除自己的留言 → 不寫稽核 log（不是操作他人留言）")
+    void deleteComment_byAdminOnOwnComment_writesNoAuditLog() {
+        UUID commentUuid = UUID.randomUUID();
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(commentOwnedBy(commentUuid, userUuid)));
+        when(commentMapper.softDelete(1L, "AUTHOR")).thenReturn(1);
+        AuditLogCaptor appender = AuditLogCaptor.attach();
+        try {
+            service.deleteComment(commentUuid, userUuid, true);
+
+            assertThat(appender.auditMessages()).isEmpty();
+        } finally {
+            appender.detach();
+        }
+    }
+
+    @Test
+    @DisplayName("AUTH-11a：admin 編輯他人留言 → 寫一行 INFO 稽核 log；編輯自己的不寫")
+    void editComment_byAdminOnOthersComment_writesAuditLog_ownCommentDoesNot() {
+        UUID commentUuid = UUID.randomUUID();
+        UUID adminUuid = UUID.randomUUID();
+        when(articleFacade.isReadableBy(eq(articleUuid), any(), anyBoolean())).thenReturn(true);
+        when(renderer.render(any())).thenReturn("<p>x</p>");
+        when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
+        EditCommentRequest req = new EditCommentRequest();
+        req.setContent("admin edit");
+        AuditLogCaptor appender = AuditLogCaptor.attach();
+        try {
+            when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(commentOwnedBy(commentUuid, otherUserUuid)));
+            service.editComment(commentUuid, adminUuid, true, req);
+
+            assertThat(appender.auditMessages()).singleElement().satisfies(m -> assertThat(m)
+                    .contains("action=ADMIN_EDIT_COMMENT")
+                    .contains("operatorUuid=" + adminUuid)
+                    .contains("commentUuid=" + commentUuid)
+                    .contains("articleUuid=" + articleUuid));
+
+            appender.clear();
+            when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(commentOwnedBy(commentUuid, adminUuid)));
+            service.editComment(commentUuid, adminUuid, true, req);
+
+            assertThat(appender.auditMessages()).isEmpty();
+        } finally {
+            appender.detach();
+        }
+    }
+
+    @Test
+    @DisplayName("AUTH-11a：本人編輯自己的留言 → 不寫稽核 log")
+    void editComment_byOwner_writesNoAuditLog() {
+        UUID commentUuid = UUID.randomUUID();
+        when(commentRepo.findByUuid(commentUuid)).thenReturn(Optional.of(commentOwnedBy(commentUuid, userUuid)));
+        when(articleFacade.isReadableBy(eq(articleUuid), any(), anyBoolean())).thenReturn(true);
+        when(renderer.render(any())).thenReturn("<p>x</p>");
+        when(commentRepo.save(any(Comment.class))).thenAnswer(inv -> inv.getArgument(0));
+        EditCommentRequest req = new EditCommentRequest();
+        req.setContent("mine");
+        AuditLogCaptor appender = AuditLogCaptor.attach();
+        try {
+            service.editComment(commentUuid, userUuid, false, req);
+
+            assertThat(appender.auditMessages()).isEmpty();
+        } finally {
+            appender.detach();
+        }
     }
 
     // ── deleteComment ─────────────────────────────────────────────────────

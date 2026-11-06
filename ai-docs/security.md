@@ -54,7 +54,7 @@ Every Access Token carries a `version` claim. The JWT `subject` is the user's uu
 4. `AuthStateLoader` looks up Redis `user:auth:{userUuid}`; a missing/partial hash (any of `status`/`role`/`version` absent) is a cache miss → fall back to DB and backfill. `/auth/refresh` shares the same loader.
 5. `tokenVersion` must **exactly match** the Redis version (`Objects.equals`).
 6. User status must be `ACTIVE` or `PENDING_VERIFICATION`.
-7. Build `Authentication` with principal = `AuthUser(uuid, role)`; `role` and the authorities both come from the token's `role` claim. (`/auth/refresh` accepts `ACTIVE` only.)
+7. Build `Authentication` with principal = `AuthUser(uuid, role)`; `role` and the authorities both come from the token's `role` claim. (`/auth/refresh` accepts `ACTIVE` only.) Only `ACTIVE` users get the role's Permission authorities; `PENDING_VERIFICATION` users get the `ROLE_*` authority only, so every `hasAuthority('<PERMISSION>')` endpoint rejects them (Q3: unverified accounts must not write; AUTH-06, 2026-11-06). Comment create / edit / like / unlike require `COMMENT_WRITE`, comment delete requires `COMMENT_DELETE` (AUTH-04).
 
 **Instant logout**: update the token version in Redis — existing tokens become invalid immediately without waiting for JWT expiry.
 

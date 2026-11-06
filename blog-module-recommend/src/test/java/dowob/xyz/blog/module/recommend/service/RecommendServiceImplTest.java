@@ -85,6 +85,7 @@ class RecommendServiceImplTest {
     private static final UUID TAG_ID_1 = UUID.randomUUID();
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
@@ -93,6 +94,9 @@ class RecommendServiceImplTest {
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
         when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(valueOperations.get(anyString())).thenReturn(null);
+        /* DATA-13：快取命中後會即時過濾非公開文章；預設視為「傳入的全部都是公開」 */
+        when(articleFacade.filterPublishedUuids(any()))
+                .thenAnswer(inv -> new java.util.HashSet<>((java.util.Collection<UUID>) inv.getArgument(0)));
     }
 
     private ArticleSummaryInfo summary(UUID uuid, String title) {
@@ -281,6 +285,101 @@ class RecommendServiceImplTest {
         }
     }
 
+    // ─────────────────────────── Related: PERF-26 / DATA-13 ───────────────────────────
+
+    @Nested
+    @DisplayName("getRelatedArticles - 快取 limit 與即時過濾非公開文章")
+    class RelatedLimitAndVisibility {
+
+        /** 以記憶體 Map 模擬 Redis String，使「第一次寫入、第二次讀取」可以串起來 */
+        private void useInMemoryCache() {
+            java.util.Map<String, String> store = new java.util.HashMap<>();
+            when(valueOperations.get(anyString())).thenAnswer(inv -> store.get(inv.<String>getArgument(0)));
+            org.mockito.Mockito.doAnswer(inv -> {
+                store.put(inv.getArgument(0), inv.getArgument(1));
+                return null;
+            }).when(valueOperations).set(anyString(), anyString(), any(Duration.class));
+        }
+
+        @Test
+        @DisplayName("先以 limit=1 請求、再以 limit=5 請求：第二次拿到 5 筆（快取不得被 limit=1 的結果污染）")
+        void firstSmallLimitDoesNotPoisonLaterLargerLimit() {
+            useInMemoryCache();
+            List<ArticleSummaryInfo> pool = summaries(20);
+            when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID))
+                    .thenReturn(Optional.of(new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1))));
+            /* 模擬真實 Facade：只回傳不超過呼叫端要求 limit 的筆數 */
+            when(articleFacade.getArticlesByTagIds(anyList(), eq(ARTICLE_UUID), anyInt()))
+                    .thenAnswer(inv -> pool.subList(0, Math.min(pool.size(), inv.<Integer>getArgument(2))));
+
+            List<RecommendArticleResponse> first = service.getRelatedArticles(ARTICLE_UUID, 1);
+            List<RecommendArticleResponse> second = service.getRelatedArticles(ARTICLE_UUID, 5);
+
+            assertThat(first).hasSize(1);
+            assertThat(second).hasSize(5);
+            /* 第二次是快取命中，不應再次計算 */
+            verify(articleFacade, times(1)).getPublishedArticleBasicInfo(ARTICLE_UUID);
+        }
+
+        @Test
+        @DisplayName("快取未命中：一律以最大 limit(20) 向各層取資料")
+        void cacheMiss_computesWithMaxLimit() {
+            when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID))
+                    .thenReturn(Optional.of(new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1))));
+            when(articleFacade.getArticlesByTagIds(anyList(), eq(ARTICLE_UUID), anyInt()))
+                    .thenReturn(summaries(3));
+
+            service.getRelatedArticles(ARTICLE_UUID, 1);
+
+            verify(articleFacade).getArticlesByTagIds(anyList(), eq(ARTICLE_UUID), eq(20));
+        }
+
+        @Test
+        @DisplayName("快取命中但其中一篇已下架：該篇不回傳")
+        void cacheHit_unpublishedArticleIsFilteredOut() throws Exception {
+            RecommendArticleResponse kept1 = resp("k1");
+            RecommendArticleResponse unpublished = resp("gone");
+            RecommendArticleResponse kept2 = resp("k2");
+            when(valueOperations.get(RedisKeyConstant.getRelatedKey(ARTICLE_UUID.toString())))
+                    .thenReturn(objectMapper.writeValueAsString(List.of(kept1, unpublished, kept2)));
+            org.mockito.Mockito.doReturn(new java.util.HashSet<>(List.of(kept1.uuid(), kept2.uuid())))
+                    .when(articleFacade).filterPublishedUuids(any());
+
+            List<RecommendArticleResponse> result = service.getRelatedArticles(ARTICLE_UUID, 5);
+
+            assertThat(result).extracting(RecommendArticleResponse::uuid)
+                    .containsExactly(kept1.uuid(), kept2.uuid());
+        }
+
+        @Test
+        @DisplayName("先過濾再切片：前段有已下架文章時，limit 仍盡量用後段公開文章補滿")
+        void cacheHit_filtersBeforeSlicing() throws Exception {
+            RecommendArticleResponse gone = resp("gone");
+            RecommendArticleResponse a = resp("a");
+            RecommendArticleResponse b = resp("b");
+            RecommendArticleResponse c = resp("c");
+            when(valueOperations.get(RedisKeyConstant.getRelatedKey(ARTICLE_UUID.toString())))
+                    .thenReturn(objectMapper.writeValueAsString(List.of(gone, a, b, c)));
+            org.mockito.Mockito.doReturn(new java.util.HashSet<>(List.of(a.uuid(), b.uuid(), c.uuid())))
+                    .when(articleFacade).filterPublishedUuids(any());
+
+            List<RecommendArticleResponse> result = service.getRelatedArticles(ARTICLE_UUID, 2);
+
+            assertThat(result).extracting(RecommendArticleResponse::uuid).containsExactly(a.uuid(), b.uuid());
+        }
+
+        @Test
+        @DisplayName("快取命中只對 Facade 做 1 次集合述詞查詢（不逐篇查）")
+        void cacheHit_singleFilterCall() throws Exception {
+            when(valueOperations.get(RedisKeyConstant.getRelatedKey(ARTICLE_UUID.toString())))
+                    .thenReturn(objectMapper.writeValueAsString(List.of(resp("a"), resp("b"), resp("c"))));
+
+            service.getRelatedArticles(ARTICLE_UUID, 5);
+
+            verify(articleFacade, times(1)).filterPublishedUuids(any());
+        }
+    }
+
     // ─────────────────────────── Related: 三層降級 ───────────────────────────
 
     @Nested
@@ -332,7 +431,7 @@ class RecommendServiceImplTest {
         @Test
         @DisplayName("第三層最新文章查詢傳入 remaining*2")
         void recentLayer_receivesRemainingTimesTwo() {
-            /** limit=5，前兩層各 0 篇，remaining=5 → recent 應收到 5*2=10 */
+            /** 以最大 limit=20 計算，前兩層各 0 篇，remaining=20 → recent 應收到 20*2=40 */
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, Collections.emptyList());
             when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID))
                     .thenReturn(Optional.of(basicInfo));
@@ -343,18 +442,19 @@ class RecommendServiceImplTest {
 
             service.getRelatedArticles(ARTICLE_UUID, 5);
 
-            verify(articleFacade).getRecentPublishedArticles(ARTICLE_UUID, 10);
+            /* PERF-26：一律以最大 limit(20) 計算 → remaining=20 → 20*2=40 */
+            verify(articleFacade).getRecentPublishedArticles(ARTICLE_UUID, 40);
         }
 
         @Test
-        @DisplayName("第一層即超量時截斷到 limit，且不查 ES/最新")
+        @DisplayName("第一層即超量時以計算上限截斷、讀取時切到 limit，且不查 ES/最新")
         void tagLayerOverflow_truncatedToLimitAndSkipsLowerLayers() {
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1));
-            /** 第一層回 5 篇，但 limit=3 → 截斷成 3 */
+            /** 第一層回滿 20 篇（計算上限），limit=3 → 讀取時切成 3 */
             when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID))
                     .thenReturn(Optional.of(basicInfo));
             when(articleFacade.getArticlesByTagIds(anyList(), eq(ARTICLE_UUID), anyInt()))
-                    .thenReturn(summaries(5));
+                    .thenReturn(summaries(25));
 
             List<RecommendArticleResponse> result = service.getRelatedArticles(ARTICLE_UUID, 3);
 

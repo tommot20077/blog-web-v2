@@ -11,7 +11,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * Series 模組 RabbitMQ 設定。訂閱 article.events / article.deleted 與 user.events / user.deleted（作者刪帳連動），並宣告自己的 series.events exchange
@@ -94,12 +94,5 @@ public class SeriesRabbitMqConfig {
                 .bind(seriesUserDeletedQueue)
                 .to(seriesUserEventsExchange)
                 .with(UserEventContract.ROUTING_KEY_DELETED);
-    }
-
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-            "x-dead-letter-exchange", "blog.dlq",
-            "x-dead-letter-routing-key", "dead-letter"
-        );
     }
 }

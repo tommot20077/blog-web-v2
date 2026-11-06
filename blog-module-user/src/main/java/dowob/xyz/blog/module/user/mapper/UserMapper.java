@@ -26,24 +26,6 @@ import java.util.UUID;
 public interface UserMapper {
 
     /**
-     * 根據角色查詢用戶列表
-     *
-     * @param role 角色名稱
-     * @return 用戶列表
-     */
-    @Select("SELECT * FROM users WHERE role = #{role}")
-    List<User> findByRole(@Param("role") String role);
-
-    /**
-     * 模糊搜尋暱稱
-     *
-     * @param keyword 關鍵字
-     * @return 用戶列表
-     */
-    @Select("SELECT * FROM users WHERE nickname ILIKE CONCAT('%', #{keyword}, '%')")
-    List<User> searchByNickname(@Param("keyword") String keyword);
-
-    /**
      * 以公開 UUID 批次查詢使用者顯示投影
      *
      * <p>只撈 {@code uuid / nickname / avatar_url} 三欄，不讀 {@code password_hash} 等欄位。

@@ -2,6 +2,7 @@ package dowob.xyz.blog.infrastructure.facade;
 
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 
+import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -74,4 +75,29 @@ public interface ArticleLookupFacade {
      * @return 文章存在時為其內文（內文為 null 時以空字串表示）；文章不存在時為 empty
      */
     Optional<String> findContentByUuid(UUID articleUuid);
+
+    /**
+     * 查出某作者<b>所有仍存在的文章</b>（<b>不分狀態</b>：DRAFT、PENDING_REVIEW、REJECTED、PUBLISHED、ARCHIVED）
+     * 內文與封面中引用的檔案 UUID。
+     *
+     * <p>與 {@link #findFileUuidsReferencedByRetainedArticles} 的差別在於去留語意：後者回答「作者刪帳後哪些檔案還要留」
+     * （草稿隨帳號移除，所以不算）；本方法回答「刪除<b>單篇</b>文章後，哪些檔案仍被作者其餘文章使用」——其餘文章（含草稿）
+     * 都還在，圖被它們引用就不能刪。用途：file 模組在文章刪除（事件或每日孤兒校正）後清理綁定該文章的檔案（DATA-07）。
+     * 引用格式與掃描方式同 {@link #findFileUuidsReferencedByRetainedArticles}。</p>
+     *
+     * @param authorUuid 作者公開 UUID；為 null 時回傳空集合
+     * @return 作者名下仍存在的任一文章引用的檔案 UUID（去重）；無則為空集合
+     */
+    Set<UUID> findFileUuidsReferencedByAuthorArticles(UUID authorUuid);
+
+    /**
+     * 回傳其中仍存在於文章表的 UUID（<b>不分狀態</b>，僅被硬刪者不會出現）。
+     *
+     * <p>集合述詞，供 file 模組的每日孤兒校正使用（語意等同 {@code ArticleFacade#filterExistingUuids}；
+     * file 不能依賴那顆胖 Bean，見本介面說明）。實作端自行去重並切批，caller 可一次傳入任意數量。</p>
+     *
+     * @param uuids 待查證的文章公開 UUID；null 或空集合回傳空集合；null 元素會被忽略
+     * @return 仍存在的 UUID 子集
+     */
+    Set<UUID> filterExistingUuids(Collection<UUID> uuids);
 }

@@ -88,7 +88,7 @@ public class CommentController {
     }
 
     @PostMapping("/articles/{articleUuid}/comments")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('COMMENT_WRITE')")
     @Operation(summary = "建立留言（top-level 或 reply）")
     public ApiResponse<CommentResponse> create(
             @PathVariable UUID articleUuid,
@@ -98,7 +98,7 @@ public class CommentController {
     }
 
     @PutMapping("/comments/{uuid}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('COMMENT_WRITE')")
     @Operation(summary = "編輯留言（5 分鐘窗，Admin 不受限）")
     public ApiResponse<CommentResponse> edit(
             @PathVariable UUID uuid,
@@ -109,7 +109,7 @@ public class CommentController {
     }
 
     @DeleteMapping("/comments/{uuid}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('COMMENT_DELETE')")
     @Operation(summary = "軟刪除留言")
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,

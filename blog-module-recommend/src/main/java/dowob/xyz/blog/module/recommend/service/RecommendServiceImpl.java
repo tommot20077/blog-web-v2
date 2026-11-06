@@ -70,9 +70,17 @@ public class RecommendServiceImpl implements RecommendService {
     private static final Duration RELATED_CACHE_TTL = Duration.ofHours(1);
 
     /**
+     * 相關文章一律計算並快取的筆數，等於 controller 允許的最大 limit（20）
+     */
+    static final int RELATED_COMPUTE_LIMIT = 20;
+
+    /**
      * {@inheritDoc}
      *
-     * <p>優先從 Redis 快取讀取，快取未命中時執行三層策略並寫入快取。</p>
+     * <p>快取 key 不含 limit，因此一律以 {@link #RELATED_COMPUTE_LIMIT}（controller 允許的最大值）計算並快取，
+     * 讀取時再切片，避免第一個小 limit 的請求把不完整結果快取 1 小時（PERF-26）。
+     * 快取命中後以 {@link ArticleFacade#filterPublishedUuids} 一次查詢即時過濾已刪除／下架的文章，
+     * 再切到 limit（DATA-13）。</p>
      */
     @Override
     public List<RecommendArticleResponse> getRelatedArticles(UUID articleUuid, int limit) {
@@ -83,13 +91,13 @@ public class RecommendServiceImpl implements RecommendService {
             if (cached != null) {
                 List<RecommendArticleResponse> result = objectMapper.readValue(
                         cached, new TypeReference<>() {});
-                return result.size() > limit ? result.subList(0, limit) : result;
+                return sliceVisible(result, limit);
             }
         } catch (Exception e) {
             log.warn("讀取相關文章快取失敗，articleUuid={}: {}", articleUuid, e.getMessage());
         }
 
-        List<ArticleSummaryInfo> results = computeRelatedArticles(articleUuid, limit);
+        List<ArticleSummaryInfo> results = computeRelatedArticles(articleUuid, RELATED_COMPUTE_LIMIT);
         List<RecommendArticleResponse> responses = results.stream()
                 .map(RecommendArticleResponse::from)
                 .toList();
@@ -101,7 +109,26 @@ public class RecommendServiceImpl implements RecommendService {
             log.warn("寫入相關文章快取失敗，articleUuid={}: {}", articleUuid, e.getMessage());
         }
 
-        return responses;
+        return responses.size() > limit ? responses.subList(0, Math.max(limit, 0)) : responses;
+    }
+
+    /**
+     * 即時過濾非公開文章後再切到 limit（先過濾再切片，前段被下架時仍可由後段補滿）
+     *
+     * @param cached 快取中的完整結果（保持原順序）
+     * @param limit  呼叫端要求的筆數
+     * @return 僅含公開文章、不超過 limit 的結果
+     */
+    private List<RecommendArticleResponse> sliceVisible(List<RecommendArticleResponse> cached, int limit) {
+        if (cached.isEmpty()) {
+            return cached;
+        }
+        Set<UUID> published = articleFacade.filterPublishedUuids(
+                cached.stream().map(RecommendArticleResponse::uuid).toList());
+        return cached.stream()
+                .filter(r -> published.contains(r.uuid()))
+                .limit(Math.max(limit, 0))
+                .toList();
     }
 
     /**

@@ -23,7 +23,7 @@ public class UpdateProfileRequest {
      */
     @Schema(description = "暱稱", example = "newNickname")
     @NotBlank(message = "暱稱不能為空")
-    @Size(max = 50, message = "暱稱不能超過 50 字元")
+    @Size(max = ProfileFieldLimits.NICKNAME_MAX_LENGTH, message = "暱稱不能超過 50 字元")
     private String nickname;
 
     /**

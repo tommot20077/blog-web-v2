@@ -54,14 +54,18 @@ public interface CommentMapper {
     /**
      * 一次撈多個 top-level 的所有 replies（按 parent_id 分組、created_at ASC）。
      * 過濾軟刪除 leaf reply。
+     *
+     * <p>parent uuid 以 {@code LEFT JOIN comments p} 取得（PERF-22；原為逐列執行的相關子查詢，結果相同）。
+     * {@code p.id} 為主鍵，每列至多匹配一列，不會讓結果列數增加；父留言已軟刪除時仍會帶出其 uuid。</p>
      */
     @Select({
         "<script>",
         "SELECT c.id, c.uuid, c.article_uuid, c.parent_id,",
-        "       (SELECT p.uuid FROM comments p WHERE p.id = c.parent_id) AS parent_uuid,",
+        "       p.uuid AS parent_uuid,",
         "       c.user_uuid, c.content, c.content_html, c.like_count,",
         "       c.edited_at, c.deleted_at, c.deleted_by_role, c.created_at",
         "  FROM comments c",
+        "  LEFT JOIN comments p ON p.id = c.parent_id",
         " WHERE c.parent_id IN",
         "<foreach collection='parentIds' item='id' open='(' separator=',' close=')'>",
         "  #{id}",

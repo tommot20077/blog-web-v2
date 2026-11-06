@@ -304,6 +304,58 @@ class FileControllerIT {
                 .andExpect(jsonPath("$.data[0].originalName").value("test.jpg"));
     }
 
+    /** 寫入 {@code count} 筆屬於 {@link #USER_A_UUID} 的檔案，createdAt 遞增（i 越大越新） */
+    private void insertFilesForUserA(int count) {
+        java.time.LocalDateTime base = java.time.LocalDateTime.of(2026, 1, 1, 0, 0);
+        for (int i = 0; i < count; i++) {
+            dowob.xyz.blog.module.file.model.FileMetadata m = new dowob.xyz.blog.module.file.model.FileMetadata();
+            UUID id = UUID.randomUUID();
+            m.setId(id);
+            m.setNewEntity(true);
+            m.setOriginalName("f" + i + ".jpg");
+            m.setStoragePath("articles/2026/01/01/" + id + ".jpg");
+            m.setContentType("image/jpeg");
+            m.setSize(10L);
+            m.setUsageType(dowob.xyz.blog.module.file.model.UsageType.ARTICLE_CONTENT);
+            m.setUploaderId(USER_A_UUID);
+            m.setHasThumbnail(false);
+            m.setCreatedAt(base.plusMinutes(i));
+            fileMetadataRepository.save(m);
+        }
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/users/me/files?size=2 - 只回 2 筆（最新在前）；page=1 取下一頁；page=2 取最後 1 筆")
+    void getUserFiles_withPaging_returnsOnlyRequestedPage() throws Exception {
+        insertFilesForUserA(5);
+
+        mockMvc.perform(get("/api/v1/users/me/files").param("size", "2")
+                        .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].originalName").value("f4.jpg"))
+                .andExpect(jsonPath("$.data[1].originalName").value("f3.jpg"));
+
+        mockMvc.perform(get("/api/v1/users/me/files").param("page", "1").param("size", "2")
+                        .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].originalName").value("f2.jpg"))
+                .andExpect(jsonPath("$.data[1].originalName").value("f1.jpg"));
+
+        mockMvc.perform(get("/api/v1/users/me/files").param("page", "2").param("size", "2")
+                        .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].originalName").value("f0.jpg"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/users/me/files?size=101 - 超過上限 100 一律拒絕（HTTP 400），不靜默夾界")
+    void getUserFiles_withSizeAboveMax_returns400() throws Exception {
+        mockMvc.perform(get("/api/v1/users/me/files").param("size", "101")
+                        .with(asUser(USER_A_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest());
+    }
+
     @Test
     @DisplayName("DELETE /api/files/{id} - 擁有者刪除自己的檔案，應回傳 00000")
     void deleteFile_byOwner_returns200() throws Exception {

@@ -213,6 +213,57 @@ class ArticleLookupFacadeImplTest {
         verifyNoInteractions(articleAuthorCleanupMapper);
     }
 
+    @Test
+    @DisplayName("findFileUuidsReferencedByAuthorArticles → 以全部 ArticleStatus 查詢（含草稿）並轉成 UUID 集合（DATA-07：單篇刪除後其餘文章仍在）")
+    void findFileUuidsReferencedByAuthorArticles_queriesAllStatuses() {
+        UUID author = UUID.randomUUID();
+        UUID f1 = UUID.randomUUID();
+        when(articleAuthorCleanupMapper.findReferencedFileUuidsByAuthorAndStatuses(
+                org.mockito.ArgumentMatchers.eq(author), org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(java.util.List.of(f1.toString()));
+
+        java.util.Set<UUID> result = articleLookupFacadeImpl.findFileUuidsReferencedByAuthorArticles(author);
+
+        assertThat(result).containsExactly(f1);
+        org.mockito.ArgumentCaptor<java.util.List<String>> statuses = org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        org.mockito.Mockito.verify(articleAuthorCleanupMapper)
+                .findReferencedFileUuidsByAuthorAndStatuses(org.mockito.ArgumentMatchers.eq(author), statuses.capture());
+        assertThat(statuses.getValue()).containsExactlyInAnyOrder(
+                java.util.Arrays.stream(ArticleStatus.values()).map(Enum::name).toArray(String[]::new));
+    }
+
+    @Test
+    @DisplayName("findFileUuidsReferencedByAuthorArticles → authorUuid 為 null → 空集合且不查詢")
+    void findFileUuidsReferencedByAuthorArticles_nullAuthor_returnsEmptyWithoutQuery() {
+        assertThat(articleLookupFacadeImpl.findFileUuidsReferencedByAuthorArticles(null)).isEmpty();
+        verifyNoInteractions(articleAuthorCleanupMapper);
+    }
+
+    @Test
+    @DisplayName("filterExistingUuids → 去重、略過 null，經 mapper 查詢後轉成 UUID 集合")
+    void filterExistingUuids_dedupesAndMapsToUuids() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        when(articleAuthorCleanupMapper.findExistingUuidsIn(org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(java.util.List.of(a.toString()));
+
+        java.util.Set<UUID> result = articleLookupFacadeImpl
+                .filterExistingUuids(java.util.Arrays.asList(a, b, a, null));
+
+        assertThat(result).containsExactly(a);
+        org.mockito.ArgumentCaptor<java.util.List<UUID>> sent = org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        org.mockito.Mockito.verify(articleAuthorCleanupMapper).findExistingUuidsIn(sent.capture());
+        assertThat(sent.getValue()).containsExactly(a, b);
+    }
+
+    @Test
+    @DisplayName("filterExistingUuids → null 或空集合：空結果且不查詢")
+    void filterExistingUuids_nullOrEmpty_returnsEmptyWithoutQuery() {
+        assertThat(articleLookupFacadeImpl.filterExistingUuids(null)).isEmpty();
+        assertThat(articleLookupFacadeImpl.filterExistingUuids(java.util.List.of())).isEmpty();
+        verifyNoInteractions(articleAuthorCleanupMapper);
+    }
+
     /** W5A：file 模組消費內容變更事件時，以此取得文章最新內文來回填檔案綁定 */
     @Test
     @DisplayName("findContentByUuid → 文章存在 → 回傳目前內文")

@@ -173,6 +173,44 @@ class TagFacadeImplTest {
         }
 
         @Test
+        @DisplayName("PERF-27：已存在的標籤以單一批次查詢讀出，只對缺少的才 findOrCreate（且仍依 slug 固定順序）")
+        void findOrCreateTags_batchReadsExisting_createsOnlyMissingInSlugOrder() {
+            stubNormalizeAsLowerCase();
+            Tag existingMid = buildTag(UUID.randomUUID(), "mid", "mid");
+            Tag createdZeta = buildTag(UUID.randomUUID(), "zeta", "zeta");
+            Tag createdAlpha = buildTag(UUID.randomUUID(), "alpha", "alpha");
+            when(tagNormalizationService.findExistingBySlugs(org.mockito.ArgumentMatchers.anyCollection()))
+                    .thenReturn(java.util.Map.of("mid", existingMid));
+            when(tagNormalizationService.findOrCreate("Zeta")).thenReturn(createdZeta);
+            when(tagNormalizationService.findOrCreate("Alpha")).thenReturn(createdAlpha);
+
+            List<TagInfo> result = tagFacadeImpl.findOrCreateTags(List.of("Zeta", "Mid", "Alpha"));
+
+            verify(tagNormalizationService, times(1)).findExistingBySlugs(org.mockito.ArgumentMatchers.anyCollection());
+            verify(tagNormalizationService, never()).findOrCreate("Mid");
+            InOrder order = inOrder(tagNormalizationService);
+            order.verify(tagNormalizationService).findOrCreate("Alpha");
+            order.verify(tagNormalizationService).findOrCreate("Zeta");
+            assertThat(result).extracting(TagInfo::slug).containsExactly("zeta", "mid", "alpha");
+            assertThat(result.get(1).id()).isEqualTo(existingMid.getId());
+        }
+
+        @Test
+        @DisplayName("PERF-27：全部標籤都已存在 → 一次批次查詢，完全不呼叫 findOrCreate")
+        void findOrCreateTags_allExisting_noFindOrCreate() {
+            stubNormalizeAsLowerCase();
+            Tag a = buildTag(UUID.randomUUID(), "a", "a");
+            Tag b = buildTag(UUID.randomUUID(), "b", "b");
+            when(tagNormalizationService.findExistingBySlugs(org.mockito.ArgumentMatchers.anyCollection()))
+                    .thenReturn(java.util.Map.of("a", a, "b", b));
+
+            List<TagInfo> result = tagFacadeImpl.findOrCreateTags(List.of("B", "A"));
+
+            verify(tagNormalizationService, never()).findOrCreate(anyString());
+            assertThat(result).extracting(TagInfo::slug).containsExactly("b", "a");
+        }
+
+        @Test
         @DisplayName("blank 名稱提早拋 BusinessException：在建立任何標籤之前就失敗")
         void findOrCreateTags_blankName_failsBeforeCreatingAnything() {
             when(tagNormalizationService.normalize("  ")).thenThrow(new BusinessException(TagErrorCode.TAG_INVALID_NAME));
@@ -212,52 +250,51 @@ class TagFacadeImplTest {
     class SyncArticleTagsTests {
 
         @Test
-        @DisplayName("正常：有舊標籤時，先刪除舊標籤，再新增新標籤")
+        @DisplayName("正常：只刪除被移除的舊標籤、只新增新加入的標籤（各一次批次呼叫）")
         void syncArticleTags_deletesOldAndSavesNew() {
             UUID articleUuid = UUID.randomUUID();
             UUID existingTagId = UUID.randomUUID();
-            Tag existingTag = buildTag(existingTagId, "OldTag", "old-tag");
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(existingTag));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(existingTagId));
 
             UUID newTagId = UUID.randomUUID();
             tagFacadeImpl.syncArticleTags(articleUuid, List.of(newTagId));
 
-            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, existingTagId);
-            verify(articleTagRepository).save(articleUuid, newTagId);
+            verify(articleTagRepository).deleteByArticleIdAndTagIds(articleUuid, List.of(existingTagId));
+            verify(articleTagRepository).saveAll(articleUuid, List.of(newTagId));
         }
 
         @Test
-        @DisplayName("正常：多個舊標籤，每個都要刪除；多個新標籤，每個都要新增")
+        @DisplayName("正常：多個舊標籤與多個新標籤，仍只各用一次批次刪除／批次新增")
         void syncArticleTags_deletesAllOldAndSavesAllNew() {
             UUID articleUuid = UUID.randomUUID();
-            UUID oldId1 = UUID.randomUUID();
-            UUID oldId2 = UUID.randomUUID();
-            Tag oldTag1 = buildTag(oldId1, "Tag1", "tag-1");
-            Tag oldTag2 = buildTag(oldId2, "Tag2", "tag-2");
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(oldTag1, oldTag2));
+            UUID oldId1 = new UUID(1L, 1L);
+            UUID oldId2 = new UUID(1L, 2L);
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(oldId1, oldId2));
 
-            UUID newId1 = UUID.randomUUID();
-            UUID newId2 = UUID.randomUUID();
+            UUID newId1 = new UUID(2L, 1L);
+            UUID newId2 = new UUID(2L, 2L);
             tagFacadeImpl.syncArticleTags(articleUuid, List.of(newId1, newId2));
 
-            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, oldId1);
-            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, oldId2);
-            verify(articleTagRepository).save(articleUuid, newId1);
-            verify(articleTagRepository).save(articleUuid, newId2);
+            verify(articleTagRepository, times(1)).deleteByArticleIdAndTagIds(articleUuid, List.of(oldId1, oldId2));
+            verify(articleTagRepository, times(1)).saveAll(articleUuid, List.of(newId1, newId2));
+            verify(articleTagRepository, never()).deleteByArticleIdAndTagId(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            verify(articleTagRepository, never()).save(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
 
         @Test
-        @DisplayName("邊界：無舊標籤時，不呼叫 deleteByArticleIdAndTagId，仍新增新標籤")
+        @DisplayName("邊界：無舊標籤時，不刪除，仍新增新標籤")
         void syncArticleTags_noExistingTags_onlySaves() {
             UUID articleUuid = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of());
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of());
 
             UUID newTagId = UUID.randomUUID();
             tagFacadeImpl.syncArticleTags(articleUuid, List.of(newTagId));
 
-            verify(articleTagRepository, never()).deleteByArticleIdAndTagId(
-                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
-            verify(articleTagRepository).save(articleUuid, newTagId);
+            verify(articleTagRepository, never()).deleteByArticleIdAndTagIds(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyCollection());
+            verify(articleTagRepository).saveAll(articleUuid, List.of(newTagId));
         }
 
         @Test
@@ -265,14 +302,46 @@ class TagFacadeImplTest {
         void syncArticleTags_nullTagIds_deletesOldAndDoesNotThrow() {
             UUID articleUuid = UUID.randomUUID();
             UUID existingTagId = UUID.randomUUID();
-            Tag existingTag = buildTag(existingTagId, "OldTag", "old-tag");
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(existingTag));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(existingTagId));
 
             tagFacadeImpl.syncArticleTags(articleUuid, null);
 
-            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, existingTagId);
-            verify(articleTagRepository, never()).save(
-                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            verify(articleTagRepository).deleteByArticleIdAndTagIds(articleUuid, List.of(existingTagId));
+            verify(articleTagRepository, never()).saveAll(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList());
+        }
+
+        @Test
+        @DisplayName("PERF-27：只改一個標籤（[A,B,C] → [A,B,D]）→ 只刪 C、只增 D，未變動的 A、B 完全不被碰")
+        void syncArticleTags_changeOneTag_onlyTouchesTheDifference() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID a = new UUID(0L, 1L);
+            UUID b = new UUID(0L, 2L);
+            UUID c = new UUID(0L, 3L);
+            UUID d = new UUID(0L, 4L);
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(a, b, c));
+
+            tagFacadeImpl.syncArticleTags(articleUuid, List.of(a, b, d));
+
+            verify(articleTagRepository).deleteByArticleIdAndTagIds(articleUuid, List.of(c));
+            verify(articleTagRepository).saveAll(articleUuid, List.of(d));
+            verify(articleTagRepository, never()).deleteByArticleId(org.mockito.ArgumentMatchers.any());
+        }
+
+        @Test
+        @DisplayName("PERF-27：新舊集合完全相同 → 不刪、不增（零寫入）；輸入重複與順序不同也視為相同")
+        void syncArticleTags_sameSet_noWrites() {
+            UUID articleUuid = UUID.randomUUID();
+            UUID a = new UUID(0L, 1L);
+            UUID b = new UUID(0L, 2L);
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(a, b));
+
+            tagFacadeImpl.syncArticleTags(articleUuid, List.of(b, a, b));
+
+            verify(articleTagRepository, never()).deleteByArticleIdAndTagIds(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyCollection());
+            verify(articleTagRepository, never()).saveAll(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyList());
         }
     }
 
@@ -285,31 +354,30 @@ class TagFacadeImplTest {
     class DeleteArticleTagsTests {
 
         @Test
-        @DisplayName("正常：有兩個標籤，每個都呼叫 deleteByArticleIdAndTagId")
-        void deleteArticleTags_deletesAll() {
+        @DisplayName("正常：有兩個標籤 → 單一批次刪除（依無號 uuid 順序），不再逐筆刪除")
+        void deleteArticleTags_deletesAllInOneBatch() {
             UUID articleUuid = UUID.randomUUID();
-            UUID tagId1 = UUID.randomUUID();
-            UUID tagId2 = UUID.randomUUID();
-            Tag tag1 = buildTag(tagId1, "Tag1", "tag-1");
-            Tag tag2 = buildTag(tagId2, "Tag2", "tag-2");
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(tag1, tag2));
+            UUID low = new UUID(1L, 0L);
+            UUID high = new UUID(-1L, 0L);
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(high, low));
 
             tagFacadeImpl.deleteArticleTags(articleUuid);
 
-            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, tagId1);
-            verify(articleTagRepository).deleteByArticleIdAndTagId(articleUuid, tagId2);
-            verify(articleTagRepository, times(2)).deleteByArticleIdAndTagId(
+            verify(articleTagRepository, times(1)).deleteByArticleIdAndTagIds(articleUuid, List.of(low, high));
+            verify(articleTagRepository, never()).deleteByArticleIdAndTagId(
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
 
         @Test
-        @DisplayName("邊界：無標籤時，不呼叫 deleteByArticleIdAndTagId")
+        @DisplayName("邊界：無標籤時，不發出任何刪除")
         void deleteArticleTags_noTags_doesNothing() {
             UUID articleUuid = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of());
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of());
 
             tagFacadeImpl.deleteArticleTags(articleUuid);
 
+            verify(articleTagRepository, never()).deleteByArticleIdAndTagIds(
+                    org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyCollection());
             verify(articleTagRepository, never()).deleteByArticleIdAndTagId(
                     org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
@@ -369,18 +437,19 @@ class TagFacadeImplTest {
         }
 
         @Test
-        @DisplayName("插入 article_tags 依 tag id 的 uuid 位元組無號順序（與資料庫 ORDER BY id 一致），而非輸入順序")
-        void syncArticleTags_insertsInUnsignedUuidOrder() {
+        @DisplayName("新增與刪除都依 tag id 的 uuid 位元組無號順序（與資料庫 ORDER BY id 一致），而非輸入順序")
+        void syncArticleTags_writesInUnsignedUuidOrder() {
             UUID articleUuid = UUID.randomUUID();
             UUID low = new UUID(1L, 0L);
             UUID high = new UUID(-1L, 0L);
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of());
+            UUID oldLow = new UUID(2L, 0L);
+            UUID oldHigh = new UUID(-2L, 0L);
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(oldHigh, oldLow));
 
             tagFacadeImpl.syncArticleTags(articleUuid, List.of(high, low));
 
-            InOrder order = inOrder(articleTagRepository);
-            order.verify(articleTagRepository).save(articleUuid, low);
-            order.verify(articleTagRepository).save(articleUuid, high);
+            verify(articleTagRepository).saveAll(articleUuid, List.of(low, high));
+            verify(articleTagRepository).deleteByArticleIdAndTagIds(articleUuid, List.of(oldLow, oldHigh));
         }
 
         @Test
@@ -389,8 +458,8 @@ class TagFacadeImplTest {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
             UUID b = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid))
-                    .thenReturn(List.of(buildTag(a, "A", "a"), buildTag(b, "B", "b")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid))
+                    .thenReturn(List.of(a, b));
 
             List<TransactionSynchronization> syncs =
                     withSynchronization(() -> tagFacadeImpl.syncArticleTags(articleUuid, List.of(a)));
@@ -405,7 +474,7 @@ class TagFacadeImplTest {
         void syncArticleTags_rollback_doesNotRecalculate() {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(a));
 
             List<TransactionSynchronization> syncs =
                     withSynchronization(() -> tagFacadeImpl.syncArticleTags(articleUuid, List.of()));
@@ -420,7 +489,7 @@ class TagFacadeImplTest {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
             UUID added = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(a));
 
             List<TransactionSynchronization> syncs =
                     withSynchronization(() -> tagFacadeImpl.syncArticleTags(articleUuid, List.of(a, added)));
@@ -435,8 +504,8 @@ class TagFacadeImplTest {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
             UUID b = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid))
-                    .thenReturn(List.of(buildTag(a, "A", "a"), buildTag(b, "B", "b")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid))
+                    .thenReturn(List.of(a, b));
 
             List<TransactionSynchronization> syncs =
                     withSynchronization(() -> tagFacadeImpl.deleteArticleTags(articleUuid));
@@ -450,7 +519,7 @@ class TagFacadeImplTest {
         void recalculationFailureAfterCommit_isSwallowed() {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(a));
             when(tagUsageRecalculator.recalculateInNewTransaction(org.mockito.ArgumentMatchers.anyCollection()))
                     .thenThrow(new RuntimeException("DB down"));
 
@@ -466,7 +535,7 @@ class TagFacadeImplTest {
         void withoutTransactionSynchronization_recalculatesImmediately() {
             UUID articleUuid = UUID.randomUUID();
             UUID a = UUID.randomUUID();
-            when(articleTagRepository.findTagsByArticleId(articleUuid)).thenReturn(List.of(buildTag(a, "A", "a")));
+            when(articleTagRepository.findTagIdsByArticleId(articleUuid)).thenReturn(List.of(a));
 
             tagFacadeImpl.deleteArticleTags(articleUuid);
 

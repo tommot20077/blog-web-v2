@@ -37,6 +37,18 @@ import java.util.UUID;
 public interface ArticleMapper {
 
     /**
+     * 列表／摘要用途的明確選欄（PERF-06）：{@link Article} 除正文三欄外的全部欄位。
+     *
+     * <p>刻意<b>排除</b> {@code content_md}、{@code content_html}、{@code toc}：列表只組摘要／{@code ArticleData}，
+     * 用不到這三個 TEXT 欄位，{@code SELECT *} 卻會讓 PostgreSQL 讀出並傳輸整頁文章的正文。
+     * 詳情頁（{@code ArticleRepository}）、ES 全量索引（{@link #findAllPublished()}）、版本快照與檔案綁定需要正文，
+     * 不使用本常數。{@link Article} 新增欄位時須同步補進這裡（{@code ArticleMapperListColumnsSqlTest} 守衛）。</p>
+     */
+    String LIST_COLUMNS = "id, uuid, author_uuid, title, slug, summary, cover_image_url, status, reject_reason, "
+            + "view_count, like_count, comment_count, version, series_uuid, series_position, "
+            + "published_at, created_at, updated_at ";
+
+    /**
      * 公開列表的篩選條件（WHERE 子句），由列表查詢與 count 查詢共用。
      *
      * <p>抽成常數是為了讓兩條查詢<b>不可能</b>篩選條件不一致——不一致時 total 與實際筆數對不上，
@@ -106,7 +118,7 @@ public interface ArticleMapper {
      * @param size     每頁筆數
      * @return 文章列表，依條件指定的排序
      */
-    @Select("<script>SELECT a.* FROM articles a " + PUBLISHED_CRITERIA_WHERE + PUBLISHED_CRITERIA_ORDER_BY +
+    @Select("<script>SELECT " + LIST_COLUMNS + "FROM articles a " + PUBLISHED_CRITERIA_WHERE + PUBLISHED_CRITERIA_ORDER_BY +
             "LIMIT #{size} OFFSET #{offset}</script>")
     List<Article> findPublishedPageByCriteria(@Param("criteria") PublishedArticleCriteria criteria,
                                               @Param("offset") long offset,
@@ -130,7 +142,7 @@ public interface ArticleMapper {
      * @param size       每頁筆數
      * @return 文章列表
      */
-    @Select("SELECT * FROM articles WHERE author_uuid = #{authorUuid}::uuid AND status = #{status} ORDER BY created_at DESC, id DESC LIMIT #{size} OFFSET #{offset}")
+    @Select("SELECT " + LIST_COLUMNS + "FROM articles WHERE author_uuid = #{authorUuid}::uuid AND status = #{status} ORDER BY created_at DESC, id DESC LIMIT #{size} OFFSET #{offset}")
     List<Article> findByAuthorUuidAndStatus(
             @Param("authorUuid") UUID authorUuid,
             @Param("status") ArticleStatus status,
@@ -145,7 +157,7 @@ public interface ArticleMapper {
      * @param size       每頁筆數
      * @return 文章列表
      */
-    @Select("SELECT * FROM articles WHERE author_uuid = #{authorUuid}::uuid ORDER BY created_at DESC, id DESC LIMIT #{size} OFFSET #{offset}")
+    @Select("SELECT " + LIST_COLUMNS + "FROM articles WHERE author_uuid = #{authorUuid}::uuid ORDER BY created_at DESC, id DESC LIMIT #{size} OFFSET #{offset}")
     List<Article> findByAuthorUuidPaged(
             @Param("authorUuid") UUID authorUuid,
             @Param("offset") long offset,
@@ -177,7 +189,7 @@ public interface ArticleMapper {
      * @param size   每頁筆數
      * @return 文章列表
      */
-    @Select("SELECT * FROM articles WHERE status = 'PENDING_REVIEW' ORDER BY created_at ASC, id ASC LIMIT #{size} OFFSET #{offset}")
+    @Select("SELECT " + LIST_COLUMNS + "FROM articles WHERE status = 'PENDING_REVIEW' ORDER BY created_at ASC, id ASC LIMIT #{size} OFFSET #{offset}")
     List<Article> findPendingReviewPage(@Param("offset") long offset, @Param("size") int size);
 
     /**
@@ -216,9 +228,14 @@ public interface ArticleMapper {
     /**
      * 查詢所有已發布文章（供全量重建 Elasticsearch 索引使用）
      *
+     * <p>需要正文（{@code content}），但不需要 {@code content_html}／{@code toc}。MyBatis 以欄名自動映射，
+     * 而實體欄位叫 {@code content}、資料庫欄位叫 {@code content_md}，必須明寫 {@code content_md AS content}，
+     * 否則 content 恆為 null，全量重建會把內文索引成空字串。</p>
+     *
      * @return 所有已發布文章列表
      */
-    @Select("SELECT * FROM articles WHERE status = 'PUBLISHED' ORDER BY published_at DESC")
+    @Select("SELECT " + LIST_COLUMNS + ", content_md AS content FROM articles WHERE status = 'PUBLISHED' "
+            + "ORDER BY published_at DESC NULLS LAST")
     List<Article> findAllPublished();
 
     /**
@@ -310,7 +327,7 @@ public interface ArticleMapper {
      * @param seriesUuid Series 公開 UUID
      * @return 按 series_position 排序的文章列表；系列沒有成員（含系列不存在）時為空
      */
-    @Select("SELECT * FROM articles WHERE series_uuid = #{seriesUuid}::uuid ORDER BY series_position")
+    @Select("SELECT " + LIST_COLUMNS + "FROM articles WHERE series_uuid = #{seriesUuid}::uuid ORDER BY series_position")
     List<Article> findBySeriesUuidOrderByPosition(@Param("seriesUuid") UUID seriesUuid);
 
     /**

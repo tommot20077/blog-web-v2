@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 import static dowob.xyz.blog.e2e.support.AuthHelper.bearerToken;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -170,5 +171,29 @@ class ArticleFileBindingFlowE2E extends AbstractE2ETest {
                 .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                 .andReturn();
         assertThat(streamed.getResponse().getContentAsByteArray()).isEqualTo(expected);
+    }
+
+    @Test
+    @DisplayName("刪除文章 → ArticleDeletedEvent 經 MQ 到 file 模組：只被該文章引用的圖，metadata 消失、/content 查無（DATA-07）；未綁定的圖不受影響")
+    void deleteArticle_cleansBoundFilesViaMq() throws Exception {
+        String token = authHelper.createUserWithRole(
+                "binding-delete@test.com", PASSWORD, "bindingdelete", "BindingDelete", Role.AUTHOR);
+        String image = uploadImage(token);
+        String unrelated = uploadImage(token);
+        String articleUuid = createArticle(token, contentWith(image));
+        awaitBound(image, articleUuid);
+
+        mockMvc.perform(delete("/api/v1/articles/" + articleUuid).with(bearerToken(token)))
+                .andExpect(status().isOk());
+
+        await().atMost(30, TimeUnit.SECONDS).pollInterval(300, TimeUnit.MILLISECONDS)
+                .untilAsserted(() -> assertThat(fileRows(image)).as("綁定的圖應被清除").isZero());
+        mockMvc.perform(get("/api/v1/files/" + image + "/content").with(bearerToken(token)))
+                .andExpect(status().is4xxClientError());
+        assertThat(fileRows(unrelated)).as("從未綁定的圖不在清理範圍").isEqualTo(1);
+    }
+
+    private int fileRows(String fileId) {
+        return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM file_metadata WHERE id = ?::uuid", Integer.class, fileId);
     }
 }

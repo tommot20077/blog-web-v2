@@ -87,11 +87,11 @@ public interface FileService {
     FileMetadata getFileMetadata(UUID fileId);
 
     /**
-     * 取得使用者上傳的所有檔案
+     * 分頁取得使用者上傳的檔案（最新在前）
      *
      * @param uploaderId 使用者 UUID
-     * @param pageable   分頁參數
-     * @return 檔案元資料列表
+     * @param pageable   分頁參數（size 上限 100，超過拒絕；unpaged 時取第一頁預設筆數）
+     * @return 該頁的檔案元資料列表
      */
     List<FileMetadata> getUserFiles(UUID uploaderId, Pageable pageable);
 

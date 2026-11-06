@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import dowob.xyz.blog.module.user.validation.ProfileFieldLimits;
 import lombok.Data;
 
 /**
@@ -43,9 +44,10 @@ public class RegisterRequest {
     private String username;
 
     /**
-     * 暱稱
+     * 暱稱（最多 {@value ProfileFieldLimits#NICKNAME_MAX_LENGTH} 字元，對應 users.nickname VARCHAR(50)）
      */
     @Schema(description = "暱稱", example = "Yuan")
     @NotBlank(message = "暱稱不能為空")
+    @Size(max = ProfileFieldLimits.NICKNAME_MAX_LENGTH, message = "暱稱不能超過 50 字元")
     private String nickname;
 }

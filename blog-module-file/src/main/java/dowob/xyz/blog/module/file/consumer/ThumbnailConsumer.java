@@ -3,9 +3,11 @@ package dowob.xyz.blog.module.file.consumer;
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
+import dowob.xyz.blog.module.file.service.AllowedImageTypes;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.coobird.thumbnailator.Thumbnails;
@@ -67,8 +69,10 @@ public class ThumbnailConsumer {
     @RabbitListener(queues = "file.thumbnail")
     public void handleImageUploaded(ImageUploadedEvent event) {
         consumerExecutor.execute(CONSUMER_NAME, () -> "fileId=" + event.fileId() + ", eventId=" + event.eventId(), () -> {
-            if (!event.contentType().startsWith("image/")) {
-                log.debug("非圖片類型，跳過縮圖處理: {}", event.contentType());
+            /* FILE-03：輸出格式只取自 contentType 白名單，不採用 storagePath 的副檔名 */
+            String outputFormat = AllowedImageTypes.extensionFor(event.contentType()).orElse(null);
+            if (outputFormat == null) {
+                log.debug("非白名單圖片類型，跳過縮圖處理: {}", event.contentType());
                 return;
             }
 
@@ -85,7 +89,6 @@ public class ThumbnailConsumer {
                 return;
             }
 
-            String ext = extractExtension(event.storagePath());
             String thumbPath = buildThumbPath(event.storagePath());
 
             try (InputStream inputStream = minioClient.getObject(
@@ -98,7 +101,7 @@ public class ThumbnailConsumer {
                 Thumbnails.of(inputStream)
                         .width(300)
                         .keepAspectRatio(true)
-                        .outputFormat(ext)
+                        .outputFormat(outputFormat)
                         .toOutputStream(outputStream);
 
                 byte[] thumbBytes = outputStream.toByteArray();
@@ -114,25 +117,33 @@ public class ThumbnailConsumer {
             /*
              * 只做單欄位 UPDATE，不 save 開頭讀出的舊實體：縮圖處理耗時，save 會以舊值覆寫所有欄位，
              * 把處理期間 bindToArticle 寫入的 article_uuid 蓋回 null（已發布文章的圖片變 403）。
-             * 檔案若在處理期間被刪除，影響 0 列，屬正常 no-op。
+             * 檔案若在處理期間被刪除，影響 0 列，屬正常 no-op——但此時剛寫入的縮圖物件已無 metadata
+             * 指向，必須補刪，否則成為孤兒（DATA-14）。補刪失敗只記 WARN，不拋例外（重試也無法讓
+             * 已刪除的檔案復活，進 DLQ 沒有意義）。
              */
-            fileMetadataRepository.markThumbnailGenerated(event.fileId());
+            int updated = fileMetadataRepository.markThumbnailGenerated(event.fileId());
+            if (updated == 0) {
+                removeOrphanThumbnail(thumbPath, event.fileId());
+                return;
+            }
 
             log.info("縮圖產生成功: {}", thumbPath);
         });
     }
 
     /**
-     * 從路徑提取副檔名
+     * 補刪孤兒縮圖物件（檔案在縮圖處理期間已被刪除）；失敗僅記 WARN，不拋例外。
      *
-     * @param path 檔案路徑
-     * @return 副檔名（不含點），若無則返回 "jpg"
+     * @param thumbPath 剛寫入的縮圖物件鍵
+     * @param fileId    對應（已不存在的）檔案 UUID
      */
-    private String extractExtension(String path) {
-        if (path == null || !path.contains(".")) {
-            return "jpg";
+    private void removeOrphanThumbnail(String thumbPath, java.util.UUID fileId) {
+        try {
+            minioClient.removeObject(RemoveObjectArgs.builder().bucket(bucketName).object(thumbPath).build());
+            log.info("檔案已於縮圖處理期間被刪除，已補刪縮圖物件: fileId={}, thumbPath={}", fileId, thumbPath);
+        } catch (Exception e) {
+            log.warn("補刪孤兒縮圖失敗（物件可能殘留）: fileId={}, thumbPath={}", fileId, thumbPath, e);
         }
-        return path.substring(path.lastIndexOf('.') + 1).toLowerCase();
     }
 
     /**

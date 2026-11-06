@@ -65,6 +65,7 @@ class RecommendServiceTest {
     private static final UUID TAG_ID_2 = UUID.randomUUID();
 
     @BeforeEach
+    @SuppressWarnings("unchecked")
     void setUp() {
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
@@ -73,6 +74,9 @@ class RecommendServiceTest {
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
         when(stringRedisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(valueOperations.get(anyString())).thenReturn(null);
+        /* DATA-13：快取命中後會即時過濾非公開文章；預設視為「傳入的全部都是公開」 */
+        when(articleFacade.filterPublishedUuids(any()))
+                .thenAnswer(inv -> new java.util.HashSet<>((java.util.Collection<UUID>) inv.getArgument(0)));
     }
 
     private ArticleSummaryInfo summary(UUID uuid, String title) {
@@ -97,12 +101,14 @@ class RecommendServiceTest {
         @DisplayName("同標籤文章足夠時不查 ES 和最新文章")
         void whenTagArticlesSufficient_skipsEsAndRecentQuery() {
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1));
-            UUID uuid1 = UUID.randomUUID();
-            UUID uuid2 = UUID.randomUUID();
+            /* PERF-26：一律以最大 limit(20) 計算，同標籤要湊滿 20 篇才會略過 ES／最新 */
+            List<ArticleSummaryInfo> tagArticles = java.util.stream.IntStream.range(0, 20)
+                    .mapToObj(i -> summary(UUID.randomUUID(), "T" + i))
+                    .toList();
 
             when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID)).thenReturn(Optional.of(basicInfo));
             when(articleFacade.getArticlesByTagIds(anyList(), eq(ARTICLE_UUID), anyInt()))
-                    .thenReturn(List.of(summary(uuid1, "A"), summary(uuid2, "B")));
+                    .thenReturn(tagArticles);
 
             List<RecommendArticleResponse> result = service.getRelatedArticles(ARTICLE_UUID, 2);
 
@@ -136,7 +142,7 @@ class RecommendServiceTest {
         @Test
         @DisplayName("ES 查詢傳入 remaining 乘以 2 而非完整 limit")
         void esQuery_receivesRemainingTimesTwo() {
-            /** limit=5，第一層取得1篇，remaining=4，ES 應被呼叫時傳入 4*2=8 */
+            /** 以最大 limit=20 計算，第一層取得1篇，remaining=19，ES 應被呼叫時傳入 19*2=38 */
             ArticleBasicInfo basicInfo = new ArticleBasicInfo(ARTICLE_UUID, List.of(TAG_ID_1));
             UUID tagUuid = UUID.randomUUID();
 
@@ -148,8 +154,8 @@ class RecommendServiceTest {
 
             service.getRelatedArticles(ARTICLE_UUID, 5);
 
-            /** remaining = 5 - 1 = 4, 預期傳入 4 * 2 = 8 */
-            verify(searchFacade).findSimilarArticles(eq(ARTICLE_UUID), eq(8));
+            /** remaining = 20 - 1 = 19, 預期傳入 19 * 2 = 38 */
+            verify(searchFacade).findSimilarArticles(eq(ARTICLE_UUID), eq(38));
         }
 
         @Test
@@ -159,7 +165,7 @@ class RecommendServiceTest {
             UUID recentUuid = UUID.randomUUID();
 
             when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID)).thenReturn(Optional.of(basicInfo));
-            when(searchFacade.findSimilarArticles(ARTICLE_UUID, 5))
+            when(searchFacade.findSimilarArticles(eq(ARTICLE_UUID), anyInt()))
                     .thenReturn(Collections.emptyList());
             when(articleFacade.getRecentPublishedArticles(eq(ARTICLE_UUID), anyInt()))
                     .thenReturn(List.of(summary(recentUuid, "Recent")));
@@ -179,7 +185,7 @@ class RecommendServiceTest {
             when(articleFacade.getPublishedArticleBasicInfo(ARTICLE_UUID)).thenReturn(Optional.of(basicInfo));
             when(articleFacade.getArticlesByTagIds(anyList(), eq(ARTICLE_UUID), anyInt()))
                     .thenReturn(List.of(summary(sharedUuid, "Shared")));
-            when(searchFacade.findSimilarArticles(ARTICLE_UUID, 5))
+            when(searchFacade.findSimilarArticles(eq(ARTICLE_UUID), anyInt()))
                     .thenReturn(List.of(sharedUuid));
 
             List<RecommendArticleResponse> result = service.getRelatedArticles(ARTICLE_UUID, 5);

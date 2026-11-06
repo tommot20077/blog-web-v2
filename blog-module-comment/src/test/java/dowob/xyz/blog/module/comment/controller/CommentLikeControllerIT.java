@@ -136,6 +136,30 @@ class CommentLikeControllerIT {
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
+    private RequestPostProcessor asUserWithoutPermissions(UUID userUuid) {
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                new AuthUser(userUuid, Role.USER), null,
+                List.of(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole())));
+        return SecurityMockMvcRequestPostProcessors.authentication(auth);
+    }
+
+    @Test
+    @DisplayName("AUTH-04 POST /like - 缺 COMMENT_WRITE 回 403 且不建立 like")
+    void like_withoutCommentWrite_returns403() throws Exception {
+        mockMvc.perform(post("/api/v1/comments/{uuid}/like", commentUuid)
+                .with(asUserWithoutPermissions(USER_UUID)))
+                .andExpect(status().isForbidden());
+        assertThat(commentLikeRepo.findByUserUuidAndCommentId(USER_UUID, commentId)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("AUTH-04 DELETE /like - 缺 COMMENT_WRITE 回 403")
+    void unlike_withoutCommentWrite_returns403() throws Exception {
+        mockMvc.perform(delete("/api/v1/comments/{uuid}/like", commentUuid)
+                .with(asUserWithoutPermissions(USER_UUID)))
+                .andExpect(status().isForbidden());
+    }
+
     @Test
     @DisplayName("POST /comments/{uuid}/like - 200 + 建 row + count+1")
     void like_returns200() throws Exception {

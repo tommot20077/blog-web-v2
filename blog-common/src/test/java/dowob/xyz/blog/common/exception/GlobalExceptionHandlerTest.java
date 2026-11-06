@@ -1,6 +1,7 @@
 package dowob.xyz.blog.common.exception;
 
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.lang.reflect.Method;
@@ -62,6 +64,24 @@ class GlobalExceptionHandlerTest {
         handler = new GlobalExceptionHandler();
         request = new MockHttpServletRequest();
         request.setRequestURI("/api/test");
+    }
+
+    /**
+     * FILE-05：multipart 超過框架上限時應回既有的檔案過大錯誤碼（HTTP 狀態沿用 BusinessException 的 400），不是 500
+     */
+    @Test
+    @DisplayName("MaxUploadSizeExceededException 應回 FILE_TOO_LARGE 錯誤碼與 HTTP 400")
+    void whenMaxUploadSizeExceeded_returnsFileTooLarge() {
+        MaxUploadSizeExceededException ex = new MaxUploadSizeExceededException(5L * 1024 * 1024);
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleMaxUploadSizeExceeded(ex, request);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getCode())
+                .isEqualTo(FileErrorCode.FILE_TOO_LARGE.getCode());
+        assertThat(response.getBody().getMessage())
+                .isEqualTo(FileErrorCode.FILE_TOO_LARGE.getMessage());
     }
 
     /**

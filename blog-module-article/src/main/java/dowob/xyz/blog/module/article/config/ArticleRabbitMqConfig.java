@@ -11,7 +11,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
  * 文章模組 RabbitMQ 設定
@@ -42,27 +42,6 @@ public class ArticleRabbitMqConfig {
     public static final String ROUTING_KEY_VIEWED = "article.viewed";
 
     /**
-     * 建立死信隊列（DLQ）參數
-     *
-     * @return 包含死信交換器與路由 Key 的 Map
-     */
-    private Map<String, Object> dlqArgs() {
-        return Map.of(
-                "x-dead-letter-exchange", "blog.dlq",
-                "x-dead-letter-routing-key", "dead-letter");
-    }
-
-    /**
-     * 建立文章事件 Topic Exchange
-     *
-     * @return TopicExchange 實例
-     */
-    @Bean
-    public TopicExchange articleEventsExchange() {
-        return new TopicExchange(ArticleEventContract.EXCHANGE);
-    }
-
-    /**
      * 建立文章瀏覽計數 Queue（持久化，含 DLQ 設定）
      *
      * @return Queue 實例
@@ -75,13 +54,14 @@ public class ArticleRabbitMqConfig {
     /**
      * 建立文章瀏覽計數 Queue 與 Exchange 的綁定
      *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
      * @return Binding 實例
      */
     @Bean
-    public Binding articleViewCountBinding() {
+    public Binding articleViewCountBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
         return BindingBuilder
                 .bind(articleViewCountQueue())
-                .to(articleEventsExchange())
+                .to(articleEventsExchange)
                 .with(ROUTING_KEY_VIEWED);
     }
 
@@ -181,5 +161,4 @@ public class ArticleRabbitMqConfig {
                 .to(articleUserEventsExchange)
                 .with(UserEventContract.ROUTING_KEY_DELETED);
     }
-
 }

@@ -1,17 +1,13 @@
 package dowob.xyz.blog.module.file.service;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
-import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
-import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleLookupFacade;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -38,15 +34,15 @@ import java.util.UUID;
  * 只被草稿引用而尚未回填的檔案則本來就該隨草稿刪除；反方向（綁定仍指向已不引用它的舊文章）只會多保留、不會誤刪。</p>
  * <p>頭像（{@link UsageType#AVATAR}）是使用者個資，一律刪除。每個不同的文章只查一次狀態，不逐檔查詢。</p>
  *
- * <p>實際刪除委派既有的 {@link FileService#deleteFile}（以上傳者本人身分）：metadata 列與 MinIO 物件
- * （含縮圖）在同一交易內，MinIO 失敗則該檔案的 metadata 刪除回滾，不會留下「物件還在、紀錄沒了」的孤兒。
+ * <p>實際刪除委派既有的 {@link FileService#deleteFile}（以上傳者本人身分）：順序為先刪 MinIO 物件
+ * （原檔與縮圖路徑，交易外），成功後才用短交易刪 metadata 列；MinIO 失敗則拋錯、metadata 保留，不會留下
+ * 「物件還在、紀錄沒了」的孤兒，重試即可。若 MinIO 已刪但 DB 刪除失敗，重試時 MinIO 端為 no-op、DB 列隨後被刪掉。
  * 單一檔案失敗不影響其餘檔案，最後把例外往外拋，由容器重試（重試只會處理剩下的）；已不存在的檔案（重送）視為已完成。
  * 文章狀態查詢失敗則整體往外拋、<b>不刪除任何檔案</b>——無法確認時寧可重試，也不銷毀仍被引用的圖片。</p>
  *
  * @author Yuan
  * @version 1.0
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class FileUserCleanupService {
@@ -76,31 +72,10 @@ public class FileUserCleanupService {
         /* 保留文章內文／封面實際引用的檔案：不論 article_uuid 綁到哪（封面不會被 binder 綁定；同圖可能只綁到草稿） */
         Set<UUID> referencedFileIds = articleLookupFacade.findFileUuidsReferencedByRetainedArticles(uploaderId);
 
-        int deleted = 0;
-        List<RuntimeException> failures = new ArrayList<>();
-        for (FileMetadata file : files) {
-            if (isReferencedByRetainedArticle(file, retainedArticles, referencedFileIds)) {
-                continue;
-            }
-            try {
-                fileService.deleteFile(file.getId(), uploaderId, false);
-                deleted++;
-            } catch (BusinessException e) {
-                if (!FileErrorCode.FILE_NOT_FOUND.getCode().equals(e.getCode())) {
-                    failures.add(e);
-                }
-            } catch (RuntimeException e) {
-                failures.add(e);
-            }
-        }
-        log.info("使用者刪除連動：已刪除未被保留文章引用的檔案 uploaderId={} total={} deleted={} failed={}",
-                uploaderId, files.size(), deleted, failures.size());
-        if (!failures.isEmpty()) {
-            RuntimeException first = failures.get(0);
-            failures.stream().skip(1).forEach(first::addSuppressed);
-            throw first;
-        }
-        return deleted;
+        List<FileMetadata> toDelete = files.stream()
+                .filter(file -> !isReferencedByRetainedArticle(file, retainedArticles, referencedFileIds))
+                .toList();
+        return FileCleanupSupport.deleteAll(fileService, toDelete, "（使用者刪除連動）uploaderId=" + uploaderId);
     }
 
     /**
