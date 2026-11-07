@@ -62,7 +62,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 跨模組整合測試：Article ↔ Series。
+ * 模組整合測試：Article ↔ Series。
  *
  * <p>驗證以下端對端流程：</p>
  * <ol>
@@ -74,6 +74,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>SeriesTestApplication 已掃 article 模組（ArticleController 可用），
  * 但未掃 reading 模組，故 liked/bookmarked/progress 均為 null 或 false，這在此 IT 中 OK。</p>
  *
+ * <p>定位：模組內整合測試（真 DB），跨模組 facade 以 mock 取代；跨模組接縫由 blog-start 的 E2E 覆蓋。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -81,8 +83,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Testcontainers
 @ActiveProfiles("test")
-@DisplayName("跨模組整合測試 — Article ↔ Series")
-class CrossModuleSeriesIT {
+@DisplayName("模組整合測試 — Article ↔ Series")
+class SeriesModuleIT {
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")

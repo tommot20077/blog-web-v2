@@ -59,7 +59,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 跨模組整合測試：Article ↔ Comment ↔ Like。
+ * 模組整合測試：Article ↔ Comment ↔ Like。
  *
  * <p>驗證以下端對端流程：</p>
  * <ol>
@@ -71,14 +71,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *     <li>留言物理刪除連帶清 comment_likes（FK CASCADE）</li>
  * </ol>
  *
+ * <p>定位：模組內整合測試（真 DB），跨模組 facade 以 mock 取代；跨模組接縫由 blog-start 的 E2E 覆蓋。</p>
+ *
  * @author Yuan
  */
 @SpringBootTest(classes = CommentTestApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 @Testcontainers
 @ActiveProfiles("test")
-@DisplayName("跨模組整合測試 — Article ↔ Comment ↔ Like")
-class CrossModuleCommentIT {
+@DisplayName("模組整合測試 — Article ↔ Comment ↔ Like")
+class CommentModuleIT {
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
@@ -253,7 +255,7 @@ class CrossModuleCommentIT {
                 .as("FK 已移除：僅刪文章不會連帶刪留言，須等 consumer 處理事件").isPresent();
         /**
          * user_article_likes 的清除改由 reading 模組的 ReadingArticleDeletedConsumer 負責，
-         * 並由 reading 的 IT 驗證（ReadingArticleDeletedConsumerIT、CrossModuleReadingIT）；
+         * 並由 reading 的 IT 驗證（ReadingArticleDeletedConsumerIT、ReadingModuleIT）；
          * 這裡只確認「FK CASCADE 已不存在」。收尾時由 @AfterEach 的 deleteAll 清掉。
          */
         assertThat(articleLikeRepo.findByUserUuidAndArticleUuid(USER_UUID, articleUuid))

@@ -65,7 +65,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Reading 跨模組整合 IT。
+ * Reading 模組整合 IT。
  *
  * <p>驗證 Article ↔ Bookmark ↔ Highlight ↔ ReadingProgress 的端到端整合：
  * <ul>
@@ -78,6 +78,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </ul>
  * </p>
  *
+ * <p>定位：模組內整合測試（真 DB），跨模組 facade 以 mock 取代；跨模組接縫由 blog-start 的 E2E 覆蓋。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -85,8 +87,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Testcontainers
 @ActiveProfiles("test")
-@DisplayName("Reading 跨模組整合 IT")
-class CrossModuleReadingIT {
+@DisplayName("Reading 模組整合 IT")
+class ReadingModuleIT {
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
