@@ -65,7 +65,7 @@ class RabbitListenerYamlBindingTest {
     }
 
     @Test
-    @DisplayName("yaml 的 Hikari maximum-pool-size=32（14 個 DB consumer 最壞佔 26 條：12×2＋2 條固定 1-1 的 file consumer，已由實際容器斷言 max=1，仍留 6 條給 HTTP／排程；Yuan 2026-11-05）、minimum-idle=10")
+    @DisplayName("yaml 的 Hikari maximum-pool-size=32（13 個 DB consumer 最壞佔 24 條：11×2＋2 條固定 1-1 的 file consumer，已由實際容器斷言 max=1，仍留 8 條給 HTTP／排程；W7-d1 移除 series.article-deleted 後的算式，池大小維持 Yuan 2026-11-05 的決定）、minimum-idle=10")
     void yamlHikariPoolSize_isThirtyTwo() {
         runner.run(context -> {
             assertThat(context).hasNotFailed();

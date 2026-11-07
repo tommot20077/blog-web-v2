@@ -263,7 +263,6 @@ class SeriesControllerIT {
         series.setSlug("original-slug");
         series.setDescription("desc");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -293,7 +292,6 @@ class SeriesControllerIT {
         series.setSlug("user2-series");
         series.setDescription("desc");
         series.setAuthorUuid(SeededUsers.USER2_UUID);
-        series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -317,7 +315,6 @@ class SeriesControllerIT {
         series.setTitle("Series");
         series.setSlug("series-rbac-test");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -342,7 +339,6 @@ class SeriesControllerIT {
         series.setTitle("Series To Delete");
         series.setSlug("series-to-delete");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -386,7 +382,6 @@ class SeriesControllerIT {
         series.setTitle("Article Series");
         series.setSlug("article-series");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -419,7 +414,6 @@ class SeriesControllerIT {
         series1.setTitle("Series 1");
         series1.setSlug("series-one");
         series1.setAuthorUuid(SeededUsers.USER1_UUID);
-        series1.setArticleCount(1);
         series1.setCreatedAt(LocalDateTime.now());
         series1.setUpdatedAt(LocalDateTime.now());
         Series saved1 = seriesRepo.save(series1);
@@ -429,7 +423,6 @@ class SeriesControllerIT {
         series2.setTitle("Series 2");
         series2.setSlug("series-two");
         series2.setAuthorUuid(SeededUsers.USER1_UUID);
-        series2.setArticleCount(0);
         series2.setCreatedAt(LocalDateTime.now());
         series2.setUpdatedAt(LocalDateTime.now());
         Series saved2 = seriesRepo.save(series2);
@@ -460,7 +453,6 @@ class SeriesControllerIT {
         series.setTitle("Progress Series");
         series.setSlug("progress-series");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -485,7 +477,6 @@ class SeriesControllerIT {
         series.setTitle("Anonymous Series");
         series.setSlug("anonymous-series");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -510,7 +501,6 @@ class SeriesControllerIT {
         series.setTitle("Draft Only Series");
         series.setSlug("draft-only-series");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -534,7 +524,6 @@ class SeriesControllerIT {
         series.setTitle("Mixed Series");
         series.setSlug("mixed-series");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        series.setArticleCount(2);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -569,19 +558,17 @@ class SeriesControllerIT {
         withPublished.setTitle("Has Published");
         withPublished.setSlug("has-published");
         withPublished.setAuthorUuid(SeededUsers.USER1_UUID);
-        withPublished.setArticleCount(1);
         withPublished.setCreatedAt(LocalDateTime.now());
         withPublished.setUpdatedAt(LocalDateTime.now());
         Series savedA = seriesRepo.save(withPublished);
         createArticleInSeries(USER1_ID, ArticleStatus.PUBLISHED, savedA.getUuid(), 1);
 
-        // series B：只有 DRAFT 文章，但反正規化 article_count 仍為 1（模擬 unpublish 後的漂移）→ 不應出現
+        // series B：只有 DRAFT 文章（例如 unpublish 後）→ 不應出現
         Series draftOnly = new Series();
         draftOnly.setUuid(UUID.randomUUID());
         draftOnly.setTitle("Draft Only");
         draftOnly.setSlug("draft-only");
         draftOnly.setAuthorUuid(SeededUsers.USER1_UUID);
-        draftOnly.setArticleCount(1);
         draftOnly.setCreatedAt(LocalDateTime.now());
         draftOnly.setUpdatedAt(LocalDateTime.now());
         Series savedB = seriesRepo.save(draftOnly);
@@ -591,7 +578,7 @@ class SeriesControllerIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.records.length()").value(1))
                 .andExpect(jsonPath("$.data.records[0].slug").value("has-published"))
-                // articleCount 反映實際 PUBLISHED 數，而非反正規化欄
+                // articleCount 反映實際 PUBLISHED 數
                 .andExpect(jsonPath("$.data.records[0].articleCount").value(1));
     }
 
@@ -627,8 +614,7 @@ class SeriesControllerIT {
         series.setTitle("Mixed Series");
         series.setSlug("mixed-series");
         series.setAuthorUuid(SeededUsers.USER1_UUID);
-        // 非正規化計數含未發布文章；response 的 articleCount 不該沿用（見 #1）
-        series.setArticleCount(2);
+        // 系列含未發布文章；response 的 articleCount 只算對外可見的（見 #1）
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series savedSeries = seriesRepo.save(series);
@@ -664,7 +650,7 @@ class SeriesControllerIT {
                 // 只列出 PUBLISHED；length==1 且該篇為 published，即證明 DRAFT 的 title/slug/summary 未外洩
                 .andExpect(jsonPath("$.data.articles.length()").value(1))
                 .andExpect(jsonPath("$.data.articles[0].uuid").value(published.getUuid().toString()))
-                // articleCount 對齊過濾後數量（#1），不沿用 series.article_count=2
+                // articleCount 對齊過濾後數量（#1）
                 .andExpect(jsonPath("$.data.articleCount").value(1))
                 // 進度分母只算公開文章
                 .andExpect(jsonPath("$.data.myProgress.readCount").value(0))
@@ -680,7 +666,6 @@ class SeriesControllerIT {
         series.setTitle("Title " + slug);
         series.setSlug(slug);
         series.setAuthorUuid(authorUuid);
-        series.setArticleCount(1);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);
@@ -791,7 +776,6 @@ class SeriesControllerIT {
         series.setTitle("Admin Target");
         series.setSlug("admin-target");
         series.setAuthorUuid(SeededUsers.USER2_UUID);
-        series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         Series saved = seriesRepo.save(series);

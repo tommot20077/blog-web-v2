@@ -5,6 +5,10 @@ import java.util.List;
 /**
  * {@link MqTopologySnapshotTest} 的期望值：由 ARCH-19／ARCH-06 重構<b>之前</b>的程式碼錄製（含 DATA-07 新增的 file.article-deleted）。
  *
+ * <p><b>與原錄製的刻意差異（W7-d1，DATA-10／決策 B6）</b>：移除 {@code series.article-deleted} queue 與其對
+ * {@code article.events} 的 {@code article.deleted} binding——series 篇數改為即時計數後，該 consumer 成為空殼而被移除。
+ * 其餘條目維持原錄製值。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -32,7 +36,6 @@ final class MqTopologySnapshotData {
             "Q reading.user-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
             "Q recommend.article.published | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
             "Q search.user-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
-            "Q series.article-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
             "Q series.user-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
             "Q tag.article-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
             "Q tag.article.tagged | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
@@ -67,7 +70,6 @@ final class MqTopologySnapshotData {
             "B article.events -> QUEUE:queue.search.index.update [article.updated] args={}",
             "B article.events -> QUEUE:reading.article-deleted [article.deleted] args={}",
             "B article.events -> QUEUE:recommend.article.published [article.published] args={}",
-            "B article.events -> QUEUE:series.article-deleted [article.deleted] args={}",
             "B article.events -> QUEUE:tag.article-deleted [article.deleted] args={}",
             "B article.events -> QUEUE:tag.article.tagged [article.tagged] args={}",
             "B article.events -> QUEUE:tag.usage.article-archived [article.archived] args={}",

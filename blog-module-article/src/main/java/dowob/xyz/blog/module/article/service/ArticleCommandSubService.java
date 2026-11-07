@@ -325,8 +325,8 @@ class ArticleCommandSubService {
         checkWritePermission(operatorUuid, operatorRole, article);
 
         /* delete 前讀取：article 刪除後 FK CASCADE 會清 article_tags / article_categories，
-         * series consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。
-         * seriesUuid 是 series 扣 article_count 的唯一依據（事件不再帶 series 的 Long 主鍵）；M6-b 起文章自己就存有
+         * 下游 consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。
+         * seriesUuid 隨事件帶出（W7-d1 起 series 不再訂閱本事件，目前沒有 consumer 讀它）；M6-b 起文章自己就存有
          * series_uuid，直接讀取（不再查 SeriesFacade，沒有查詢失敗的可能）。*/
         UUID seriesUuid = article.getSeriesUuid();
         List<UUID> categoryIds = articleMapper.findCategoryUuidsByArticleId(article.getId());

@@ -10,14 +10,12 @@ import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.infrastructure.security.UserAuthService;
-import dowob.xyz.blog.infrastructure.event.ArticleDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.SeriesDeletedEvent;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
 import dowob.xyz.blog.module.article.consumer.ArticleSeriesDeletedConsumer;
 import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.series.config.SeriesTestApplication;
-import dowob.xyz.blog.module.series.consumer.SeriesArticleDeletedConsumer;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
 import dowob.xyz.blog.module.series.support.SeededUsers;
@@ -47,7 +45,6 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -70,7 +67,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>驗證以下端對端流程：</p>
  * <ol>
  *     <li>POST /series + 加文章 → GET /articles/{uuid} 回應含 seriesNav</li>
- *     <li>DELETE /articles/{uuid} → series.article_count 連動 -1</li>
+ *     <li>系列篇數為 article facade 的即時計數：文章刪除／下架後立即反映，不依賴 MQ consumer（DATA-10）</li>
  *     <li>DELETE /series/{uuid} → SeriesDeletedEvent → article consumer 把 articles.series_uuid 清空</li>
  * </ol>
  *
@@ -109,7 +106,6 @@ class CrossModuleSeriesIT {
     @Autowired private ObjectMapper objectMapper;
     @Autowired private SeriesRepository seriesRepo;
     @Autowired private ArticleRepository articleRepo;
-    @Autowired private SeriesArticleDeletedConsumer seriesArticleDeletedConsumer;
     @Autowired private ArticleSeriesDeletedConsumer articleSeriesDeletedConsumer;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private SeriesFacade seriesFacade;
@@ -160,22 +156,6 @@ class CrossModuleSeriesIT {
         return SecurityMockMvcRequestPostProcessors.authentication(auth);
     }
 
-    /**
-     * 模擬 consumer 收到 ArticleDeletedEvent（IT 不真起 RabbitMQ broker，直接呼叫 consumer）。
-     *
-     * <p>Channel 用 Mockito mock，deliveryTag 固定為 1L，僅讓 basicAck/basicNack 不拋例外。</p>
-     */
-    private void simulateConsumerProcessing(UUID eventId, UUID articleUuid,
-                                            Long authorId, UUID seriesUuid) {
-        try {
-            ArticleDeletedEvent event = new ArticleDeletedEvent(
-                eventId, articleUuid, List.of(), List.of(), Instant.now(), null, seriesUuid);
-            seriesArticleDeletedConsumer.onArticleDeleted(event);
-        } catch (Exception e) {
-            throw new RuntimeException("simulateConsumerProcessing 失敗", e);
-        }
-    }
-
     /** 直接透過 repository 建立一篇 PUBLISHED 測試文章。 */
     private Article createPublishedArticle(Long authorId) {
         return createArticle(authorId, ArticleStatus.PUBLISHED);
@@ -214,7 +194,6 @@ class CrossModuleSeriesIT {
         series.setSlug(slug);
         series.setDescription("IT description");
         series.setAuthorUuid(SeededUsers.uuidOf(authorId));
-        series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         return seriesRepo.save(series);
@@ -267,102 +246,48 @@ class CrossModuleSeriesIT {
                 .andExpect(jsonPath("$.data.seriesNav.position").value(1));
     }
 
-    // ─── Test B: article_count 連動 ──────────────────────────────────────────
+    // ─── B6：篇數即時計數 ────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("DELETE article → series.article_count 連動 -1（透過 MQ event）")
-    void deleteArticle_decrementsSeriesCount() throws Exception {
-        // 1. 建立 series + 文章
-        Series series = createSeries("Count Series", "count-series-it", AUTHOR_ID);
-        Article article = createPublishedArticle(AUTHOR_ID);
-        UUID articleUuid = article.getUuid();
+    @DisplayName("B6：系列含 2 篇已發布、1 篇草稿、1 篇下架 → 更新與詳情的 articleCount 都是 2；刪除／下架後立即反映，不必等 MQ")
+    void articleCount_isLivePublishedCount_reflectsDeleteAndArchiveImmediately() throws Exception {
+        Series series = createSeries("Live Count Series", "live-count-series-it", AUTHOR_ID);
+        Article published1 = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getUuid(), 1);
+        Article published2 = assignToSeries(createPublishedArticle(AUTHOR_ID), series.getUuid(), 2);
+        assignToSeries(createArticle(AUTHOR_ID, ArticleStatus.DRAFT), series.getUuid(), 3);
+        assignToSeries(createArticle(AUTHOR_ID, ArticleStatus.ARCHIVED), series.getUuid(), 4);
 
-        // 2. 透過 API 將文章加入 series（會觸發 incrementArticleCount）
-        Map<String, Object> addPayload = Map.of("position", 1);
-        mockMvc.perform(put("/api/v1/series/{seriesUuid}/articles/{articleUuid}",
-                        series.getUuid(), articleUuid)
+        assertThat(updateSeriesArticleCount(series)).isEqualTo(2);
+        assertThat(detailArticleCount(series.getSlug())).isEqualTo(2);
+
+        /* 刪除一篇已發布文章：沒有任何 MQ consumer 介入，兩個端點立即少 1 */
+        mockMvc.perform(delete("/api/v1/articles/{uuid}", published1.getUuid())
+                        .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+        assertThat(updateSeriesArticleCount(series)).isEqualTo(1);
+        assertThat(detailArticleCount(series.getSlug())).isEqualTo(1);
+
+        /* 下架另一篇：已發布數歸 0 */
+        jdbcTemplate.update("UPDATE articles SET status = 'ARCHIVED' WHERE uuid = ?", published2.getUuid());
+        assertThat(updateSeriesArticleCount(series)).isZero();
+        assertThat(detailArticleCount(series.getSlug())).isZero();
+    }
+
+    private int updateSeriesArticleCount(Series series) throws Exception {
+        String body = mockMvc.perform(put("/api/v1/series/{uuid}", series.getUuid())
                         .with(asUser(AUTHOR_ID, Role.AUTHOR))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(addPayload)))
-                .andExpect(status().isOk());
-
-        // 驗證 article_count = 1
-        Series afterAdd = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
-        assertThat(afterAdd.getArticleCount()).isEqualTo(1);
-
-        // 3. DELETE /api/v1/articles/{uuid}（ADMIN 可刪任意文章）
-        //    IT 不真起 RabbitMQ broker，ArticleServiceImpl 只 mock publish，下面手動呼叫 consumer
-        mockMvc.perform(delete("/api/v1/articles/{uuid}", articleUuid)
-                        .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                        .content(objectMapper.writeValueAsString(Map.of("description", "d" + UUID.randomUUID()))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value("00000"));
-
-        // 4. 模擬 consumer 收到 ArticleDeletedEvent（直接呼叫，繞過 broker）
-        simulateConsumerProcessing(UUID.randomUUID(), articleUuid,
-                AUTHOR_ID, series.getUuid());
-
-        // 5. 重查 series，article_count 應為 0
-        Series afterDelete = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
-        assertThat(afterDelete.getArticleCount()).isEqualTo(0);
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(body).at("/data/articleCount").asInt();
     }
 
-    // ─── Test D: 重送冪等驗證 ────────────────────────────────────────────────
-
-    @Test
-    @DisplayName("DELETE article 同事件重送 → article_count 不再扣（冪等驗證）")
-    void deleteArticle_replayedEvent_skipsDecrement() {
-        // 1. 建立 series + 文章，直接寫 DB 設定 article_count = 1
-        Series series = createSeries("Idempotent Series", "idempotent-series-it", AUTHOR_ID);
-        Article article = createPublishedArticle(AUTHOR_ID);
-        article.setSeriesUuid(series.getUuid());
-        article.setSeriesPosition(1);
-        articleRepo.save(article);
-        seriesRepo.findByUuid(series.getUuid()).ifPresent(s -> {
-            // 直接更新 article_count 為 1
-            jdbcTemplate.update("UPDATE series SET article_count = 1 WHERE id = ?", s.getId());
-        });
-
-        // 2. 構造一個固定 eventId 的事件（重送 2 次）
-        UUID eventId = UUID.randomUUID();
-        ArticleDeletedEvent event = new ArticleDeletedEvent(
-            eventId, article.getUuid(), List.of(), List.of(), Instant.now(), null, series.getUuid());
-
-        // 3. 第一次處理 → article_count 從 1 變 0
-        seriesArticleDeletedConsumer.onArticleDeleted(event);
-        Series afterFirst = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
-        assertThat(afterFirst.getArticleCount()).isEqualTo(0);
-
-        // 4. 第二次處理（同一 event，模擬重送）
-        seriesArticleDeletedConsumer.onArticleDeleted(event);
-
-        // 5. article_count 仍是 0（沒被扣到 -1，dedup 生效）
-        Series afterReplay = seriesRepo.findByUuid(series.getUuid()).orElseThrow();
-        assertThat(afterReplay.getArticleCount()).isEqualTo(0);
-
-        // 6. processed_events 只有 1 筆對應 (eventId, "series.article-deleted")
-        long count = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM processed_events WHERE event_id = ? AND consumer_name = ?",
-            Long.class, eventId, SeriesArticleDeletedConsumer.CONSUMER_NAME
-        );
-        assertThat(count).isEqualTo(1);
-    }
-
-    // ─── Test E: article 不在 series no-op ──────────────────────────────────
-
-    @Test
-    @DisplayName("Article 不在 series 被刪 → consumer no-op，不寫 processed_events")
-    void deleteArticle_notInSeries_noOp() {
-        // 1. 構造 seriesUuid == null 的事件
-        ArticleDeletedEvent event = new ArticleDeletedEvent(
-            UUID.randomUUID(), UUID.randomUUID(), List.of(), List.of(), Instant.now(), null, null);
-        seriesArticleDeletedConsumer.onArticleDeleted(event);
-
-        // 2. 無 processed_events 記錄（早返不寫 dedup）
-        long count = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM processed_events WHERE consumer_name = ?",
-            Long.class, SeriesArticleDeletedConsumer.CONSUMER_NAME
-        );
-        assertThat(count).isEqualTo(0);
+    private int detailArticleCount(String slug) throws Exception {
+        String body = mockMvc.perform(get("/api/v1/series/{slug}", slug))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(body).at("/data/articleCount").asInt();
     }
 
     // ─── Test C: DELETE series → SeriesDeletedEvent → article consumer 清空 articles.series_uuid ──
@@ -375,7 +300,7 @@ class CrossModuleSeriesIT {
         Article article = createPublishedArticle(AUTHOR_ID);
         UUID articleUuid = article.getUuid();
 
-        // 2. 將文章加入 series（直接寫 DB，避免 article_count 影響 Test C 邏輯）
+        // 2. 將文章加入 series（直接寫 DB）
         article.setSeriesUuid(series.getUuid());
         article.setSeriesPosition(1);
         articleRepo.save(article);

@@ -37,7 +37,7 @@ import java.util.UUID;
  *       無業務邏輯觸發。</li>
  *   <li><b>series 用條件式寫入</b>（assignToSeriesIfUnassigned / removeFromSeriesIfAssigned /
  *       updateSeriesPositionIfAssigned）：由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
- *       讓 series 的 article_count 不必先讀再寫（RACE-14）；直接查寫 {@code articles.series_uuid}。</li>
+ *       讓 series 不必先讀再寫（RACE-14）；直接查寫 {@code articles.series_uuid}。</li>
  *   <li><b>version 用 atomic write</b>（applyRestoreContent）：內部接管渲染 / mutate / save /
  *       syncArticleTags / publish events 順序，caller 只交出 Markdown 原文。</li>
  * </ul>
@@ -221,9 +221,9 @@ public interface ArticleFacade {
     /**
      * 條件式加入 series：僅當文章<b>目前不屬於任何 series</b> 時才指派，並回報這次寫入是否真的指派了。
      *
-     * <p>為什麼需要：series 模組以 {@code article_count} 記錄成員數，必須知道「這次呼叫是不是新成員」。
-     * 先讀 {@code seriesUuid} 再決定是否 +1 是 check-then-act（RACE-14）——兩個請求同時加入同一篇文章，
-     * 都讀到「無 series」，都 +1，計數多出 1。本方法把判斷放進寫入本身：
+     * <p>為什麼需要：series 模組必須知道「這次呼叫是不是新成員」。
+     * 先讀 {@code seriesUuid} 再決定是 check-then-act（RACE-14）——兩個請求同時加入同一篇文章，
+     * 都讀到「無 series」，都當成新成員。本方法把判斷放進寫入本身：
      * {@code UPDATE articles SET series_uuid = ?, series_position = ? WHERE uuid = ? AND series_uuid IS NULL}，
      * 由 affected rows 決定。同一時間只有一個交易能把 NULL 改成非 NULL，另一個得到 {@code false}。</p>
      *
@@ -233,7 +233,7 @@ public interface ArticleFacade {
      *
      * <p>直接寫入 {@code articles.series_uuid}；article 不檢查系列是否存在
      * （系列存在性由呼叫端 series 模組負責，V32 起沒有 FK 把關）。呼叫端若在寫入後發現系列已被併發刪除
-     * （例如 {@code article_count + 1} 影響 0 列），須回滾交易，避免留下指向已不存在系列的歸屬。</p>
+     * （例如對 series 列加共享鎖查無此列），須回滾交易，避免留下指向已不存在系列的歸屬。</p>
      *
      * @param articleUuid    文章公開 UUID
      * @param seriesUuid     要加入的系列公開 UUID（不得為 null）
@@ -248,7 +248,7 @@ public interface ArticleFacade {
      *
      * <p>與 {@link #assignToSeriesIfUnassigned} 對稱，解 RACE-14 的移出面：
      * {@code UPDATE articles SET series_uuid = NULL, series_position = NULL WHERE uuid = ? AND series_uuid = ?}，
-     * 由 affected rows 決定 series 模組是否 {@code article_count - 1}。兩個請求同時移出同一篇文章，
+     * 由 affected rows 決定這次是否真的移出。兩個請求同時移出同一篇文章，
      * 只有一個得到 {@code true}。寫入時一併遞增 {@code version} 並更新 {@code updated_at}。</p>
      *
      * @param articleUuid 文章公開 UUID
@@ -324,7 +324,7 @@ public interface ArticleFacade {
      * 集合述詞：一次取得多個 series 各自的 PUBLISHED 文章數。
      *
      * <p>供 series 模組同時作為「哪些 series 有公開內容」的過濾條件與
-     * {@code article_count} 的即時投影，取代原本直讀 articles 的
+     * 篇數的即時投影（V36 起 {@code series.article_count} 已移除），取代原本直讀 articles 的
      * EXISTS ＋ COUNT 子查詢（ARCH-13 / PERF-34）。直接以 {@code articles.series_uuid} 分組計數。</p>
      *
      * <p><b>傳輸量界限</b>：與 {@code seriesUuids} 大小成正比。series 為低基數實體
@@ -341,7 +341,7 @@ public interface ArticleFacade {
      * <p>「保留文章」＝作者刪帳（匿名化，DATA-02）時<b>不會被移除</b>的狀態（{@code PUBLISHED}、{@code ARCHIVED}），
      * 判斷委派 {@code ArticleStatus#isRemovedWithAuthorAccount}（去留政策的唯一真相，不在此另寫狀態集合）。
      * 供 series 模組在作者刪帳時決定哪些系列已經「空了」可以刪除。直接查 {@code articles.status}／{@code series_uuid}，
-     * <b>不依賴</b> {@code series.article_count}（文章刪除與 series consumer 的執行順序不確定，計數可能尚未遞減）。</p>
+     * 不依賴任何計數（文章刪除與 series 端處理的執行順序不確定）。</p>
      *
      * <p>與 {@link #countPublishedBySeriesUuids} 的差異：後者是狀態字面量 PUBLISHED（公開可見性），
      * 本方法是「去留政策」，ARCHIVED 也算保留。</p>

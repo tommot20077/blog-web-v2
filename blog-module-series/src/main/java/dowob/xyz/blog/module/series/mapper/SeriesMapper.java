@@ -45,9 +45,8 @@ public interface SeriesMapper {
      * <p>公開列表的第三段：只查該頁的 uuid。作者只帶 {@code author_uuid}，呼叫端收集整頁的作者 UUID 後
      * 以 {@code UserFacade.getDisplayInfoByUuids} 一次解析（不再跨表連結使用者資料）。</p>
      *
-     * <p>注意：本查詢<b>不投影 article_count</b>——列表的計數改用
-     * {@code ArticleFacade.countPublishedBySeriesUuids} 的即時值，
-     * 不沿用 {@code series.article_count} 這個含非公開文章的反正規化欄位。</p>
+     * <p>注意：篇數不在 series 表內（V36 已移除 {@code article_count}）——列表的計數用
+     * {@code ArticleFacade.countPublishedBySeriesUuids} 的即時值。</p>
      *
      * @param uuids series 公開 UUID 集合（大小以呼叫端的頁大小為界，不得為空）
      * @return series 明細列（順序不保證，由 caller 依輸入順序重排）
@@ -73,13 +72,13 @@ public interface SeriesMapper {
      * 由呼叫端以 Java 時間（{@code LocalDateTime.now()}）傳入，與其他寫入路徑的 {@code @CreatedDate}／
      * {@code @LastModifiedDate} 同一個時鐘來源，不用資料庫的 CURRENT_TIMESTAMP。</p>
      *
-     * @param series 要新增的 series（uuid、title、slug、description、coverImageUrl、authorUuid、articleCount、createdAt、updatedAt）
+     * @param series 要新增的 series（uuid、title、slug、description、coverImageUrl、authorUuid、createdAt、updatedAt）
      * @return 受影響列數：1 表示新增成功，0 表示 slug 已被使用
      */
-    @Insert("INSERT INTO series (uuid, title, slug, description, cover_image_url, author_uuid, article_count, "
+    @Insert("INSERT INTO series (uuid, title, slug, description, cover_image_url, author_uuid, "
             + "created_at, updated_at) "
             + "VALUES (#{uuid}::uuid, #{title}, #{slug}, #{description}, #{coverImageUrl}, #{authorUuid}::uuid, "
-            + "#{articleCount}, #{createdAt}, #{updatedAt}) ON CONFLICT (slug) DO NOTHING")
+            + "#{createdAt}, #{updatedAt}) ON CONFLICT (slug) DO NOTHING")
     int insertIfSlugAbsent(Series series);
 
     /**
@@ -109,22 +108,18 @@ public interface SeriesMapper {
                           @Param("coverImageUrl") String coverImageUrl,
                           @Param("updatedAt") LocalDateTime updatedAt);
 
-    /** 反正規化 +1 */
-    @Update("UPDATE series SET article_count = article_count + 1 WHERE id = #{id}")
-    int incrementArticleCount(@Param("id") Long id);
-
-    /** 反正規化 -1（守衛 > 0） */
-    @Update("UPDATE series SET article_count = article_count - 1 WHERE id = #{id} AND article_count > 0")
-    int decrementArticleCount(@Param("id") Long id);
-
     /**
-     * 以公開 UUID 反正規化 -1（守衛 &gt; 0）——供刪除事件 consumer 使用，consumer 不持有 series 主鍵。
+     * 對 series 列加共享鎖並確認它仍存在（{@code FOR SHARE}）。
      *
-     * @param uuid series 公開 UUID
-     * @return 受影響列數；series 已不存在或計數已為 0 時為 0
+     * <p>「加入系列」在條件式指派文章之後呼叫：列已被另一個交易刪除並 commit 時回 null（呼叫端拋 S0101 回滾，
+     * 避免文章歸屬到已不存在的 series）；列正被另一個尚未 commit 的交易刪除時，共享鎖會等它結束再判斷。
+     * 取代原本 {@code article_count + 1} 順帶提供的「列仍存在」保證。</p>
+     *
+     * @param id series 主鍵
+     * @return 列仍存在時為其主鍵，否則 null
      */
-    @Update("UPDATE series SET article_count = article_count - 1 WHERE uuid = #{uuid}::uuid AND article_count > 0")
-    int decrementArticleCountByUuid(@Param("uuid") java.util.UUID uuid);
+    @Select("SELECT id FROM series WHERE id = #{id} FOR SHARE")
+    Long lockExistingById(@Param("id") Long id);
 
     /**
      * {@link #findBasicInfoBySeriesUuids} 的投影列。
