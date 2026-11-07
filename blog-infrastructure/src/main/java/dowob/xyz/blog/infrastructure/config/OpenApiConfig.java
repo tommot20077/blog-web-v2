@@ -1,11 +1,17 @@
 package dowob.xyz.blog.infrastructure.config;
 
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import dowob.xyz.blog.infrastructure.openapi.CommonResponsesOperationCustomizer;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
+import io.swagger.v3.oas.models.responses.ApiResponse;
+import io.swagger.v3.oas.models.responses.ApiResponses;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
+import org.springdoc.core.customizers.OpenApiCustomizer;
+import org.springdoc.core.customizers.OperationCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -58,5 +64,40 @@ public class OpenApiConfig {
         components.addSecuritySchemes(API_SECURITY_SCHEME_NAME, securityScheme);
 
         return new OpenAPI().info(info).addSecurityItem(securityRequirement).components(components);
+    }
+
+    /**
+     * 共通錯誤回應 customizer：依 {@code @PreAuthorize}／{@code @RateLimited} 補 401／403／429
+     *
+     * @return operation customizer
+     */
+    @Bean
+    public OperationCustomizer commonResponsesOperationCustomizer() {
+        return new CommonResponsesOperationCustomizer();
+    }
+
+    /**
+     * 全域 customizer：每個 operation 補上 500（{@code B0001}）。
+     *
+     * <p>500 對所有端點都可能發生，不逐一標註；已手寫 500 的 operation 不覆蓋。</p>
+     *
+     * @return OpenAPI customizer
+     */
+    @Bean
+    public OpenApiCustomizer internalErrorOpenApiCustomizer() {
+        return openApi -> {
+            if (openApi.getPaths() == null) {
+                return;
+            }
+            openApi.getPaths().values().forEach(pathItem -> pathItem.readOperations().forEach(operation -> {
+                if (operation.getResponses() == null) {
+                    operation.setResponses(new ApiResponses());
+                }
+                if (operation.getResponses().get("500") == null) {
+                    operation.getResponses().addApiResponse("500", new ApiResponse()
+                            .description(CommonErrorCode.SYSTEM_EXECUTION_ERROR.getCode() + " 系統執行出錯"));
+                }
+            }));
+        };
     }
 }
