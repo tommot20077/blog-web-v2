@@ -57,4 +57,17 @@ class MultipartYamlBindingTest {
                     .isLessThanOrEqualTo(DataSize.ofMegabytes(2).toBytes());
         });
     }
+
+    @Test
+    @DisplayName("blog.file.max-image-pixels 在 yaml 明確設為 100MP（FILE-04，A6；不限單邊）")
+    void yamlMaxImagePixels_isExplicit100Megapixels() {
+        runner.run(context -> {
+            assertThat(context.getEnvironment().getProperty("blog.file.max-image-pixels"))
+                    .as("yaml 必須明確設定，不能只靠程式預設值")
+                    .isEqualTo("100000000");
+            dowob.xyz.blog.module.file.config.FileProperties props = Binder.get(context.getEnvironment())
+                    .bind("blog.file", dowob.xyz.blog.module.file.config.FileProperties.class).get();
+            assertThat(props.maxImagePixels()).isEqualTo(100_000_000L);
+        });
+    }
 }

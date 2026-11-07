@@ -149,6 +149,10 @@ blog:
     quotas:
       USER: 10MB
       AUTHOR: 500MB
+    # 圖片總像素上限（寬 × 高，不限單邊；FILE-04／A6）：100MP。全景圖（例如 30000×3000＝90MP）可通過。
+    # 上傳端（FileServiceImpl）只讀 header 檢查，超過回 400 INVALID_IMAGE_DIMENSIONS；
+    # 縮圖端（ThumbnailConsumer）解碼前再擋一次，超限不產生縮圖。防 decompression bomb 讓 worker OOM。
+    max-image-pixels: 100000000
     allowed-mime-types:
       - image/jpeg
       - image/png

@@ -2,7 +2,9 @@ package dowob.xyz.blog.module.file.consumer;
 
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
 import dowob.xyz.blog.infrastructure.mq.ThrowingRunnable;
+import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
+import dowob.xyz.blog.module.file.support.TestImages;
 import dowob.xyz.blog.module.file.model.FileMetadata;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import io.micrometer.core.instrument.Counter;
@@ -67,6 +69,10 @@ class ThumbnailConsumerTest {
     /** 真實的 ack/nack 共用包裝（Spy 實例，非 Mock，使 ack/nack 與計數走真實路徑） */
     @Spy
     private ConsumerExecutor consumerExecutor = new ConsumerExecutor();
+
+    /** 真實的設定實例（圖片總像素上限預設 100MP） */
+    @Spy
+    private FileProperties fileProperties = new FileProperties(java.util.Map.of(), java.util.Set.of(), null);
 
     @InjectMocks
     private ThumbnailConsumer thumbnailConsumer;
@@ -258,6 +264,56 @@ class ThumbnailConsumerTest {
         when(mockResponse.read()).thenAnswer(inv -> bais.read());
         when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
         when(fileMetadataRepository.markThumbnailGenerated(fileId)).thenReturn(markResult);
+    }
+
+    /** 讓 getObject 回傳指定位元組的串流 */
+    private void stubDownload(byte[] bytes) throws Exception {
+        GetObjectResponse mockResponse = org.mockito.Mockito.mock(GetObjectResponse.class);
+        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+        when(mockResponse.read(any(byte[].class), any(int.class), any(int.class)))
+                .thenAnswer(inv -> bais.read(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        when(mockResponse.read()).thenAnswer(inv -> bais.read());
+        when(minioClient.getObject(any(GetObjectArgs.class))).thenReturn(mockResponse);
+    }
+
+    /**
+     * FILE-04（A6）：縮圖端再擋一次——總像素超過上限的圖不解碼、不產生縮圖，記 WARN 後正常結束（ack，不重試進 DLQ）
+     */
+    @Test
+    @DisplayName("handleImageUploaded_withImageOverPixelLimit_skipsThumbnail_andAcksWithoutThrowing")
+    void handleImageUploaded_withImageOverPixelLimit_skipsThumbnail() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.png", "image/png");
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+        stubDownload(TestImages.solidPng(12000, 9000));
+
+        org.assertj.core.api.Assertions.assertThatCode(() -> thumbnailConsumer.handleImageUploaded(event))
+                .doesNotThrowAnyException();
+
+        verify(minioClient, never()).putObject(any(PutObjectArgs.class));
+        verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
+    }
+
+    /**
+     * FILE-04（A6）：上限來自設定屬性；縮圖端用同一個值
+     */
+    @Test
+    @DisplayName("handleImageUploaded_withConfiguredSmallerPixelLimit_skipsThumbnailAccordingToProperty")
+    void handleImageUploaded_withConfiguredSmallerPixelLimit_skipsThumbnail() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        ReflectionTestUtils.setField(thumbnailConsumer, "fileProperties",
+                new FileProperties(java.util.Map.of(), java.util.Set.of(), 99L));
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+        stubDownload(getClass().getResourceAsStream("/test.jpg").readAllBytes());
+
+        thumbnailConsumer.handleImageUploaded(event);
+
+        verify(minioClient, never()).putObject(any(PutObjectArgs.class));
     }
 
     /**

@@ -36,14 +36,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.stream.ImageInputStream;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -139,6 +135,18 @@ public class FileServiceImpl implements FileService {
         if (fileBytes.length > MAX_FILE_SIZE) {
             throw new BusinessException(FileErrorCode.FILE_TOO_LARGE);
         }
+        /*
+         * FILE-04（A6）：總像素上限（寬×高，不限單邊）。在寫入 MinIO 之前只讀 header 檢查，
+         * 超限者不落地；讀不到寬高的檔案（ImageIO 無法解析）縮圖端也解不開，放行但不記錄寬高。
+         */
+        ImageDimensionReader.Dimensions dimensions = ImageDimensionReader.read(fileBytes).orElse(null);
+        if (dimensions != null && dimensions.pixels() > fileProperties.maxImagePixels()) {
+            log.warn("拒絕上傳：圖片總像素超過上限 {}x{}={} > {}, uploaderId={}",
+                    dimensions.width(), dimensions.height(), dimensions.pixels(), fileProperties.maxImagePixels(), uploaderId);
+            throw new BusinessException(FileErrorCode.INVALID_IMAGE_DIMENSIONS);
+        }
+        Integer width = dimensions == null ? null : (int) dimensions.width();
+        Integer height = dimensions == null ? null : (int) dimensions.height();
         long quota = resolveQuota(uploaderRole);
         boolean quotaLimited = quota != Long.MAX_VALUE;
         /* RACE-12：不加鎖的快速預檢，明顯超額就直接拒絕（省一次 MinIO 上傳）；權威檢查在下方交易內加鎖後重做 */
@@ -161,23 +169,6 @@ public class FileServiceImpl implements FileService {
         } catch (Exception e) {
             log.error("MinIO 上傳失敗: {}", storagePath, e);
             throw new SystemException(CommonErrorCode.STORAGE_ERROR);
-        }
-        Integer width = null;
-        Integer height = null;
-        try (ImageInputStream iis = ImageIO.createImageInputStream(new ByteArrayInputStream(fileBytes))) {
-            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
-            if (readers.hasNext()) {
-                ImageReader reader = readers.next();
-                try {
-                    reader.setInput(iis);
-                    width = reader.getWidth(0);
-                    height = reader.getHeight(0);
-                } finally {
-                    reader.dispose();
-                }
-            }
-        } catch (IOException e) {
-            log.warn("無法讀取圖片尺寸: {}", e.getMessage());
         }
         FileMetadata metadata = new FileMetadata();
         metadata.setId(fileId);

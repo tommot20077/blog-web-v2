@@ -36,12 +36,21 @@ public record FileProperties(
         /**
          * 允許上傳的 MIME 類型集合（使用 Set 確保無重複）
          */
-        Set<String> allowedMimeTypes
+        Set<String> allowedMimeTypes,
+
+        /**
+         * 圖片總像素（寬 × 高）上限，不限單邊；未設定時為 {@link #DEFAULT_MAX_IMAGE_PIXELS}（FILE-04，A6）
+         */
+        Long maxImagePixels
 
 ) {
+    /** 圖片總像素預設上限：100MP（100,000,000 像素） */
+    public static final long DEFAULT_MAX_IMAGE_PIXELS = 100_000_000L;
+
     /** 防禦性預設值：避免 YAML 未設定時的 NPE */
     public FileProperties {
         if (quotas == null) quotas = Map.of();
         if (allowedMimeTypes == null) allowedMimeTypes = Set.of();
+        if (maxImagePixels == null) maxImagePixels = DEFAULT_MAX_IMAGE_PIXELS;
     }
 }

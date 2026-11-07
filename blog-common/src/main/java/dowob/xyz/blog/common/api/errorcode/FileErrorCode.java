@@ -26,7 +26,10 @@ public enum FileErrorCode implements IErrorCode {
     INVALID_FILE_TYPE("A0404", "不支援的檔案類型"),
 
     /** 無權限操作此檔案 */
-    FILE_ACCESS_DENIED("A0405", "無權限操作此檔案");
+    FILE_ACCESS_DENIED("A0405", "無權限操作此檔案"),
+
+    /** 圖片總像素超過上限（FILE-04：防 decompression bomb） */
+    INVALID_IMAGE_DIMENSIONS("A0406", "圖片尺寸過大");
 
     /**
      * 錯誤碼

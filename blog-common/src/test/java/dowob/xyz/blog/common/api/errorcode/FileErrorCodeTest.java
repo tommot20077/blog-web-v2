@@ -45,4 +45,10 @@ class FileErrorCodeTest {
     void fileAccessDenied_code_isA0405() {
         assertThat(FileErrorCode.FILE_ACCESS_DENIED.getCode()).isEqualTo("A0405");
     }
+
+    @Test
+    @DisplayName("INVALID_IMAGE_DIMENSIONS 錯誤碼應為 A0406")
+    void invalidImageDimensions_code_isA0406() {
+        assertThat(FileErrorCode.INVALID_IMAGE_DIMENSIONS.getCode()).isEqualTo("A0406");
+    }
 }

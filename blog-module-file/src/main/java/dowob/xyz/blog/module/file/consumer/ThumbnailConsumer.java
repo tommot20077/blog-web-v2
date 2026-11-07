@@ -1,9 +1,11 @@
 package dowob.xyz.blog.module.file.consumer;
 
 import dowob.xyz.blog.infrastructure.mq.ConsumerExecutor;
+import dowob.xyz.blog.module.file.config.FileProperties;
 import dowob.xyz.blog.module.file.event.ImageUploadedEvent;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
 import dowob.xyz.blog.module.file.service.AllowedImageTypes;
+import dowob.xyz.blog.module.file.service.ImageDimensionReader;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -49,6 +51,11 @@ public class ThumbnailConsumer {
      * 檔案元資料 Repository
      */
     private final FileMetadataRepository fileMetadataRepository;
+
+    /**
+     * 檔案模組設定（圖片總像素上限）
+     */
+    private final FileProperties fileProperties;
 
     /**
      * MQ consumer 共用執行包裝（失敗日誌、計數、冪等）
@@ -97,8 +104,22 @@ public class ThumbnailConsumer {
                             .object(event.storagePath())
                             .build())) {
 
+                /*
+                 * FILE-04（A6）：解碼前先只讀 header 檢查總像素；超限（decompression bomb）不產生縮圖，
+                 * 記 WARN 後正常結束（ack）——重試不會讓圖變小，進 DLQ 只會反覆占用 concurrentConsumers=1 的 queue。
+                 * 原檔上限為 20MB，整檔讀入記憶體可接受；讀成 byte[] 才能「先看 header、再決定要不要解碼」。
+                 */
+                byte[] original = readFully(inputStream);
+                ImageDimensionReader.Dimensions dimensions = ImageDimensionReader.read(original).orElse(null);
+                if (dimensions != null && dimensions.pixels() > fileProperties.maxImagePixels()) {
+                    log.warn("圖片總像素超過上限，跳過縮圖: fileId={}, {}x{}={} > {}",
+                            event.fileId(), dimensions.width(), dimensions.height(),
+                            dimensions.pixels(), fileProperties.maxImagePixels());
+                    return;
+                }
+
                 ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-                Thumbnails.of(inputStream)
+                Thumbnails.of(new ByteArrayInputStream(original))
                         .width(300)
                         .keepAspectRatio(true)
                         .outputFormat(outputFormat)
@@ -129,6 +150,23 @@ public class ThumbnailConsumer {
 
             log.info("縮圖產生成功: {}", thumbPath);
         });
+    }
+
+    /**
+     * 讀完整個串流（以 {@code read(byte[], int, int)} 逐段讀取）。
+     *
+     * @param in 輸入串流
+     * @return 全部內容
+     * @throws java.io.IOException 讀取失敗
+     */
+    private static byte[] readFully(InputStream in) throws java.io.IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int n;
+        while ((n = in.read(chunk, 0, chunk.length)) != -1) {
+            buffer.write(chunk, 0, n);
+        }
+        return buffer.toByteArray();
     }
 
     /**

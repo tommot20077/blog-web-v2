@@ -13,6 +13,7 @@ import dowob.xyz.blog.module.file.model.UsageType;
 import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
 import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
 import dowob.xyz.blog.module.file.repository.FileMetadataRepository;
+import dowob.xyz.blog.module.file.support.TestImages;
 import io.minio.GetObjectArgs;
 import io.minio.GetObjectResponse;
 import io.minio.MinioClient;
@@ -90,7 +91,8 @@ class FileServiceTest {
 
     private final FileProperties fileProperties = new FileProperties(
             Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)),
-            Set.of("image/jpeg", "image/png", "image/webp", "image/gif")
+            Set.of("image/jpeg", "image/png", "image/webp", "image/gif"),
+            null
     );
 
     @InjectMocks
@@ -224,6 +226,89 @@ class FileServiceTest {
             assertThatThrownBy(() -> fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(FileErrorCode.FILE_TOO_LARGE.getMessage());
+        }
+
+        /** FILE-04（A6）：總像素超過 100MP（12000×9000＝108MP）的小檔案 PNG 被拒絕，且不得寫入 MinIO 與 DB */
+        @Test
+        @DisplayName("uploadFile_withImageOverPixelLimit_throwsInvalidImageDimensions_andStoresNothing")
+        void uploadFile_withImageOverPixelLimit_throwsInvalidImageDimensions_andStoresNothing() throws Exception {
+            byte[] png = TestImages.solidPng(12000, 9000);
+            assertThat(png.length).as("小檔案、大寬高").isLessThan(1024 * 1024);
+            MockMultipartFile file = new MockMultipartFile("file", "huge.png", "image/png", png);
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            UUID uploaderId = UUID.randomUUID();
+
+            assertThatThrownBy(() -> fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR"))
+                    .isInstanceOfSatisfying(BusinessException.class, e ->
+                            assertThat(e.getCode()).isEqualTo(FileErrorCode.INVALID_IMAGE_DIMENSIONS.getCode()));
+            verify(minioClient, never()).putObject(any(PutObjectArgs.class));
+            verify(fileMetadataRepository, never()).save(any());
+            verify(rabbitTemplate, never()).convertAndSend(any(String.class), any(String.class), any(Object.class));
+        }
+
+        /** FILE-04（A6）：全景圖 30000×3000＝90MP 不限單邊，可通過並記錄寬高 */
+        @Test
+        @DisplayName("uploadFile_withPanoramaUnderPixelLimit_succeeds")
+        void uploadFile_withPanoramaUnderPixelLimit_succeeds() throws Exception {
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "pano.png", "image/png", TestImages.solidPng(30000, 3000));
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            assertThat(response.getWidth()).isEqualTo(30000);
+            assertThat(response.getHeight()).isEqualTo(3000);
+        }
+
+        /** FILE-04（A6）：邊界——恰好 100MP（10000×10000）可通過（判斷為「大於」才拒絕） */
+        @Test
+        @DisplayName("uploadFile_withExactlyPixelLimit_succeeds")
+        void uploadFile_withExactlyPixelLimit_succeeds() throws Exception {
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "edge.png", "image/png", TestImages.solidPng(10000, 10000));
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+            FileUploadResponse response = fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR");
+
+            assertThat(response.getWidth()).isEqualTo(10000);
+        }
+
+        /** FILE-04（A6）：上限來自 {@code blog.file.max-image-pixels} 屬性，不是寫死 */
+        @Test
+        @DisplayName("uploadFile_withConfiguredSmallerPixelLimit_rejectsAccordingToProperty")
+        void uploadFile_withConfiguredSmallerPixelLimit_rejectsAccordingToProperty() throws Exception {
+            ReflectionTestUtils.setField(fileService, "fileProperties", new FileProperties(
+                    Map.of("AUTHOR", DataSize.ofMegabytes(500)), Set.of("image/png"), 1000L));
+            MockMultipartFile file = new MockMultipartFile(
+                    "file", "small.png", "image/png", TestImages.solidPng(50, 50));
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+
+            assertThatThrownBy(() -> fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, UUID.randomUUID(), "AUTHOR"))
+                    .isInstanceOfSatisfying(BusinessException.class, e ->
+                            assertThat(e.getCode()).isEqualTo(FileErrorCode.INVALID_IMAGE_DIMENSIONS.getCode()));
+        }
+
+        /** FILE-04（A6）：JDK 沒有 WebP reader，不得因讀不到寬高而一律拒絕，也不得放行超限的 WebP */
+        @Test
+        @DisplayName("uploadFile_withWebpOverPixelLimit_rejected_andWebpWithinLimit_succeedsWithDimensions")
+        void uploadFile_withWebp_checksPixelLimitViaHeaderParsing() throws Exception {
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            UUID uploaderId = UUID.randomUUID();
+            MockMultipartFile tooBig = new MockMultipartFile(
+                    "file", "big.webp", "image/webp", TestImages.webpVp8x(20000, 10000));
+            MockMultipartFile ok = new MockMultipartFile(
+                    "file", "ok.webp", "image/webp", TestImages.webpVp8x(4000, 3000));
+
+            assertThatThrownBy(() -> fileService.uploadFile(tooBig, UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR"))
+                    .isInstanceOfSatisfying(BusinessException.class, e ->
+                            assertThat(e.getCode()).isEqualTo(FileErrorCode.INVALID_IMAGE_DIMENSIONS.getCode()));
+            FileUploadResponse response = fileService.uploadFile(ok, UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR");
+
+            assertThat(response.getWidth()).isEqualTo(4000);
+            assertThat(response.getHeight()).isEqualTo(3000);
         }
 
         /** 驗證配額超限應拋出 QUOTA_EXCEEDED 錯誤 */
