@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import io.swagger.v3.oas.annotations.Operation;
 
 /**
  * 標籤管理員 API 控制器
@@ -26,6 +27,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@io.swagger.v3.oas.annotations.tags.Tag(name = "標籤管理")
 @RestController
 @RequestMapping("/api/v1/admin/tags")
 @RequiredArgsConstructor
@@ -43,6 +45,9 @@ public class AdminTagController {
      * @param request 更新請求
      * @return 更新後的標籤
      */
+    @Operation(summary = "更新標籤",
+            description = "需 ADMIN_TAG 權限。更新顏色、圖示與描述，僅更新有帶的欄位。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0301 標籤不存在")
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('ADMIN_TAG')")
     public ApiResponse<Tag> updateTag(
@@ -57,6 +62,9 @@ public class AdminTagController {
      * @param id 標籤 ID
      * @return 成功回應
      */
+    @Operation(summary = "刪除標籤",
+            description = "需 ADMIN_TAG 權限。標籤仍被任何文章使用（含草稿）時不可刪除。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0301 標籤不存在；A0303 標籤正在使用中")
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('ADMIN_TAG')")
     public ApiResponse<Void> deleteTag(@PathVariable UUID id) {
