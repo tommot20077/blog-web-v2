@@ -139,7 +139,7 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    @DisplayName("AUTHOR 角色的 Authentication 應包含 ROLE_AUTHOR 與 ARTICLE_CREATE，不含 SYSTEM_CONFIG")
+    @DisplayName("AUTHOR 角色的 Authentication 應包含 ROLE_AUTHOR 與 ARTICLE_CREATE，不含 ADMIN_TAG")
     void author_authoritiesShouldContainRoleAndPermissions() throws Exception {
         performFilterWithRole(Role.AUTHOR);
 
@@ -156,7 +156,7 @@ class JwtAuthenticationFilterTest {
         assertThat(authorityNames).contains(Permission.ARTICLE_DELETE.name());
         assertThat(authorityNames).contains(Permission.COMMENT_WRITE.name());
         assertThat(authorityNames).contains(Permission.FILE_UPLOAD.name());
-        assertThat(authorityNames).doesNotContain(Permission.SYSTEM_CONFIG.name());
+        assertThat(authorityNames).doesNotContain(Permission.ADMIN_TAG.name());
     }
 
     @Test
@@ -175,7 +175,7 @@ class JwtAuthenticationFilterTest {
         assertThat(authorityNames).contains(Permission.COMMENT_WRITE.name());
         assertThat(authorityNames).contains(Permission.COMMENT_DELETE.name());
         assertThat(authorityNames).doesNotContain(Permission.ARTICLE_CREATE.name());
-        assertThat(authorityNames).doesNotContain(Permission.SYSTEM_CONFIG.name());
+        assertThat(authorityNames).doesNotContain(Permission.ADMIN_TAG.name());
     }
 
     @Test

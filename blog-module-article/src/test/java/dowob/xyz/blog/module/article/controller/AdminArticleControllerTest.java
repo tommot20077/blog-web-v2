@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.common.api.enums.Permission;
 import dowob.xyz.blog.module.article.support.TestUsers;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
@@ -285,4 +286,56 @@ class AdminArticleControllerTest {
         verify(articleService).unarchiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid);
     }
 
+    // =========================================================================
+    // A9：持有 ROLE_ADMIN、但缺少該端點對應 permission（手工構造 authorities）→ 方法層 403
+    // =========================================================================
+
+    /** ROLE_ADMIN + 除了 {@code missing} 之外的所有 permission：URL 層放行，方法層必須擋下。 */
+    private static RequestPostProcessor asAdminWithout(Permission missing) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().stream().filter(p -> p != missing).forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(1L), Role.ADMIN), null, authorities);
+        return authentication(auth);
+    }
+
+    @Test
+    @DisplayName("GET /pending → ROLE_ADMIN 但缺 ADMIN_ARTICLE_REVIEW → 403，且不查詢")
+    void getPendingArticles_adminWithoutReviewPermission_shouldReturn403() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_REVIEW)))
+                .andExpect(status().isForbidden());
+        verify(articleQueryService, never()).getPendingArticles(anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → ROLE_ADMIN 但缺 ADMIN_ARTICLE_ARCHIVE → 403，且不委派 service")
+    void archiveArticle_adminWithoutArchivePermission_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_ARCHIVE)))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).archiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → ROLE_ADMIN 但缺 ADMIN_ARTICLE_ARCHIVE → 403，且不委派 service")
+    void unarchiveArticle_adminWithoutArchivePermission_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/unarchive")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_ARCHIVE)))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).unarchiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("權限不可互通：只有 ADMIN_ARTICLE_REVIEW 者不能封存；只有 ADMIN_ARTICLE_ARCHIVE 者不能看待審清單")
+    void reviewAndArchivePermissions_areNotInterchangeable() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_ARCHIVE)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_REVIEW)))
+                .andExpect(status().isForbidden());
+    }
 }

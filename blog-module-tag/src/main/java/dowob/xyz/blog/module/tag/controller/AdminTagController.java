@@ -20,7 +20,7 @@ import java.util.UUID;
  * 標籤管理員 API 控制器
  *
  * <p>
- * 提供管理員更新與刪除標籤的功能，需具備 {@code SYSTEM_CONFIG} 權限。
+ * 提供管理員更新與刪除標籤的功能，需具備 {@code ADMIN_TAG} 權限。
  * </p>
  *
  * @author Yuan
@@ -44,7 +44,7 @@ public class AdminTagController {
      * @return 更新後的標籤
      */
     @PutMapping("/{id}")
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_TAG')")
     public ApiResponse<Tag> updateTag(
             @PathVariable UUID id,
             @Valid @RequestBody UpdateTagRequest request) {
@@ -58,7 +58,7 @@ public class AdminTagController {
      * @return 成功回應
      */
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_TAG')")
     public ApiResponse<Void> deleteTag(@PathVariable UUID id) {
         tagService.adminDeleteTag(id);
         return ApiResponse.success();

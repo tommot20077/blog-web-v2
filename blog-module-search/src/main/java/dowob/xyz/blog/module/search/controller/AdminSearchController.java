@@ -41,7 +41,7 @@ public class AdminSearchController {
      * @return 成功回應
      */
     @PostMapping("/reindex")
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_SEARCH')")
     public ApiResponse<Void> reindex() {
         searchService.reindexAll();
         return ApiResponse.success(null, "Elasticsearch 索引全量重建已完成");
@@ -58,7 +58,7 @@ public class AdminSearchController {
      * @return 搜尋索引狀態
      */
     @GetMapping("/status")
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_SEARCH')")
     public ApiResponse<SearchIndexStatusResponse> status() {
         return ApiResponse.success(searchService.getIndexStatus());
     }

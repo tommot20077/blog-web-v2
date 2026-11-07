@@ -1,5 +1,7 @@
 package dowob.xyz.blog.module.search.controller;
 
+import static org.mockito.Mockito.verifyNoInteractions;
+import dowob.xyz.blog.common.api.enums.Permission;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.config.SecurityConfig;
@@ -149,5 +151,38 @@ class AdminSearchControllerTest {
                 .andExpect(jsonPath("$.data.healthy").value(true));
 
         verify(searchService).getIndexStatus();
+    }
+
+    // =========================================================================
+    // A9：持有 ROLE_ADMIN、但缺少該端點對應 permission（手工構造 authorities）→ 方法層 403
+    // =========================================================================
+
+    /** ROLE_ADMIN + 除了 {@code missing} 之外的所有 permission：URL 層放行，方法層必須擋下。 */
+    private static RequestPostProcessor asAdminWithout(Permission missing) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().stream().filter(p -> p != missing).forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 1L), Role.ADMIN), null, authorities);
+        return authentication(auth);
+    }
+
+    @Test
+    @DisplayName("POST /reindex — ROLE_ADMIN 但缺 ADMIN_SEARCH → 403，且不重建索引")
+    void reindex_adminWithoutSearchPermission_returns403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/search/reindex")
+                        .with(asAdminWithout(Permission.ADMIN_SEARCH)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(searchService);
+    }
+
+    @Test
+    @DisplayName("GET /status — ROLE_ADMIN 但缺 ADMIN_SEARCH → 403，且不查詢狀態")
+    void status_adminWithoutSearchPermission_returns403() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/search/status")
+                        .with(asAdminWithout(Permission.ADMIN_SEARCH)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(searchService);
     }
 }

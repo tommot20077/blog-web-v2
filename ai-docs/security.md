@@ -35,7 +35,19 @@ If the order is wrong, `anyRequest()` matches first and shadows the admin rule, 
 |------|-------------|-------------|
 | USER | ROLE_USER | COMMENT_WRITE, COMMENT_DELETE |
 | AUTHOR | ROLE_AUTHOR | All USER permissions + ARTICLE_CREATE, ARTICLE_EDIT, ARTICLE_DELETE, ARTICLE_PIN, FILE_UPLOAD |
-| ADMIN | ROLE_ADMIN | All permissions (`EnumSet.allOf`) |
+| ADMIN | ROLE_ADMIN | All permissions (`EnumSet.allOf`), including the `ADMIN_*` family below (only ADMIN has them) |
+
+**Admin permissions (`ADMIN_*`, A9／AUTH-10, Yuan 2026-11-07)** — every admin endpoint is guarded by a permission named for its duty, on top of the URL-layer `/api/v1/admin/** → hasRole('ADMIN')` (two layers). The generic `SYSTEM_CONFIG` (and the unused duplicate `TAG_MANAGE`, renamed `ADMIN_TAG`) no longer exist; the guard `EndpointAuthorizationTest` rejects any `/api/v1/admin/**` handler that is not `hasAuthority('ADMIN_*')` with an existing permission name.
+
+| Permission | Endpoints |
+|------------|-----------|
+| `ADMIN_TAG` | `PUT`／`DELETE /api/v1/admin/tags/{id}` |
+| `ADMIN_CATEGORY` | `POST /api/v1/admin/categories`, `PUT`／`DELETE /api/v1/admin/categories/{uuid}` |
+| `ADMIN_ARTICLE_REVIEW` | `GET /api/v1/admin/articles/pending`, `POST /api/v1/articles/{uuid}/reject` (the only one outside the `/admin` URL layer — method layer is its sole guard) |
+| `ADMIN_ARTICLE_ARCHIVE` | `POST /api/v1/admin/articles/{uuid}/archive`, `POST /api/v1/admin/articles/{uuid}/unarchive` |
+| `ADMIN_SEARCH` | `POST /api/v1/admin/search/reindex`, `GET /api/v1/admin/search/status` |
+
+`USER_MANAGE`, `USER_BAN`, `SYSTEM_ANNOUNCE` are reserved ADMIN-only permissions with no endpoint yet. The two version read endpoints (`GET /api/v1/articles/{uuid}/versions[/{versionUuid}]`) now require `ARTICLE_EDIT` like the four write endpoints; owner/admin checks stay in the service layer.
 
 ### 4. Capability vs Ownership Separation
 
@@ -192,7 +204,7 @@ public void changePassword(...) {
 |--------|------|-----------|
 | GET | `/api/v1/articles/me` | `@PreAuthorize("isAuthenticated()")` |
 | GET | `/api/v1/articles/{uuid}/edit` | `@PreAuthorize("hasAuthority('ARTICLE_EDIT')")` |
-| GET | `/api/v1/articles/{uuid}/versions`、`/versions/{versionUuid}` | `@PreAuthorize("isAuthenticated()")` |
+| GET | `/api/v1/articles/{uuid}/versions`、`/versions/{versionUuid}` | `@PreAuthorize("hasAuthority('ARTICLE_EDIT')")`(A9;擁有者／ADMIN 檢查在 service 層) |
 | GET | `/api/v1/articles/{uuid}/highlights` | `@PreAuthorize("isAuthenticated()")` |
 | GET | `/api/v1/articles/{uuid}/progress` | `@PreAuthorize("isAuthenticated()")` |
 

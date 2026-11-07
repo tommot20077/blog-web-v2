@@ -42,12 +42,14 @@ import java.util.UUID;
  * <p>owner 與 admin 檢查一律在 service 層執行（security.md 原則 4：能力歸
  * {@code @PreAuthorize}，歸屬歸 service 層）。</p>
  *
- * <p>兩個 GET（list / getDetail）僅讀取，要求 {@code isAuthenticated()}。
+ * <p>六個端點一律要求 {@code ARTICLE_EDIT} 細粒度權限（A9／AUTH-10，Yuan 2026-11-07 決定統一命名）。
  * 四個寫入端點（manual / restore / promote / delete）皆會改寫或刪除文章的版本資料，
- * 因此比照 {@code PUT /api/v1/articles/{uuid}} 要求 {@code ARTICLE_EDIT} 細粒度權限——
+ * 因此比照 {@code PUT /api/v1/articles/{uuid}} 要求 {@code ARTICLE_EDIT}——
  * restore 首先於 F-M1 收斂，manual / promote / delete 於 M-1（PR #68 review）跟進，
- * 統一「會寫入就要 ARTICLE_EDIT」的標準，避免被降級為 USER 的前作者仍能寫入或
- * 刪除自己文章的版本資料。</p>
+ * 避免被降級為 USER 的前作者仍能寫入或刪除自己文章的版本資料。
+ * 兩個 GET（list / getDetail）原本只要 {@code isAuthenticated()}、靠 service 層擁有者檢查兜底，
+ * 現同樣要求 {@code ARTICLE_EDIT}：版本是編輯功能的一部分，能讀版本的人本來就只有 AUTHOR（自己文章）與 ADMIN，
+ * 兩者都擁有 {@code ARTICLE_EDIT}；USER 角色不再能呼叫。owner／admin 檢查仍在 service 層。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -65,7 +67,7 @@ public class VersionController {
      * 列出 article 的版本 summary（分頁，可選 type filter）。
      */
     @GetMapping
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "版本列表（分頁）")
     public ApiResponse<PageResult<VersionSummaryResponse>> list(
             @PathVariable UUID articleUuid,
@@ -82,7 +84,7 @@ public class VersionController {
      * 取版本詳情（含完整 content）。
      */
     @GetMapping("/{versionUuid}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "版本詳情")
     public ApiResponse<VersionDetailResponse> getDetail(
             @PathVariable UUID articleUuid,

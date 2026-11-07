@@ -4,6 +4,9 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -50,10 +53,8 @@ class RolePermissionTest {
     @Test
     @DisplayName("USER 不擁有任何 ADMIN 專屬權限")
     void user_doesNotHaveAdminPermissions() {
-        assertThat(Role.USER.hasPermission(Permission.TAG_MANAGE)).isFalse();
         assertThat(Role.USER.hasPermission(Permission.USER_MANAGE)).isFalse();
         assertThat(Role.USER.hasPermission(Permission.USER_BAN)).isFalse();
-        assertThat(Role.USER.hasPermission(Permission.SYSTEM_CONFIG)).isFalse();
         assertThat(Role.USER.hasPermission(Permission.SYSTEM_ANNOUNCE)).isFalse();
     }
 
@@ -84,23 +85,51 @@ class RolePermissionTest {
     @Test
     @DisplayName("AUTHOR 不擁有 ADMIN 專屬權限")
     void author_doesNotHaveAdminPermissions() {
-        assertThat(Role.AUTHOR.hasPermission(Permission.TAG_MANAGE)).isFalse();
         assertThat(Role.AUTHOR.hasPermission(Permission.USER_MANAGE)).isFalse();
         assertThat(Role.AUTHOR.hasPermission(Permission.USER_BAN)).isFalse();
-        assertThat(Role.AUTHOR.hasPermission(Permission.SYSTEM_CONFIG)).isFalse();
         assertThat(Role.AUTHOR.hasPermission(Permission.SYSTEM_ANNOUNCE)).isFalse();
     }
 
     /** ===== ADMIN 角色測試 ===== */
 
     @Test
-    @DisplayName("ADMIN 擁有全部 12 個 Permission")
+    @DisplayName("ADMIN 擁有全部 Permission")
     void admin_hasAllPermissions() {
         for (Permission permission : Permission.values()) {
             assertThat(Role.ADMIN.hasPermission(permission))
                     .as("ADMIN 應擁有 %s", permission)
                     .isTrue();
         }
+    }
+
+    /** ===== A9：ADMIN_* 權限命名 ===== */
+
+    @Test
+    @DisplayName("A9：admin 職責分域的 permission 齊備（ADMIN_TAG／CATEGORY／ARTICLE_REVIEW／ARTICLE_ARCHIVE／SEARCH）")
+    void adminDomainPermissions_exist() {
+        assertThat(Arrays.stream(Permission.values()).map(Enum::name))
+                .contains("ADMIN_TAG", "ADMIN_CATEGORY", "ADMIN_ARTICLE_REVIEW", "ADMIN_ARTICLE_ARCHIVE", "ADMIN_SEARCH");
+    }
+
+    @Test
+    @DisplayName("A9：只有 ADMIN 擁有 ADMIN_* 權限，USER 與 AUTHOR 一個都沒有")
+    void adminPermissions_onlyAdminHasThem() {
+        List<Permission> adminOnes = Arrays.stream(Permission.values())
+                .filter(p -> p.name().startsWith("ADMIN_")).toList();
+
+        assertThat(adminOnes).hasSize(5);
+        for (Permission permission : adminOnes) {
+            assertThat(Role.ADMIN.hasPermission(permission)).as("ADMIN 擁有 %s", permission).isTrue();
+            assertThat(Role.AUTHOR.hasPermission(permission)).as("AUTHOR 不應擁有 %s", permission).isFalse();
+            assertThat(Role.USER.hasPermission(permission)).as("USER 不應擁有 %s", permission).isFalse();
+        }
+    }
+
+    @Test
+    @DisplayName("A9：泛用的 SYSTEM_CONFIG 與同義重複的 TAG_MANAGE 已移除（沒有端點使用，避免誤用）")
+    void legacyGenericPermissions_removed() {
+        assertThat(Arrays.stream(Permission.values()).map(Enum::name))
+                .doesNotContain("SYSTEM_CONFIG", "TAG_MANAGE");
     }
 
     /** ===== 邊界條件 ===== */

@@ -187,7 +187,7 @@ class TagControllerIT {
      *
      * @param userId      使用者 ID（對應 {@code AuthUser#id()}）
      * @param role        角色名稱（不含 ROLE_ 前綴，例如 "USER"、"ADMIN"）
-     * @param permissions 額外的權限名稱（例如 "SYSTEM_CONFIG"）
+     * @param permissions 額外的權限名稱（例如 "ADMIN_TAG"）
      * @return 認證物件
      */
     private Authentication buildAuth(Long userId, String role, String... permissions) {
@@ -404,14 +404,14 @@ class TagControllerIT {
     }
 
     @Test
-    @DisplayName("PUT /api/admin/tags/{id} - 具備 SYSTEM_CONFIG 權限的 ADMIN，回傳 200 成功")
+    @DisplayName("PUT /api/admin/tags/{id} - 具備 ADMIN_TAG 權限的 ADMIN，回傳 200 成功")
     void adminUpdateTag_withSystemConfigPermission_returns200() throws Exception {
         UUID tagId = insertTestTag("Redis", "redis", 0);
         Map<String, String> body = Map.of("color", "#ff0000");
 
         mockMvc.perform(put("/api/v1/admin/tags/{id}", tagId)
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
-                                buildAuth(1L, "ADMIN", "SYSTEM_CONFIG")))
+                                buildAuth(1L, "ADMIN", "ADMIN_TAG")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isOk())
@@ -464,19 +464,36 @@ class TagControllerIT {
     }
 
     @Test
-    @DisplayName("DELETE /api/admin/tags/{id} - 具備 SYSTEM_CONFIG 權限的 ADMIN 刪除標籤，回傳 200 成功")
+    @DisplayName("DELETE /api/admin/tags/{id} - 具備 ADMIN_TAG 權限的 ADMIN 刪除標籤，回傳 200 成功")
     void adminDeleteTag_withSystemConfigPermission_returns200() throws Exception {
         UUID tagId = insertTestTag("Obsolete", "obsolete", 0);
 
         mockMvc.perform(delete("/api/v1/admin/tags/{id}", tagId)
                         .with(SecurityMockMvcRequestPostProcessors.authentication(
-                                buildAuth(1L, "ADMIN", "SYSTEM_CONFIG"))))
+                                buildAuth(1L, "ADMIN", "ADMIN_TAG"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("00000"));
     }
 
     @Test
-    @DisplayName("DELETE /api/admin/tags/{id} - USER 角色（無 SYSTEM_CONFIG 權限），回傳 403")
+    @DisplayName("A9 PUT／DELETE /api/admin/tags/{id} - ROLE_ADMIN 只帶已廢除的 SYSTEM_CONFIG（無 ADMIN_TAG），回傳 403")
+    void adminTagEndpoints_withLegacySystemConfigOnly_returns403() throws Exception {
+        UUID tagId = insertTestTag("Legacy", "legacy", 0);
+
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", tagId)
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "ADMIN", "SYSTEM_CONFIG")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("color", "#00ff00"))))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete("/api/v1/admin/tags/{id}", tagId)
+                        .with(SecurityMockMvcRequestPostProcessors.authentication(
+                                buildAuth(1L, "ADMIN", "SYSTEM_CONFIG"))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/admin/tags/{id} - USER 角色（無 ADMIN_TAG 權限），回傳 403")
     void adminDeleteTag_withoutPermission_returns403() throws Exception {
         UUID tagId = insertTestTag("Protected", "protected", 0);
 

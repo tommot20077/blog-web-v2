@@ -56,7 +56,7 @@ public class AdminArticleController {
      *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @return 分頁待審文章摘要列表
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_ARTICLE_REVIEW')")
     @GetMapping("/pending")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPendingArticles(
             PageQuery pageQuery) {
@@ -90,7 +90,7 @@ public class AdminArticleController {
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 下架後的文章完整資訊
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_ARTICLE_ARCHIVE')")
     @PostMapping("/{uuid}/archive")
     public ApiResponse<ArticleResponse> archiveArticle(@PathVariable UUID uuid,
                                                        @AuthenticationPrincipal AuthUser user,
@@ -117,7 +117,7 @@ public class AdminArticleController {
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 復原後的文章完整資訊
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_ARTICLE_ARCHIVE')")
     @PostMapping("/{uuid}/unarchive")
     public ApiResponse<ArticleResponse> unarchiveArticle(@PathVariable UUID uuid,
                                                          @AuthenticationPrincipal AuthUser user,
