@@ -912,47 +912,45 @@ class CommentServiceTest {
     }
 
     @Test
-    @DisplayName("D3：找不到留言 → 404 COMMENT_NOT_FOUND")
-    void listReplies_commentNotFound_is404() {
+    @DisplayName("D3：找不到留言 → 200 空 PageResult（與列表一致，不形成存在性探測）")
+    void listReplies_commentNotFound_isEmptyPage() {
         UUID missing = UUID.randomUUID();
         when(commentRepo.findByUuid(missing)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.listReplies(missing, null, false, 1, 10))
-                .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.HttpStatusBusinessException.class, e -> {
-                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND);
-                    assertThat(e.getCode()).isEqualTo(CommentErrorCode.COMMENT_NOT_FOUND.getCode());
-                });
+        var result = service.listReplies(missing, null, false, 1, 10);
+
+        assertThat(result.getRecords()).isEmpty();
+        assertThat(result.getTotal()).isZero();
+        verify(commentMapper, never()).findReplyPage(any(), anyInt(), anyInt());
     }
 
     @Test
-    @DisplayName("D3：傳入的是回覆（非頂層）的 uuid → 404 COMMENT_NOT_FOUND，不查回覆資料")
-    void listReplies_onReply_is404() {
+    @DisplayName("D3：傳入的是回覆（非頂層）的 uuid → 200 空 PageResult，不查回覆資料")
+    void listReplies_onReply_isEmptyPage() {
         UUID replyUuid = UUID.randomUUID();
         Comment reply = topLevelEntity(11L, replyUuid);
         reply.setParentId(1L);
         stubPublishedArticle();
         when(commentRepo.findByUuid(replyUuid)).thenReturn(Optional.of(reply));
 
-        assertThatThrownBy(() -> service.listReplies(replyUuid, null, false, 1, 10))
-                .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.HttpStatusBusinessException.class, e -> {
-                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND);
-                    assertThat(e.getCode()).isEqualTo(CommentErrorCode.COMMENT_NOT_FOUND.getCode());
-                });
+        var result = service.listReplies(replyUuid, null, false, 1, 10);
+
+        assertThat(result.getRecords()).isEmpty();
+        assertThat(result.getTotal()).isZero();
         verify(commentMapper, never()).findReplyPage(any(), anyInt(), anyInt());
     }
 
     @Test
-    @DisplayName("D3：文章對檢視者不可讀（草稿、下架或不存在）→ 404 ARTICLE_NOT_FOUND，不查回覆資料")
-    void listReplies_articleNotReadable_is404() {
+    @DisplayName("D3：文章對檢視者不可讀（草稿、下架或不存在）→ 200 空 PageResult，不查回覆資料")
+    void listReplies_articleNotReadable_isEmptyPage() {
         UUID topUuid = UUID.randomUUID();
         stubArticle("DRAFT", authorUuid);
         when(commentRepo.findByUuid(topUuid)).thenReturn(Optional.of(topLevelEntity(1L, topUuid)));
 
-        assertThatThrownBy(() -> service.listReplies(topUuid, null, false, 1, 10))
-                .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.HttpStatusBusinessException.class, e -> {
-                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND);
-                    assertThat(e.getCode()).isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
-                });
+        var result = service.listReplies(topUuid, null, false, 1, 10);
+
+        assertThat(result.getRecords()).isEmpty();
+        assertThat(result.getTotal()).isZero();
         verify(commentMapper, never()).findReplyPage(any(), anyInt(), anyInt());
     }
 

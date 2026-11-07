@@ -103,8 +103,9 @@ public class CommentController {
      *   <li>本 JavaDoc 即為所需的豁免標註。</li>
      * </ol>
      *
-     * <p>「匿名可到達」不等於「內容公開」：文章對檢視者不可讀（草稿、下架、不存在）時回 <b>404</b>
-     * {@code A0201}；傳入回覆（非頂層）或不存在的留言 uuid 回 404 {@code C0101}。
+     * <p>「匿名可到達」不等於「內容公開」：文章對檢視者不可讀（草稿、下架、不存在）、留言不存在、
+     * 傳入的是回覆（非頂層）的 uuid，三者一律回 <b>200 ＋空頁</b>（total 為 0），回應完全相同，
+     * 與 {@link #list} 一致，避免被用來探測 uuid 是否存在。
      * 列表 API 每則頂層只內嵌前 3 則回覆，其餘由本端點以相同排序（created_at 升冪）分頁取得。</p>
      *
      * @param commentUuid 頂層留言公開 UUID
@@ -114,10 +115,11 @@ public class CommentController {
      * @return 回覆分頁（{@code total} 為未刪除回覆總數）
      */
     @GetMapping("/comments/{commentUuid}/replies")
-    @Operation(summary = "列出頂層留言的回覆分頁（匿名可存取；文章不可讀回 404）",
+    @Operation(summary = "列出頂層留言的回覆分頁（匿名可存取；不可讀、不存在或非頂層一律回 200 空頁）",
             description = "列表 API 每則頂層留言只內嵌前 3 則回覆（replyCount 為未刪除回覆總數）；"
                     + "其餘用本端點載入，排序為 created_at 升冪，page 自 1 起、size 上限 100。"
-                    + "傳入回覆（非頂層）的 uuid 回 404 C0101；文章對檢視者不可讀回 404 A0201。")
+                    + "留言不存在、傳入回覆（非頂層）的 uuid、文章對檢視者不可讀，三者一律回 200 且 total 為 0 的空頁，"
+                    + "與留言列表一致，不形成存在性探測。")
     public ApiResponse<PageResult<CommentResponse>> listReplies(
             @PathVariable UUID commentUuid,
             PageQuery pageQuery,

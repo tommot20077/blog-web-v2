@@ -138,8 +138,8 @@ class CommentRepliesFlowE2E extends AbstractE2ETest {
     }
 
     @Test
-    @DisplayName("草稿文章底下的回覆分頁：匿名 404、作者本人 200")
-    void draftArticleReplies_anonymous404_authorOk() throws Exception {
+    @DisplayName("草稿文章底下的回覆分頁：匿名得 200 空頁、作者本人讀得到")
+    void draftArticleReplies_anonymousEmpty_authorOk() throws Exception {
         String authorToken = authHelper.createUserWithRole(
                 "replies-draft@test.com", "Password1!", "repliesdraft", "RepliesDraft", Role.AUTHOR);
         MvcResult created = mockMvc.perform(post("/api/v1/articles")
@@ -152,10 +152,14 @@ class CommentRepliesFlowE2E extends AbstractE2ETest {
         // 草稿無法經 API 留言（可讀才可互動，作者本人可以）
         String top = postComment(authorToken, draftUuid, "作者在草稿上的留言", null);
 
+        postComment(authorToken, draftUuid, "草稿上的回覆", top);
+
         mockMvc.perform(get("/api/v1/comments/" + top + "/replies"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("A0201"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(0))
+                .andExpect(jsonPath("$.data.records.length()").value(0));
         mockMvc.perform(get("/api/v1/comments/" + top + "/replies").with(bearerToken(authorToken)))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
     }
 }

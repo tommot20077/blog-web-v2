@@ -3,7 +3,6 @@ package dowob.xyz.blog.module.comment.service;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
 import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -22,7 +21,6 @@ import dowob.xyz.blog.module.comment.model.dto.response.CommentResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -388,11 +386,12 @@ public class CommentService {
      *
      * <p><b>可見性</b>：沿用留言列表的政策——所屬文章必須對檢視者可讀
      * （{@link ArticleVisibility#isReadableBy(String, UUID, UUID, boolean)}，PUBLISHED，或作者本人，或 ADMIN），
-     * 這是 SEC-16「可讀才可互動」的讀取面。與列表端點回 200＋空清單不同，本端點以 <b>404 {@code ARTICLE_NOT_FOUND}</b>
-     * 回應不可讀與不存在：本端點的資源是單一留言串，不存在「整頁為空」的合理形狀，且不形成存在性 oracle。</p>
+     * 這是 SEC-16「可讀才可互動」的讀取面。</p>
      *
-     * <p><b>只對頂層留言有效</b>：傳入回覆的 uuid 回 404 {@code COMMENT_NOT_FOUND}（回覆底下沒有回覆，
-     * 對它而言「這個留言串」不存在）。可見性檢查先於此判斷，避免從錯誤碼推知隱藏文章底下的留言結構。
+     * <p><b>一律 200 加空頁，不形成存在性探測</b>：父留言不存在、傳入的是回覆（非頂層）的 uuid、
+     * 文章對檢視者不可讀，三種情況回應<b>完全相同</b>（200 ＋ total 為 0 的空 {@link PageResult}），
+     * 與 {@link #listComments} 維持「匿名可讀、恆 200」的契約一致；若錯誤碼或狀態碼不同，
+     * 呼叫端就能藉此探測某個 uuid 是否存在、是否為頂層、其文章是否公開。
      * 頂層已軟刪除（墓碑）時，其存活的回覆仍可分頁取得，與列表一致。</p>
      *
      * <p>排序與列表內嵌的前 {@link #REPLY_PREVIEW_SIZE} 則相同（created_at 升冪），故列表內嵌的就是
@@ -404,21 +403,20 @@ public class CommentService {
      * @param isAdmin         當前使用者是否為 ADMIN
      * @param page            頁碼（1-based）
      * @param size            每頁筆數
-     * @return 回覆分頁結果，{@code total} 為未刪除回覆總數
-     * @throws HttpStatusBusinessException 404：留言不存在、不是頂層留言，或所屬文章對檢視者不可讀
+     * @return 回覆分頁結果，{@code total} 為未刪除回覆總數；不存在、非頂層或不可讀時為空頁
      */
     public PageResult<CommentResponse> listReplies(UUID commentUuid, UUID currentUserUuid, boolean isAdmin,
                                                    int page, int size) {
-        Comment parent = commentRepo.findByUuid(commentUuid)
-                .orElseThrow(() -> new HttpStatusBusinessException(CommentErrorCode.COMMENT_NOT_FOUND, HttpStatus.NOT_FOUND));
-
+        PageResult<CommentResponse> empty = PageResult.of(page, size, 0L, Collections.emptyList());
+        Comment parent = commentRepo.findByUuid(commentUuid).orElse(null);
+        if (parent == null) {
+            return empty;
+        }
         ArticleData article = articleFacade.findByUuid(parent.getArticleUuid()).orElse(null);
         if (article == null
-                || !ArticleVisibility.isReadableBy(article.status(), article.authorUuid(), currentUserUuid, isAdmin)) {
-            throw new HttpStatusBusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND, HttpStatus.NOT_FOUND);
-        }
-        if (parent.getParentId() != null) {
-            throw new HttpStatusBusinessException(CommentErrorCode.COMMENT_NOT_FOUND, HttpStatus.NOT_FOUND);
+                || !ArticleVisibility.isReadableBy(article.status(), article.authorUuid(), currentUserUuid, isAdmin)
+                || parent.getParentId() != null) {
+            return empty;
         }
 
         int offset = Math.max(0, (page - 1) * size);

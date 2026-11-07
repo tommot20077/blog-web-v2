@@ -238,29 +238,51 @@ class CommentRepliesPagingIT {
     }
 
     @Test
-    @DisplayName("文章不可讀（草稿）：匿名回 404 A0201；作者本人與 ADMIN 可讀")
-    void unreadableArticle_is404_forAnonymous_butAuthorAndAdminCanRead() throws Exception {
+    @DisplayName("文章不可讀（草稿）：匿名與無關使用者回 200 空頁；作者本人與 ADMIN 可讀")
+    void unreadableArticle_isEmptyPage_forAnonymous_butAuthorAndAdminCanRead() throws Exception {
         UUID draftArticle = saveArticle(ArticleStatus.DRAFT);
         Comment draftTop = saveComment(draftArticle, null);
         saveComment(draftArticle, draftTop.getId());
         String url = "/api/v1/comments/" + draftTop.getUuid() + "/replies";
 
-        JsonNode anonymous = getJson(url, 404);
-        assertThat(anonymous.get("code").asText()).isEqualTo("A0201");
+        JsonNode anonymous = getJson(url, 200);
+        assertThat(anonymous.get("data").get("records")).isEmpty();
+        assertThat(anonymous.get("data").get("total").asInt()).isZero();
 
-        mockMvc.perform(get(url).with(asUser(SeededUsers.USER_ID, Role.USER))).andExpect(status().isOk());
-        mockMvc.perform(get(url).with(asUser(SeededUsers.ADMIN_ID, Role.ADMIN))).andExpect(status().isOk());
-        mockMvc.perform(get(url).with(asUser(SeededUsers.OTHER_USER_ID, Role.USER))).andExpect(status().isNotFound());
+        String author = mockMvc.perform(get(url).with(asUser(SeededUsers.USER_ID, Role.USER)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(objectMapper.readTree(author).get("data").get("total").asInt()).isEqualTo(1);
+        String admin = mockMvc.perform(get(url).with(asUser(SeededUsers.ADMIN_ID, Role.ADMIN)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(objectMapper.readTree(admin).get("data").get("total").asInt()).isEqualTo(1);
+        String other = mockMvc.perform(get(url).with(asUser(SeededUsers.OTHER_USER_ID, Role.USER)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(objectMapper.readTree(other).get("data").get("total").asInt()).isZero();
     }
 
     @Test
-    @DisplayName("傳入回覆的 uuid、或不存在的 uuid → 404 C0101")
-    void replyUuidOrUnknownUuid_is404() throws Exception {
-        JsonNode onReply = getJson("/api/v1/comments/" + replies.get(0).getUuid() + "/replies", 404);
-        assertThat(onReply.get("code").asText()).isEqualTo("C0101");
+    @DisplayName("傳入回覆的 uuid、不存在的 uuid、不可讀文章：三者回應完全相同（200 空頁），不形成存在性探測")
+    void replyUuid_unknownUuid_unreadableArticle_haveIdenticalResponses() throws Exception {
+        UUID draftArticle = saveArticle(ArticleStatus.DRAFT);
+        Comment draftTop = saveComment(draftArticle, null);
 
-        JsonNode unknown = getJson("/api/v1/comments/" + UUID.randomUUID() + "/replies", 404);
-        assertThat(unknown.get("code").asText()).isEqualTo("C0101");
+        String onReply = mockMvc.perform(get("/api/v1/comments/" + replies.get(0).getUuid() + "/replies"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String unknown = mockMvc.perform(get("/api/v1/comments/" + UUID.randomUUID() + "/replies"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String unreadable = mockMvc.perform(get("/api/v1/comments/" + draftTop.getUuid() + "/replies"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        for (String body : new String[]{onReply, unknown, unreadable}) {
+            JsonNode data = objectMapper.readTree(body).get("data");
+            assertThat(data.get("records")).isEmpty();
+            assertThat(data.get("total").asInt()).isZero();
+        }
+        assertThat(stripTimestamp(unknown)).isEqualTo(stripTimestamp(onReply)).isEqualTo(stripTimestamp(unreadable));
+    }
+
+    private String stripTimestamp(String body) {
+        return body.replaceAll("\"timestamp\"\\s*:\\s*[^,}]+,?", "");
     }
 
     @Test
