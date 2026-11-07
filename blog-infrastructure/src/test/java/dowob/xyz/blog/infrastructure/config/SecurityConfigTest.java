@@ -384,6 +384,28 @@ class SecurityConfigTest {
     }
 
     @Test
+    @DisplayName("未認證 GET /livez 與 /readyz 不得回 401（management port 搬走後，K3s probe 走主 port 的 additional path）")
+    void unauthenticatedGetProbePaths_shouldNotBeUnauthorized() throws Exception {
+        for (String path : new String[]{"/livez", "/readyz"}) {
+            mockMvc.perform(get(path))
+                    .andExpect(result -> {
+                        int status = result.getResponse().getStatus();
+                        if (status == 401 || status == 403) {
+                            throw new AssertionError(path + " 不得需要認證——K3s liveness/readiness probe 依賴它，"
+                                    + "收緊會讓 pod 反覆重啟（security.md），實得 " + status);
+                        }
+                    });
+        }
+    }
+
+    @Test
+    @DisplayName("未認證 GET /actuator/prometheus 應回傳 401（主 port 上 fail-closed；匯出端點只在 management port）")
+    void unauthenticatedGetActuatorPrometheus_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     @DisplayName("一般登入使用者 GET /actuator/metrics 應回傳 403——運維資訊限 ADMIN")
     void authenticatedNonAdminGetActuatorMetrics_shouldReturn403() throws Exception {
         mockMvc.perform(get("/actuator/metrics").with(asUser()))

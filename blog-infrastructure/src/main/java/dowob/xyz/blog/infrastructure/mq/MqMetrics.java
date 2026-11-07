@@ -40,4 +40,24 @@ final class MqMetrics {
             log.warn("指標 {}（{}={}）計數失敗，已忽略（不影響訊息處理結果）", metric, tagKey, tagValue, e);
         }
     }
+
+    /**
+     * 將指定指標加一（多個 tag 版本）；<b>絕不外拋</b>。
+     *
+     * @param metric     指標名稱
+     * @param tagsKeyVal tag 的 key／value 成對序列（偶數個，例如 {@code "exchange", "x", "routing_key", "y"}）
+     */
+    static void increment(String metric, String... tagsKeyVal) {
+        try {
+            if (Metrics.globalRegistry.getRegistries().isEmpty()) {
+                return;
+            }
+            Counter.builder(metric)
+                    .tags(tagsKeyVal)
+                    .register(Metrics.globalRegistry)
+                    .increment();
+        } catch (RuntimeException e) {
+            log.warn("指標 {}（{}）計數失敗，已忽略（不影響原本的處理結果）", metric, String.join(",", tagsKeyVal), e);
+        }
+    }
 }
