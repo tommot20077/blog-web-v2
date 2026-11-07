@@ -87,6 +87,7 @@ class ArticleResponseMapper {
                 .lastReadProgress(lastReadProgress)
                 .seriesNav(seriesNav)
                 .toc(articleTocCodec.deserialize(article.getToc()))
+                .version(article.getVersion())
                 .build();
     }
 
@@ -110,6 +111,7 @@ class ArticleResponseMapper {
                 .createdAt(article.getCreatedAt())
                 .updatedAt(article.getUpdatedAt())
                 .toc(articleTocCodec.deserialize(article.getToc()))
+                .version(article.getVersion())
                 .build();
     }
 

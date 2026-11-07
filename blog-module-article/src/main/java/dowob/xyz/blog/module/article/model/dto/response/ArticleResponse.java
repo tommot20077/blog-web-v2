@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.model.dto.response;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.infrastructure.facade.dto.SeriesNavigation;
 import dowob.xyz.blog.infrastructure.facade.dto.TagSummaryResponse;
@@ -146,4 +147,11 @@ public class ArticleResponse {
      * <p>恆為非 null 陣列；無標題或 TOC 資料缺失/解析失敗時為空陣列 {@code []}。</p>
      */
     private List<TocEntry> toc;
+
+    /**
+     * 樂觀鎖版本號：編輯後存檔時原樣帶回 {@code UpdateArticleRequest.version}，
+     * 讓後端偵測「載入之後文章已被其他地方修改」。每次成功寫入遞增。
+     */
+    @Schema(description = "樂觀鎖版本號；存檔時原樣帶回 UpdateArticleRequest.version，每次成功寫入遞增", example = "3")
+    private Long version;
 }

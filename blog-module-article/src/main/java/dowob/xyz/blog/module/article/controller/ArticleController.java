@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.request.PageQuery;
@@ -187,6 +188,9 @@ public class ArticleController {
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 更新後的文章完整資訊
      */
+    @Operation(summary = "更新文章內容",
+            description = "request 可帶 version（取自 GET /{uuid}/edit 或上一次存檔回應）：與目前版本不一致回 409（A0208）。"
+                    + "省略 version 則不做版本比對。成功回應帶遞增後的新 version。")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PutMapping("/{uuid}")
     public ApiResponse<EditorArticleResponse> updateArticle(

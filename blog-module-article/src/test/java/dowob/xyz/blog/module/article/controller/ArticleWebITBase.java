@@ -30,8 +30,6 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -55,21 +53,30 @@ import static org.mockito.Mockito.when;
  */
 @SpringBootTest(classes = ArticleTestApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
-@Testcontainers
 @ActiveProfiles("test")
 abstract class ArticleWebITBase {
 
-    /** PostgreSQL TestContainer */
-    @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+    /*
+     * 單例容器模式：容器在 JVM 內只啟動一次、由 Ryuk 在 JVM 結束時回收，不用 @Container。
+     * 若改用 @Container 的 static 欄位，Testcontainers 會在每個子類別結束時停掉容器、下一個子類別再起新容器（新埠號），
+     * 但 Spring 的 context cache 會重用第一個子類別建的 context，仍指向已停掉的舊埠，造成
+     * 「Could not open JDBC Connection」。
+     */
+
+    /** PostgreSQL TestContainer（單例） */
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
             .withDatabaseName("blog_test")
             .withUsername("test")
             .withPassword("test");
 
-    /** Redis TestContainer */
-    @Container
-    static com.redis.testcontainers.RedisContainer redis =
+    /** Redis TestContainer（單例） */
+    static final com.redis.testcontainers.RedisContainer redis =
             new com.redis.testcontainers.RedisContainer("redis:7-alpine");
+
+    static {
+        postgres.start();
+        redis.start();
+    }
 
     /**
      * 動態注入容器連線設定
