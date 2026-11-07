@@ -245,4 +245,29 @@ class ViewCountServiceTest {
 
         verify(valueOps, never()).multiGet(any());
     }
+
+    /**
+     * B4 review：MGET 與 DB 查詢一樣依 BatchedQuery.BATCH_SIZE 切批
+     */
+    @Test
+    @DisplayName("addRedisDeltas：1200 筆切成 500／500／200 共三次 MGET，結果依輸入順序合併")
+    void addRedisDeltas_splitsMgetIntoBatches() {
+        Map<UUID, Long> db = new LinkedHashMap<>();
+        for (int i = 0; i < 1200; i++) {
+            db.put(UUID.randomUUID(), (long) i);
+        }
+        List<Integer> batchSizes = new java.util.ArrayList<>();
+        when(valueOps.multiGet(anyList())).thenAnswer(inv -> {
+            List<String> keys = inv.getArgument(0);
+            batchSizes.add(keys.size());
+            return keys.stream().map(k -> "1").toList();
+        });
+
+        Map<UUID, Long> result = viewCountService.addRedisDeltas(db);
+
+        verify(valueOps, times(3)).multiGet(anyList());
+        assertThat(batchSizes).containsExactly(500, 500, 200);
+        assertThat(result).hasSize(1200);
+        db.forEach((uuid, base) -> assertThat(result.get(uuid)).isEqualTo(base + 1));
+    }
 }

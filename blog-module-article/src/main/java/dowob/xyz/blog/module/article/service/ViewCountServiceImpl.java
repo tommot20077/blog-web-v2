@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.article.service;
 
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +11,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -83,8 +85,8 @@ public class ViewCountServiceImpl implements ViewCountService {
     /**
      * {@inheritDoc}
      *
-     * <p>Redis 以單次 {@code MGET} 取回全部 key（輸入大小由呼叫端的頁大小界定；搜尋頁上限
-     * {@code PageQuery.MAX_SIZE} = 100）。</p>
+     * <p>Redis 以 {@code MGET} 批次取回，每 {@link BatchedQuery#BATCH_SIZE} 個 key 一批
+     * （搜尋頁上限 {@code PageQuery.MAX_SIZE} = 100，實務上為單次 MGET；切批是對任意呼叫端的保險）。</p>
      */
     @Override
     public Map<UUID, Long> addRedisDeltas(Map<UUID, Long> dbViewCounts) {
@@ -93,11 +95,15 @@ public class ViewCountServiceImpl implements ViewCountService {
         }
         List<UUID> uuids = new ArrayList<>(dbViewCounts.keySet());
         List<String> keys = uuids.stream().map(u -> RedisKeyConstant.ARTICLE_VIEWS_PREFIX + u).toList();
-        List<String> redisVals = stringRedisTemplate.opsForValue().multiGet(keys);
+        /* 與 DB 查詢一致依 BATCH_SIZE 切批；MGET 回傳與 key 同序，批次串接後仍與 uuids 對齊 */
+        List<String> redisVals = BatchedQuery.queryInBatches(keys, batch -> {
+            List<String> vals = stringRedisTemplate.opsForValue().multiGet(batch);
+            return vals != null ? vals : Collections.<String>nCopies(batch.size(), null);
+        });
         Map<UUID, Long> result = new LinkedHashMap<>();
         for (int i = 0; i < uuids.size(); i++) {
             UUID uuid = uuids.get(i);
-            String redisVal = (redisVals != null && i < redisVals.size()) ? redisVals.get(i) : null;
+            String redisVal = i < redisVals.size() ? redisVals.get(i) : null;
             result.put(uuid, combine(uuid, dbViewCounts.get(uuid), redisVal));
         }
         return result;
