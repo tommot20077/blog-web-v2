@@ -14,6 +14,7 @@ import io.minio.GetObjectArgs;
 import io.minio.GetObjectResponse;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import net.coobird.thumbnailator.Thumbnails;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LogEvent;
@@ -292,6 +293,32 @@ class ThumbnailConsumerTest {
         org.assertj.core.api.Assertions.assertThatCode(() -> thumbnailConsumer.handleImageUploaded(event))
                 .doesNotThrowAnyException();
 
+        verify(minioClient, never()).putObject(any(PutObjectArgs.class));
+        verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
+    }
+
+    /**
+     * FILE-04：header 讀不到寬高的檔案不得進入解碼（安全性由程式碼保證，不依賴「兩邊用同一套 reader」的假設）——
+     * 跳過縮圖、不外拋（ack），不呼叫 Thumbnails 也不寫入縮圖物件
+     */
+    @Test
+    @DisplayName("handleImageUploaded_whenHeaderUnreadable_skipsThumbnailWithoutDecoding")
+    void handleImageUploaded_whenHeaderUnreadable_skipsThumbnail() throws Exception {
+        ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
+        UUID fileId = UUID.randomUUID();
+        ImageUploadedEvent event = new ImageUploadedEvent(
+                UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");
+        when(fileMetadataRepository.findById(fileId)).thenReturn(Optional.empty());
+        /* ImageIO 認得 PNG 簽章、但 header 被截斷而讀不出尺寸 */
+        byte[] png = TestImages.solidPng(50, 50);
+        stubDownload(java.util.Arrays.copyOf(png, 12));
+
+        try (org.mockito.MockedStatic<Thumbnails> thumbnails = org.mockito.Mockito.mockStatic(Thumbnails.class)) {
+            org.assertj.core.api.Assertions.assertThatCode(() -> thumbnailConsumer.handleImageUploaded(event))
+                    .doesNotThrowAnyException();
+
+            thumbnails.verifyNoInteractions();
+        }
         verify(minioClient, never()).putObject(any(PutObjectArgs.class));
         verify(fileMetadataRepository, never()).markThumbnailGenerated(any());
     }

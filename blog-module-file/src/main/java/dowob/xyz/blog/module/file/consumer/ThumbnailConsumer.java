@@ -111,7 +111,12 @@ public class ThumbnailConsumer {
                  */
                 byte[] original = readFully(inputStream);
                 ImageDimensionReader.Dimensions dimensions = ImageDimensionReader.read(original).orElse(null);
-                if (dimensions != null && dimensions.pixels() > fileProperties.maxImagePixels()) {
+                if (dimensions == null) {
+                    /* 讀不到寬高就無法確認像素數：不解碼（安全性由程式碼保證，不倚賴「上傳端與解碼端用同一套 reader」的假設） */
+                    log.warn("讀不到圖片寬高，無法確認像素數，跳過縮圖: fileId={}", event.fileId());
+                    return;
+                }
+                if (dimensions.pixels() > fileProperties.maxImagePixels()) {
                     log.warn("圖片總像素超過上限，跳過縮圖: fileId={}, {}x{}={} > {}",
                             event.fileId(), dimensions.width(), dimensions.height(),
                             dimensions.pixels(), fileProperties.maxImagePixels());
