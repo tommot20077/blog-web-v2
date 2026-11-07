@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -164,4 +165,16 @@ public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUI
     List<FileMetadata> findUnboundNonAvatarCreatedBefore(@Param("createdBefore") LocalDateTime createdBefore,
                                                           @Param("after") UUID after,
                                                           @Param("limit") int limit);
+
+    /**
+     * 以 {@code SELECT ... FOR UPDATE} 鎖住並讀出單一檔案列，供未綁定檔清理的「鎖列 → 重驗 → 刪除」使用。
+     *
+     * <p><b>必須在交易內呼叫</b>；鎖在交易結束時釋放。持鎖期間對該列的 UPDATE（例如綁定回填的
+     * {@link #bindFilesToArticle}）會等待到交易結束。</p>
+     *
+     * @param id 檔案 UUID
+     * @return 檔案列；不存在則 empty
+     */
+    @Query("SELECT * FROM file_metadata WHERE id = :id FOR UPDATE")
+    Optional<FileMetadata> findByIdForUpdate(@Param("id") UUID id);
 }

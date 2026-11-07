@@ -45,6 +45,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -450,6 +451,146 @@ class FileServiceTest {
             assertThatThrownBy(() -> fileService.uploadFile(file, UsageType.ARTICLE_CONTENT, uploaderId, "USER"))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining(FileErrorCode.QUOTA_EXCEEDED.getMessage());
+        }
+    }
+
+    /** D6：未綁定檔清理專用刪除（鎖列、重驗、MinIO 先 DB 後，同一交易） */
+    @Nested
+    @DisplayName("deleteUnboundFileIfUnreferenced 測試（D6 TOCTOU 修正）")
+    class DeleteUnboundFileTests {
+
+        private final LocalDateTime cutoff = LocalDateTime.of(2026, 10, 31, 4, 17);
+        private final UUID uploader = UUID.randomUUID();
+        private final List<String> calls = new java.util.ArrayList<>();
+        private boolean txActive;
+
+        /** 讓 transactionTemplate.execute() 實際執行 callback，並記錄呼叫順序與是否位於交易內 */
+        @BeforeEach
+        @SuppressWarnings("unchecked")
+        void stubExecute() throws Exception {
+            when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+                org.springframework.transaction.support.TransactionCallback<Object> cb = inv.getArgument(0);
+                txActive = true;
+                try {
+                    return cb.doInTransaction(null);
+                } finally {
+                    txActive = false;
+                }
+            });
+            doAnswer(inv -> {
+                calls.add("minio-remove(tx=" + txActive + ")");
+                return null;
+            }).when(minioClient).removeObject(any(RemoveObjectArgs.class));
+            doAnswer(inv -> {
+                calls.add("db-delete(tx=" + txActive + ")");
+                return null;
+            }).when(fileMetadataRepository).deleteById(any());
+            when(articleLookupFacade.findFileUuidsReferencedByAuthorArticles(uploader)).thenAnswer(inv -> {
+                calls.add("facade-recheck(tx=" + txActive + ")");
+                return Set.of();
+            });
+        }
+
+        private FileMetadata eligible() {
+            FileMetadata f = new FileMetadata();
+            f.setId(UUID.randomUUID());
+            f.setUploaderId(uploader);
+            f.setUsageType(UsageType.ARTICLE_CONTENT);
+            f.setArticleUuid(null);
+            f.setCreatedAt(cutoff.minusDays(1));
+            f.setStoragePath("articles/2026/10/01/" + f.getId() + ".jpg");
+            when(fileMetadataRepository.findByIdForUpdate(f.getId())).thenAnswer(inv -> {
+                calls.add("lock(tx=" + txActive + ")");
+                return Optional.of(f);
+            });
+            return f;
+        }
+
+        @Test
+        @DisplayName("全部條件仍成立 → 同一交易內依序：鎖列、重查引用、刪 MinIO（原檔＋縮圖）、刪 DB 列")
+        void stillEligible_locksRechecksRemovesObjectsThenRow_allInOneTransaction() {
+            FileMetadata f = eligible();
+
+            boolean deleted = fileService.deleteUnboundFileIfUnreferenced(f.getId(), cutoff);
+
+            assertThat(deleted).isTrue();
+            assertThat(calls).containsExactly("lock(tx=true)", "facade-recheck(tx=true)",
+                    "minio-remove(tx=true)", "minio-remove(tx=true)", "db-delete(tx=true)");
+        }
+
+        @Test
+        @DisplayName("掃描後、刪除前該檔被綁定到文章（鎖列後讀到 article_uuid 非 null）→ 保留，不動 MinIO 與 DB")
+        void boundMeanwhile_keptUntouched() {
+            FileMetadata f = eligible();
+            f.setArticleUuid(UUID.randomUUID());
+
+            assertThat(fileService.deleteUnboundFileIfUnreferenced(f.getId(), cutoff)).isFalse();
+
+            assertThat(calls).containsExactly("lock(tx=true)");
+        }
+
+        @Test
+        @DisplayName("掃描後、刪除前該檔被上傳者的文章內文／封面引用（重查引用集合含它）→ 保留")
+        void referencedMeanwhile_keptUntouched() {
+            FileMetadata f = eligible();
+            doAnswer(inv -> {
+                calls.add("facade-recheck(tx=" + txActive + ")");
+                return Set.of(f.getId());
+            }).when(articleLookupFacade).findFileUuidsReferencedByAuthorArticles(uploader);
+
+            assertThat(fileService.deleteUnboundFileIfUnreferenced(f.getId(), cutoff)).isFalse();
+
+            assertThat(calls).containsExactly("lock(tx=true)", "facade-recheck(tx=true)");
+        }
+
+        @Test
+        @DisplayName("頭像、或建立時間未早於上界 → 保留（重驗不通過就不查 facade、不動物件）")
+        void avatarOrTooNew_keptUntouched() {
+            FileMetadata avatar = eligible();
+            avatar.setUsageType(UsageType.AVATAR);
+            FileMetadata tooNew = eligible();
+            tooNew.setCreatedAt(cutoff.plusHours(1));
+
+            assertThat(fileService.deleteUnboundFileIfUnreferenced(avatar.getId(), cutoff)).isFalse();
+            assertThat(fileService.deleteUnboundFileIfUnreferenced(tooNew.getId(), cutoff)).isFalse();
+
+            assertThat(calls).containsExactly("lock(tx=true)", "lock(tx=true)");
+        }
+
+        @Test
+        @DisplayName("檔案列已不存在（被他人先刪）→ false，不動任何東西")
+        void rowGone_returnsFalse() {
+            UUID id = UUID.randomUUID();
+            when(fileMetadataRepository.findByIdForUpdate(id)).thenReturn(Optional.empty());
+
+            assertThat(fileService.deleteUnboundFileIfUnreferenced(id, cutoff)).isFalse();
+
+            assertThat(calls).isEmpty();
+        }
+
+        @Test
+        @DisplayName("fail-safe：重查引用的 facade 拋例外 → 例外外拋，MinIO 與 DB 都不動")
+        void facadeFails_nothingDeleted() {
+            FileMetadata f = eligible();
+            doThrow(new IllegalStateException("article db down"))
+                    .when(articleLookupFacade).findFileUuidsReferencedByAuthorArticles(uploader);
+
+            assertThatThrownBy(() -> fileService.deleteUnboundFileIfUnreferenced(f.getId(), cutoff))
+                    .isInstanceOf(IllegalStateException.class);
+
+            assertThat(calls).containsExactly("lock(tx=true)");
+        }
+
+        @Test
+        @DisplayName("嚴格語意：MinIO 刪除失敗 → 拋 STORAGE_ERROR，DB 列不刪（交易回滾，留到下次）")
+        void minioFails_rowKept() throws Exception {
+            FileMetadata f = eligible();
+            doThrow(new RuntimeException("minio down")).when(minioClient).removeObject(any(RemoveObjectArgs.class));
+
+            assertThatThrownBy(() -> fileService.deleteUnboundFileIfUnreferenced(f.getId(), cutoff))
+                    .isInstanceOf(SystemException.class);
+
+            verify(fileMetadataRepository, never()).deleteById(any());
         }
     }
 

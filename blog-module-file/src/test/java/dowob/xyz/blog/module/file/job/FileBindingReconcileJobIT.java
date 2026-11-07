@@ -125,7 +125,7 @@ class FileBindingReconcileJobIT {
         if (keys != null && !keys.isEmpty()) {
             stringRedis.delete(keys);
         }
-        Mockito.reset(articleLookupFacade);
+        Mockito.reset(articleLookupFacade, minioClient);
     }
 
     private void putObject(String path) throws Exception {
@@ -260,5 +260,70 @@ class FileBindingReconcileJobIT {
 
         assertThat(metadataExists(orphan)).isFalse();
         assertThat(boundArticleOf(inDraft)).isEqualTo(draftArticle);
+    }
+
+    @Test
+    @DisplayName("TOCTOU：掃描之後、刪除之前該檔被綁定到文章（模擬綁定 consumer 在此時 commit）→ 刪除當下鎖列重驗發現已綁定，保留")
+    void run_boundBetweenScanAndDelete_isKept() throws Exception {
+        UUID racing = insertFile(UsageType.ARTICLE_CONTENT, 8);
+        when(articleLookupFacade.findUuidsUpdatedSinceAnyStatus(any(), any(), anyInt())).thenReturn(List.of());
+        /* 階段一查引用集合時（候選頁已讀出）模擬作者存檔：綁定在此刻 commit */
+        when(articleLookupFacade.findFileUuidsReferencedByAuthorArticles(author)).thenAnswer(inv -> {
+            jdbc.update("UPDATE file_metadata SET article_uuid = ? WHERE id = ?", draftArticle, racing);
+            return Set.of();
+        });
+
+        job.run();
+
+        assertThat(metadataExists(racing)).as("被綁定的檔案不得被刪").isTrue();
+        assertThat(objectExists(pathOf(racing))).isTrue();
+        assertThat(boundArticleOf(racing)).isEqualTo(draftArticle);
+    }
+
+    @Test
+    @DisplayName("TOCTOU：掃描之後、刪除之前該檔被作者的文章內文引用（重查引用集合才看得到）→ 保留，物件仍在")
+    void run_referencedBetweenScanAndDelete_isKept() throws Exception {
+        UUID racing = insertFile(UsageType.ARTICLE_CONTENT, 8);
+        when(articleLookupFacade.findUuidsUpdatedSinceAnyStatus(any(), any(), anyInt())).thenReturn(List.of());
+        /* 第一次（階段一）看不到引用，第二次（刪除當下的重驗）已看到 */
+        when(articleLookupFacade.findFileUuidsReferencedByAuthorArticles(author))
+                .thenReturn(Set.of()).thenReturn(Set.of(racing));
+
+        job.run();
+
+        assertThat(metadataExists(racing)).isTrue();
+        assertThat(objectExists(pathOf(racing))).isTrue();
+    }
+
+    @Test
+    @DisplayName("持鎖：刪除 MinIO 物件期間，另一連線對該列的綁定 UPDATE 會被擋住，等刪除交易結束後才執行（影響 0 列）")
+    void run_rowLockHeldWhileDeletingObjects_concurrentBindWaits() throws Exception {
+        UUID target = insertFile(UsageType.ARTICLE_CONTENT, 8);
+        when(articleLookupFacade.findUuidsUpdatedSinceAnyStatus(any(), any(), anyInt())).thenReturn(List.of());
+        when(articleLookupFacade.findFileUuidsReferencedByAuthorArticles(author)).thenReturn(Set.of());
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<Integer>> bind =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicBoolean blockedWhileDeleting = new java.util.concurrent.atomic.AtomicBoolean();
+        org.mockito.Mockito.doAnswer(inv -> {
+            if (bind.get() == null) {
+                bind.set(executor.submit(() ->
+                        jdbc.update("UPDATE file_metadata SET article_uuid = ? WHERE id = ?", draftArticle, target)));
+                Thread.sleep(500);
+                blockedWhileDeleting.set(!bind.get().isDone());
+            }
+            return inv.callRealMethod();
+        }).when(minioClient).removeObject(any(io.minio.RemoveObjectArgs.class));
+
+        try {
+            job.run();
+
+            assertThat(blockedWhileDeleting.get()).as("持鎖期間綁定 UPDATE 應被擋住").isTrue();
+            assertThat(bind.get().get(10, java.util.concurrent.TimeUnit.SECONDS)).as("鎖釋放後列已刪除，UPDATE 影響 0 列").isZero();
+            assertThat(metadataExists(target)).isFalse();
+            assertThat(objectExists(pathOf(target))).isFalse();
+        } finally {
+            executor.shutdownNow();
+        }
     }
 }

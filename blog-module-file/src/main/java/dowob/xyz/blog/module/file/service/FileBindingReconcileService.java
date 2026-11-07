@@ -45,8 +45,8 @@ import java.util.function.BooleanSupplier;
  * <ul>
  *   <li>任何 facade 查詢失敗（列舉近期文章、取得引用集合）都往外拋，由 job 整次中止；
  *       引用集合在<b>刪除開始前</b>全部查完，因此查詢失敗時零刪除。</li>
- *   <li>刪除走 {@link FileCleanupSupport#deleteAll}（→ {@link FileService#deleteFile} 的嚴格語意）：先刪 MinIO，
- *       失敗則該筆 metadata 保留、留到下次；其餘檔案仍會嘗試，最後把第一個例外往外拋。</li>
+ *   <li>刪除走 {@link FileService#deleteUnboundFileIfUnreferenced}：交易內鎖列、重驗、先刪 MinIO 再刪 DB 列，
+ *       掃描後才被綁定或引用的檔案不會被誤刪；MinIO 失敗則該筆保留、留到下次；其餘檔案仍會嘗試，最後把第一個例外往外拋。</li>
  *   <li>單次處理有上限（文章數、掃描數、刪除數）與時間預算，避免長時間占住排程執行緒與鎖。</li>
  * </ul>
  *
@@ -244,9 +244,28 @@ public class FileBindingReconcileService {
             after = page.get(page.size() - 1).getId();
         }
 
-        /* 階段二：嚴格語意的刪除（先 MinIO 後 DB；失敗的留到下次，其餘照做，最後外拋第一個例外） */
-        int deleted = toDelete.isEmpty() ? 0
-                : FileCleanupSupport.deleteAll(fileService, toDelete, "（未綁定檔清理）createdBefore=" + createdBefore);
+        /*
+         * 階段二：逐檔以專用方法刪除（交易內鎖列、重驗是否仍未綁定且未被引用、先 MinIO 後 DB；見
+         * FileService#deleteUnboundFileIfUnreferenced）。階段一的判斷只用來縮小候選，權威判斷在刪除當下，
+         * 因此掃描後才被綁定或引用的檔案不會被誤刪。單檔失敗不影響其餘，最後把第一個例外往外拋（失敗的留到下次）。
+         */
+        int deleted = 0;
+        List<RuntimeException> failures = new ArrayList<>();
+        for (FileMetadata file : toDelete) {
+            try {
+                if (fileService.deleteUnboundFileIfUnreferenced(file.getId(), createdBefore)) {
+                    deleted++;
+                }
+            } catch (RuntimeException e) {
+                failures.add(e);
+            }
+        }
+        if (!failures.isEmpty()) {
+            log.error("未綁定檔清理：{} 個檔案刪除失敗（保留，留到下次），已刪除 {}", failures.size(), deleted);
+            RuntimeException first = failures.get(0);
+            failures.stream().skip(1).forEach(first::addSuppressed);
+            throw first;
+        }
         UUID nextCursor = finished ? null : lastDecided;
         log.info("綁定校正（未綁定檔清理）完成 createdBefore={} scanned={} deleted={} keptReferenced={} truncated={} finished={}",
                 createdBefore, scanned, deleted, keptReferenced, truncated, finished);

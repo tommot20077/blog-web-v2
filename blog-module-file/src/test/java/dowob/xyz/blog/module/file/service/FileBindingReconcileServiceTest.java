@@ -57,6 +57,7 @@ class FileBindingReconcileServiceTest {
         bindingService = mock(ArticleFileBindingService.class);
         repository = mock(FileMetadataRepository.class);
         fileService = mock(FileService.class);
+        when(fileService.deleteUnboundFileIfUnreferenced(any(), any())).thenReturn(true);
         service = new FileBindingReconcileService(facade, bindingService, repository, fileService, 2);
     }
 
@@ -172,7 +173,7 @@ class FileBindingReconcileServiceTest {
     class Cleanup {
 
         @Test
-        @DisplayName("只刪「未被作者任何文章引用」的候選；被引用的保留；刪除走 deleteFile（以上傳者身分、非 admin）")
+        @DisplayName("只刪「未被作者任何文章引用」的候選；被引用的保留；刪除走交易內鎖列重驗的專用方法")
         void cleanup_deletesOnlyUnreferencedCandidates() {
             UUID author = UUID.randomUUID();
             FileMetadata orphan = candidate(author);
@@ -182,8 +183,8 @@ class FileBindingReconcileServiceTest {
 
             var result = service.cleanupUnboundFiles(CUTOFF, null, 100, 1000, () -> false);
 
-            verify(fileService).deleteFile(orphan.getId(), author, false);
-            verify(fileService, never()).deleteFile(eq(referenced.getId()), any(), anyBoolean());
+            verify(fileService).deleteUnboundFileIfUnreferenced(orphan.getId(), CUTOFF);
+            verify(fileService, never()).deleteUnboundFileIfUnreferenced(eq(referenced.getId()), any());
             assertThat(result.deleted()).isEqualTo(1);
             assertThat(result.keptReferenced()).isEqualTo(1);
         }
@@ -201,7 +202,7 @@ class FileBindingReconcileServiceTest {
 
             var result = service.cleanupUnboundFiles(CUTOFF, null, 100, 1000, () -> false);
 
-            verify(fileService, never()).deleteFile(any(), any(), anyBoolean());
+            verify(fileService, never()).deleteUnboundFileIfUnreferenced(any(), any());
             assertThat(result.deleted()).isZero();
         }
 
@@ -219,7 +220,7 @@ class FileBindingReconcileServiceTest {
             assertThatThrownBy(() -> service.cleanupUnboundFiles(CUTOFF, null, 100, 1000, () -> false))
                     .isInstanceOf(IllegalStateException.class);
 
-            verify(fileService, never()).deleteFile(any(), any(), anyBoolean());
+            verify(fileService, never()).deleteUnboundFileIfUnreferenced(any(), any());
         }
 
         @Test
@@ -244,12 +245,26 @@ class FileBindingReconcileServiceTest {
             when(repository.findUnboundNonAvatarCreatedBefore(CUTOFF, NIL, 2)).thenReturn(List.of(failing, fine));
             when(facade.findFileUuidsReferencedByAuthorArticles(author)).thenReturn(Set.of());
             doThrow(new SystemException(CommonErrorCode.STORAGE_ERROR)).when(fileService)
-                    .deleteFile(failing.getId(), author, false);
+                    .deleteUnboundFileIfUnreferenced(failing.getId(), CUTOFF);
 
             assertThatThrownBy(() -> service.cleanupUnboundFiles(CUTOFF, null, 100, 1000, () -> false))
                     .isInstanceOf(SystemException.class);
 
-            verify(fileService).deleteFile(fine.getId(), author, false);
+            verify(fileService).deleteUnboundFileIfUnreferenced(fine.getId(), CUTOFF);
+        }
+
+        @Test
+        @DisplayName("刪除當下重驗不通過（掃描後被綁定或被引用，專用方法回 false）→ 不算刪除")
+        void cleanup_recheckRejectsAtDeleteTime_notCountedAsDeleted() {
+            UUID author = UUID.randomUUID();
+            FileMetadata f = candidate(author);
+            when(repository.findUnboundNonAvatarCreatedBefore(CUTOFF, NIL, 2)).thenReturn(List.of(f));
+            when(facade.findFileUuidsReferencedByAuthorArticles(author)).thenReturn(Set.of());
+            when(fileService.deleteUnboundFileIfUnreferenced(f.getId(), CUTOFF)).thenReturn(false);
+
+            var result = service.cleanupUnboundFiles(CUTOFF, null, 100, 1000, () -> false);
+
+            assertThat(result.deleted()).isZero();
         }
 
         @Test
@@ -265,9 +280,9 @@ class FileBindingReconcileServiceTest {
 
             var result = service.cleanupUnboundFiles(CUTOFF, null, 2, 1000, () -> false);
 
-            verify(fileService).deleteFile(f1.getId(), author, false);
-            verify(fileService).deleteFile(f2.getId(), author, false);
-            verify(fileService, never()).deleteFile(eq(f3.getId()), any(), anyBoolean());
+            verify(fileService).deleteUnboundFileIfUnreferenced(f1.getId(), CUTOFF);
+            verify(fileService).deleteUnboundFileIfUnreferenced(f2.getId(), CUTOFF);
+            verify(fileService, never()).deleteUnboundFileIfUnreferenced(eq(f3.getId()), any());
             assertThat(result.deleted()).isEqualTo(2);
             assertThat(result.truncated()).isTrue();
             assertThat(result.nextCursor()).isEqualTo(f2.getId());

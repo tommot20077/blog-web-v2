@@ -265,6 +265,39 @@ public class FileServiceImpl implements FileService {
     }
 
     /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean deleteUnboundFileIfUnreferenced(UUID fileId, LocalDateTime createdBefore) {
+        /*
+         * 整段在同一個交易內：FOR UPDATE 鎖列 → 重驗 → 刪 MinIO → 刪 DB 列。
+         * 持鎖期間綁定 consumer 對該列的 UPDATE 會等待，TOCTOU 窗口縮到只剩 facade 查詢與兩次 MinIO 呼叫。
+         * MinIO 失敗（拋例外）使交易回滾：列與鎖都還原，留到下次處理；DB 刪除排在 MinIO 之後，不會留下「物件在、紀錄沒了」的孤兒。
+         * 本方法只供低並行度的批次 job 使用，不在使用者請求路徑上，持鎖時間可接受。
+         */
+        Boolean deleted = transactionTemplate.execute(status -> {
+            FileMetadata file = fileMetadataRepository.findByIdForUpdate(fileId).orElse(null);
+            if (file == null) {
+                return false;
+            }
+            if (file.getArticleUuid() != null || file.getUsageType() == UsageType.AVATAR
+                    || file.getCreatedAt() == null || !file.getCreatedAt().isBefore(createdBefore)) {
+                log.info("未綁定檔清理：重驗不通過（已綁定、頭像或未滿保留天數），保留 fileId={}", fileId);
+                return false;
+            }
+            if (articleLookupFacade.findFileUuidsReferencedByAuthorArticles(file.getUploaderId()).contains(fileId)) {
+                log.info("未綁定檔清理：重驗發現已被上傳者的文章引用，保留 fileId={}", fileId);
+                return false;
+            }
+            removeObjectOrThrow(file.getStoragePath());
+            removeObjectOrThrow(buildThumbPath(file.getStoragePath()));
+            fileMetadataRepository.deleteById(fileId);
+            return true;
+        });
+        return Boolean.TRUE.equals(deleted);
+    }
+
+    /**
      * 刪除單一 MinIO 物件；失敗記 ERROR（含 storage path）並拋 {@code STORAGE_ERROR}。
      *
      * @param objectPath 物件鍵
