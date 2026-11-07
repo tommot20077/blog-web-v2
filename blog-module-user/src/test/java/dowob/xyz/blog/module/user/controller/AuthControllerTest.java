@@ -440,7 +440,7 @@ class AuthControllerTest {
     @Test
     @DisplayName("POST /verify-email-code → 正確驗證碼 → 應回傳 200 成功回應")
     void verifyEmailCode_validCode_shouldReturn200() throws Exception {
-        doNothing().when(authService).verifyEmailCode(TEST_EMAIL, "123456");
+        doNothing().when(authService).verifyEmailCode(TEST_EMAIL, "123456", "127.0.0.1");
 
         mockMvc.perform(post("/api/v1/auth/verify-email-code")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -485,7 +485,7 @@ class AuthControllerTest {
         ForgotPasswordRequest request = new ForgotPasswordRequest();
         request.setEmail(TEST_EMAIL);
 
-        doNothing().when(authService).forgotPassword(anyString());
+        doNothing().when(authService).forgotPassword(anyString(), nullable(String.class));
 
         mockMvc.perform(post("/api/v1/auth/forgot-password")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -523,7 +523,7 @@ class AuthControllerTest {
         ForgotPasswordRequest request = new ForgotPasswordRequest();
         request.setEmail(TEST_EMAIL);
 
-        doNothing().when(authService).resendVerification(anyString());
+        doNothing().when(authService).resendVerification(anyString(), nullable(String.class));
 
         mockMvc.perform(post("/api/v1/auth/resend-verification")
                         .contentType(MediaType.APPLICATION_JSON)

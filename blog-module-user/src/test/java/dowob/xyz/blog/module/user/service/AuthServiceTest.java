@@ -388,7 +388,7 @@ class AuthServiceTest {
     @DisplayName("register → 撞到不認得的約束，或非唯一約束錯誤 → 原例外照常拋出，不轉成業務錯誤")
     void register_unknownConstraintOrOtherFailure_rethrowsOriginal() {
         when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
-        DuplicateKeyException unknown = uniqueViolationOn("verification_tokens_token_key");
+        DuplicateKeyException unknown = uniqueViolationOn("uq_verification_tokens_token_hash");
         failTransactionWith(unknown);
 
         assertThatThrownBy(() -> authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME))
@@ -988,7 +988,7 @@ class AuthServiceTest {
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
 
-        authService.verifyEmailCode(TEST_EMAIL, "123456");
+        authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP);
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(captor.capture());
@@ -1008,7 +1008,7 @@ class AuthServiceTest {
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
 
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
@@ -1026,7 +1026,7 @@ class AuthServiceTest {
         String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
         when(valueOperations.get(failKey)).thenReturn("5");
 
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "000000"))
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "000000", TEST_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
@@ -1045,7 +1045,7 @@ class AuthServiceTest {
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
         when(userRedisAtomicOps.incrementWithTtl(eq(failKey), any(Duration.class))).thenReturn(2L);
 
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRedisAtomicOps).incrementWithTtl(eq(failKey), any(Duration.class));
@@ -1062,7 +1062,7 @@ class AuthServiceTest {
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
         when(userRedisAtomicOps.incrementWithTtl(eq(failKey), any(Duration.class))).thenReturn(1L);
 
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
                 .isInstanceOf(BusinessException.class);
 
         verify(userRedisAtomicOps).incrementWithTtl(eq(failKey),
@@ -1080,7 +1080,7 @@ class AuthServiceTest {
         when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
@@ -1100,7 +1100,7 @@ class AuthServiceTest {
         User mockUser = buildActiveUser(); // status = ACTIVE
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
 
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456"))
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
@@ -1124,7 +1124,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
 
-        authService.forgotPassword(TEST_EMAIL);
+        authService.forgotPassword(TEST_EMAIL, TEST_IP);
 
         verifyNoInteractions(verificationTokenRepository);
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
@@ -1141,7 +1141,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(buildActiveUser()));
         when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
 
-        authService.forgotPassword(TEST_EMAIL);
+        authService.forgotPassword(TEST_EMAIL, TEST_IP);
 
         ArgumentCaptor<UserPasswordResetRequestedEvent> eventCaptor =
                 ArgumentCaptor.forClass(UserPasswordResetRequestedEvent.class);
@@ -1162,7 +1162,7 @@ class AuthServiceTest {
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
 
-        authService.forgotPassword(TEST_EMAIL);
+        authService.forgotPassword(TEST_EMAIL, TEST_IP);
 
         verify(verificationTokenRepository, never()).save(any());
         verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), (Object) any());
@@ -1177,7 +1177,7 @@ class AuthServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(2L);
 
-        assertThatThrownBy(() -> authService.forgotPassword(TEST_EMAIL))
+        assertThatThrownBy(() -> authService.forgotPassword(TEST_EMAIL, TEST_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
@@ -1196,7 +1196,7 @@ class AuthServiceTest {
                 .thenReturn(1L)
                 .thenReturn(6L);
 
-        assertThatThrownBy(() -> authService.forgotPassword(TEST_EMAIL))
+        assertThatThrownBy(() -> authService.forgotPassword(TEST_EMAIL, TEST_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
@@ -1218,7 +1218,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
 
-        authService.forgotPassword(TEST_EMAIL);
+        authService.forgotPassword(TEST_EMAIL, TEST_IP);
 
         verifyNoInteractions(verificationTokenRepository);
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
@@ -1405,7 +1405,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
 
-        authService.resendVerification(TEST_EMAIL);
+        authService.resendVerification(TEST_EMAIL, TEST_IP);
 
         verifyNoInteractions(verificationTokenRepository);
         ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
@@ -1435,8 +1435,8 @@ class AuthServiceTest {
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
         when(verificationTokenRepository.save(any(VerificationToken.class))).thenReturn(new VerificationToken());
 
-        authService.resendVerification(TEST_EMAIL);
-        authService.resendVerification(TEST_EMAIL);
+        authService.resendVerification(TEST_EMAIL, TEST_IP);
+        authService.resendVerification(TEST_EMAIL, TEST_IP);
 
         ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
         verify(rabbitTemplate, times(2)).convertAndSend(anyString(), anyString(), eventCaptor.capture());
@@ -1459,7 +1459,7 @@ class AuthServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
 
-        authService.resendVerification(TEST_EMAIL);
+        authService.resendVerification(TEST_EMAIL, TEST_IP);
 
         verify(verificationTokenRepository, never()).save(any());
         verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), (Object) any());
@@ -1475,7 +1475,7 @@ class AuthServiceTest {
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
 
-        authService.resendVerification(TEST_EMAIL);
+        authService.resendVerification(TEST_EMAIL, TEST_IP);
 
         verify(verificationTokenRepository, never()).save(any());
         verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), (Object) any());
@@ -1490,7 +1490,7 @@ class AuthServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(2L);
 
-        assertThatThrownBy(() -> authService.resendVerification(TEST_EMAIL))
+        assertThatThrownBy(() -> authService.resendVerification(TEST_EMAIL, TEST_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
@@ -1614,7 +1614,7 @@ class AuthServiceTest {
                 .thenReturn(5L); // dayCount = 5 (not > 5)
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
 
-        authService.forgotPassword(TEST_EMAIL);
+        authService.forgotPassword(TEST_EMAIL, null);
 
         verify(verificationTokenRepository, never()).save(any());
     }
@@ -1634,7 +1634,7 @@ class AuthServiceTest {
                 .thenReturn(1L)  // minCount = 1
                 .thenReturn(6L); // dayCount = 6
 
-        assertThatThrownBy(() -> authService.resendVerification(TEST_EMAIL))
+        assertThatThrownBy(() -> authService.resendVerification(TEST_EMAIL, TEST_IP))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
@@ -1654,7 +1654,7 @@ class AuthServiceTest {
                 .thenReturn(5L); // dayCount = 5 (not > 5)
         when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
 
-        authService.resendVerification(TEST_EMAIL);
+        authService.resendVerification(TEST_EMAIL, null);
 
         verify(verificationTokenRepository, never()).save(any());
     }

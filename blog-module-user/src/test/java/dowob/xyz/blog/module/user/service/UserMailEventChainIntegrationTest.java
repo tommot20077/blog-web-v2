@@ -165,7 +165,7 @@ class UserMailEventChainIntegrationTest extends AbstractRealTokenIntegrationTest
     void forgotPassword_thenConsumer_mailsToken_thenResetPasswordSucceeds() throws Exception {
         authService.register(EMAIL, PASSWORD, PREFIX + "user", "Arch24User");
         clearInvocations(rabbitTemplate);
-        authService.forgotPassword(EMAIL);
+        authService.forgotPassword(EMAIL, null);
         UserPasswordResetRequestedEvent event = captureReset();
         assertThat(event.toString()).doesNotContain(EMAIL);
         assertThat(tokenRows("PASSWORD_RESET")).isZero();
@@ -205,7 +205,7 @@ class UserMailEventChainIntegrationTest extends AbstractRealTokenIntegrationTest
         UserRegisteredEvent first = captureRegistered(1);
         verificationConsumer.handleUserRegistered(first);
         redis.delete(RedisKeyConstant.getResendVerifyMinKey(EMAIL));
-        authService.resendVerification(EMAIL);
+        authService.resendVerification(EMAIL, null);
         UserRegisteredEvent second = captureRegistered(2);
         assertThat(second.eventId()).isNotEqualTo(first.eventId());
 
@@ -229,7 +229,7 @@ class UserMailEventChainIntegrationTest extends AbstractRealTokenIntegrationTest
         verificationConsumer.handleUserRegistered(event);
         String firstToken = tokenIn(sentMails(1).get(0), "/verify-email");
         redis.delete(RedisKeyConstant.getResendVerifyMinKey(EMAIL));
-        authService.resendVerification(EMAIL);
+        authService.resendVerification(EMAIL, null);
         UserRegisteredEvent resend = captureRegistered(2);
 
         doThrow(new MailSendException("smtp down")).when(mailSender).send(any(MimeMessage.class));
@@ -262,7 +262,7 @@ class UserMailEventChainIntegrationTest extends AbstractRealTokenIntegrationTest
     void resetMailFailure_thenRetry_sendsValidToken() throws Exception {
         authService.register(EMAIL, PASSWORD, PREFIX + "user", "Arch24User");
         clearInvocations(rabbitTemplate);
-        authService.forgotPassword(EMAIL);
+        authService.forgotPassword(EMAIL, null);
         UserPasswordResetRequestedEvent event = captureReset();
 
         doThrow(new MailSendException("smtp down")).when(mailSender).send(any(MimeMessage.class));
@@ -298,7 +298,7 @@ class UserMailEventChainIntegrationTest extends AbstractRealTokenIntegrationTest
         authService.register(EMAIL, PASSWORD, PREFIX + "user", "Arch24User");
         UserRegisteredEvent registered = captureRegistered(1);
         clearInvocations(rabbitTemplate);
-        authService.forgotPassword(EMAIL);
+        authService.forgotPassword(EMAIL, null);
         UserPasswordResetRequestedEvent reset = captureReset();
         jdbc.update("UPDATE users SET status = 'DELETED' WHERE email = ?", EMAIL);
 

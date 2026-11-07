@@ -222,9 +222,9 @@ class VerificationTokenRealDbIntegrationTest extends AbstractRealTokenIntegratio
     void forgotPasswordTwice_createsNoTokenRowsButPublishesEvents() {
         User user = createUser(EMAIL, UserStatus.ACTIVE);
 
-        authService.forgotPassword(EMAIL);
+        authService.forgotPassword(EMAIL, null);
         redis.delete(RedisKeyConstant.getForgotPwdMinKey(EMAIL));
-        authService.forgotPassword(EMAIL);
+        authService.forgotPassword(EMAIL, null);
 
         assertThat(countTokens(user, "PASSWORD_RESET")).isZero();
         verify(rabbitTemplate, times(2)).convertAndSend(any(String.class), any(String.class), any(Object.class));
@@ -235,7 +235,7 @@ class VerificationTokenRealDbIntegrationTest extends AbstractRealTokenIntegratio
     void resendVerification_createsNoTokenRow() {
         User user = createUser(EMAIL, UserStatus.PENDING_VERIFICATION);
 
-        authService.resendVerification(EMAIL);
+        authService.resendVerification(EMAIL, null);
 
         assertThat(countTokens(user, "EMAIL_VERIFICATION")).isZero();
         verify(rabbitTemplate).convertAndSend(any(String.class), any(String.class), any(Object.class));

@@ -455,17 +455,6 @@ public class AuthService {
     }
 
     /**
-     * 使用 6 位數驗證碼驗證電子信箱（不帶 IP，不做 IP 層級限流）
-     *
-     * @param email 電子信箱
-     * @param code  6 位數驗證碼
-     * @see #verifyEmailCode(String, String, String)
-     */
-    public void verifyEmailCode(String email, String code) {
-        verifyEmailCode(email, code, null);
-    }
-
-    /**
      * 使用 6 位數驗證碼驗證電子信箱（含 client IP 層級限流）
      *
      * <p>內建防暴力破解機制：失敗次數達 {@link RedisKeyConstant#EMAIL_VERIFY_CODE_MAX_ATTEMPTS}
@@ -526,16 +515,6 @@ public class AuthService {
     }
 
     /**
-     * 申請忘記密碼（不帶 IP，不做 IP 層級限流）
-     *
-     * @param email 用戶電子信箱
-     * @see #forgotPassword(String, String)
-     */
-    public void forgotPassword(String email) {
-        forgotPassword(email, null);
-    }
-
-    /**
      * 申請忘記密碼（含 client IP 層級限流）
      *
      * <p>若信箱存在，發布 {@link UserPasswordResetRequestedEvent} 至 RabbitMQ，由寄信 consumer 於寄信當下產生
@@ -582,16 +561,6 @@ public class AuthService {
                 log.warn("MQ 發送失敗（best-effort）: {}", e.getMessage(), e);
             }
         });
-    }
-
-    /**
-     * 重發驗證信（不帶 IP，不做 IP 層級限流）
-     *
-     * @param email 用戶電子信箱
-     * @see #resendVerification(String, String)
-     */
-    public void resendVerification(String email) {
-        resendVerification(email, null);
     }
 
     /**
