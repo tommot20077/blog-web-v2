@@ -65,6 +65,14 @@ spring:
     virtual-host: ${RABBITMQ_VHOST:blog}
     publisher-confirm-type: correlated
     publisher-returns: true
+    # 逾時（全站 MQ 共用的連線層設定）：未設時 connection-timeout 為 client 預設 60s、channel-rpc-timeout 為 10 分鐘。
+    # broker 黑洞（網路丟封包而非拒絕連線）時，所有呼叫端——publisher 的 convertAndSend、DlqDepthMetrics.refresh()
+    # 的 passive declare、@RabbitListener 容器重連——都會卡到逾時才返回；其中排程池只有 4 條
+    # （spring.task.scheduling.pool.size），卡住的 refresh 會佔掉其中一條而拖慢其他 job。
+    # 5s／10s 讓失敗在數秒內浮現（publisher 照舊 best-effort 吞掉並計 mq.publisher.failed）。
+    # 影響面：連線建立超過 5s、或單一 channel RPC（declare、confirm 等）超過 10s 會判定失敗。
+    connection-timeout: ${RABBITMQ_CONNECTION_TIMEOUT:5s}
+    channel-rpc-timeout: ${RABBITMQ_CHANNEL_RPC_TIMEOUT:10s}
     listener:
       simple:
         # AUTO：listener 正常返回即 ack、拋例外即 nack(requeue)，重試攔截器才有機會介入。

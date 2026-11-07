@@ -87,4 +87,18 @@ class SecurityConfigManagementPortTest {
         mockMvc.perform(get("/api/v1/articles/me").with(onPort(9091)))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    @DisplayName("從 management port 進來的 /actuator/health 與 /actuator/info，未認證也應放行（由 management port 規則涵蓋，不再靠獨立 permitAll）")
+    void anonymousHealthAndInfoOnManagementPort_shouldBePermitted() throws Exception {
+        for (String path : new String[]{"/actuator/health", "/actuator/info"}) {
+            mockMvc.perform(get(path).with(onPort(9091)))
+                    .andExpect(result -> {
+                        int st = result.getResponse().getStatus();
+                        if (st == 401 || st == 403) {
+                            throw new AssertionError(path + " 在 management port 不應需要 JWT，實得 " + st);
+                        }
+                    });
+        }
+    }
 }

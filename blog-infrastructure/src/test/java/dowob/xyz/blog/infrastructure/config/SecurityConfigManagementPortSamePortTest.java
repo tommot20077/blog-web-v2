@@ -66,4 +66,25 @@ class SecurityConfigManagementPortSamePortTest {
         mockMvc.perform(get("/actuator/prometheus").with(onPort(8080)))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    @DisplayName("management port == 主 port：未認證 GET /actuator/health 與 /actuator/info 也回 401（不因舊 permitAll 而匿名可讀）")
+    void anonymousHealthAndInfoWhenPortsEqual_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/health").with(onPort(8080))).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/actuator/info").with(onPort(8080))).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("management port == 主 port：/livez、/readyz 仍匿名放行（探針不受影響）")
+    void probesWhenPortsEqual_shouldStillBePermitted() throws Exception {
+        for (String path : new String[]{"/livez", "/readyz"}) {
+            mockMvc.perform(get(path).with(onPort(8080)))
+                    .andExpect(result -> {
+                        int st = result.getResponse().getStatus();
+                        if (st == 401 || st == 403) {
+                            throw new AssertionError(path + " 不得需要認證，實得 " + st);
+                        }
+                    });
+        }
+    }
 }

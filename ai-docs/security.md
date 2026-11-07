@@ -153,8 +153,7 @@ public void changePassword(...) {
 | Method | Path | Description |
 |--------|------|-------------|
 | ANY | `/livez`, `/readyz` | K3s liveness/readiness probe（主 port）。actuator 搬到獨立 management port 後，由 `management.endpoint.health.probes.add-additional-paths=true` 在主 port 提供 |
-| ANY | `/actuator/health/**`, `/actuator/info` | 服務資訊與健康檢查（只存在於 management port） |
-| ANY（限 management port） | `/actuator/**` | **僅「從 management port 進來」的請求**匿名放行（Prometheus 抓取端不帶 JWT），前提是該 port 不對外，見下方說明；主 port 的同一路徑不放行 |
+| ANY（限 management port） | `/actuator/**`（含 health、info、prometheus） | **僅「從 management port 進來」的請求**匿名放行（抓取端不帶 JWT），前提是該 port 不對外，見下方說明；主 port 的同一路徑（包括 `/actuator/health/**`、`/actuator/info`）不放行，一律 ADMIN |
 | ANY | `/swagger-ui/**`, `/v3/api-docs/**`, `/swagger-ui.html` | API documentation。僅在 springdoc 啟用時（dev／demo／`SPRINGDOC_ENABLED=true`）存在；正式環境關閉（SEC-21，Yuan 2026-11-04）：關閉時這些路徑**不在 permitAll**，匿名請求落入 `anyRequest().authenticated()` 回 401；已登入者打到則由 `GlobalExceptionHandler` 回 404 |
 | ANY | `/favicon.ico`, `/error` | favicon 與 Servlet 容器的錯誤轉發路徑 |
 | ANY | `/api/v1/auth/**` | Login, registration, refresh 等。**例外**:`POST /api/v1/auth/logout` 已在上一條規則設為 `authenticated()` |
@@ -197,6 +196,13 @@ public void changePassword(...) {
 >   `adminGetActuatorMetrics_shouldPassAuthorization`，以及
 >   `unauthenticatedGetProbePaths_shouldNotBeUnauthorized`（防止日後收緊時誤傷 `/livez`、`/readyz`，那會讓 pod 反覆重啟）；
 >   端到端見 `ActuatorManagementPortE2E`（management port 取得 Prometheus 輸出、主 port 取不到）。
+> - **部署注意事項**：
+>   1. management port 預設綁在**所有網卡**（未設 `management.server.address`），不得經由 Service（含 ClusterIP 以外的型別）、
+>      ingress 或 host network 發布；Pod 若用 `hostNetwork: true`，9091 會直接暴露在節點上。
+>   2. K3s probe **必須**改打主 port 的 `/livez`、`/readyz`（或 management port 的 `/actuator/health/liveness|readiness`）；
+>      主 port 已沒有 `/actuator/health`，仍打舊路徑會得到 404（探針失敗），pod 會反覆重啟。
+>   3. `spring.rabbitmq.connection-timeout`（預設 5s）與 `channel-rpc-timeout`（預設 10s）為全站 MQ 連線層逾時，
+>      可用 `RABBITMQ_CONNECTION_TIMEOUT`、`RABBITMQ_CHANNEL_RPC_TIMEOUT` 覆寫。
 > - 歷史：2026-09-06 曾將 `exposure.include` 自 `health,info` 增為 `health,info,metrics`（BatchedQuery 輸入分佈，ARCH-16 第一步），
 >   並加上 `.requestMatchers("/actuator/**").hasRole("ADMIN")`，避免「新端點沒順手確認授權面」（BUG-2026-001 FIN-3+4）；該規則保留。
 
@@ -232,7 +238,7 @@ public void changePassword(...) {
 > `unauthenticatedListHighlights_shouldReturn401` / `unauthenticatedGetProgress_shouldReturn401`,
 > 另有 5 條 `authenticated*_shouldReturn200` 正向案例確保沒擋掉合法使用者。
 > **(2) SEC-27 文件校正**:`/api/admin/**` → `/api/v1/admin/**`(全檔);補上實作早已存在但未入表的
-> `/livez`、`/readyz`、`/actuator/health/**`、`/actuator/info`、`/favicon.ico`、`/error`、`/swagger-ui.html`;
+> `/actuator/health/**`、`/actuator/info`、`/favicon.ico`、`/error`、`/swagger-ui.html`;
 > `GET /api/v1/files/**` 的描述由「Public file access」改為 PR #54 之後的實際語意
 > (permitAll 只代表可到達 Controller,授權在 `canRead`);移除與任何 `permitAll()` 都對不上的
 > 「Static resources / css, js, images」列——本專案是純 API 後端,靜態資源由 nginx 供應,

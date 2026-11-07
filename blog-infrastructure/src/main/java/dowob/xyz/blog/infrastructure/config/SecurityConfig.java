@@ -140,16 +140,15 @@ public class SecurityConfig {
                         // 主 port 以 management.endpoint.health.probes.add-additional-paths 提供 /livez、/readyz。
                         .requestMatchers("/livez", "/readyz").permitAll()
 
-                        // Actuator Health／info（management port 上的探針與服務資訊；主 port 無此路徑）
-                        .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
-
-                        // 從 management port 進來的 /actuator/**（Prometheus 抓取端不帶 JWT）：匿名放行。
+                        // 從 management port 進來的 /actuator/**（health、info、Prometheus 抓取端都不帶 JWT）：匿名放行。
+                        // 刻意不另設 /actuator/health/**、/actuator/info 的全域 permitAll：那會在 management port
+                        // 被誤設成主 port 時讓 health／info 匿名可讀，與 fail-closed 矛盾。
                         // 前提是「management port 不對外」（不經 ingress／Service 發布，見 security.md 部署注意事項）；
                         // 主 port 的同一路徑落入下一條 hasRole("ADMIN")，維持 fail-closed。
                         .requestMatchers(managementPortActuatorRequest()).permitAll()
 
-                        // Actuator 其餘端點（metrics、prometheus 等運維資訊）限 ADMIN。
-                        // 必須排在上面 permitAll 之後（health/info 仍公開）、anyRequest 之前；
+                        // 主 port 上所有 /actuator/**（health、info、metrics、prometheus 等）限 ADMIN。
+                        // 必須排在上面 management port 規則之後、anyRequest 之前；
                         // 少了這條，暴露 metrics 等於讓任何已登入使用者讀到端點清單與呼叫量。
                         // 這是主 port 上的 fail-closed 兜底：Prometheus 端點正常只在 management port，
                         // 主 port 不存在該路徑（見 ActuatorManagementPortE2E）。

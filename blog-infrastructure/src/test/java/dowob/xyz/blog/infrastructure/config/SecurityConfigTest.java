@@ -371,16 +371,10 @@ class SecurityConfigTest {
     }
 
     @Test
-    @DisplayName("未認證 GET /actuator/health 仍應可達（K3s probe 依賴）")
-    void unauthenticatedGetActuatorHealth_shouldNotBeUnauthorized() throws Exception {
-        mockMvc.perform(get("/actuator/health"))
-                .andExpect(result -> {
-                    int status = result.getResponse().getStatus();
-                    if (status == 401) {
-                        throw new AssertionError("/actuator/health 不得需要認證——K3s liveness/readiness "
-                                + "probe 依賴它（security.md 公開端點表）");
-                    }
-                });
+    @DisplayName("主 port 上未認證 GET /actuator/health 與 /actuator/info 應回 401（fail-closed；健康檢查改走 /livez、/readyz，management port 上才匿名）")
+    void unauthenticatedGetActuatorHealthAndInfoOnMainPort_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/health")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/actuator/info")).andExpect(status().isUnauthorized());
     }
 
     @Test

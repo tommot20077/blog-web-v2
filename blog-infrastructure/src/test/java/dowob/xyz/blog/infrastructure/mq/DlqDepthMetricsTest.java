@@ -155,4 +155,26 @@ class DlqDepthMetricsTest {
 
         assertThatCode(metrics::refresh).doesNotThrowAnyException();
     }
+
+    @Test
+    @DisplayName("broker 黑洞（接受 TCP 連線但永不回應 AMQP 握手）→ refresh 在逾時內返回、不外拋、gauge 為 NaN")
+    void refresh_whenBrokerIsBlackHole_returnsWithinTimeout() throws Exception {
+        try (java.net.ServerSocket blackHole = new java.net.ServerSocket(0)) {
+            org.springframework.amqp.rabbit.connection.CachingConnectionFactory cf =
+                    new org.springframework.amqp.rabbit.connection.CachingConnectionFactory("localhost", blackHole.getLocalPort());
+            cf.setConnectionTimeout(1_000);
+            cf.getRabbitConnectionFactory().setHandshakeTimeout(1_000);
+            cf.getRabbitConnectionFactory().setChannelRpcTimeout(1_000);
+            when(provider.getIfAvailable()).thenReturn(new org.springframework.amqp.rabbit.core.RabbitAdmin(cf));
+            DlqDepthMetrics metrics = create();
+
+            long start = System.nanoTime();
+            assertThatCode(metrics::refresh).doesNotThrowAnyException();
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+
+            assertThat(elapsedMs).as("refresh 不得長時間卡住").isLessThan(15_000);
+            assertThat(gaugeValue()).isNaN();
+            cf.destroy();
+        }
+    }
 }
