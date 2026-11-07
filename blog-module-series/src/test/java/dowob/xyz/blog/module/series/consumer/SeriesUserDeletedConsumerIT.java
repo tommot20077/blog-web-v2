@@ -42,7 +42,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * {@link SeriesUserDeletedConsumer} 對真實 PostgreSQL（含真實 article 模組 facade）的整合測試。
  *
  * <p>驗證作者刪帳（DATA-02）時：只有「已無保留文章（PUBLISHED、ARCHIVED 以外）」的系列被刪；
- * 仍有已發布或已下架文章的系列保留；判斷不看 {@code series.article_count}（故意設成與事實不符的值）；
+ * 仍有已發布或已下架文章的系列保留；判斷一律回問 article facade（series 表已沒有計數欄位）；
  * 重送同一事件不會再刪、也不會重發 {@code SeriesDeletedEvent}。</p>
  *
  * @author Yuan
@@ -104,10 +104,10 @@ class SeriesUserDeletedConsumerIT {
         jdbc.update("DELETE FROM processed_events WHERE consumer_name = ?", SeriesUserDeletedConsumer.CONSUMER_NAME);
     }
 
-    /** 建立系列；article_count 一律設成 7（與事實不符），證明判斷不看這個欄位。 */
+    /** 建立系列。 */
     private UUID insertSeries(UUID authorUuid, String slug) {
         UUID uuid = UUID.randomUUID();
-        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid, article_count) VALUES (?, ?, ?, ?, 7)",
+        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid) VALUES (?, ?, ?, ?)",
                 uuid, "T-" + slug, slug, authorUuid);
         return uuid;
     }

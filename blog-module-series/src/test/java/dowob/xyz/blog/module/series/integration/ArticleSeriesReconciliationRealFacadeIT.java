@@ -90,7 +90,7 @@ class ArticleSeriesReconciliationRealFacadeIT {
 
     private UUID insertSeries(String slug) {
         UUID uuid = UUID.randomUUID();
-        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid, article_count) VALUES (?, ?, ?, ?, 0)",
+        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid) VALUES (?, ?, ?, ?)",
                 uuid, "T-" + slug, slug, SeededUsers.USER1_UUID);
         return uuid;
     }

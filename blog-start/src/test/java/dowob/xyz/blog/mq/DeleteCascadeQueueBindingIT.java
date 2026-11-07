@@ -29,7 +29,6 @@ import dowob.xyz.blog.module.search.config.SearchRabbitMqConfig;
 import dowob.xyz.blog.module.search.listener.ArticleSearchListener;
 import dowob.xyz.blog.module.search.listener.UserDeletedSearchListener;
 import dowob.xyz.blog.module.series.config.SeriesRabbitMqConfig;
-import dowob.xyz.blog.module.series.consumer.SeriesArticleDeletedConsumer;
 import dowob.xyz.blog.module.series.consumer.SeriesUserDeletedConsumer;
 import dowob.xyz.blog.module.series.service.SeriesEventPublisher;
 import dowob.xyz.blog.module.tag.config.TagRabbitMqConfig;
@@ -81,7 +80,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * ({@link ArticleEventPublisher#publishDeleted}、{@link SeriesEventPublisher#publishDeleted}) 發布事件到正式的
  * exchange＋routing key，逐一斷言：</p>
  * <ul>
- *   <li>article 刪除 → {@code comment.article-deleted}、{@code reading.article-deleted}、{@code series.article-deleted}、
+ *   <li>article 刪除 → {@code comment.article-deleted}、{@code reading.article-deleted}、
  *       {@code tag.article-deleted}、{@code version.article-deleted}、{@code file.article-deleted}（DATA-07）、{@code search.index.delete} 各收到一則</li>
  *   <li>series 刪除 → {@code article.series-deleted} 收到一則</li>
  *   <li>user 刪除帳號（DATA-02）→ {@code article.user-deleted}、{@code reading.user-deleted}、{@code version.user-deleted}、
@@ -111,7 +110,6 @@ class DeleteCascadeQueueBindingIT {
     private static final Map<String, Class<?>> ARTICLE_DELETED_QUEUES = Map.of(
             CommentRabbitMqConfig.QUEUE_COMMENT_ARTICLE_DELETED, CommentArticleDeletedConsumer.class,
             ReadingRabbitMqConfig.QUEUE_READING_ARTICLE_DELETED, ReadingArticleDeletedConsumer.class,
-            SeriesRabbitMqConfig.QUEUE_SERIES_ARTICLE_DELETED, SeriesArticleDeletedConsumer.class,
             TagRabbitMqConfig.QUEUE_TAG_ARTICLE_DELETED, TagArticleDeletedConsumer.class,
             VersionRabbitMqConfig.QUEUE_VERSION_ARTICLE_DELETED, VersionArticleDeletedConsumer.class,
             FileRabbitMqConfig.QUEUE_ARTICLE_DELETED, FileArticleDeletedConsumer.class,
@@ -201,7 +199,7 @@ class DeleteCascadeQueueBindingIT {
     }
 
     @Test
-    @DisplayName("article 刪除事件：comment／reading／series／tag／version／search 的刪除 queue 都收到，且對應 consumer 存在、能還原事件")
+    @DisplayName("article 刪除事件：comment／reading／tag／version／search 的刪除 queue 都收到，且對應 consumer 存在、能還原事件")
     void articleDeleted_reachesEveryCascadeQueue() throws Exception {
         UUID articleUuid = UUID.randomUUID();
         UUID authorUuid = UUID.randomUUID();

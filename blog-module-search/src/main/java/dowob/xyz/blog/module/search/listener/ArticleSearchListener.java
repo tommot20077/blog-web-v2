@@ -119,8 +119,8 @@ public class ArticleSearchListener {
      * <p>
      * 下架（PUBLISHED → ARCHIVED）代表文章不再公開，索引若不移除，
      * 搜尋結果仍會曝光已下架文章的標題與內文摘要。處置與刪除相同（移除 document），
-     * 但走獨立的 routing key／queue——{@code article.deleted} 另有 series 模組訂閱並遞減
-     * {@code series.article_count}，共用會使該計數被誤扣（見
+     * 但走獨立的 routing key／queue——{@code article.deleted} 另有 comment、reading、tag 等模組訂閱並清除各自的衍生資料，
+     * 共用會使它們被誤清（見
      * {@code SearchRabbitMqConfig#ROUTING_KEY_ARCHIVED}）。
      * </p>
      *

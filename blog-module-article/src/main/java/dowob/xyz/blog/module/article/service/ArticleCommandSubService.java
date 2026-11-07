@@ -4,6 +4,8 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
+import org.springframework.http.HttpStatus;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
@@ -169,6 +171,15 @@ class ArticleCommandSubService {
          * 就會再造出 SEC-02 剛收斂掉的「多套真相」。
          */
         ArticleContentFreezePolicy.assertContentEditable(article.getStatus());
+        /*
+         * RACE-05（決策 B2）：request 有帶 version 時，必須與剛載入的 DB 版本一致，否則代表編輯器載入之後
+         * 文章已被其他地方（另一分頁／裝置）改過——回 409，不寫入、不合併，由前端提示重新載入。
+         * 沒帶 version 維持舊行為（只靠下方 save 的 @Version 防「讀取到存檔」之間的極短視窗），
+         * 以相容前後端分開部署。只約束這條內容更新路徑；狀態轉換端點維持全域 409（決策 B3）。
+         */
+        if (request.getVersion() != null && !request.getVersion().equals(article.getVersion())) {
+            throw new HttpStatusBusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE, HttpStatus.CONFLICT);
+        }
         /** 狀態轉換前先記下：判斷這次 PUT 是否進出「已發布集合」（歸檔頁快取失效依據） */
         ArticleStatus previousStatus = article.getStatus();
 
@@ -229,7 +240,8 @@ class ArticleCommandSubService {
             try {
                 updated = articleRepository.save(article);
             } catch (org.springframework.dao.OptimisticLockingFailureException e) {
-                throw new BusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE);
+                /* 兩個請求同時通過上方 version 比對、在 save 才撞鎖：與比對不一致同一語意，一樣回 409 */
+                throw new HttpStatusBusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE, HttpStatus.CONFLICT);
             }
 
             /** 同步文章分類（null 表示不更新，空列表表示清除） */
@@ -313,8 +325,8 @@ class ArticleCommandSubService {
         checkWritePermission(operatorUuid, operatorRole, article);
 
         /* delete 前讀取：article 刪除後 FK CASCADE 會清 article_tags / article_categories，
-         * series consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。
-         * seriesUuid 是 series 扣 article_count 的唯一依據（事件不再帶 series 的 Long 主鍵）；M6-b 起文章自己就存有
+         * 下游 consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。
+         * seriesUuid 隨事件帶出（W7-d1 起 series 不再訂閱本事件，目前沒有 consumer 讀它）；M6-b 起文章自己就存有
          * series_uuid，直接讀取（不再查 SeriesFacade，沒有查詢失敗的可能）。*/
         UUID seriesUuid = article.getSeriesUuid();
         List<UUID> categoryIds = articleMapper.findCategoryUuidsByArticleId(article.getId());
@@ -326,7 +338,7 @@ class ArticleCommandSubService {
             articleRepository.delete(article);
             /*
              * SP-A: 移除 seriesFacade.notifyArticleDeletedFromSeries
-             * 改由 SeriesArticleDeletedConsumer 訂閱 ArticleDeletedEvent 處理（冪等）。
+             * series 篇數已改為即時計數（V36 移除 article_count），不再有 series 端的刪除 consumer。
              * ArticleServiceImpl 不再依賴 SeriesFacade interface。
              */
         });

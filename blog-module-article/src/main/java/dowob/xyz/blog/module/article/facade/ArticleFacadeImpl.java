@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.article.facade;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
@@ -24,6 +25,7 @@ import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import dowob.xyz.blog.module.article.mapper.ArticleRecommendMapper;
 import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.ArticleContentLimits;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
@@ -426,6 +428,15 @@ public class ArticleFacadeImpl implements ArticleFacade {
         Objects.requireNonNull(articleUuid, "articleUuid 不可為 null");
         Objects.requireNonNull(source, "source 不可為 null");
         Objects.requireNonNull(source.content(), "source.content 不可為 null");
+        /*
+         * SEC-25：還原是第三條會寫入 content_md 的路徑（另兩條為建立／更新，由 request 的 @Size 守住）。
+         * 快照內容多半來自曾經合法的文章，但 200,000 字元上限是後來才施行的，上限前存下的舊快照可能超限；
+         * 若不在此擋住，作者即可用還原把超限內容寫回，繞過上限。故在 render 與開交易之前就拒絕。
+         */
+        if (source.content().length() > ArticleContentLimits.MAX_CONTENT_LENGTH) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR,
+                    "還原內容超過 " + ArticleContentLimits.MAX_CONTENT_LENGTH + " 字元上限");
+        }
         RenderResult rendered = markdownRenderer.render(source.content());
         String contentHtml = rendered.html();
         String toc = tocCodec.serialize(rendered.toc());

@@ -159,7 +159,6 @@ class ArticleSeriesUuidFacadeIT {
         series.setSlug(slug);
         series.setDescription("d");
         series.setAuthorUuid(SeededUsers.uuidOf(AUTHOR_1));
-        series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         return seriesRepo.save(series);

@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.article.model.dto.request;
 
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.module.article.model.ArticleContentLimits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
@@ -28,6 +29,7 @@ public class CreateArticleRequest {
      * 文章 Markdown 內容（必填）
      */
     @NotBlank(message = "內容不得為空")
+    @Size(max = ArticleContentLimits.MAX_CONTENT_LENGTH, message = "內容長度不得超過 200000 字元")
     private String content;
 
     /**
