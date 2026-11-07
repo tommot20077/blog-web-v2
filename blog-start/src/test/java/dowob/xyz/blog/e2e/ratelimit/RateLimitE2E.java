@@ -5,12 +5,11 @@ import dowob.xyz.blog.e2e.config.AbstractE2ETest;
 import dowob.xyz.blog.e2e.support.AuthHelper;
 import dowob.xyz.blog.e2e.support.DataBuilder;
 import dowob.xyz.blog.e2e.support.DatabaseCleaner;
-import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.e2e.support.SearchIndexCleaner;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
@@ -47,17 +46,14 @@ class RateLimitE2E extends AbstractE2ETest {
 
     @Autowired private AuthHelper authHelper;
     @Autowired private DatabaseCleaner databaseCleaner;
-    @Autowired private ElasticsearchOperations esOps;
+    @Autowired private SearchIndexCleaner searchIndexCleaner;
     @Autowired private StringRedisTemplate redis;
 
     @AfterEach
     void tearDown() {
         databaseCleaner.cleanAll();
-        var indexOps = esOps.indexOps(ArticleDocument.class);
-        if (indexOps.exists()) {
-            indexOps.delete();
-            indexOps.createWithMapping();
-        }
+        /* 讀寫改走 alias 後不可再 delete＋createWithMapping（alias 會讓 delete 被 ES 拒絕），改為經 alias 清空文件 */
+        searchIndexCleaner.clearArticles();
     }
 
     private String createPublishedArticle(String authorToken) throws Exception {

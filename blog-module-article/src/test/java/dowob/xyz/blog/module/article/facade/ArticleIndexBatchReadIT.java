@@ -141,7 +141,8 @@ class ArticleIndexBatchReadIT extends ArticleSeriesITSupport {
         String sql = sqlOf("findPublishedForIndexAfter")
                 .replace("<script>", "").replace("</script>", "")
                 .replaceAll("<if test='afterUuid != null'>(.*?)</if>", "$1")
-                .replace("#{afterUuid}", "'" + UUID.randomUUID() + "'")
+                /* 固定游標在 uuid 空間最前端：隨機 uuid 落在高端時符合列太少，planner 會合理地改選 bitmap scan + Sort，測試因此 flaky */
+                .replace("#{afterUuid}", "'00000000-0000-0000-0000-000000000001'")
                 .replace("#{limit}", "200");
 
         String plan = String.join("\n", explain(sql));
