@@ -3,6 +3,11 @@ package dowob.xyz.blog.module.article.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -11,6 +16,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -25,6 +32,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @DisplayName("文章樂觀鎖 version（IT）")
 class ArticleOptimisticVersionIT extends ArticleWebITBase {
+
+    /**
+     * 以 spy 包住真的 TransactionTemplate：updateArticle 在「載入並通過 version 比對」之後才進入
+     * {@code transactionTemplate.execute}（內含 save），在此插入「另一個交易已 commit」的寫入。
+     * （不 spy repository：它是 Spring Data 的介面代理，無法 callRealMethod。）
+     */
+    @MockitoSpyBean
+    private TransactionTemplate spiedTransactionTemplate;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @Test
     @DisplayName("GET /edit 與建立回應帶 version；存檔成功的回應帶遞增後的新 version，可連續存檔")
@@ -87,6 +105,30 @@ class ArticleOptimisticVersionIT extends ArticleWebITBase {
         assertThat(second.path("code").asText()).isEqualTo("A0208");
         assertThat(articleRepository.findByUuid(UUID.fromString(uuid)).orElseThrow().getContent())
                 .isEqualTo("先到的");
+    }
+
+    @Test
+    @DisplayName("比對通過、save 才撞 @Version（另一交易在載入後、存檔前已 commit）→ 409 A0208，不是 400/500，DB 保留先 commit 者的內容")
+    void versionCheckPasses_butSaveHitsOptimisticLock_returns409() throws Exception {
+        stubUserFacade();
+        String uuid = createArticle("原始內容");
+        long loaded = readEditVersion(uuid);
+        AtomicBoolean armed = new AtomicBoolean(true);
+        doAnswer(invocation -> {
+            if (armed.getAndSet(false)) {
+                /* 模擬另一個交易在本請求載入並通過比對之後、save 之前，已改寫並 commit（真 DB、獨立連線） */
+                jdbcTemplate.update("UPDATE articles SET content_md = ?, version = version + 1 WHERE uuid = ?",
+                        "別的交易先 commit 的內容", UUID.fromString(uuid));
+            }
+            return invocation.callRealMethod();
+        }).when(spiedTransactionTemplate).execute(any());
+
+        JsonNode rejected = putArticle(uuid, Map.of("content", "後到的內容", "version", loaded), 409);
+
+        assertThat(rejected.path("code").asText()).isEqualTo("A0208");
+        var stored = articleRepository.findByUuid(UUID.fromString(uuid)).orElseThrow();
+        assertThat(stored.getContent()).isEqualTo("別的交易先 commit 的內容");
+        assertThat(stored.getVersion()).isEqualTo(loaded + 1);
     }
 
     @Test

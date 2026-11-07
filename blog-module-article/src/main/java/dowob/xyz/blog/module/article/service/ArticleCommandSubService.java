@@ -338,7 +338,7 @@ class ArticleCommandSubService {
             articleRepository.delete(article);
             /*
              * SP-A: 移除 seriesFacade.notifyArticleDeletedFromSeries
-             * 改由 SeriesArticleDeletedConsumer 訂閱 ArticleDeletedEvent 處理（冪等）。
+             * series 篇數已改為即時計數（V36 移除 article_count），不再有 series 端的刪除 consumer。
              * ArticleServiceImpl 不再依賴 SeriesFacade interface。
              */
         });

@@ -21,7 +21,7 @@ import java.util.UUID;
  * @param tagIds       文章被刪前的 tag UUIDs（nullable — 舊 message 為 null）
  * @param occurredAt   事件發生時間
  * @param authorUuid   作者公開 UUID（nullable — 舊 message 或 uuid 查詢失敗時為 null）
- * @param seriesUuid   文章所屬 series 公開 UUID（nullable — 文章不在 series、舊 message 或查詢失敗時為 null）
+ * @param seriesUuid   文章所屬 series 公開 UUID（nullable — 文章不在 series、舊 message 或查詢失敗時為 null）；目前無 consumer 使用，保留供未來需求
  *
  * @author Yuan
  * @version 5.0（由 article 模組搬到 blog-infrastructure；新增 authorUuid、seriesUuid；M4-b 移除 articleId、seriesId；M6-a 移除 authorId）
