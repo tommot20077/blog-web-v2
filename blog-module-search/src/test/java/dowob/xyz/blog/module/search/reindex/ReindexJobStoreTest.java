@@ -185,6 +185,39 @@ class ReindexJobStoreTest {
     }
 
     @Test
+    @DisplayName("m5：lockHolderJob：最近一次作業就是持鎖者 → 回傳它（含進度）")
+    void lockHolderJob_latestIsHolder_returnsIt() {
+        when(valueOps.get(RedisKeyConstant.LOCK_SEARCH_REINDEX)).thenReturn(JOB.toString());
+        when(hashOps.entries(RedisKeyConstant.SEARCH_REINDEX_JOB_KEY)).thenReturn(storedJob("RUNNING"));
+
+        SearchReindexJobResponse job = store.lockHolderJob().orElseThrow();
+
+        assertThat(job.getJobId()).isEqualTo(JOB);
+        assertThat(job.getProcessed()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("m5：lockHolderJob：持鎖的新作業尚未寫入狀態（最近一次仍是舊作業）→ 回傳持鎖者的 jobId 與 RUNNING，不回舊作業")
+    void lockHolderJob_statusNotYetWritten_returnsHolderId() {
+        UUID holder = UUID.randomUUID();
+        when(valueOps.get(RedisKeyConstant.LOCK_SEARCH_REINDEX)).thenReturn(holder.toString());
+        when(hashOps.entries(RedisKeyConstant.SEARCH_REINDEX_JOB_KEY)).thenReturn(storedJob("COMPLETED"));
+
+        SearchReindexJobResponse job = store.lockHolderJob().orElseThrow();
+
+        assertThat(job.getJobId()).isEqualTo(holder);
+        assertThat(job.getState()).isEqualTo(ReindexJobState.RUNNING);
+    }
+
+    @Test
+    @DisplayName("m5：lockHolderJob：鎖已釋放 → empty")
+    void lockHolderJob_noLock_empty() {
+        when(valueOps.get(RedisKeyConstant.LOCK_SEARCH_REINDEX)).thenReturn(null);
+
+        assertThat(store.lockHolderJob()).isEmpty();
+    }
+
+    @Test
     @DisplayName("current：狀態資料損毀（無法解析）→ 回 empty，不讓狀態端點 500")
     void current_corruptData_empty() {
         Map<Object, Object> corrupt = storedJob("RUNNING");

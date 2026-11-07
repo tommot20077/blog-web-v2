@@ -276,6 +276,25 @@ class ArticleIndexRebuilderTest {
         }
 
         @Test
+        @DisplayName("m4：補齊作者前先 refresh 新索引，剛由文章補齊寫入的文件才會被 update_by_query 看到")
+        void rebuild_refreshesBeforeAuthorRewrite() {
+            UUID fresh = UUID.randomUUID();
+            UUID author = UUID.randomUUID();
+            when(journal.drainArticles(eq(JOB), anyInt())).thenReturn(List.of(fresh.toString()), List.of());
+            when(journal.drainAuthors(eq(JOB), anyInt())).thenReturn(List.of(author.toString()), List.of());
+            when(articleFacade.findPublishedForIndexByUuids(List.of(fresh)))
+                    .thenReturn(List.of(data(fresh, author, "Yuan", List.of())));
+
+            rebuild();
+
+            InOrder order = inOrder(admin);
+            order.verify(admin).bulkIndex(org.mockito.ArgumentMatchers.argThat(docs ->
+                    docs.size() == 1 && docs.get(0).getId().equals(fresh.toString())), eq(NEW));
+            order.verify(admin).refresh(NEW);
+            order.verify(admin).updateAuthorNickname(eq(author), anyString(), eq(NEW));
+        }
+
+        @Test
         @DisplayName("紀錄中混入非 UUID 的值：直接從新索引刪除該 id，不送進 facade")
         void rebuild_garbageJournalEntry_deletedNotQueried() {
             when(journal.drainArticles(eq(JOB), anyInt())).thenReturn(List.of("not-a-uuid"), List.of());
@@ -419,6 +438,47 @@ class ArticleIndexRebuilderTest {
 
             assertThatThrownBy(() -> rebuild()).isInstanceOf(IllegalStateException.class).hasMessageContaining("變動紀錄");
             assertAliasUntouchedAndNewIndexDeleted();
+        }
+
+        @Test
+        @DisplayName("m3：開始記錄變動失敗（Redis 故障）→ 新索引也被刪除，不留孤兒索引")
+        void rebuild_journalBeginFails_deletesNewIndex() {
+            doThrow(new IllegalStateException("redis down")).when(journal).begin(JOB);
+
+            assertThatThrownBy(() -> rebuild()).hasMessage("redis down");
+            verify(admin).deleteIndexQuietly(NEW);
+            verify(admin, never()).switchAlias(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("m3：切換前遇到 Error（例如 OutOfMemoryError）也會收尾——刪新索引、結束記錄——再原樣往外拋")
+        void rebuild_errorBeforeSwitch_stillCleansUp() {
+            when(articleFacade.findPublishedForIndexAfter(null, 200)).thenReturn(batch(1));
+            doThrow(new OutOfMemoryError("Java heap space")).when(admin).bulkIndex(anyList(), eq(NEW));
+
+            assertThatThrownBy(() -> rebuild()).isInstanceOf(OutOfMemoryError.class);
+            assertAliasUntouchedAndNewIndexDeleted();
+        }
+
+        @Test
+        @DisplayName("m1：中斷旗標仍在時，收尾前先清掉旗標（否則 Redis／ES 呼叫會直接丟例外），收尾後再設回")
+        void rebuild_interruptFlagClearedDuringCleanupAndRestored() {
+            java.util.concurrent.atomic.AtomicBoolean interruptedDuringCleanup = new java.util.concurrent.atomic.AtomicBoolean(true);
+            when(articleFacade.findPublishedForIndexAfter(null, 200)).thenAnswer(inv -> {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("讀取被中斷");
+            });
+            when(admin.deleteIndexQuietly(NEW)).thenAnswer(inv -> {
+                interruptedDuringCleanup.set(Thread.currentThread().isInterrupted());
+                return true;
+            });
+            try {
+                assertThatThrownBy(() -> rebuild()).hasMessage("讀取被中斷");
+                assertThat(Thread.currentThread().isInterrupted()).as("收尾後中斷旗標設回").isTrue();
+            } finally {
+                Thread.interrupted();
+            }
+            assertThat(interruptedDuringCleanup.get()).as("收尾期間中斷旗標已清除").isFalse();
         }
 
         @Test

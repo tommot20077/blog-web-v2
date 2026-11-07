@@ -142,12 +142,12 @@ class SearchReindexServiceTest {
     }
 
     @Test
-    @DisplayName("已有作業持有鎖：不建立新作業、不送出工作，回傳進行中的作業（呼叫端回 409）")
+    @DisplayName("已有作業持有鎖：不建立新作業、不送出工作，回傳持鎖的作業（呼叫端回 409）")
     void start_whenLocked_returnsRunningJob() {
         SearchReindexJobResponse running = SearchReindexJobResponse.builder()
                 .jobId(UUID.randomUUID()).state(ReindexJobState.RUNNING).build();
         when(jobStore.tryLock(any())).thenReturn(false);
-        when(jobStore.current()).thenReturn(Optional.of(running));
+        when(jobStore.lockHolderJob()).thenReturn(Optional.of(running));
 
         ReindexStartResult result = service.start();
 
@@ -163,7 +163,7 @@ class SearchReindexServiceTest {
         AtomicReference<UUID> lock = new AtomicReference<>();
         when(jobStore.tryLock(any())).thenAnswer(inv -> lock.compareAndSet(null, inv.getArgument(0)));
         org.mockito.Mockito.doAnswer(inv -> lock.compareAndSet(inv.getArgument(0), null)).when(jobStore).unlock(any());
-        when(jobStore.current()).thenAnswer(inv -> Optional.of(SearchReindexJobResponse.builder()
+        when(jobStore.lockHolderJob()).thenAnswer(inv -> Optional.of(SearchReindexJobResponse.builder()
                 .jobId(lock.get()).state(ReindexJobState.RUNNING).build()));
 
         ReindexStartResult first = service.start();
@@ -175,6 +175,64 @@ class SearchReindexServiceTest {
 
         executor.runAll();
         assertThat(service.start().started()).isTrue();
+    }
+
+    @Test
+    @DisplayName("m5：409 的 data 以鎖的值（jobId）取得持鎖作業，不讀「最近一次作業」（新作業剛取鎖、狀態尚未寫入時會讀到舊作業）")
+    void start_whenLocked_usesLockHolderNotLatestJob() {
+        when(jobStore.tryLock(any())).thenReturn(false);
+        UUID holder = UUID.randomUUID();
+        when(jobStore.lockHolderJob()).thenReturn(Optional.of(SearchReindexJobResponse.builder()
+                .jobId(holder).state(ReindexJobState.RUNNING).build()));
+        when(jobStore.current()).thenReturn(Optional.of(SearchReindexJobResponse.builder()
+                .jobId(UUID.randomUUID()).state(ReindexJobState.COMPLETED).build()));
+
+        ReindexStartResult result = service.start();
+
+        assertThat(result.started()).isFalse();
+        assertThat(result.job().getJobId()).isEqualTo(holder);
+        verify(jobStore, never()).current();
+    }
+
+    @Test
+    @DisplayName("m3：重建遇到 Error：作業 FAILED、錯誤摘要為該 Error、釋放鎖，Error 原樣往外拋（不吞掉）")
+    void run_error_marksFailedAndRethrows() {
+        when(rebuilder.rebuild(any(), any())).thenThrow(new OutOfMemoryError("Java heap space"));
+        UUID jobId = startedJobId();
+
+        assertThatThrownBy(() -> executor.runAll()).isInstanceOf(OutOfMemoryError.class);
+
+        verify(jobStore).fail(jobId, "OutOfMemoryError: Java heap space", NOW_LOCAL);
+        verify(jobStore).unlock(jobId);
+    }
+
+    @Test
+    @DisplayName("m1：重建因中斷失敗（中斷旗標仍在）時，寫入 FAILED 與解鎖前先清掉旗標，之後再設回")
+    void run_interrupted_clearsFlagForBookkeepingAndRestores() {
+        java.util.concurrent.atomic.AtomicBoolean interruptedWhileFailing = new java.util.concurrent.atomic.AtomicBoolean(true);
+        java.util.concurrent.atomic.AtomicBoolean interruptedWhileUnlocking = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(rebuilder.rebuild(any(), any())).thenAnswer(inv -> {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("重建被中止");
+        });
+        org.mockito.Mockito.doAnswer(inv -> {
+            interruptedWhileFailing.set(Thread.currentThread().isInterrupted());
+            return null;
+        }).when(jobStore).fail(any(), anyString(), any());
+        org.mockito.Mockito.doAnswer(inv -> {
+            interruptedWhileUnlocking.set(Thread.currentThread().isInterrupted());
+            return null;
+        }).when(jobStore).unlock(any());
+        startedJobId();
+
+        try {
+            executor.runAll();
+            assertThat(Thread.currentThread().isInterrupted()).as("收尾後中斷旗標設回").isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+        assertThat(interruptedWhileFailing.get()).isFalse();
+        assertThat(interruptedWhileUnlocking.get()).isFalse();
     }
 
     @Test

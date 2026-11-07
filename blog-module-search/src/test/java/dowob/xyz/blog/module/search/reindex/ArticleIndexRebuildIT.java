@@ -410,6 +410,76 @@ class ArticleIndexRebuildIT {
         assertThat(redis.opsForValue().get(RedisKeyConstant.LOCK_SEARCH_REINDEX)).as("A 也不會刪掉 B 的鎖").isEqualTo(jobB.toString());
     }
 
+    /**
+     * 審查 m1：應用程式關閉時 executor.shutdownNow() 中斷背景執行緒；中斷旗標仍在時，Lettuce 與 RestClient 的呼叫會直接丟例外，
+     * 收尾（刪新索引、結束變動紀錄、寫 FAILED、解鎖）全部失敗：留下孤兒索引、鎖卡 10 分鐘、狀態一直顯示 RUNNING。
+     */
+    @Test
+    @DisplayName("m1：關閉應用（中斷背景執行緒）時收尾仍完成：新索引刪除、鎖與進行中標記釋放、作業記為 FAILED")
+    void shutdown_interruptedRebuild_stillCleansUp() throws Exception {
+        publishedAndIndexed("Shutdown alpha");
+        CountDownLatch reading = new CountDownLatch(1);
+        when(articleFacade.findPublishedForIndexAfter(any(), anyInt())).thenAnswer(inv -> {
+            reading.countDown();
+            try {
+                new CountDownLatch(1).await(WAIT.toSeconds(), TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                /* 與 I/O 函式庫被中斷時的行為一致：還原中斷旗標後丟出例外 */
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("讀取被中斷", e);
+            }
+            return List.of();
+        });
+        UUID jobId = reindexService.start().job().getJobId();
+        await(() -> null, reading);
+
+        reindexService.destroy();
+
+        SearchReindexJobResponse job = reindexService.currentJob().orElseThrow();
+        assertThat(job.getJobId()).isEqualTo(jobId);
+        assertThat(job.getState()).isEqualTo(ReindexJobState.FAILED);
+        assertThat(job.getFinishedAt()).as("由作業自己寫下，不是被判定中斷").isNotNull();
+        assertThat(ArticleIndexTestSupport.articleIndexNames(template)).containsExactly(ArticleIndexAdmin.INITIAL_INDEX);
+        assertThat(redis.hasKey(RedisKeyConstant.LOCK_SEARCH_REINDEX)).isFalse();
+        assertThat(redis.hasKey(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY)).isFalse();
+    }
+
+    /**
+     * 審查 m4：補齊時同一批剛 bulk 進新索引的文件尚未 refresh，緊接著的作者暱稱 update_by_query 看不到它們。
+     * 重建中發布的文章 X 經補齊寫入時（UserFacade 當時仍回舊暱稱），作者隨後刪帳匿名化；
+     * 若不先 refresh，作者改寫漏掉 X，PII 隨切換回到索引。
+     */
+    @Test
+    @DisplayName("m4：補齊時剛寫入的文章也會被作者匿名化改寫到（改寫前先 refresh 新索引）")
+    void rebuild_authorRewriteSeesDocumentsJustWrittenByCatchUp() throws Exception {
+        UUID author = UUID.randomUUID();
+        ArticleIndexData existing = article(UUID.randomUUID(), "Refresh existing", author);
+        db.put(existing.articleUuid(), existing);
+        repository.save(document(existing, "愛麗絲"));
+        Map<UUID, UserDisplayInfo> before = Map.of(author, new UserDisplayInfo(author, "愛麗絲", null));
+        Map<UUID, UserDisplayInfo> after = Map.of(author, new UserDisplayInfo(author, "已刪除使用者#cd34", null));
+        /* 第一批與補齊文章時仍回舊暱稱，補齊作者時才回匿名暱稱 */
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(before, before, after);
+        CountDownLatch reading = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        pauseFirstBatch(reading, proceed);
+
+        UUID jobId = reindexService.start().job().getJobId();
+        await(() -> null, reading);
+        ArticleIndexData fresh = article(UUID.randomUUID(), "Refresh fresh", author);
+        db.put(fresh.articleUuid(), fresh);
+        searchService.indexArticle(document(fresh, "愛麗絲"));
+        searchService.updateAuthorNickname(author, "已刪除使用者#cd34");
+        proceed.countDown();
+
+        assertThat(awaitFinished(jobId).getState()).isEqualTo(ReindexJobState.COMPLETED);
+        refreshLive();
+        assertThat(repository.findById(fresh.articleUuid().toString()).orElseThrow().getAuthor().getNickname())
+                .isEqualTo("已刪除使用者#cd34");
+        assertThat(repository.findById(existing.articleUuid().toString()).orElseThrow().getAuthor().getNickname())
+                .isEqualTo("已刪除使用者#cd34");
+    }
+
     @Test
     @DisplayName("重建進行中再觸發：第二次不建立新作業，回傳進行中的同一個 jobId（呼叫端回 409）")
     void rebuild_secondTriggerWhileRunning_isRejected() throws Exception {
@@ -428,6 +498,11 @@ class ArticleIndexRebuildIT {
         assertThat(second.job().getJobId()).isEqualTo(first.job().getJobId());
         assertThat(second.job().getState()).isEqualTo(ReindexJobState.RUNNING);
         assertThat(awaitFinished(first.job().getJobId()).getState()).isEqualTo(ReindexJobState.COMPLETED);
+        /* 狀態先寫 COMPLETED、解鎖在 finally，兩者之間有極短的空窗；等鎖釋放後再觸發 */
+        long deadline = System.nanoTime() + WAIT.toNanos();
+        while (Boolean.TRUE.equals(redis.hasKey(RedisKeyConstant.LOCK_SEARCH_REINDEX)) && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
         assertThat(reindexService.start().started()).as("前一個結束後可以再觸發").isTrue();
     }
 

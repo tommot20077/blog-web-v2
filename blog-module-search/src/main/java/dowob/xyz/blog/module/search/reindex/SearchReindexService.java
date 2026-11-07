@@ -120,7 +120,8 @@ public class SearchReindexService implements DisposableBean {
     public ReindexStartResult start() {
         UUID jobId = UUID.randomUUID();
         if (!jobStore.tryLock(jobId)) {
-            return ReindexStartResult.alreadyRunning(jobStore.current().orElse(null));
+            /* 以鎖的值取持鎖作業：新作業剛取鎖、狀態尚未寫入時，「最近一次作業」還是舊的那個（審查 m5） */
+            return ReindexStartResult.alreadyRunning(jobStore.lockHolderJob().orElse(null));
         }
         SearchReindexJobResponse job = SearchReindexJobResponse.builder()
                 .jobId(jobId)
@@ -155,6 +156,7 @@ public class SearchReindexService implements DisposableBean {
      * @param jobId 作業 id
      */
     void run(UUID jobId) {
+        Error fatal = null;
         try {
             jobStore.updateTotal(jobId, articleFacade.countPublished());
             long written = rebuilder.rebuild(jobId, processed -> {
@@ -166,11 +168,18 @@ public class SearchReindexService implements DisposableBean {
             jobStore.complete(jobId, written, now());
             recordLastReindexAt();
             log.info("搜尋索引全量重建作業完成 jobId={} written={}", jobId, written);
-        } catch (RuntimeException e) {
-            log.error("搜尋索引全量重建作業失敗 jobId={}: {}", jobId, e.getMessage(), e);
-            failQuietly(jobId, summarize(e));
+        } catch (Throwable failure) {
+            /* Throwable：Error 也要寫入 FAILED 與正確的摘要（審查 m3）；之後原樣往外拋，不吞掉 Error */
+            log.error("搜尋索引全量重建作業失敗 jobId={}: {}", jobId, failure.getMessage(), failure);
+            InterruptSafe.run(() -> failQuietly(jobId, summarize(failure)));
+            if (failure instanceof Error error) {
+                fatal = error;
+            }
         } finally {
-            jobStore.unlock(jobId);
+            InterruptSafe.run(() -> jobStore.unlock(jobId));
+        }
+        if (fatal != null) {
+            throw fatal;
         }
     }
 

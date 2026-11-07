@@ -111,18 +111,19 @@ public class ArticleIndexRebuilder {
     /**
      * 執行一次全量重建（同步，在呼叫端的執行緒；由 {@link SearchReindexService} 的背景執行緒呼叫）。
      *
+     * @param jobId    本作業 id（變動紀錄綁定此 id）
      * @param progress 進度回報：每批之後與切換前各呼叫一次；拋例外即中止（切換前）
      * @return 寫入新索引的文章數（不含補齊）
-     * @throws RuntimeException 任何失敗；切換前失敗時 alias 維持原狀、新索引已刪除
+     * @throws RuntimeException 任何失敗；切換前失敗時 alias 維持原狀、新索引已刪除（Error 同樣先收尾再原樣往外拋）
      */
     public long rebuild(UUID jobId, ReindexProgress progress) {
         Instant deadline = clock.instant().plus(MAX_DURATION);
         IndexState before = indexAdmin.inspect();
         String target = indexAdmin.newVersionedIndexName();
         indexAdmin.createIndex(target);
-        journal.begin(jobId);
         long written;
         try {
+            journal.begin(jobId);
             written = bulkLoad(jobId, target, progress, deadline);
             guardAgainstEmptySnapshot(written, before);
             indexAdmin.refresh(target);
@@ -130,10 +131,13 @@ public class ArticleIndexRebuilder {
             progress.onProgress(written);
             checkStillAllowed(deadline);
             ensureJournalOwned(jobId);
-        } catch (RuntimeException e) {
-            endJournalQuietly(jobId);
-            indexAdmin.deleteIndexQuietly(target);
-            throw e;
+        } catch (Throwable failure) {
+            /* Throwable：Error（例如 OutOfMemoryError）也要收尾，不留孤兒索引與進行中標記（審查 m3） */
+            InterruptSafe.run(() -> {
+                endJournalQuietly(jobId);
+                indexAdmin.deleteIndexQuietly(target);
+            });
+            throw failure;
         }
         switchAliasOrResolve(jobId, target, before);
         try {
@@ -142,8 +146,10 @@ public class ArticleIndexRebuilder {
             throw new IllegalStateException("alias 已切換至新索引 " + target + "，但切換後的增量補齊失敗（" + e.getMessage()
                     + "）；重建期間的部分變動可能未反映，請再執行一次重建", e);
         } finally {
-            endJournalQuietly(jobId);
-            deleteOldIndices(before);
+            InterruptSafe.run(() -> {
+                endJournalQuietly(jobId);
+                deleteOldIndices(before);
+            });
         }
         log.info("搜尋索引全量重建完成：alias 已切換至 {}，寫入 {} 篇文章", target, written);
         return written;
@@ -167,14 +173,19 @@ public class ArticleIndexRebuilder {
             indexAdmin.switchAlias(target, before);
             return;
         } catch (RuntimeException e) {
-            SwitchOutcome outcome = indexAdmin.verifySwitch(target);
-            if (outcome == SwitchOutcome.APPLIED) {
+            SwitchOutcome[] outcome = new SwitchOutcome[1];
+            InterruptSafe.run(() -> outcome[0] = indexAdmin.verifySwitch(target));
+            if (outcome[0] == SwitchOutcome.APPLIED) {
                 log.warn("alias 切換請求回報失敗，但 ES 端已套用（alias 只指向 {}），視為切換成功：{}", target, e.getMessage());
                 return;
             }
-            endJournalQuietly(jobId);
-            if (outcome == SwitchOutcome.NOT_APPLIED) {
-                indexAdmin.deleteIndexQuietly(target);
+            InterruptSafe.run(() -> {
+                endJournalQuietly(jobId);
+                if (outcome[0] == SwitchOutcome.NOT_APPLIED) {
+                    indexAdmin.deleteIndexQuietly(target);
+                }
+            });
+            if (outcome[0] == SwitchOutcome.NOT_APPLIED) {
                 throw e;
             }
             throw new IllegalStateException("alias 切換結果狀態不明（" + e.getMessage() + "）：新索引 " + target
@@ -267,6 +278,8 @@ public class ArticleIndexRebuilder {
         }
         for (List<String> ids = journal.drainAuthors(jobId, DRAIN_BATCH_SIZE); !ids.isEmpty();
              ids = journal.drainAuthors(jobId, DRAIN_BATCH_SIZE)) {
+            /* 先 refresh：同一輪剛由文章補齊 bulk 寫入的文件要 refresh 後才會被 update_by_query 查到（審查 m4） */
+            indexAdmin.refresh(target);
             applyAuthorChanges(ids, target);
         }
     }

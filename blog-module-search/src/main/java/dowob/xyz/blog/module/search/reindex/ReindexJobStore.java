@@ -205,6 +205,32 @@ public class ReindexJobStore {
     }
 
     /**
+     * 以鎖的值（jobId）取得持有重建鎖的作業（觸發時已有作業在跑，409 回應的 data）。
+     *
+     * <p>不能直接用 {@link #current()}：新作業取得鎖之後、寫入狀態之前，「最近一次作業」仍是上一個作業（審查 m5）。
+     * 狀態已寫入時回傳完整狀態（含進度）；尚未寫入時只回 jobId 與 RUNNING。</p>
+     *
+     * @return 持鎖作業；鎖已釋放時為 empty
+     */
+    public Optional<SearchReindexJobResponse> lockHolderJob() {
+        String owner = redis.opsForValue().get(RedisKeyConstant.LOCK_SEARCH_REINDEX);
+        if (owner == null) {
+            return Optional.empty();
+        }
+        Optional<SearchReindexJobResponse> latest = current();
+        if (latest.isPresent() && owner.equals(latest.get().getJobId().toString())) {
+            return latest;
+        }
+        try {
+            return Optional.of(SearchReindexJobResponse.builder()
+                    .jobId(UUID.fromString(owner)).state(ReindexJobState.RUNNING).build());
+        } catch (IllegalArgumentException e) {
+            log.warn("搜尋索引重建鎖的值不是 jobId：{}", owner);
+            return Optional.empty();
+        }
+    }
+
+    /**
      * jobId 相符才寫入（Lua）。
      *
      * @param jobId        作業 id
