@@ -413,7 +413,7 @@ public class RedisKeyConstant {
     /**
      * 搜尋索引全量重建時間戳 Key (String，值為 ISO-8601 時間字串)
      * Key: search:reindex:at
-     * <p>由 {@code SearchServiceImpl.reindexAll()} 於重建完成後寫入，
+     * <p>由 {@code SearchReindexService} 於背景全量重建完成（alias 已切換）後寫入，
      * 供 Admin 後台查詢索引狀態時讀取「最後重建時間」；從未重建過時該 Key 不存在。</p>
      */
     public static final String SEARCH_REINDEX_AT_KEY = "search:reindex:at";
