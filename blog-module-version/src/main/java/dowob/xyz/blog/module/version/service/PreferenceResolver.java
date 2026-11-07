@@ -1,7 +1,7 @@
 package dowob.xyz.blog.module.version.service;
 
 import dowob.xyz.blog.common.exception.BusinessException;
-import dowob.xyz.blog.module.version.exception.VersionErrorCode;
+import dowob.xyz.blog.common.api.errorcode.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.UserPreferenceMapper;
 import dowob.xyz.blog.module.version.model.UserPreference;
 import dowob.xyz.blog.module.version.model.dto.request.UpdatePreferenceRequest;

@@ -4,7 +4,7 @@ import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.security.AuthUser;
-import dowob.xyz.blog.module.version.exception.VersionErrorCode;
+import dowob.xyz.blog.common.api.errorcode.VersionErrorCode;
 import dowob.xyz.blog.module.version.model.dto.request.UpdatePreferenceRequest;
 import dowob.xyz.blog.module.version.model.dto.response.EffectiveConfigResponse;
 import dowob.xyz.blog.module.version.service.PreferenceResolver;

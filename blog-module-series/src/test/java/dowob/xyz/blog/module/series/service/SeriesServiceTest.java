@@ -10,7 +10,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
-import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
+import dowob.xyz.blog.common.api.errorcode.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
