@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.comment.controller;
 
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
 import dowob.xyz.blog.module.comment.model.dto.request.CreateCommentRequest;
@@ -30,9 +31,10 @@ import java.util.UUID;
 /**
  * 留言 Controller。
  *
- * <p>4 個端點：
+ * <p>5 個端點：
  * <ul>
- *   <li>GET /articles/{uuid}/comments — 公開列表（含軟刪除佔位）</li>
+ *   <li>GET /articles/{uuid}/comments — 公開列表（含軟刪除佔位；每則頂層只內嵌前 3 則回覆）</li>
+ *   <li>GET /comments/{uuid}/replies — 公開：頂層留言的回覆分頁（載入更多）</li>
  *   <li>POST /articles/{uuid}/comments — 登入：建立 top-level 或 reply</li>
  *   <li>PUT /comments/{uuid} — 登入 + 作者 / Admin：編輯（5 分鐘窗）</li>
  *   <li>DELETE /comments/{uuid} — 登入 + 作者 / Admin：軟刪除</li>
@@ -85,6 +87,44 @@ public class CommentController {
         boolean isAdmin = SecurityUtils.isAdmin();
         return ApiResponse.success(
                 commentService.listComments(articleUuid, (user == null ? null : user.uuid()), isAdmin, sort, pageQuery.page(), pageQuery.sizeOrDefault(20)));
+    }
+
+    /**
+     * 列出頂層留言的回覆（分頁，「載入更多」，D3）。
+     *
+     * <p>
+     * <b>匿名可存取</b>——與 {@link #list} 同為 {@code security.md} 原則 7 的「選填認證公開端點」豁免，
+     * 三項豁免條件均成立：
+     * </p>
+     * <ol>
+     *   <li>路徑 {@code GET /api/v1/comments/{commentUuid}/replies} 於 {@code SecurityConfig} 以明確清單 {@code permitAll}
+     *       （UUID 形狀比對，非萬用字元；見 {@code SecurityConfig.PUBLIC_COMMENT_REPLIES}），且只開放 GET；</li>
+     *   <li>{@code currentUserUuid} 允許為 null，僅用於選填個人化（「已按讚」標記）與文章可讀性判斷；</li>
+     *   <li>本 JavaDoc 即為所需的豁免標註。</li>
+     * </ol>
+     *
+     * <p>「匿名可到達」不等於「內容公開」：文章對檢視者不可讀（草稿、下架、不存在）時回 <b>404</b>
+     * {@code A0201}；傳入回覆（非頂層）或不存在的留言 uuid 回 404 {@code C0101}。
+     * 列表 API 每則頂層只內嵌前 3 則回覆，其餘由本端點以相同排序（created_at 升冪）分頁取得。</p>
+     *
+     * @param commentUuid 頂層留言公開 UUID
+     * @param pageQuery   分頁參數（query string 仍為 {@code page} / {@code size}，page 自 1 起；
+     *                    {@code size} 上限見 {@link PageQuery#MAX_SIZE}，超出回 400；預設 10）
+     * @param user        當前登入者（未登入為 null，僅供個人化與可讀性判斷）
+     * @return 回覆分頁（{@code total} 為未刪除回覆總數）
+     */
+    @GetMapping("/comments/{commentUuid}/replies")
+    @Operation(summary = "列出頂層留言的回覆分頁（匿名可存取；文章不可讀回 404）",
+            description = "列表 API 每則頂層留言只內嵌前 3 則回覆（replyCount 為未刪除回覆總數）；"
+                    + "其餘用本端點載入，排序為 created_at 升冪，page 自 1 起、size 上限 100。"
+                    + "傳入回覆（非頂層）的 uuid 回 404 C0101；文章對檢視者不可讀回 404 A0201。")
+    public ApiResponse<PageResult<CommentResponse>> listReplies(
+            @PathVariable UUID commentUuid,
+            PageQuery pageQuery,
+            @AuthenticationPrincipal AuthUser user) {
+        boolean isAdmin = SecurityUtils.isAdmin();
+        return ApiResponse.success(commentService.listReplies(
+                commentUuid, (user == null ? null : user.uuid()), isAdmin, pageQuery.page(), pageQuery.sizeOrDefault(10)));
     }
 
     @PostMapping("/articles/{articleUuid}/comments")

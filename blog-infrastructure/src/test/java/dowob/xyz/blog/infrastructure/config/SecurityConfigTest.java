@@ -268,6 +268,18 @@ class SecurityConfigTest {
             return "comment";
         }
 
+        /** 回覆分頁端點（D3）：對齊 CommentController#listReplies 的實際 URL 形狀 */
+        @GetMapping("/api/v1/comments/{uuid}/replies")
+        public String listCommentReplies(@PathVariable String uuid) {
+            return "replies";
+        }
+
+        /** 留言編輯／刪除的實際 URL 形狀（需認證；用來證明回覆端點的 permitAll 沒有外溢） */
+        @GetMapping("/api/v1/comments/{uuid}")
+        public String getCommentByUuid(@PathVariable String uuid) {
+            return "comment-by-uuid";
+        }
+
         @GetMapping("/swagger-ui/index.html")
         public String swagger() {
             return "swagger";
@@ -359,6 +371,36 @@ class SecurityConfigTest {
     void unauthenticatedListComments_shouldReturn200() throws Exception {
         mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/comments"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("D3：未認證 GET /api/v1/comments/{uuid}/replies 應回傳 200（與留言列表一致，匿名可讀）")
+    void unauthenticatedListCommentReplies_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/" + ARTICLE_UUID + "/replies"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("D3：permitAll 只開放 GET .../replies：同前綴的 GET /api/v1/comments/{uuid} 仍回 401")
+    void unauthenticatedGetCommentByUuid_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/" + ARTICLE_UUID))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("D3：非 UUID 形狀的路徑變數不落入 replies 的 permitAll 規則（fail-closed）")
+    void unauthenticatedListCommentRepliesWithNonUuid_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/not-a-uuid/replies"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("D3：未認證 POST /api/v1/comments/{uuid}/replies 應回傳 401（只開放 GET）")
+    void unauthenticatedPostCommentReplies_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/comments/" + ARTICLE_UUID + "/replies")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
     }
 
     // ── actuator：暴露 metrics 後的授權面（只有 health/info 是公開的）──

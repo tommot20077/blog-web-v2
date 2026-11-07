@@ -161,6 +161,7 @@ public void changePassword(...) {
 | GET | `/api/v1/articles/slug/{slug}` | 依 slug 取已發布文章 |
 | GET | `/api/v1/articles/{uuid}` | 依 uuid 取文章(`{uuid}` 以 UUID 形狀比對,非 UUID 的字面量子路徑不落在此規則內) |
 | GET | `/api/v1/articles/{uuid}/comments` | 文章留言列表(原則 7 豁免的匿名可讀端點) |
+| GET | `/api/v1/comments/{uuid}/replies` | 頂層留言的回覆分頁(「載入更多」;原則 7 豁免的匿名可讀端點,與留言列表同一公開面;`{uuid}` 以 UUID 形狀比對,僅開放 GET;文章對檢視者不可讀回 404 `A0201`,傳入回覆或不存在的留言回 404 `C0101`) |
 | GET | `/api/v1/tags/**` | Tag queries |
 | GET | `/api/v1/files/**` | **不代表檔案公開**——permitAll 只代表「請求可到達 Controller」,實際授權在 `FileService#canRead()`(AVATAR 與已發布文章圖片對匿名開放;草稿圖片與未綁定檔案僅上傳者與 ADMIN 可讀) |
 | GET | `/api/v1/categories/**` | Category queries |
@@ -197,6 +198,8 @@ public void changePassword(...) {
 | GET | `/api/v1/articles/{uuid}/progress` | `@PreAuthorize("isAuthenticated()")` |
 
 > 此表必須與 `blog-infrastructure/.../config/SecurityConfig.java` 的 `permitAll()` 規則**一對一對得上**;改任一邊都要同步另一邊與前端 `ai-docs/api-contract.md`。
+> (2026-11-07 D3,Yuan 拍板「回覆改為分頁(載入更多)」:新增 `GET /api/v1/comments/{uuid}/replies` 一條 permitAll。理由:列表 API 每則頂層留言只內嵌前 3 則回覆,其餘由此端點載入,而列表本身匿名可讀,若回覆分頁需登入,匿名讀者就看不到完整討論串。可見性與列表一致(文章可讀才可讀,SEC-16 的讀取面)。守衛:`SecurityConfigTest` 的 `unauthenticatedListCommentReplies_shouldReturn200` 與反向 `unauthenticatedGetCommentByUuid_shouldReturn401` / `unauthenticatedListCommentRepliesWithNonUuid_shouldReturn401` / `unauthenticatedPostCommentReplies_shouldReturn401`;`EndpointAuthorizationTest.EXEMPT` 的 `CommentController#listReplies`;`CommentRepliesPagingIT` 驗證匿名可讀、文章不可讀 404。)
+
 > (2026-07-07 依 `SecurityConfig.java:75-102` 校正:移除 `GET /api/v1/users/**`——已收窄,見 `SecurityConfigTest.java:235`「已收窄 permitAll」;補上 categories、recommend。)
 > (2026-07-16 依 Yuan 裁定新增 `GET /api/v1/series/**`:此前 SecurityConfig 無 series 規則,該路徑落入 `anyRequest().authenticated()`,與 `SeriesController` JavaDoc 自稱「公開」矛盾(backlog H5 / 07-07 #3),且使公開的前端 `/tags` 頁對匿名訪客靜默隱藏系列區塊。**僅開放 GET**,寫入維持認證;守衛見 `SecurityConfigTest` 的 `unauthenticatedListSeries_shouldReturn200` / `unauthenticatedGetSeriesDetail_shouldReturn200` / `unauthenticatedPostSeries_shouldReturn401`。)
 > (2026-07-18 commit `147e4cf`:series 對匿名開放後的讀取端點強化。permitAll 面**不變**,僅收斂匿名可見內容——(1) 公開列表 `findPublic`/`countPublic` 改以 `EXISTS(status='PUBLISHED')` 判可見性,只含草稿的系列不再曝光給匿名;(2) `getSeriesDetail` 一律只回 PUBLISHED 文章、`articleCount` 為實際公開數,零篇已發布仍回 200 空清單(series 視為存在,列表另行策展);(3) `listPublic` 的 `size` 夾 [1,100] 防匿名放大查詢。此三項是「原則 7 選填認證公開端點」豁免下、匿名可見面的縱深控制。守衛 `SeriesControllerIT.list_seriesWithOnlyDraft_excludedFromPublicList` / `getSlug_anonymous_neverExposesDraftArticle` / `getSlug_anonymous_seriesWithoutPublished_returnsEmpty` / `list_oversizedPageSize_clampedTo100`。)

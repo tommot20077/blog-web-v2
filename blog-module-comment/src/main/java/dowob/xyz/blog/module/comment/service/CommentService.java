@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.comment.service;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
 import dowob.xyz.blog.common.util.ArticleVisibility;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
@@ -21,6 +22,7 @@ import dowob.xyz.blog.module.comment.model.dto.response.CommentResponse;
 import dowob.xyz.blog.module.comment.repository.CommentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +53,9 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class CommentService {
+
+    /** 列表 API 每則頂層留言預設帶的回覆數（D3）；其餘以回覆分頁端點「載入更多」 */
+    public static final int REPLY_PREVIEW_SIZE = 3;
 
     private static final Duration EDIT_WINDOW = Duration.ofMinutes(5);
 
@@ -281,9 +286,13 @@ public class CommentService {
                 articleUuid, sortKey, size, offset);
         List<Long> topLevelIds = topLevels.stream().map(CommentRow::getId).toList();
 
-        // 2. replies 一次撈完（已過濾 deleted leaf at SQL level）
-        List<CommentRow> replies =
-                BatchedQuery.queryInBatches(topLevelIds, commentMapper::findRepliesByParentIds);
+        // 2. 每個頂層只帶前 REPLY_PREVIEW_SIZE 則未刪除回覆（資料庫端 LATERAL ... LIMIT，不撈全部再截斷，D3）；
+        //    其餘由回覆分頁端點「載入更多」。replyCount 為未刪除回覆總數，前端以它判斷是否顯示「載入更多」
+        List<CommentRow> replies = BatchedQuery.queryInBatches(topLevelIds,
+                ids -> commentMapper.findFirstRepliesByParentIds(ids, REPLY_PREVIEW_SIZE));
+        Map<Long, Integer> replyCounts = BatchedQuery.queryInBatches(topLevelIds, commentMapper::countRepliesByParentIds)
+                .stream()
+                .collect(Collectors.toMap(CommentMapper.ReplyCountRow::parentId, r -> r.replyCount().intValue()));
 
         // 3. 當前使用者的 liked 集合（一次 batch；未登入跳過）
         List<Long> allCommentIds = java.util.stream.Stream.concat(
@@ -311,6 +320,7 @@ public class CommentService {
                 .map(t -> {
                     CommentResponse dto = toResponse(t, likedIds, authors);
                     dto.setReplies(repliesByParent.getOrDefault(t.getId(), List.of()));
+                    dto.setReplyCount(replyCounts.getOrDefault(t.getId(), 0));
                     return dto;
                 })
                 .toList();
@@ -371,5 +381,57 @@ public class CommentService {
         dto.setEditedAt(c.getEditedAt());
         dto.setReplies(List.of());     // top-level 在外面 set 真正 replies；reply 永遠空陣列（2 層）
         return dto;
+    }
+
+    /**
+     * 頂層留言的回覆分頁（「載入更多」，D3）。
+     *
+     * <p><b>可見性</b>：沿用留言列表的政策——所屬文章必須對檢視者可讀
+     * （{@link ArticleVisibility#isReadableBy(String, UUID, UUID, boolean)}，PUBLISHED，或作者本人，或 ADMIN），
+     * 這是 SEC-16「可讀才可互動」的讀取面。與列表端點回 200＋空清單不同，本端點以 <b>404 {@code ARTICLE_NOT_FOUND}</b>
+     * 回應不可讀與不存在：本端點的資源是單一留言串，不存在「整頁為空」的合理形狀，且不形成存在性 oracle。</p>
+     *
+     * <p><b>只對頂層留言有效</b>：傳入回覆的 uuid 回 404 {@code COMMENT_NOT_FOUND}（回覆底下沒有回覆，
+     * 對它而言「這個留言串」不存在）。可見性檢查先於此判斷，避免從錯誤碼推知隱藏文章底下的留言結構。
+     * 頂層已軟刪除（墓碑）時，其存活的回覆仍可分頁取得，與列表一致。</p>
+     *
+     * <p>排序與列表內嵌的前 {@link #REPLY_PREVIEW_SIZE} 則相同（created_at 升冪），故列表內嵌的就是
+     * {@code page=1,size=3} 的結果，前端可從 {@code page=2,size=3} 繼續。回傳的回覆不再帶 {@code replies}，
+     * {@code replyCount} 為 0。</p>
+     *
+     * @param commentUuid     頂層留言 UUID
+     * @param currentUserUuid 當前使用者 UUID；null 代表未登入
+     * @param isAdmin         當前使用者是否為 ADMIN
+     * @param page            頁碼（1-based）
+     * @param size            每頁筆數
+     * @return 回覆分頁結果，{@code total} 為未刪除回覆總數
+     * @throws HttpStatusBusinessException 404：留言不存在、不是頂層留言，或所屬文章對檢視者不可讀
+     */
+    public PageResult<CommentResponse> listReplies(UUID commentUuid, UUID currentUserUuid, boolean isAdmin,
+                                                   int page, int size) {
+        Comment parent = commentRepo.findByUuid(commentUuid)
+                .orElseThrow(() -> new HttpStatusBusinessException(CommentErrorCode.COMMENT_NOT_FOUND, HttpStatus.NOT_FOUND));
+
+        ArticleData article = articleFacade.findByUuid(parent.getArticleUuid()).orElse(null);
+        if (article == null
+                || !ArticleVisibility.isReadableBy(article.status(), article.authorUuid(), currentUserUuid, isAdmin)) {
+            throw new HttpStatusBusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND, HttpStatus.NOT_FOUND);
+        }
+        if (parent.getParentId() != null) {
+            throw new HttpStatusBusinessException(CommentErrorCode.COMMENT_NOT_FOUND, HttpStatus.NOT_FOUND);
+        }
+
+        int offset = Math.max(0, (page - 1) * size);
+        List<CommentRow> rows = commentMapper.findReplyPage(parent.getId(), size, offset);
+        int total = commentMapper.countRepliesByParentId(parent.getId());
+
+        Set<Long> likedIds = currentUserUuid == null || rows.isEmpty()
+                ? Collections.emptySet()
+                : new HashSet<>(commentMapper.findLikedCommentIdsByUser(currentUserUuid,
+                        rows.stream().map(CommentRow::getId).toList()));
+        Map<UUID, UserDisplayInfo> authors = resolveAuthors(List.of(), rows);
+
+        List<CommentResponse> records = rows.stream().map(r -> toResponse(r, likedIds, authors)).toList();
+        return PageResult.of(page, size, (long) total, records);
     }
 }

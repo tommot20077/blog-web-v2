@@ -662,7 +662,7 @@ class CommentServiceTest {
         stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(eq(articleUuid), eq("newest"), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
-        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of(makeRow(11L, 1L)));
+        when(commentMapper.findFirstRepliesByParentIds(any(), anyInt())).thenReturn(List.of(makeRow(11L, 1L)));
         when(commentMapper.countByArticle(articleUuid)).thenReturn(3);
         when(commentMapper.countTopLevelByArticle(articleUuid)).thenReturn(2);
 
@@ -688,7 +688,7 @@ class CommentServiceTest {
         stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(deletedTop));
-        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.findFirstRepliesByParentIds(any(), anyInt())).thenReturn(List.of());
         when(commentMapper.countByArticle(any())).thenReturn(1);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
 
@@ -709,7 +709,7 @@ class CommentServiceTest {
         stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
-        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.findFirstRepliesByParentIds(any(), anyInt())).thenReturn(List.of());
         when(commentMapper.countByArticle(any())).thenReturn(2);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(2);
         when(commentMapper.findLikedCommentIdsByUser(eq(viewerUuid), any()))
@@ -726,7 +726,7 @@ class CommentServiceTest {
         stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null)));
-        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.findFirstRepliesByParentIds(any(), anyInt())).thenReturn(List.of());
         when(commentMapper.countByArticle(any())).thenReturn(1);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
 
@@ -752,7 +752,7 @@ class CommentServiceTest {
 
         stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt())).thenReturn(List.of(top1, top2));
-        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of(reply));
+        when(commentMapper.findFirstRepliesByParentIds(any(), anyInt())).thenReturn(List.of(reply));
         when(commentMapper.countByArticle(any())).thenReturn(3);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(2);
         when(userFacade.getDisplayInfoByUuids(any())).thenReturn(Map.of(
@@ -796,7 +796,7 @@ class CommentServiceTest {
 
         stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt())).thenReturn(List.of(deletedTop));
-        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.findFirstRepliesByParentIds(any(), anyInt())).thenReturn(List.of());
         when(commentMapper.countByArticle(any())).thenReturn(1);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
 
@@ -820,7 +820,7 @@ class CommentServiceTest {
 
         stubPublishedArticle();
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt())).thenReturn(List.of(deletedTop));
-        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of(liveReply));
+        when(commentMapper.findFirstRepliesByParentIds(any(), anyInt())).thenReturn(List.of(liveReply));
         when(commentMapper.countByArticle(any())).thenReturn(2);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
         when(userFacade.getDisplayInfoByUuids(any())).thenReturn(Map.of(
@@ -855,6 +855,118 @@ class CommentServiceTest {
         row.setLikeCount(0);
         row.setCreatedAt(LocalDateTime.now());
         return row;
+    }
+
+    // ── D3：列表只帶前 N 則回覆 + replyCount；回覆分頁端點 ─────────────────────
+
+    @Test
+    @DisplayName("D3：列表以 REPLY_PREVIEW_SIZE(=3) 向 mapper 要每串前 N 則，且頂層 replyCount 取自未刪除回覆總數")
+    void listComments_asksForFirstThreeRepliesPerParent_andSetsReplyCount() {
+        stubPublishedArticle();
+        when(commentMapper.findTopLevelByArticle(eq(articleUuid), eq("newest"), anyInt(), anyInt()))
+                .thenReturn(List.of(makeRow(1L, null), makeRow(2L, null)));
+        when(commentMapper.findFirstRepliesByParentIds(any(), eq(3)))
+                .thenReturn(List.of(makeRow(11L, 1L), makeRow(12L, 1L), makeRow(13L, 1L)));
+        when(commentMapper.countRepliesByParentIds(any()))
+                .thenReturn(List.of(new CommentMapper.ReplyCountRow(1L, 5L)));
+        when(commentMapper.countByArticle(articleUuid)).thenReturn(7);
+        when(commentMapper.countTopLevelByArticle(articleUuid)).thenReturn(2);
+
+        ArticleCommentListResponse resp = service.listComments(articleUuid, null, false, "newest", 1, 20);
+
+        assertThat(CommentService.REPLY_PREVIEW_SIZE).isEqualTo(3);
+        var first = resp.getTopLevels().getRecords().get(0);
+        var second = resp.getTopLevels().getRecords().get(1);
+        assertThat(first.getReplies()).hasSize(3);
+        assertThat(first.getReplyCount()).as("5 則回覆只帶 3 則，replyCount 仍為 5").isEqualTo(5);
+        assertThat(second.getReplies()).isEmpty();
+        assertThat(second.getReplyCount()).as("沒有出現在計數結果的頂層為 0").isZero();
+    }
+
+    private Comment topLevelEntity(long id, UUID uuid) {
+        Comment c = new Comment();
+        c.setId(id);
+        c.setUuid(uuid);
+        c.setArticleUuid(articleUuid);
+        return c;
+    }
+
+    @Test
+    @DisplayName("D3：回覆分頁 page=2,size=2 → offset 2、limit 2；total 為未刪除回覆總數；回覆本身不再帶 replies")
+    void listReplies_pagesWithOffset_andReturnsTotal() {
+        UUID topUuid = UUID.randomUUID();
+        stubPublishedArticle();
+        when(commentRepo.findByUuid(topUuid)).thenReturn(Optional.of(topLevelEntity(1L, topUuid)));
+        when(commentMapper.findReplyPage(1L, 2, 2)).thenReturn(List.of(makeRow(13L, 1L), makeRow(14L, 1L)));
+        when(commentMapper.countRepliesByParentId(1L)).thenReturn(5);
+
+        var result = service.listReplies(topUuid, null, false, 2, 2);
+
+        assertThat(result.getRecords()).hasSize(2);
+        assertThat(result.getTotal()).isEqualTo(5L);
+        assertThat(result.getCurrent()).isEqualTo(2);
+        assertThat(result.getRecords()).allSatisfy(r -> {
+            assertThat(r.getReplies()).isEmpty();
+            assertThat(r.getReplyCount()).isZero();
+        });
+    }
+
+    @Test
+    @DisplayName("D3：找不到留言 → 404 COMMENT_NOT_FOUND")
+    void listReplies_commentNotFound_is404() {
+        UUID missing = UUID.randomUUID();
+        when(commentRepo.findByUuid(missing)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.listReplies(missing, null, false, 1, 10))
+                .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.HttpStatusBusinessException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND);
+                    assertThat(e.getCode()).isEqualTo(CommentErrorCode.COMMENT_NOT_FOUND.getCode());
+                });
+    }
+
+    @Test
+    @DisplayName("D3：傳入的是回覆（非頂層）的 uuid → 404 COMMENT_NOT_FOUND，不查回覆資料")
+    void listReplies_onReply_is404() {
+        UUID replyUuid = UUID.randomUUID();
+        Comment reply = topLevelEntity(11L, replyUuid);
+        reply.setParentId(1L);
+        stubPublishedArticle();
+        when(commentRepo.findByUuid(replyUuid)).thenReturn(Optional.of(reply));
+
+        assertThatThrownBy(() -> service.listReplies(replyUuid, null, false, 1, 10))
+                .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.HttpStatusBusinessException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND);
+                    assertThat(e.getCode()).isEqualTo(CommentErrorCode.COMMENT_NOT_FOUND.getCode());
+                });
+        verify(commentMapper, never()).findReplyPage(any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("D3：文章對檢視者不可讀（草稿、下架或不存在）→ 404 ARTICLE_NOT_FOUND，不查回覆資料")
+    void listReplies_articleNotReadable_is404() {
+        UUID topUuid = UUID.randomUUID();
+        stubArticle("DRAFT", authorUuid);
+        when(commentRepo.findByUuid(topUuid)).thenReturn(Optional.of(topLevelEntity(1L, topUuid)));
+
+        assertThatThrownBy(() -> service.listReplies(topUuid, null, false, 1, 10))
+                .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.HttpStatusBusinessException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.NOT_FOUND);
+                    assertThat(e.getCode()).isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+                });
+        verify(commentMapper, never()).findReplyPage(any(), anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("D3：草稿文章的作者本人與 ADMIN 仍可讀回覆（與列表端點同一套可見性政策）")
+    void listReplies_draftArticle_authorAndAdminCanRead() {
+        UUID topUuid = UUID.randomUUID();
+        stubArticle("DRAFT", authorUuid);
+        when(commentRepo.findByUuid(topUuid)).thenReturn(Optional.of(topLevelEntity(1L, topUuid)));
+        when(commentMapper.findReplyPage(any(), anyInt(), anyInt())).thenReturn(List.of());
+        when(commentMapper.countRepliesByParentId(any())).thenReturn(0);
+
+        assertThat(service.listReplies(topUuid, authorUuid, false, 1, 10).getRecords()).isEmpty();
+        assertThat(service.listReplies(topUuid, UUID.randomUUID(), true, 1, 10).getRecords()).isEmpty();
     }
 
     // ── 文章可見性（下架／未發布文章的留言不得對外曝光）────────────────────
@@ -953,7 +1065,7 @@ class CommentServiceTest {
     private void stubOneTopLevelComment() {
         when(commentMapper.findTopLevelByArticle(any(), any(), anyInt(), anyInt()))
                 .thenReturn(List.of(makeRow(1L, null)));
-        when(commentMapper.findRepliesByParentIds(any())).thenReturn(List.of());
+        when(commentMapper.findFirstRepliesByParentIds(any(), anyInt())).thenReturn(List.of());
         when(commentMapper.countByArticle(any())).thenReturn(1);
         when(commentMapper.countTopLevelByArticle(any())).thenReturn(1);
     }

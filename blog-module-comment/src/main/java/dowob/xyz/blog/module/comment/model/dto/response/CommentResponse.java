@@ -72,7 +72,13 @@ public class CommentResponse {
     private String deletedByRole;
 
     /**
-     * 子回覆列表；僅頂層留言帶此欄位
+     * 未刪除回覆的總數（僅頂層留言有意義；回覆與新建立的留言為 0）。
+     * 前端以 {@code replyCount > replies.size()} 判斷是否顯示「載入更多」。
+     */
+    private Integer replyCount = 0;
+
+    /**
+     * 子回覆列表；僅頂層留言帶此欄位，列表 API 只帶前 3 則，其餘請用回覆分頁端點
      */
     private List<CommentResponse> replies;
 }
