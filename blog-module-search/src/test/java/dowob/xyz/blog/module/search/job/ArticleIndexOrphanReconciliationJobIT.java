@@ -123,7 +123,7 @@ class ArticleIndexOrphanReconciliationJobIT {
     /** 以真實 ES 建立 initializer（索引管理經 {@link dowob.xyz.blog.module.search.index.ArticleIndexAdmin}） */
     private dowob.xyz.blog.module.search.init.SearchIndexInitializer newInitializer() {
         return new dowob.xyz.blog.module.search.init.SearchIndexInitializer(
-                new dowob.xyz.blog.module.search.index.ArticleIndexAdmin(template));
+                dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.newAdmin(template));
     }
 
     /**
@@ -140,7 +140,7 @@ class ArticleIndexOrphanReconciliationJobIT {
                 java.util.Map.of(), org.springframework.data.elasticsearch.core.document.Document.parse(
                         "{\"properties\":{\"status\":{\"type\":\"keyword\"},\"tags\":{\"type\":\"nested\"},"
                                 + "\"author\":{\"properties\":{\"uuid\":{\"type\":\"keyword\"}}}}}"));
-        new dowob.xyz.blog.module.search.index.ArticleIndexAdmin(template)
+        dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.newAdmin(template)
                 .switchAlias(legacy, dowob.xyz.blog.module.search.index.IndexState.absent());
     }
 

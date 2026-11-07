@@ -122,7 +122,7 @@ class ArticleIndexRebuildIT {
             return uuids.stream().map(db::get).filter(java.util.Objects::nonNull).toList();
         });
 
-        admin = new ArticleIndexAdmin(template);
+        admin = ArticleIndexTestSupport.newAdmin(template);
         new SearchIndexInitializer(admin).ensureCorrectMapping();
         ReindexJournal journal = new ReindexJournal(redis);
         ReindexJobStore jobStore = new ReindexJobStore(redis);

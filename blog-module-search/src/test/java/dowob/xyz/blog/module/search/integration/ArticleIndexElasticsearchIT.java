@@ -102,7 +102,7 @@ class ArticleIndexElasticsearchIT {
         userFacade = mock(dowob.xyz.blog.infrastructure.facade.UserFacade.class);
         /* 讀寫改走 alias 後，對 alias 名稱 delete 會被 ES 拒絕：改為逐一刪除所有 blog_articles* 實體索引 */
         dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.deleteAllArticleIndices(template);
-        indexAdmin = new dowob.xyz.blog.module.search.index.ArticleIndexAdmin(template);
+        indexAdmin = dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.newAdmin(template);
         initializer = new SearchIndexInitializer(indexAdmin);
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);

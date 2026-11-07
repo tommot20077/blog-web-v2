@@ -62,7 +62,7 @@ class ArticleIndexAliasIT {
     @BeforeEach
     void reset() {
         ArticleIndexTestSupport.deleteAllArticleIndices(template);
-        admin = new ArticleIndexAdmin(template);
+        admin = ArticleIndexTestSupport.newAdmin(template);
         initializer = new SearchIndexInitializer(admin);
     }
 
@@ -206,6 +206,74 @@ class ArticleIndexAliasIT {
         assertThat(admin.indexExists(ArticleIndexAdmin.INITIAL_INDEX)).isFalse();
     }
 
+    /**
+     * 審查 M1：ES 對「alias 不在該索引上」的 remove 預設當 no-op。以過時的 before（alias 已被別人移走）切換時，
+     * 若不要求 remove 必須存在，請求會成功、alias 同時指向兩個索引，之後經 alias 寫入會回 400
+     * {@code no write index is defined for alias}。
+     */
+    @Test
+    @DisplayName("M1：以過時的 before 切換（alias 已被別人從舊索引移到 a）→ 請求失敗，alias 仍只指向 a，不會同時指向兩個索引")
+    void switchAlias_staleBefore_failsAndKeepsAliasUnchanged() {
+        initializer.ensureCorrectMapping();
+        IndexState stale = admin.inspect();
+        String a = "blog_articles_v20261107000000001";
+        String b = "blog_articles_v20261107000000002";
+        admin.createIndex(a);
+        admin.createIndex(b);
+        admin.switchAlias(a, stale);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> admin.switchAlias(b, stale))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(admin.inspect()).isEqualTo(IndexState.alias(List.of(a)));
+        repository.save(doc(UUID.randomUUID(), "Still writable"));
+    }
+
+    @Test
+    @DisplayName("M1：before 是實體索引但已被別人遷移成 alias → remove_index 失敗，alias 不變")
+    void switchAlias_staleConcreteBefore_failsAndKeepsAliasUnchanged() {
+        initializer.ensureCorrectMapping();
+        String b = "blog_articles_v20261107000000002";
+        admin.createIndex(b);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> admin.switchAlias(b, IndexState.concrete()))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(admin.inspect()).isEqualTo(IndexState.alias(List.of(ArticleIndexAdmin.INITIAL_INDEX)));
+    }
+
+    /**
+     * 審查 M1 的第二種時序：兩個實例同時遷移 mapping 有誤的 alias。另一個實例在本實例複製完、切換前完成切換
+     * （尚未刪除舊索引），本實例以過時的 before 切換必須失敗，並收掉自己建立的索引。
+     */
+    @Test
+    @DisplayName("M1：兩個實例同時遷移 mapping 有誤的 alias → 後到的切換失敗並收掉自己的新索引，alias 只指向先完成者")
+    void initializer_concurrentMigration_aliasNeverPointsToTwoIndices() {
+        String legacy = "blog_articles_v20260101000000000";
+        template.indexOps(IndexCoordinates.of(legacy)).create(Map.of(), Document.parse("""
+                {"properties":{"status":{"type":"text"},"tags":{"type":"nested"}}}"""));
+        admin.switchAlias(legacy, IndexState.absent());
+        String winner = "blog_articles_v20261107000000009";
+        ArticleIndexAdmin racing = org.mockito.Mockito.spy(admin);
+        java.util.concurrent.atomic.AtomicBoolean raced = new java.util.concurrent.atomic.AtomicBoolean();
+        org.mockito.Mockito.doAnswer(inv -> {
+            if (raced.compareAndSet(false, true)) {
+                /* 另一個實例搶先完成切換（舊索引尚未刪除） */
+                admin.createIndex(winner);
+                admin.switchAlias(winner, IndexState.alias(List.of(legacy)));
+            }
+            return inv.callRealMethod();
+        }).when(racing).switchAlias(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any());
+
+        new SearchIndexInitializer(racing).ensureCorrectMapping();
+
+        assertThat(admin.inspect()).isEqualTo(IndexState.alias(List.of(winner)));
+        assertThat(ArticleIndexTestSupport.articleIndexNames(template))
+                .as("本實例建立的新索引已收掉，只剩先完成者與（由先完成者負責刪除的）舊索引")
+                .allMatch(n -> n.equals(winner) || n.equals(legacy));
+        repository.save(doc(UUID.randomUUID(), "Writable after race"));
+    }
+
     @Test
     @DisplayName("copyDocuments 以 _reindex 複製全部文件；deleteDocument 只刪指定實體索引內的文件")
     void copyAndDeleteDocument() {
@@ -235,7 +303,7 @@ class ArticleIndexAliasIT {
     @Test
     @DisplayName("版本化索引名稱：前綴 blog_articles_v ＋ 時間戳（毫秒），依時鐘遞增")
     void newVersionedIndexName_usesClockTimestamp() {
-        ArticleIndexAdmin fixed = new ArticleIndexAdmin(template,
+        ArticleIndexAdmin fixed = new ArticleIndexAdmin(template, ArticleIndexTestSupport.clientOf(template),
                 Clock.fixed(Instant.parse("2026-11-07T04:05:06.789Z"), ZoneId.of("UTC")));
 
         assertThat(fixed.newVersionedIndexName()).isEqualTo("blog_articles_v20261107040506789");

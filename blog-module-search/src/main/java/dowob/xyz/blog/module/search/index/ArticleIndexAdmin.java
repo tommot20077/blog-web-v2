@@ -1,5 +1,7 @@
 package dowob.xyz.blog.module.search.index;
 
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch.indices.update_aliases.Action;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -8,9 +10,6 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.document.Document;
-import org.springframework.data.elasticsearch.core.index.AliasAction;
-import org.springframework.data.elasticsearch.core.index.AliasActionParameters;
-import org.springframework.data.elasticsearch.core.index.AliasActions;
 import org.springframework.data.elasticsearch.core.index.AliasData;
 import org.springframework.data.elasticsearch.core.index.Settings;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
@@ -22,9 +21,12 @@ import org.springframework.data.elasticsearch.core.reindex.ReindexRequest;
 import org.springframework.data.elasticsearch.core.reindex.ReindexResponse;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -64,6 +66,12 @@ public class ArticleIndexAdmin {
     /** ES 操作 */
     private final ElasticsearchOperations operations;
 
+    /**
+     * ES 原生 client：alias 切換需要 remove 的 {@code must_exist}，Spring Data ES 5.5 的 {@code AliasActionParameters}
+     * 沒有這個參數，故切換改走原生 {@code indices().updateAliases}。
+     */
+    private final ElasticsearchClient client;
+
     /** 產生版本化索引名稱用的時鐘 */
     private final Clock clock;
 
@@ -71,20 +79,23 @@ public class ArticleIndexAdmin {
      * 建立索引管理元件。
      *
      * @param operations ES 操作
+     * @param client     ES 原生 client（Spring Boot 自動配置的同一個 client）
      */
     @Autowired
-    public ArticleIndexAdmin(ElasticsearchOperations operations) {
-        this(operations, Clock.systemDefaultZone());
+    public ArticleIndexAdmin(ElasticsearchOperations operations, ElasticsearchClient client) {
+        this(operations, client, Clock.systemDefaultZone());
     }
 
     /**
      * 測試用建構子：指定時鐘。
      *
      * @param operations ES 操作
+     * @param client     ES 原生 client
      * @param clock      時鐘
      */
-    ArticleIndexAdmin(ElasticsearchOperations operations, Clock clock) {
+    ArticleIndexAdmin(ElasticsearchOperations operations, ElasticsearchClient client, Clock clock) {
         this.operations = operations;
+        this.client = client;
         this.clock = clock;
     }
 
@@ -146,30 +157,41 @@ public class ArticleIndexAdmin {
      * 在<b>單一</b> {@code _aliases} 請求內，讓 {@value #ALIAS} 改為只指向 {@code newIndex}（ES 保證原子生效）。
      *
      * <ul>
-     *   <li>先前是 alias：移除它在每個舊實體索引上的指向（舊索引本身不刪，由呼叫端在切換成功後刪除）</li>
+     *   <li>先前是 alias：移除它在每個舊實體索引上的指向，且 remove 帶 {@code must_exist: true}（舊索引本身不刪，
+     *       由呼叫端在切換成功後刪除）</li>
      *   <li>先前是實體索引：以 {@code remove_index} 刪除該實體索引——同名的 alias 必須在同一個請求內建立，
-     *       否則中間會有一段時間名稱不存在，寫入會被 ES 自動建成 dynamic mapping 的新索引</li>
+     *       否則中間會有一段時間名稱不存在，寫入會被 ES 自動建成 dynamic mapping 的新索引。{@code remove_index} 對已不存在、
+     *       或已被別人改成 alias 的名稱本來就會失敗（{@code ArticleIndexAliasIT} 驗證），不需要也不能帶 {@code must_exist}
+     *       （ES 8.11 的 remove_index 不認這個參數）</li>
      *   <li>先前不存在：只新增指向</li>
      * </ul>
      *
-     * <p>任何一個 action 失敗（例如舊索引已被別人刪掉），整個請求都不生效，例外往外拋。</p>
+     * <p><b>為什麼 remove 必須 {@code must_exist}</b>（審查 M1）：ES 對「alias 不在該索引上」的 remove 預設當 no-op。
+     * 若 {@code previous} 已過時（鎖遺失後兩個重建並行、兩個實例同時遷移），不帶 must_exist 的請求會成功，
+     * alias 變成同時指向兩個索引，之後經 alias 的寫入一律回 400 {@code no write index is defined for alias}。
+     * 帶 must_exist 時整個請求失敗、alias 不變。</p>
      *
      * @param newIndex 新的實體索引
      * @param previous 切換前的狀態（{@link #inspect()} 的結果）
+     * @throws RuntimeException 任何一個 action 失敗（整個請求不生效）；連線逾時等 I/O 失敗包成 {@link UncheckedIOException}
+     *                          ——此時 ES 端可能其實已套用
      */
     public void switchAlias(String newIndex, IndexState previous) {
-        AliasActions actions = new AliasActions();
+        List<Action> actions = new ArrayList<>();
         switch (previous.kind()) {
-            case ALIAS -> previous.aliasTargets().forEach(old -> actions.add(new AliasAction.Remove(
-                    AliasActionParameters.builder().withIndices(old).withAliases(ALIAS).build())));
-            case CONCRETE -> actions.add(new AliasAction.RemoveIndex(
-                    AliasActionParameters.builder().withIndices(ALIAS).build()));
+            case ALIAS -> previous.aliasTargets().forEach(old -> actions.add(Action.of(a -> a.remove(r -> r
+                    .index(old).alias(ALIAS).mustExist(true)))));
+            case CONCRETE -> actions.add(Action.of(a -> a.removeIndex(r -> r.index(ALIAS))));
             case ABSENT -> {
                 /* 沒有舊指向需要移除 */
             }
         }
-        actions.add(new AliasAction.Add(AliasActionParameters.builder().withIndices(newIndex).withAliases(ALIAS).build()));
-        operations.indexOps(IndexCoordinates.of(newIndex)).alias(actions);
+        actions.add(Action.of(a -> a.add(ad -> ad.index(newIndex).alias(ALIAS))));
+        try {
+            client.indices().updateAliases(u -> u.actions(actions));
+        } catch (IOException e) {
+            throw new UncheckedIOException("切換 alias " + ALIAS + " 至 " + newIndex + " 時 I/O 失敗（ES 端是否已套用不明）", e);
+        }
         log.info("alias {} 已切換至 {}（切換前：{} {}）", ALIAS, newIndex, previous.kind(), previous.aliasTargets());
     }
 

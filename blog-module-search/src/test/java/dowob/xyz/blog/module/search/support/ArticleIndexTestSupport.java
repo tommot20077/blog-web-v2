@@ -67,6 +67,26 @@ public final class ArticleIndexTestSupport {
     }
 
     /**
+     * 以 template 背後的同一個原生 client 建立 {@link ArticleIndexAdmin}（與正式環境的自動配置一致：同一個 client）。
+     *
+     * @param template ES template
+     * @return 索引管理元件
+     */
+    public static ArticleIndexAdmin newAdmin(ElasticsearchTemplate template) {
+        return new ArticleIndexAdmin(template, clientOf(template));
+    }
+
+    /**
+     * 取出 template 背後的原生 client。
+     *
+     * @param template ES template
+     * @return 原生 client
+     */
+    public static ElasticsearchClient clientOf(ElasticsearchTemplate template) {
+        return template.execute(client -> client);
+    }
+
+    /**
      * 刪除所有名稱以 {@code blog_articles} 開頭的實體索引（含改版前的實體 {@code blog_articles} 與所有版本化索引）。
      *
      * @param template ES template
