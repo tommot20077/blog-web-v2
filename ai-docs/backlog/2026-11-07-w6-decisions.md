@@ -9,7 +9,7 @@
 | # | 條目 | 決定 |
 |---|---|---|
 | A1 | verification_tokens 明文 | **改為只存 SHA-256**。token 改由寄信 consumer 在寄信當下產生，DB 存雜湊、信件寄明文；事件仍只帶 userUuid。重寄與新 token 取代舊 token 的語意維持不變。 |
-| A2 | XSS-03 CSP | **用 Playwright E2E 收集 console 的 CSP 違規，零違規後切換為強制的 `Content-Security-Policy`**。不建收報端點。 |
+| A2 | XSS-03 CSP | **用 Playwright E2E 收集 console 的 CSP 違規，零違規後切換為強制的 `Content-Security-Policy`**。不建收報端點。<br>**補充（同日）**：強制後 `img-src` 只允許 `'self' blob:`，作者在 markdown 中貼外部圖床網址會在讀者端破圖。**維持嚴格，不放寬**；改由編輯器偵測外部圖片，在預覽時提示「發布後無法顯示，請改用上傳」。 |
 | A3 | SEC-22 | 忘記密碼、重寄驗證信、驗證碼校驗加 **per-IP 限流，沿用註冊門檻（每 IP 每 60 分鐘 10 次）**，三個端點各自計數。 |
 | A4 | SEC-23 | **做通用的應用層限流元件**。超限回 429 並帶 Retry-After；已登入者以使用者計數，匿名者以 IP 計數。門檻依建議值設定，寫進 yaml，可用環境變數覆寫：<br>• 留言新增／編輯：每人每分鐘 10 次<br>• 按讚、收藏、劃線、閱讀進度：每人每分鐘 60 次<br>• 上傳：每人每小時 30 次<br>• 文章建立／更新：每人每分鐘 30 次<br>• 搜尋：每 IP 每分鐘 30 次 |
 | A5 | SEC-25(b) | 文章 `content_md` **上限 200,000 字元**，超過回 400。 |
