@@ -1,7 +1,7 @@
 package dowob.xyz.blog.common.api.enums;
 
 /**
- * 系統細粒度操作權限枚舉（~12 個）
+ * 系統細粒度操作權限枚舉
  *
  * <p>
  * 依 plan2.md §7.2.1 定義所有中粒度操作權限，供 {@link Role} 進行靜態對應。
@@ -39,17 +39,26 @@ public enum Permission {
     /** 上傳檔案（AUTHOR 及以上角色擁有） */
     FILE_UPLOAD,
 
-    /** 管理標籤（僅 ADMIN） */
-    TAG_MANAGE,
+    /** 管理標籤：更新、刪除（僅 ADMIN；A9 由 TAG_MANAGE 改名，語意不變） */
+    ADMIN_TAG,
+
+    /** 管理分類：建立、更新、刪除（僅 ADMIN） */
+    ADMIN_CATEGORY,
+
+    /** 文章審核：待審清單、駁回（僅 ADMIN） */
+    ADMIN_ARTICLE_REVIEW,
+
+    /** 文章封存：下架（archive）與還原（unarchive）（僅 ADMIN） */
+    ADMIN_ARTICLE_ARCHIVE,
+
+    /** 搜尋索引管理：全量重建、狀態查詢（僅 ADMIN） */
+    ADMIN_SEARCH,
 
     /** 管理用戶（僅 ADMIN） */
     USER_MANAGE,
 
     /** 封禁用戶（僅 ADMIN） */
     USER_BAN,
-
-    /** 系統設定（僅 ADMIN） */
-    SYSTEM_CONFIG,
 
     /** 發布系統公告（僅 ADMIN） */
     SYSTEM_ANNOUNCE

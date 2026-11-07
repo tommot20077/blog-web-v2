@@ -9,6 +9,7 @@ import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
+import dowob.xyz.blog.module.user.util.TokenHasher;
 import jakarta.mail.Session;
 import jakarta.mail.internet.MimeMessage;
 import org.apache.logging.log4j.Level;
@@ -20,6 +21,9 @@ import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import org.springframework.mail.MailSendException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -31,9 +35,14 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -43,8 +52,8 @@ import static org.mockito.Mockito.when;
 /**
  * {@link UserMailService} 單元測試
  *
- * <p>ARCH-24 起事件只帶 {@code eventId}／{@code userUuid}，本服務於寄信當下查 users、verification_tokens 與 Redis。
- * 這裡驗證：寄出的內容取自查詢結果（而非事件）；token 已過期／已被取代刪除／使用者已刪帳時不寄。</p>
+ * <p>ARCH-24 起事件只帶 {@code eventId}／{@code userUuid}，本服務於寄信當下查 users 與 Redis，並於此時產生 token（A1：DB 只存 SHA-256）。
+ * 這裡驗證：寄出的是明文、DB 存的是雜湊；順序為刪舊→存雜湊→寄信；寄信失敗往外拋；已驗證／已刪帳不產生 token。</p>
  *
  * @author Yuan
  * @version 2.0
@@ -100,14 +109,19 @@ class UserMailServiceTest {
         when(userRepository.findByUuid(USER_UUID)).thenReturn(Optional.of(user(status)));
     }
 
-    private void givenToken(String type, String token, LocalDateTime expiresAt) {
-        VerificationToken t = new VerificationToken();
-        t.setId(100L);
-        t.setUserId(USER_ID);
-        t.setType(type);
-        t.setToken(token);
-        t.setExpiresAt(expiresAt);
-        when(tokenRepository.findFirstByUserIdAndTypeOrderByIdDesc(USER_ID, type)).thenReturn(Optional.of(t));
+    /** 從信件本文取出連結中的明文 token（UUID 格式） */
+    private String plainTokenIn(String path) throws Exception {
+        Matcher m = Pattern.compile(Pattern.quote(path) + "\\?token=([0-9a-f]{8}-[0-9a-f-]{27})")
+                .matcher((String) message.getContent());
+        assertThat(m.find()).as("信件應含 %s?token=<uuid>", path).isTrue();
+        return m.group(1);
+    }
+
+    /** 取出被存入 verification_tokens 的那一筆 */
+    private VerificationToken savedToken() {
+        ArgumentCaptor<VerificationToken> captor = ArgumentCaptor.forClass(VerificationToken.class);
+        verify(tokenRepository).save(captor.capture());
+        return captor.getValue();
     }
 
     private static UserRegisteredEvent registered() {
@@ -119,10 +133,9 @@ class UserMailServiceTest {
     }
 
     @Test
-    @DisplayName("sendVerificationEmail → 收件人／暱稱取自 users，連結 token 取自 verification_tokens，驗證碼取自 Redis")
-    void sendVerificationEmail_shouldSendMailBuiltFromLookups() throws Exception {
+    @DisplayName("sendVerificationEmail → 收件人取自 users、驗證碼取自 Redis；信中是明文 token，DB 只存其 SHA-256")
+    void sendVerificationEmail_shouldMailPlainTokenAndStoreOnlyHash() throws Exception {
         givenUser(UserStatus.PENDING_VERIFICATION);
-        givenToken("EMAIL_VERIFICATION", "verify-token-abc", LocalDateTime.now().plusHours(1));
         when(valueOps.get(RedisKeyConstant.getEmailVerifyCodeKey(DB_EMAIL))).thenReturn("123456");
 
         boolean sent = service.sendVerificationEmail(registered());
@@ -134,32 +147,74 @@ class UserMailServiceTest {
                 .contains("Blog Security Bot")
                 .contains("no-reply@90030.xyz");
         assertThat(message.getSubject()).isEqualTo("Verify your email address");
-        assertThat((String) message.getContent())
-                .contains("https://90030.xyz/verify-email?token=verify-token-abc")
-                .contains("123456")
-                .contains("Yuan");
+        assertThat((String) message.getContent()).contains("123456").contains("Yuan");
+
+        String plain = plainTokenIn("https://90030.xyz/verify-email");
+        VerificationToken saved = savedToken();
+        assertThat(saved.getTokenHash()).isNotEqualTo(plain).isEqualTo(TokenHasher.sha256Hex(plain));
+        assertThat(saved.getTokenHash()).matches("[0-9a-f]{64}");
+        assertThat(saved.getUserId()).isEqualTo(USER_ID);
+        assertThat(saved.getType()).isEqualTo("EMAIL_VERIFICATION");
+        assertThat(saved.getExpiresAt()).isBetween(
+                LocalDateTime.now().plusHours(24).minusMinutes(1), LocalDateTime.now().plusHours(24).plusMinutes(1));
     }
 
     @Test
-    @DisplayName("sendVerificationEmail：Redis 已無驗證碼但連結仍有效 → 照寄，只含連結、不含驗證碼段落")
+    @DisplayName("sendVerificationEmail：順序為「刪同類舊 token → 存新雜湊 → 寄信」，寄信永遠在最後")
+    void sendVerificationEmail_ordersDeleteSaveThenSend() {
+        givenUser(UserStatus.PENDING_VERIFICATION);
+
+        service.sendVerificationEmail(registered());
+
+        InOrder order = inOrder(tokenRepository, mailSender);
+        order.verify(tokenRepository).deleteByUserIdAndType(USER_ID, "EMAIL_VERIFICATION");
+        order.verify(tokenRepository).save(any(VerificationToken.class));
+        order.verify(mailSender).send(any(MimeMessage.class));
+    }
+
+    @Test
+    @DisplayName("sendVerificationEmail：每次寄信都產生新的 token（重寄／重試不沿用舊的）")
+    void sendVerificationEmail_generatesFreshTokenEachTime() throws Exception {
+        givenUser(UserStatus.PENDING_VERIFICATION);
+
+        service.sendVerificationEmail(registered());
+        String first = plainTokenIn("https://90030.xyz/verify-email");
+        message = new MimeMessage(Session.getInstance(new Properties()));
+        when(mailSender.createMimeMessage()).thenReturn(message);
+        service.sendVerificationEmail(registered());
+        String second = plainTokenIn("https://90030.xyz/verify-email");
+
+        assertThat(second).isNotEqualTo(first);
+    }
+
+    @Test
+    @DisplayName("sendVerificationEmail：寄信失敗 → 例外往外拋（交由交易 rollback 與容器重試），不吞掉")
+    void sendVerificationEmail_mailFailure_propagates() {
+        givenUser(UserStatus.PENDING_VERIFICATION);
+        doThrow(new MailSendException("smtp down")).when(mailSender).send(any(MimeMessage.class));
+
+        assertThatThrownBy(() -> service.sendVerificationEmail(registered()))
+                .isInstanceOf(MailSendException.class);
+    }
+
+    @Test
+    @DisplayName("sendVerificationEmail：Redis 已無驗證碼 → 照寄，只含連結、不含驗證碼段落")
     void sendVerificationEmail_codeExpiredInRedis_sendsLinkOnly() throws Exception {
         givenUser(UserStatus.PENDING_VERIFICATION);
-        givenToken("EMAIL_VERIFICATION", "verify-token-abc", LocalDateTime.now().plusHours(1));
         when(valueOps.get(RedisKeyConstant.getEmailVerifyCodeKey(DB_EMAIL))).thenReturn(null);
 
         boolean sent = service.sendVerificationEmail(registered());
 
         assertThat(sent).isTrue();
         String body = (String) message.getContent();
-        assertThat(body).contains("https://90030.xyz/verify-email?token=verify-token-abc");
+        assertThat(body).contains("https://90030.xyz/verify-email?token=");
         assertThat(body).doesNotContain("verification code").doesNotContain("null");
     }
 
     @Test
-    @DisplayName("sendVerificationEmail：Redis 讀取拋例外 → 降級只寄連結（不重試進 DLQ），WARN 不含 email")
+    @DisplayName("sendVerificationEmail：Redis 讀取拋例外 → 降級只寄連結（不重試進 DLQ）")
     void sendVerificationEmail_redisFailure_degradesToLinkOnly() throws Exception {
         givenUser(UserStatus.PENDING_VERIFICATION);
-        givenToken("EMAIL_VERIFICATION", "verify-token-abc", LocalDateTime.now().plusHours(1));
         when(valueOps.get(RedisKeyConstant.getEmailVerifyCodeKey(DB_EMAIL)))
                 .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("down"));
 
@@ -167,37 +222,23 @@ class UserMailServiceTest {
 
         assertThat(sent).isTrue();
         assertThat((String) message.getContent())
-                .contains("https://90030.xyz/verify-email?token=verify-token-abc")
+                .contains("https://90030.xyz/verify-email?token=")
                 .doesNotContain("verification code");
     }
 
     @Test
-    @DisplayName("sendVerificationEmail：token 已過期 → 不寄（也不查驗證碼）")
-    void sendVerificationEmail_expiredToken_doesNotSend() {
-        givenUser(UserStatus.PENDING_VERIFICATION);
-        givenToken("EMAIL_VERIFICATION", "verify-token-old", LocalDateTime.now().minusSeconds(1));
-
-        boolean sent = service.sendVerificationEmail(registered());
-
-        assertThat(sent).isFalse();
-        verify(mailSender, never()).send(any(MimeMessage.class));
-        verifyNoInteractions(valueOps);
-    }
-
-    @Test
-    @DisplayName("sendVerificationEmail：已無 token 列（已驗證刪除或已被刪除）→ 不寄")
-    void sendVerificationEmail_noTokenRow_doesNotSend() {
-        givenUser(UserStatus.PENDING_VERIFICATION);
-        when(tokenRepository.findFirstByUserIdAndTypeOrderByIdDesc(USER_ID, "EMAIL_VERIFICATION"))
-                .thenReturn(Optional.empty());
+    @DisplayName("sendVerificationEmail：帳號已驗證（非 PENDING_VERIFICATION，晚到的舊事件）→ 不產生 token、不寄")
+    void sendVerificationEmail_alreadyVerifiedUser_doesNotSendOrStoreToken() {
+        givenUser(UserStatus.ACTIVE);
 
         assertThat(service.sendVerificationEmail(registered())).isFalse();
 
         verify(mailSender, never()).send(any(MimeMessage.class));
+        verifyNoInteractions(tokenRepository);
     }
 
     @Test
-    @DisplayName("sendVerificationEmail：使用者已刪帳（DELETED，email 為墓碑值）→ 不寄，連 token 都不查")
+    @DisplayName("sendVerificationEmail：使用者已刪帳（DELETED，email 為墓碑值）→ 不寄，也不產生 token")
     void sendVerificationEmail_deletedUser_doesNotSend() {
         givenUser(UserStatus.DELETED);
 
@@ -215,13 +256,13 @@ class UserMailServiceTest {
         assertThat(service.sendVerificationEmail(registered())).isFalse();
 
         verify(mailSender, never()).send(any(MimeMessage.class));
+        verifyNoInteractions(tokenRepository);
     }
 
     @Test
-    @DisplayName("sendPasswordResetEmail → 收件人取自 users，重設連結 token 取自 verification_tokens")
-    void sendPasswordResetEmail_shouldSendMailBuiltFromLookups() throws Exception {
+    @DisplayName("sendPasswordResetEmail → 收件人取自 users；信中是明文 token，DB 只存其 SHA-256，有效期 15 分鐘")
+    void sendPasswordResetEmail_shouldMailPlainTokenAndStoreOnlyHash() throws Exception {
         givenUser(UserStatus.ACTIVE);
-        givenToken("PASSWORD_RESET", "reset-token-abc", LocalDateTime.now().plusMinutes(5));
 
         boolean sent = service.sendPasswordResetEmail(resetRequested());
 
@@ -232,35 +273,41 @@ class UserMailServiceTest {
                 .contains("Blog Security Bot")
                 .contains("no-reply@90030.xyz");
         assertThat(message.getSubject()).isEqualTo("Reset your password");
-        assertThat((String) message.getContent())
-                .contains("https://90030.xyz/reset-password?token=reset-token-abc");
+
+        String plain = plainTokenIn("https://90030.xyz/reset-password");
+        VerificationToken saved = savedToken();
+        assertThat(saved.getTokenHash()).isNotEqualTo(plain).isEqualTo(TokenHasher.sha256Hex(plain));
+        assertThat(saved.getType()).isEqualTo("PASSWORD_RESET");
+        assertThat(saved.getUserId()).isEqualTo(USER_ID);
+        assertThat(saved.getExpiresAt()).isBetween(
+                LocalDateTime.now().plusMinutes(14), LocalDateTime.now().plusMinutes(16));
     }
 
     @Test
-    @DisplayName("sendPasswordResetEmail：token 已過期 → 不寄")
-    void sendPasswordResetEmail_expiredToken_doesNotSend() {
+    @DisplayName("sendPasswordResetEmail：順序為「刪同類舊 token → 存新雜湊 → 寄信」")
+    void sendPasswordResetEmail_ordersDeleteSaveThenSend() {
         givenUser(UserStatus.ACTIVE);
-        givenToken("PASSWORD_RESET", "reset-token-old", LocalDateTime.now().minusMinutes(1));
 
-        assertThat(service.sendPasswordResetEmail(resetRequested())).isFalse();
+        service.sendPasswordResetEmail(resetRequested());
 
-        verify(mailSender, never()).send(any(MimeMessage.class));
+        InOrder order = inOrder(tokenRepository, mailSender);
+        order.verify(tokenRepository).deleteByUserIdAndType(USER_ID, "PASSWORD_RESET");
+        order.verify(tokenRepository).save(any(VerificationToken.class));
+        order.verify(mailSender).send(any(MimeMessage.class));
     }
 
     @Test
-    @DisplayName("sendPasswordResetEmail：token 已被使用（列已刪）→ 不寄")
-    void sendPasswordResetEmail_noTokenRow_doesNotSend() {
+    @DisplayName("sendPasswordResetEmail：寄信失敗 → 例外往外拋")
+    void sendPasswordResetEmail_mailFailure_propagates() {
         givenUser(UserStatus.ACTIVE);
-        when(tokenRepository.findFirstByUserIdAndTypeOrderByIdDesc(USER_ID, "PASSWORD_RESET"))
-                .thenReturn(Optional.empty());
+        doThrow(new MailSendException("smtp down")).when(mailSender).send(any(MimeMessage.class));
 
-        assertThat(service.sendPasswordResetEmail(resetRequested())).isFalse();
-
-        verify(mailSender, never()).send(any(MimeMessage.class));
+        assertThatThrownBy(() -> service.sendPasswordResetEmail(resetRequested()))
+                .isInstanceOf(MailSendException.class);
     }
 
     @Test
-    @DisplayName("sendPasswordResetEmail：使用者已刪帳 → 不寄")
+    @DisplayName("sendPasswordResetEmail：使用者已刪帳 → 不寄，也不產生 token")
     void sendPasswordResetEmail_deletedUser_doesNotSend() {
         givenUser(UserStatus.DELETED);
 

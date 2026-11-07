@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.UUID;
 
 /**
- * 分類 Admin Controller（需 SYSTEM_CONFIG 或 ADMIN 權限）
+ * 分類 Admin Controller（需 ADMIN_CATEGORY 權限，且 URL 層限 ADMIN 角色）
  *
  * <p>
  * 提供分類 CRUD 的管理端點，僅 Admin 可存取。
@@ -42,7 +42,7 @@ public class AdminCategoryController {
      * @param request 建立請求
      * @return 建立後的分類回應
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_CATEGORY')")
     @PostMapping
     public ApiResponse<CategoryResponse> createCategory(@Valid @RequestBody CreateCategoryRequest request) {
         return ApiResponse.success(categoryService.createCategory(request));
@@ -55,7 +55,7 @@ public class AdminCategoryController {
      * @param request 更新請求
      * @return 更新後的分類回應
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_CATEGORY')")
     @PutMapping("/{uuid}")
     public ApiResponse<CategoryResponse> updateCategory(
             @PathVariable UUID uuid,
@@ -69,7 +69,7 @@ public class AdminCategoryController {
      * @param uuid 分類公開 UUID
      * @return 成功回應
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_CATEGORY')")
     @DeleteMapping("/{uuid}")
     public ApiResponse<Void> deleteCategory(@PathVariable UUID uuid) {
         categoryService.deleteCategory(uuid);

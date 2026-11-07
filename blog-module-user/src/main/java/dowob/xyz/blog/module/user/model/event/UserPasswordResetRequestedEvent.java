@@ -8,8 +8,8 @@ import java.util.UUID;
  * <p>用戶申請忘記密碼後發布至 RabbitMQ，由 {@code PasswordResetConsumer} 據此寄送密碼重設信。</p>
  *
  * <p><b>事件不含個資與 token（ARCH-24）</b>：不帶 email 與重設 token。consumer 寄信當下以 {@code userUuid}
- * 查詢——email 查 {@code users}、重設 token 查 {@code verification_tokens}（該使用者最新一筆未過期的
- * {@code PASSWORD_RESET}）。重設 token 可直接完成密碼重設，因此不得進入 durable queue 與 DLQ。</p>
+ * 查詢 email（{@code users}），並在此時<b>產生</b>重設 token（A1：{@code verification_tokens} 只存其 SHA-256，
+ * 信件才是明文）。重設 token 可直接完成密碼重設，因此不得進入 durable queue 與 DLQ。</p>
  *
  * @param eventId  事件 dedup key（發送端每次 publish 時隨機產生）
  * @param userUuid 用戶公開 UUID（consumer 查詢收件資料的唯一依據）

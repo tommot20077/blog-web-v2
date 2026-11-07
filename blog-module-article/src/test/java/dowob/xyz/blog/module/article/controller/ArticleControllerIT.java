@@ -632,13 +632,36 @@ class ArticleControllerIT {
     }
 
     @Test
-    @DisplayName("POST /api/v1/articles/{uuid}/reject - AUTHOR（無 SYSTEM_CONFIG 權限）→ 403")
+    @DisplayName("POST /api/v1/articles/{uuid}/reject - AUTHOR（無 ADMIN_ARTICLE_REVIEW 權限）→ 403")
     void rejectArticle_authorForbidden_returns403() throws Exception {
         RejectArticleRequest rejectRequest = new RejectArticleRequest();
         rejectRequest.setReason("想試試駁回");
 
         mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/reject")
                 .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isForbidden());
+    }
+
+    /** ROLE_ADMIN + 除了 {@code missing} 之外的所有 permission（手工構造 authorities）。 */
+    private RequestPostProcessor asAdminWithout(Long userId, dowob.xyz.blog.common.api.enums.Permission missing) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().stream().filter(p -> p != missing)
+                .forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
+        return SecurityMockMvcRequestPostProcessors.authentication(new UsernamePasswordAuthenticationToken(
+                new AuthUser(TestUsers.uuidOf(userId), Role.ADMIN), null, authorities));
+    }
+
+    @Test
+    @DisplayName("A9 POST /api/v1/articles/{uuid}/reject - ROLE_ADMIN 但缺 ADMIN_ARTICLE_REVIEW → 403（此端點不在 /admin URL 層，只有方法層把關）")
+    void rejectArticle_adminWithoutReviewPermission_returns403() throws Exception {
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("缺權限不應能駁回");
+
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/reject")
+                .with(asAdminWithout(AUTHOR_ID, dowob.xyz.blog.common.api.enums.Permission.ADMIN_ARTICLE_REVIEW))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(rejectRequest)))
                 .andExpect(status().isForbidden());

@@ -55,12 +55,13 @@ public class PasswordResetConsumer {
      * 請其走「再次忘記密碼」（產生新 eventId）。</p>
      *
      * <p><b>事件不含個資與 token（ARCH-24）</b>：consumer 於寄信當下以 {@code userUuid} 查詢（見
-     * {@link UserMailService#sendPasswordResetEmail}）。使用者已刪帳、重設 token 已使用或已過期時不寄，
-     * 記一行 INFO 後正常 ack（不進 DLQ）。冪等標記仍在同一交易內，被略過的事件同樣標記為已處理。</p>
+     * {@link UserMailService#sendPasswordResetEmail}）。使用者已刪帳時不寄、不產生 token，
+     * 記一行 INFO 後正常 ack（不進 DLQ）。寄信時才產生重設 token（A1）：交易內「標記 → 刪同類舊 token → 存新 token 的 SHA-256 → 寄信」，
+     * 寄信失敗整個交易 rollback，重試會重新產生並再寄。被略過的事件同樣標記為已處理。</p>
      *
      * <p>郵件發送成功後正常返回（容器 ack）；失敗則往外拋，由容器重試（最多 3 次，寄信失敗可能重寄同一連結），耗盡後送 DLQ。</p>
      *
-     * @param event       密碼重設請求事件，只含 eventId 與 userUuid；信箱與重設 Token 於寄信時查詢
+     * @param event       密碼重設請求事件，只含 eventId 與 userUuid；信箱於寄信時查詢，重設 Token 於寄信時產生
      */
     @RabbitListener(
             queues = UserRabbitMqConfig.QUEUE_PASSWORD_RESET,

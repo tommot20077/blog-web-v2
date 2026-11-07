@@ -323,7 +323,7 @@ public class ArticleController {
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 駁回後的文章完整資訊
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @PreAuthorize("hasAuthority('ADMIN_ARTICLE_REVIEW')")
     @PostMapping("/{uuid}/reject")
     public ApiResponse<ArticleResponse> rejectArticle(
             @PathVariable UUID uuid,

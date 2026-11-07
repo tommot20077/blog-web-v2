@@ -56,12 +56,14 @@ public class EmailVerificationConsumer {
      * 請其走「重發驗證信」（產生新 eventId）。</p>
      *
      * <p><b>事件不含個資與 token（ARCH-24）</b>：consumer 於寄信當下以 {@code userUuid} 查詢（見
-     * {@link UserMailService#sendVerificationEmail}）。使用者已刪帳、token 已過期或已被取代刪除時不寄，
-     * 記一行 INFO 後正常 ack（不進 DLQ）；寄出的永遠是目前有效的 token。冪等標記仍在同一交易內，被略過的事件同樣標記為已處理。</p>
+     * {@link UserMailService#sendVerificationEmail}）。使用者已刪帳或帳號已不需驗證時不寄、不產生 token，
+     * 記一行 INFO 後正常 ack（不進 DLQ）。寄信時才產生 token（A1）：交易內「標記 → 刪同類舊 token → 存新 token 的 SHA-256 → 寄信」，
+     * 寄信失敗整個交易 rollback（標記、新雜湊、舊 token 的刪除一起撤銷），重試會重新產生並再寄；
+     * 寄出的永遠是目前唯一有效的 token。被略過的事件同樣標記為已處理。</p>
      *
      * <p>郵件發送成功後正常返回（容器 ack）；失敗則往外拋，由容器重試（最多 3 次，寄信失敗可能重寄同一連結），耗盡後送 DLQ。</p>
      *
-     * @param event       用戶已註冊事件，只含 eventId 與 userUuid；信箱、暱稱、驗證 Token、驗證碼於寄信時查詢
+     * @param event       用戶已註冊事件，只含 eventId 與 userUuid；信箱、暱稱、驗證碼於寄信時查詢，驗證 Token 於寄信時產生
      */
     @RabbitListener(
             queues = UserRabbitMqConfig.QUEUE_EMAIL_VERIFICATION,

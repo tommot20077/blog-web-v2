@@ -11,6 +11,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.mail.javamail.JavaMailSenderImpl;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -93,6 +95,13 @@ public abstract class AbstractE2ETest {
     }
 
     // ========== 共用的注入 ==========
+
+    /**
+     * 寄信一律 mock（E2E 不連真實 SMTP）。A1 起驗證／重設 token 只在寄信時產生、DB 只存雜湊，
+     * 測試改由 {@link dowob.xyz.blog.e2e.support.MailInterceptor} 從攔截到的信件取得明文 token。
+     */
+    @MockitoBean
+    protected JavaMailSenderImpl mailSender;
 
     @Autowired
     protected MockMvc mockMvc;

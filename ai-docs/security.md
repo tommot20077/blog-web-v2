@@ -35,7 +35,19 @@ If the order is wrong, `anyRequest()` matches first and shadows the admin rule, 
 |------|-------------|-------------|
 | USER | ROLE_USER | COMMENT_WRITE, COMMENT_DELETE |
 | AUTHOR | ROLE_AUTHOR | All USER permissions + ARTICLE_CREATE, ARTICLE_EDIT, ARTICLE_DELETE, ARTICLE_PIN, FILE_UPLOAD |
-| ADMIN | ROLE_ADMIN | All permissions (`EnumSet.allOf`) |
+| ADMIN | ROLE_ADMIN | All permissions (`EnumSet.allOf`), including the `ADMIN_*` family below (only ADMIN has them) |
+
+**Admin permissions (`ADMIN_*`, A9／AUTH-10, Yuan 2026-11-07)** — every admin endpoint is guarded by a permission named for its duty, on top of the URL-layer `/api/v1/admin/** → hasRole('ADMIN')` (two layers). The generic `SYSTEM_CONFIG` (and the unused duplicate `TAG_MANAGE`, renamed `ADMIN_TAG`) no longer exist; the guard `EndpointAuthorizationTest` rejects any `/api/v1/admin/**` handler that is not `hasAuthority('ADMIN_*')` with an existing permission name.
+
+| Permission | Endpoints |
+|------------|-----------|
+| `ADMIN_TAG` | `PUT`／`DELETE /api/v1/admin/tags/{id}` |
+| `ADMIN_CATEGORY` | `POST /api/v1/admin/categories`, `PUT`／`DELETE /api/v1/admin/categories/{uuid}` |
+| `ADMIN_ARTICLE_REVIEW` | `GET /api/v1/admin/articles/pending`, `POST /api/v1/articles/{uuid}/reject` (the only one outside the `/admin` URL layer — method layer is its sole guard) |
+| `ADMIN_ARTICLE_ARCHIVE` | `POST /api/v1/admin/articles/{uuid}/archive`, `POST /api/v1/admin/articles/{uuid}/unarchive` |
+| `ADMIN_SEARCH` | `POST /api/v1/admin/search/reindex`, `GET /api/v1/admin/search/status` |
+
+`USER_MANAGE`, `USER_BAN`, `SYSTEM_ANNOUNCE` are reserved ADMIN-only permissions with no endpoint yet. The two version read endpoints (`GET /api/v1/articles/{uuid}/versions[/{versionUuid}]`) now require `ARTICLE_EDIT` like the four write endpoints; owner/admin checks stay in the service layer.
 
 ### 4. Capability vs Ownership Separation
 
@@ -131,7 +143,7 @@ public void changePassword(...) {
 ### 11. Client IP 只能經 `ClientIpResolver` 取得 (CRITICAL)
 
 > 來源:findings SEC-01、決策紀錄 §6.1「SEC-01 定案 (a)」。`X-Forwarded-For`(XFF)左側節點由 client 任意偽造,
-> 直接取第一節或讓 Spring 無條件用 XFF 覆寫 remoteAddr,會使登入/註冊 IP 限流、瀏覽數去重整層可繞過。
+> 直接取第一節或讓 Spring 無條件用 XFF 覆寫 remoteAddr,會使登入/註冊/忘記密碼/重寄驗證信/驗證碼 IP 限流、瀏覽數去重整層可繞過。
 
 *   正式拓撲:Client → Cloudflare → nginx → k3s Ingress → app。第 1 層(origin 只放行 Cloudflare)、第 2 層(nginx `realip` 並以 `$remote_addr` **覆寫** XFF)在 infrastructure repo;本 repo 負責第 3 層。
 *   **唯一入口**:`dowob.xyz.blog.infrastructure.web.ClientIpResolver#resolve(HttpServletRequest)`。controller 注入它,不得自行讀 `X-Forwarded-For`/`Forwarded`/`X-Real-IP`/`X-Client-IP`/`CF-Connecting-IP`/`True-Client-IP`,也不得呼叫 `getRemoteAddr()`/`getRemoteHost()`/`getRemoteAddress()`(守衛:`ClientIpAccessGuardTest`)。
@@ -192,7 +204,7 @@ public void changePassword(...) {
 |--------|------|-----------|
 | GET | `/api/v1/articles/me` | `@PreAuthorize("isAuthenticated()")` |
 | GET | `/api/v1/articles/{uuid}/edit` | `@PreAuthorize("hasAuthority('ARTICLE_EDIT')")` |
-| GET | `/api/v1/articles/{uuid}/versions`、`/versions/{versionUuid}` | `@PreAuthorize("isAuthenticated()")` |
+| GET | `/api/v1/articles/{uuid}/versions`、`/versions/{versionUuid}` | `@PreAuthorize("hasAuthority('ARTICLE_EDIT')")`(A9;擁有者／ADMIN 檢查在 service 層) |
 | GET | `/api/v1/articles/{uuid}/highlights` | `@PreAuthorize("isAuthenticated()")` |
 | GET | `/api/v1/articles/{uuid}/progress` | `@PreAuthorize("isAuthenticated()")` |
 

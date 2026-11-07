@@ -58,7 +58,7 @@ public class AuthController {
     /** JWT 服務，用於 Refresh Token 驗證 */
     private final JwtService jwtService;
 
-    /** Client IP 解析器（登入／註冊 IP 限流用；信任鏈由 app.http.trusted-proxy-count 控制） */
+    /** Client IP 解析器（登入／註冊／忘記密碼／重寄驗證信／驗證碼 IP 限流用；信任鏈由 app.http.trusted-proxy-count 控制） */
     private final ClientIpResolver clientIpResolver;
 
     /** Redis 操作模板，用於 Refresh Token 比對 */
@@ -217,39 +217,45 @@ public class AuthController {
     /**
      * 使用驗證碼驗證電子信箱
      *
-     * @param request 包含電子信箱與 6 位數驗證碼
+     * @param request     包含電子信箱與 6 位數驗證碼
+     * @param httpRequest HTTP 請求（解析 client IP 供 IP 層級限流，A3）
      * @return 成功回應
      */
     @Operation(summary = "使用驗證碼驗證電子信箱", description = "透過驗證信中的 6 位數驗證碼啟用帳號")
     @PostMapping("/verify-email-code")
-    public ApiResponse<Void> verifyEmailCode(@Valid @RequestBody VerifyEmailCodeRequest request) {
-        authService.verifyEmailCode(request.getEmail(), request.getCode());
+    public ApiResponse<Void> verifyEmailCode(@Valid @RequestBody VerifyEmailCodeRequest request,
+                                             HttpServletRequest httpRequest) {
+        authService.verifyEmailCode(request.getEmail(), request.getCode(), clientIpResolver.resolve(httpRequest));
         return ApiResponse.success();
     }
 
     /**
      * 重發驗證信
      *
-     * @param request 包含電子信箱的請求
+     * @param request     包含電子信箱的請求
+     * @param httpRequest HTTP 請求（解析 client IP 供 IP 層級限流，A3）
      * @return 成功回應（無論信箱是否存在或帳號狀態，一律回傳成功以防資訊洩漏）
      */
-    @Operation(summary = "重發驗證信", description = "重新發送電子信箱驗證信，每分鐘限 1 次，每日限 5 次")
+    @Operation(summary = "重發驗證信", description = "重新發送電子信箱驗證信，每分鐘限 1 次，每日限 5 次；另有每 IP 每小時 10 次限制")
     @PostMapping("/resend-verification")
-    public ApiResponse<Void> resendVerification(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.resendVerification(request.getEmail());
+    public ApiResponse<Void> resendVerification(@Valid @RequestBody ForgotPasswordRequest request,
+                                                HttpServletRequest httpRequest) {
+        authService.resendVerification(request.getEmail(), clientIpResolver.resolve(httpRequest));
         return ApiResponse.success();
     }
 
     /**
      * 申請忘記密碼
      *
-     * @param request 包含電子信箱的忘記密碼請求
+     * @param request     包含電子信箱的忘記密碼請求
+     * @param httpRequest HTTP 請求（解析 client IP 供 IP 層級限流，A3）
      * @return 成功回應（無論信箱是否存在，一律回傳成功以防資訊洩漏）
      */
     @Operation(summary = "忘記密碼", description = "發送密碼重設信至指定信箱")
     @PostMapping("/forgot-password")
-    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.forgotPassword(request.getEmail());
+    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request,
+                                            HttpServletRequest httpRequest) {
+        authService.forgotPassword(request.getEmail(), clientIpResolver.resolve(httpRequest));
         return ApiResponse.success();
     }
 
