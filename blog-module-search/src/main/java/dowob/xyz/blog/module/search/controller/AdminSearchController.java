@@ -61,7 +61,8 @@ public class AdminSearchController {
     @Operation(summary = "觸發搜尋索引全量重建",
             description = "需 ADMIN_SEARCH 權限。於背景重建 Elasticsearch 索引並在完成後原子切換 alias；立即回 202 與作業資訊，進度以 /status 查詢。同一時間只允許一個重建作業。")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "202", description = "已開始於背景重建，body 為剛建立的作業")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "A0501 已有搜尋索引重建作業執行中，body 為進行中的作業")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "A0501 已有搜尋索引重建作業執行中，body 為進行中的作業（data 為該作業，與 202 同形）",
+            content = @io.swagger.v3.oas.annotations.media.Content(schema = @io.swagger.v3.oas.annotations.media.Schema(ref = "#/components/schemas/ApiResponseSearchReindexJobResponse")))
     @PostMapping("/reindex")
     @PreAuthorize("hasAuthority('ADMIN_SEARCH')")
     public ResponseEntity<ApiResponse<SearchReindexJobResponse>> reindex() {

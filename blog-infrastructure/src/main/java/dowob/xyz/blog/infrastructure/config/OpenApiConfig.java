@@ -3,10 +3,14 @@ package dowob.xyz.blog.infrastructure.config;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.infrastructure.openapi.CommonResponsesOperationCustomizer;
+import dowob.xyz.blog.infrastructure.openapi.ResponseBodyOperationCustomizer;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
+import io.swagger.v3.oas.models.media.IntegerSchema;
+import io.swagger.v3.oas.models.media.Schema;
+import io.swagger.v3.oas.models.media.StringSchema;
 import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.responses.ApiResponses;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
@@ -70,8 +74,37 @@ public class OpenApiConfig {
         securityScheme.setBearerFormat("JWT");
 
         components.addSecuritySchemes(API_SECURITY_SCHEME_NAME, securityScheme);
+        components.addSchemas(ResponseBodyOperationCustomizer.ERROR_SCHEMA_NAME, errorResponseSchema());
 
         return new OpenAPI().info(info).addSecurityItem(securityRequirement).components(components);
+    }
+
+    /**
+     * 錯誤回應 schema：對應專案 {@code ApiResponse.failed(...)} 的實際 JSON（{@code data} 恆為 null）。
+     *
+     * @return 錯誤回應 schema
+     */
+    private static Schema<?> errorResponseSchema() {
+        Schema<?> schema = new Schema<>().type("object")
+                .description("錯誤回應：HTTP 狀態碼非 2xx 時的 body，data 恆為 null（reindex 的 409 為例外，見該端點說明）");
+        schema.addProperty("code", new StringSchema().description("錯誤碼，例如 A0001"));
+        schema.addProperty("message", new StringSchema().description("錯誤訊息"));
+        Schema<?> data = new Schema<>().description("恆為 null");
+        data.addType("null");
+        schema.addProperty("data", data);
+        schema.addProperty("timestamp", new IntegerSchema().format("int64").description("伺服器時間戳（毫秒）"));
+        schema.setRequired(java.util.List.of("code", "message", "data", "timestamp"));
+        return schema;
+    }
+
+    /**
+     * 成功／錯誤回應 body customizer：補齊遺失的成功回應，並讓手寫錯誤回應改引用 {@code ApiErrorResponse}
+     *
+     * @return operation customizer
+     */
+    @Bean
+    public OperationCustomizer responseBodyOperationCustomizer() {
+        return new ResponseBodyOperationCustomizer();
     }
 
     /**
@@ -89,6 +122,10 @@ public class OpenApiConfig {
      *
      * <p>500 對所有端點都可能發生，不逐一標註；已手寫 500 的 operation 不覆蓋。</p>
      *
+     * <p>同時為所有尚無 content 的 4xx／5xx（含 customizer 補的 401／403／429）補上 {@code ApiErrorResponse}，
+     * 讓錯誤回應一律引用同一個 schema；handler 明確指定 content 的回應保持原樣。此處在全部 operation customizer
+     * 之後執行，與它們的順序無關。</p>
+     *
      * @return OpenAPI customizer
      */
     @Bean
@@ -105,6 +142,11 @@ public class OpenApiConfig {
                     operation.getResponses().addApiResponse("500", new ApiResponse()
                             .description(CommonErrorCode.SYSTEM_EXECUTION_ERROR.getCode() + " 系統執行出錯"));
                 }
+                operation.getResponses().forEach((status, response) -> {
+                    if ((status.startsWith("4") || status.startsWith("5")) && response.getContent() == null) {
+                        response.setContent(ResponseBodyOperationCustomizer.errorContent());
+                    }
+                });
             }));
         };
     }

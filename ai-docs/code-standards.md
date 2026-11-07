@@ -92,6 +92,7 @@
     *   **429**：handler 或 class 帶 `@RateLimited`，並附 `Retry-After` header 說明。
     *   **500**：所有 operation（`B0001`）。
     *   採 `OperationCustomizer` 讀 `HandlerMethod` 的標註而非手寫，理由：共通錯誤由「實際生效的標註」推導，標註改了文件自動跟著變，不會漂移。
+*   **成功回應由 customizer 依回傳型別補齊，錯誤回應一律引用 `ApiErrorResponse`**：springdoc 2.8.5 在方法上有 `@ApiResponse` 時不再補預設 200，且會把成功 schema 填進手寫的 4xx；`ResponseBodyOperationCustomizer` 統一補回成功回應（狀態碼取 `@ResponseStatus`，預設 200；`void` 不帶 content）並把所有錯誤回應改引用 `ApiErrorResponse`（`code`／`message`／`data`＝null／`timestamp`）。因此 handler 不必手寫 `@ApiResponse(responseCode = "200")`。唯一例外是 handler 的 `@ApiResponse` 明確指定 `content`（錯誤時 body 確實帶資料，如 reindex 的 409），customizer 不覆蓋。守衛：`OpenApiDocsE2E`。
 *   `@AuthenticationPrincipal AuthUser` 是 Spring Security 注入的登入主體，不是請求參數；`OpenApiConfig` 已讓 springdoc 忽略 `AuthUser`，新增類似的注入型別時同樣要忽略，否則會被展開成 query 參數。
 *   request／response DTO 的 `@Schema` 目前不強制，有餘力再補欄位說明。
 

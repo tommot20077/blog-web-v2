@@ -7,7 +7,9 @@ import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotatedElementUtils;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
@@ -71,6 +73,12 @@ class OpenApiDocsE2E extends AbstractE2ETest {
         Files.createDirectories(out.getParent());
         Files.writeString(out, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(docs));
         return docs;
+    }
+
+    private static List<String> toList(java.util.Iterator<String> names) {
+        List<String> list = new ArrayList<>();
+        names.forEachRemaining(list::add);
+        return list;
     }
 
     private static JsonNode operation(JsonNode docs, String path, String method) {
@@ -164,5 +172,146 @@ class OpenApiDocsE2E extends AbstractE2ETest {
             }
         }
         assertThat(leaked).as("AuthUser 欄位洩漏成 query 參數").isEmpty();
+    }
+
+    private static final String ERROR_SCHEMA_REF = "#/components/schemas/ApiErrorResponse";
+
+    /**
+     * 刻意讓錯誤回應 body 帶資料的例外（key 為 {@code METHOD path status}）：
+     * reindex 衝突時 {@code data} 是進行中的作業，並非 null，故在 handler 明確指定 content。
+     */
+    private static final Set<String> ERROR_BODY_EXEMPTIONS = Set.of(
+            "POST /api/v1/admin/search/reindex 409");
+
+    @Test
+    @DisplayName("每個 operation 至少有一個 2xx 或 304 回應")
+    void everyOperationHasSuccessResponse() throws Exception {
+        JsonNode docs = fetchDocs();
+        List<String> missing = new ArrayList<>();
+        for (Map.Entry<String, JsonNode> path : docs.path("paths").properties()) {
+            for (String method : HTTP_METHODS) {
+                JsonNode op = path.getValue().path(method);
+                if (op.isMissingNode()) {
+                    continue;
+                }
+                boolean hasSuccess = false;
+                for (String status : toList(op.path("responses").fieldNames())) {
+                    if (status.startsWith("2") || status.equals("304")) {
+                        hasSuccess = true;
+                    }
+                }
+                if (!hasSuccess) {
+                    missing.add(method.toUpperCase() + " " + path.getKey());
+                }
+            }
+        }
+        assertThat(missing).as("沒有任何 2xx／304 回應的 operation").isEmpty();
+    }
+
+    @Test
+    @DisplayName("回傳型別非 void 的 handler，其 2xx 回應有 content 且 $ref 對應回傳型別")
+    void successResponseCarriesReturnTypeSchema() throws Exception {
+        JsonNode docs = fetchDocs();
+        List<String> problems = new ArrayList<>();
+        for (Map.Entry<RequestMappingInfo, HandlerMethod> entry : moduleHandlers()) {
+            HandlerMethod handler = entry.getValue();
+            ResolvableType returnType = ResolvableType.forMethodReturnType(handler.getMethod());
+            if (returnType.resolve(Object.class) == void.class) {
+                continue;
+            }
+            ResolvableType body = ResponseEntity.class.isAssignableFrom(returnType.resolve(Object.class))
+                    ? returnType.getGeneric(0) : returnType;
+            for (String path : entry.getKey().getPatternValues()) {
+                for (var method : entry.getKey().getMethodsCondition().getMethods()) {
+                    JsonNode op = operation(docs, path, method.name().toLowerCase());
+                    String label = method + " " + path;
+                    boolean checked = false;
+                    for (Map.Entry<String, JsonNode> response : op.path("responses").properties()) {
+                        if (!response.getKey().startsWith("2")) {
+                            continue;
+                        }
+                        checked = true;
+                        String ref = response.getValue().path("content").path("*/*").path("schema").path("$ref").asText("");
+                        if (ref.isEmpty()) {
+                            problems.add(label + " " + response.getKey() + " 缺 content／$ref");
+                        } else if (!ref.startsWith("#/components/schemas/ApiResponse")
+                                || !containsGenericNames(ref, body)) {
+                            problems.add(label + " " + response.getKey() + " $ref=" + ref + " 與回傳型別 " + body + " 不符");
+                        }
+                    }
+                    if (!checked) {
+                        problems.add(label + " 沒有 2xx");
+                    }
+                }
+            }
+        }
+        assertThat(problems).as("2xx 回應缺 content 或 schema 對不上回傳型別").isEmpty();
+    }
+
+    /** schema 名稱（springdoc 以泛型實參簡名串接）需包含回傳型別所有泛型實參的簡名 */
+    private static boolean containsGenericNames(String ref, ResolvableType type) {
+        for (ResolvableType generic : type.getGenerics()) {
+            Class<?> raw = generic.resolve(Object.class);
+            if (!ref.contains(raw.getSimpleName()) || !containsGenericNames(ref, generic)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Test
+    @DisplayName("所有 4xx／5xx 回應一律引用 ApiErrorResponse，不得引用成功 schema")
+    void errorResponsesReferenceErrorSchemaOnly() throws Exception {
+        JsonNode docs = fetchDocs();
+        List<String> problems = new ArrayList<>();
+        int checked = 0;
+        for (Map.Entry<String, JsonNode> path : docs.path("paths").properties()) {
+            for (String method : HTTP_METHODS) {
+                JsonNode op = path.getValue().path(method);
+                for (Map.Entry<String, JsonNode> response : op.path("responses").properties()) {
+                    String status = response.getKey();
+                    if (!(status.startsWith("4") || status.startsWith("5"))) {
+                        continue;
+                    }
+                    String label = method.toUpperCase() + " " + path.getKey() + " " + status;
+                    if (ERROR_BODY_EXEMPTIONS.contains(label)) {
+                        continue;
+                    }
+                    checked++;
+                    String ref = response.getValue().path("content").path("*/*").path("schema").path("$ref").asText("");
+                    if (!ERROR_SCHEMA_REF.equals(ref)) {
+                        problems.add(label + " $ref=" + (ref.isEmpty() ? "(無)" : ref));
+                    }
+                }
+            }
+        }
+        assertThat(checked).as("檢查的錯誤回應數").isGreaterThan(200);
+        assertThat(problems).as("未引用 ApiErrorResponse 的錯誤回應").isEmpty();
+    }
+
+    @Test
+    @DisplayName("components 註冊 ApiErrorResponse（code／message／data／timestamp），data 型別為 null")
+    void errorSchemaIsRegistered() throws Exception {
+        JsonNode schema = fetchDocs().path("components").path("schemas").path("ApiErrorResponse");
+        assertThat(schema.isMissingNode()).as("ApiErrorResponse 已註冊").isFalse();
+        assertThat(toList(schema.path("properties").fieldNames())).containsExactlyInAnyOrder("code", "message", "data", "timestamp");
+        assertThat(schema.path("properties").path("data").path("type").asText()).isEqualTo("null");
+    }
+
+    @Test
+    @DisplayName("抽查：reindex 202／409 保留成功 schema，PUT 文章 200 有 content 且 409 引用錯誤 schema")
+    void spotCheckKeyEndpoints() throws Exception {
+        JsonNode docs = fetchDocs();
+        JsonNode reindex = operation(docs, "/api/v1/admin/search/reindex", "post").path("responses");
+        assertThat(reindex.path("202").path("content").path("*/*").path("schema").path("$ref").asText())
+                .isEqualTo("#/components/schemas/ApiResponseSearchReindexJobResponse");
+        assertThat(reindex.path("409").path("content").path("*/*").path("schema").path("$ref").asText())
+                .isEqualTo("#/components/schemas/ApiResponseSearchReindexJobResponse");
+        JsonNode put = operation(docs, "/api/v1/articles/{uuid}", "put").path("responses");
+        assertThat(put.path("200").path("content").path("*/*").path("schema").path("$ref").asText())
+                .startsWith("#/components/schemas/ApiResponse");
+        assertThat(put.path("409").path("content").path("*/*").path("schema").path("$ref").asText())
+                .isEqualTo(ERROR_SCHEMA_REF);
+        assertThat(put.path("409").path("description").asText()).contains("A0208");
     }
 }
