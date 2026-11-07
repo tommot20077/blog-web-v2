@@ -691,6 +691,33 @@ class ArticleFacadeImplTest {
         }
 
         @Test
+        @DisplayName("SEC-25：還原內容超過 200,000 字元（上限施行前留下的舊快照）→ 拒絕，entity 與事件都不動")
+        void applyRestoreContent_contentOverLimit_rejectedWithoutMutation() {
+            ArticleRestoreSource data = new ArticleRestoreSource(
+                "T", "s", "a".repeat(200_001), "sum", null, List.of());
+
+            assertThatThrownBy(() -> facade.applyRestoreContent(articleUuid, data))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo("A0001");
+
+            assertThat(existing.getContent()).isNull();
+            verify(articleRepository, never()).save(any(Article.class));
+            verifyNoInteractions(tagFacade, articleEventPublisher);
+        }
+
+        @Test
+        @DisplayName("SEC-25：還原內容剛好 200,000 字元 → 通過")
+        void applyRestoreContent_contentAtLimit_accepted() {
+            ArticleRestoreSource data = new ArticleRestoreSource(
+                "T", "s", "a".repeat(200_000), "sum", null, List.of());
+
+            facade.applyRestoreContent(articleUuid, data);
+
+            assertThat(existing.getContent()).hasSize(200_000);
+        }
+
+        @Test
         @DisplayName("DRAFT article 還原 → 只發 publishContentChanged，不發 publishUpdated")
         void applyRestoreContent_draftArticle_publishesOnlyContentChanged() {
             ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "c", "sum", null, List.of());
