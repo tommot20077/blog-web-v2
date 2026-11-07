@@ -9,7 +9,6 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
@@ -17,6 +16,7 @@ import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.response.MyProgress;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesArticleItem;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesSummaryResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
@@ -600,14 +600,16 @@ public class SeriesService {
         r.setAuthor(toAuthorSummary(row.getAuthorUuid(), resolveAuthors(List.of(row))));
 
         List<UUID> articleUuids = articles.stream().map(ArticleData::uuid).toList();
-        List<ArticleSummaryResponse> summaries = articleUuids.isEmpty()
+        List<SeriesArticleItem> items = articleUuids.isEmpty()
                 ? List.of()
-                : articleFacade.getSummariesByUuids(articleUuids);
-        summaries.forEach(s -> {
-            s.setSeriesUuid(row.getUuid());
-            s.setSeriesTitle(row.getTitle());
+                : articleFacade.getSummariesByUuids(articleUuids).stream()
+                        .map(SeriesArticleItem::from)
+                        .toList();
+        items.forEach(item -> {
+            item.setSeriesUuid(row.getUuid());
+            item.setSeriesTitle(row.getTitle());
         });
-        r.setArticles(summaries);
+        r.setArticles(items);
         return r;
     }
 }
