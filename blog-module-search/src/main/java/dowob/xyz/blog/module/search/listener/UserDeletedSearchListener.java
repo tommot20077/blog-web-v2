@@ -27,7 +27,8 @@ import java.util.UUID;
  * 查不到時退回固定的「已刪除使用者」，仍須蓋掉索引內的原暱稱。搜尋歷史存在 Redis（{@code search:history:{userUuid}}），一併清除。</p>
  *
  * <p>冪等性：改寫是「設定為某值」，重送得到相同結果；清除歷史亦同，因此不使用 IdempotencyService。
- * 之後全量重建索引（{@code reindexAll}）讀到的也是匿名化後的暱稱，不會把原暱稱寫回。
+ * 之後全量重建索引讀到的也是匿名化後的暱稱，不會把原暱稱寫回；重建進行中改寫時，作者會被記進重建變動紀錄，
+ * 切換 alias 前後在新索引上再改寫一次（{@code ReindexJournal}）。
  * ACK 策略：AUTO；失敗往外拋，由容器重試，耗盡進 DLQ。缺 {@code userUuid} 的 payload 記 warn 後 ack。</p>
  *
  * @author Yuan
