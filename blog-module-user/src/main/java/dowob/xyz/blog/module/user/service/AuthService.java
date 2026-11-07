@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
+import dowob.xyz.blog.module.user.util.TokenHasher;
 import dowob.xyz.blog.module.user.util.TokenVersionUtils;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
@@ -187,27 +188,15 @@ public class AuthService {
         user.setTokenVersion("v1");
 
         /**
-         * DB 操作（save user + save verificationToken）在同一個 transaction 內。
+         * DB 操作（save user）在 transaction 內。驗證連結 token 不在此建立（A1）：由寄信 consumer 於寄信當下
+         * 產生並只存 SHA-256，這裡只發事件。
          * users 的 INSERT 是交易內第一個寫入：撞到唯一約束時例外立即中止交易（之後不再執行任何 SQL），
          * 在交易之外轉成業務結果（RACE-02／RACE-03／Q8）。
          */
-        String tokenValue = UUID.randomUUID().toString();
         String verificationCode = generateVerificationCode();
         User savedUser;
         try {
-            savedUser = transactionTemplate.execute(status -> {
-                User saved = userRepository.save(user);
-
-                VerificationToken verificationToken = new VerificationToken();
-                verificationToken.setUserId(saved.getId());
-                verificationToken.setToken(tokenValue);
-                verificationToken.setType("EMAIL_VERIFICATION");
-                verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
-                verificationToken.setCreatedAt(LocalDateTime.now());
-                verificationTokenRepository.save(verificationToken);
-
-                return saved;
-            });
+            savedUser = transactionTemplate.execute(status -> userRepository.save(user));
         } catch (RuntimeException e) {
             if (isEmailConflict(e)) {
                 log.info("註冊併發落敗：寫入撞到 {}，改走重複 email 路徑（靜默成功並通知原信箱主人）",
@@ -447,7 +436,7 @@ public class AuthService {
     @Transactional
     public void verifyEmail(String token) {
         VerificationToken verificationToken = verificationTokenRepository
-                .findByTokenAndType(token, "EMAIL_VERIFICATION")
+                .findByTokenHashAndType(TokenHasher.sha256Hex(token), "EMAIL_VERIFICATION")
                 .orElseThrow(() -> new BusinessException(UserErrorCode.TOKEN_INVALID));
 
         if (verificationToken.getExpiresAt().isBefore(LocalDateTime.now())) {
@@ -540,22 +529,7 @@ public class AuthService {
         }
 
         userRepository.findByEmail(email).ifPresent(user -> {
-            /** DB 操作在 transaction 內 */
-            String tokenValue = UUID.randomUUID().toString();
-            transactionTemplate.executeWithoutResult(status -> {
-                /** 先刪同類舊 token，讓「最新」等於「唯一」：晚到的舊寄信事件不會寄出仍有效的舊 token（ARCH-24） */
-                verificationTokenRepository.deleteByUserIdAndType(user.getId(), "PASSWORD_RESET");
-
-                VerificationToken resetToken = new VerificationToken();
-                resetToken.setUserId(user.getId());
-                resetToken.setToken(tokenValue);
-                resetToken.setType("PASSWORD_RESET");
-                resetToken.setExpiresAt(LocalDateTime.now().plusMinutes(15));
-                resetToken.setCreatedAt(LocalDateTime.now());
-                verificationTokenRepository.save(resetToken);
-            });
-
-            /** DB 已 commit，best-effort 發 MQ（失敗不影響忘記密碼結果） */
+            /** token 由寄信 consumer 於寄信當下產生並只存雜湊（A1），這裡不碰 verification_tokens，只發事件（best-effort） */
             try {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
@@ -597,22 +571,8 @@ public class AuthService {
                 return;
             }
 
-            /** DB 操作（delete + save）在 transaction 內 */
-            String tokenValue = UUID.randomUUID().toString();
+            /** 舊 token 的刪除與新 token 的產生都由寄信 consumer 在寄信當下於同一交易完成（A1），這裡只備好 Redis 驗證碼並發事件 */
             String verificationCode = generateVerificationCode();
-            transactionTemplate.executeWithoutResult(status -> {
-                verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
-
-                VerificationToken verificationToken = new VerificationToken();
-                verificationToken.setUserId(user.getId());
-                verificationToken.setToken(tokenValue);
-                verificationToken.setType("EMAIL_VERIFICATION");
-                verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
-                verificationToken.setCreatedAt(LocalDateTime.now());
-                verificationTokenRepository.save(verificationToken);
-            });
-
-            /** DB 已 commit，best-effort 發 MQ（失敗不影響重發結果） */
             saveEmailVerificationCode(user.getEmail(), verificationCode);
             // 新碼發出，重置失敗計數讓使用者可從新碼開始驗證
             try {
@@ -647,7 +607,7 @@ public class AuthService {
     @Transactional
     public void resetPassword(String token, String newPassword) {
         VerificationToken resetToken = verificationTokenRepository
-                .findByTokenAndType(token, "PASSWORD_RESET")
+                .findByTokenHashAndType(TokenHasher.sha256Hex(token), "PASSWORD_RESET")
                 .orElseThrow(() -> new BusinessException(UserErrorCode.TOKEN_INVALID));
 
         if (resetToken.getExpiresAt().isBefore(LocalDateTime.now())) {

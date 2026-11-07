@@ -62,18 +62,20 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 |--------|------|-------------|-------|
 | id | BIGSERIAL | PRIMARY KEY | |
 | user_id | BIGINT | NOT NULL REFERENCES users(id) | |
-| token | VARCHAR(255) | NOT NULL UNIQUE | |
-| type | VARCHAR(20) | NOT NULL | EMAIL_VERIFY / PASSWORD_RESET |
+| token_hash | VARCHAR(255) | NOT NULL UNIQUE | V35 起（原欄位 `token`）。**只存明文 token 的 SHA-256（64 字元小寫 hex）**，明文只出現在寄出的信件；由寄信 consumer 於寄信當下產生並存入（見下方說明） |
+| type | VARCHAR(20) | NOT NULL | EMAIL_VERIFICATION / PASSWORD_RESET |
 | expires_at | TIMESTAMP | NOT NULL | |
 | created_at | TIMESTAMP | NOT NULL DEFAULT CURRENT_TIMESTAMP | |
 
 **Indexes:**
 - `verification_tokens_pkey`（auto）on id
-- `verification_tokens_token_key`（auto, UNIQUE）on token
+- `uq_verification_tokens_token_hash`（UNIQUE）on token_hash（V35 由 `verification_tokens_token_key` 更名）
 
 **Foreign keys:**
 - `user_id` → `users(id)`（NO ACTION；同模組內部關聯）
 
+> **只存雜湊（A1／ARCH-24 殘餘，V35）**：token 由寄信 consumer 在寄信當下產生（UUID），同一交易內先刪該使用者同類舊 token、再存 `SHA-256(明文)`、最後寄信；寄信失敗整個交易 rollback。`verifyEmail`／`resetPassword` 對使用者提交的明文做 SHA-256 後以 `token_hash` 等值查詢，用 DB 裡的雜湊值本身提交不會通過。`AuthService` 的註冊／重寄／忘記密碼只發事件，不建立 token。
+>
 > 使用者刪除帳號（匿名化）時，該使用者的所有 token 一併刪除（避免舊 token 事後重新啟用或重設 DELETED 帳號）。
 
 ---
@@ -573,6 +575,7 @@ PRIMARY KEY (user_id, tag_id)
 | **V32** | 跨模組識別全面改 UUID（article 模組，系列維度，M6 完成）：`articles` 新增 `series_uuid UUID`，由 `series.uuid` 回填（`series_id` 為 NULL 者維持 NULL；`series_id` 非 NULL 卻找不到系列時 `RAISE EXCEPTION` 中止、不刪資料）；DROP 欄位 `series_id`（連帶移除 `articles_series_id_fkey` → `series(id)` ON DELETE SET NULL 與 partial index `idx_articles_series_position` (series_id, series_position)）；以同名在 (series_uuid, series_position) 上重建 partial index（WHERE series_uuid IS NOT NULL）。`series_uuid` 維持可 NULL、**不建 FK**；`series_position` 不動。刪除連動改由 article 訂閱 `SeriesDeletedEvent`（queue `article.series-deleted`）清空 `series_uuid`／`series_position`，並以每日校正排程兜底。至此 `articles` 沒有任何跨模組 FK |
 | **V33** | 跨模組識別全面改 UUID（tag 模組，M7-tag）：DROP `article_tags_article_id_fkey`（`article_tags.article_id` → `articles(uuid)` ON DELETE CASCADE，最後一條跨模組 FK；欄位名稱不改、不新增 FK）；`tag_id` → `tags(id)` 模組內 FK 與 PK 不動。PERF-07：新增 `idx_article_tags_tag_id` on `article_tags (tag_id)`、`idx_user_tag_follows_tag_id` on `user_tag_follows (tag_id)`。刪除連動改由 tag 訂閱 `ArticleDeletedEvent`（queue `tag.article-deleted`）刪除 `article_tags` 列，並以每日校正排程 `ArticleTagOrphanReconciliationJob`（03:59）兜底；`tags.usage_count` 不動（DATA-01 另案）。RACE-08 無 schema 變動（`tags` 的 name／slug UNIQUE 不變，程式改以 `INSERT ... ON CONFLICT DO NOTHING` 建立） |
 | **V34** | RACE-02（M8，user 階段）：`users` 新增 UNIQUE 約束 `uq_users_nickname` (nickname)。比對語意與應用層 `existsByNickname` 一致（精確比對、含軟刪除者，不加 lower()／不排除 DELETED）。遷移前先檢查既有重複：有重複 → `RAISE EXCEPTION` 列出重複的暱稱與筆數、**不修改任何資料**（需人工處理後再遷移）。應用層保留 `existsByNickname` 先查作為快速路徑，註冊與改名寫入時撞到 `uq_users_nickname` 轉成 `NICKNAME_DUPLICATED`；註冊撞 `users_username_key` 轉成 `USERNAME_DUPLICATED`；撞 `users_email_key` 原轉 `EMAIL_DUPLICATED`（A0106），Q8（SEC-14）起改為靜默成功並通知原信箱主人（RACE-03，無 schema 變動；A0106 已於 2026-11-05 停用並刪除常數，不重用） |
+| **V35** | ARCH-24 殘餘（W7-a／A1，Yuan 2026-11-07）：`verification_tokens` 只存 SHA-256。`DELETE FROM verification_tokens`（舊列為明文 token，更名後會變成「看似雜湊的明文」，且全新開站沒有需保留的資料）→ 欄位 `token` 更名 `token_hash`（存 64 字元小寫 hex）→ 約束 `verification_tokens_token_key` 更名 `uq_verification_tokens_token_hash`。token 改由寄信 consumer 於寄信當下產生，`AuthService` 不再建立 token（見 verification_tokens 區塊說明）。無跨模組 FK 變動 |
 
 ---
 

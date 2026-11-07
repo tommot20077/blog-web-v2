@@ -54,4 +54,17 @@ public final class DataBuilder {
         map.put("token", token);
         return map;
     }
+
+    public static Map<String, Object> forgotPassword(String email) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("email", email);
+        return map;
+    }
+
+    public static Map<String, Object> resetPassword(String token, String newPassword) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("token", token);
+        map.put("newPassword", newPassword);
+        return map;
+    }
 }

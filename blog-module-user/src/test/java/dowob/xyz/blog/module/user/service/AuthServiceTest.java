@@ -15,6 +15,7 @@ import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
+import dowob.xyz.blog.module.user.util.TokenHasher;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -168,6 +169,7 @@ class AuthServiceTest {
         authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
 
         verify(userRepository).save(any(User.class));
+        verifyNoInteractions(verificationTokenRepository);
     }
 
     /**
@@ -890,7 +892,7 @@ class AuthServiceTest {
         mockUser.setStatus(UserStatus.PENDING_VERIFICATION);
         mockUser.setEmailVerified(false);
 
-        when(verificationTokenRepository.findByTokenAndType(tokenStr, "EMAIL_VERIFICATION"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenStr), "EMAIL_VERIFICATION"))
                 .thenReturn(Optional.of(emailToken));
         when(userRepository.findById(1L)).thenReturn(Optional.of(mockUser));
 
@@ -910,7 +912,7 @@ class AuthServiceTest {
     @DisplayName("verifyEmail → Token 不存在 → 應拋出 TOKEN_INVALID BusinessException")
     void verifyEmail_withNonExistentToken_shouldThrowTokenInvalid() {
         String tokenStr = "non-existent-token";
-        when(verificationTokenRepository.findByTokenAndType(tokenStr, "EMAIL_VERIFICATION"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenStr), "EMAIL_VERIFICATION"))
                 .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> authService.verifyEmail(tokenStr))
@@ -927,13 +929,49 @@ class AuthServiceTest {
     void verifyEmail_withExpiredToken_shouldThrowTokenInvalid() {
         String tokenStr = "expired-email-token";
         VerificationToken expiredToken = buildEmailVerificationToken(tokenStr, LocalDateTime.now().minusHours(1));
-        when(verificationTokenRepository.findByTokenAndType(tokenStr, "EMAIL_VERIFICATION"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenStr), "EMAIL_VERIFICATION"))
                 .thenReturn(Optional.of(expiredToken));
 
         assertThatThrownBy(() -> authService.verifyEmail(tokenStr))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).getCode())
                         .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
+    }
+
+    /**
+     * 驗證（A1）：以資料庫裡的雜湊值本身當 token 提交，不得通過驗證（DB 外洩的雜湊不能直接拿來用）。
+     */
+    @Test
+    @DisplayName("verifyEmail → 提交的是 DB 儲存的雜湊值而非明文 → 查不到 → TOKEN_INVALID")
+    void verifyEmail_submittingStoredHash_shouldThrowTokenInvalid() {
+        String plain = "plain-email-token";
+        String storedHash = TokenHasher.sha256Hex(plain);
+        when(verificationTokenRepository.findByTokenHashAndType(storedHash, "EMAIL_VERIFICATION"))
+                .thenReturn(Optional.of(buildEmailVerificationToken(plain, LocalDateTime.now().plusHours(24))));
+
+        assertThatThrownBy(() -> authService.verifyEmail(storedHash))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
+        verify(verificationTokenRepository, never()).findByTokenHashAndType(plain, "EMAIL_VERIFICATION");
+    }
+
+    /**
+     * 驗證（A1）：resetPassword 以雜湊值本身當 token 同樣不得通過。
+     */
+    @Test
+    @DisplayName("resetPassword → 提交的是 DB 儲存的雜湊值而非明文 → 查不到 → TOKEN_INVALID，且不改密碼")
+    void resetPassword_submittingStoredHash_shouldThrowTokenInvalid() {
+        String plain = "plain-reset-token";
+        String storedHash = TokenHasher.sha256Hex(plain);
+        when(verificationTokenRepository.findByTokenHashAndType(storedHash, "PASSWORD_RESET"))
+                .thenReturn(Optional.of(buildResetToken(plain, LocalDateTime.now().plusMinutes(10))));
+
+        assertThatThrownBy(() -> authService.resetPassword(storedHash, "NewPassword123!"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode())
+                        .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
+        verify(userRepository, never()).save(any());
     }
 
     /**
@@ -1075,11 +1113,11 @@ class AuthServiceTest {
        ========================================================================= */
 
     /**
-     * 驗證：forgotPassword 應儲存驗證 Token 並發布事件至 RabbitMQ。
+     * 驗證（A1）：forgotPassword 不再自己建立 token（token 由寄信 consumer 於寄信當下產生並只存雜湊），只發布事件。
      */
     @Test
-    @DisplayName("forgotPassword → 信箱存在 → 應儲存驗證 Token 並發布事件")
-    void forgotPassword_shouldSaveVerificationTokenAndPublishEvent() {
+    @DisplayName("forgotPassword → 信箱存在 → 不碰 verification_tokens，只發布事件（A1）")
+    void forgotPassword_shouldOnlyPublishEvent_neverTouchTokens() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
         User mockUser = buildActiveUser();
@@ -1088,7 +1126,7 @@ class AuthServiceTest {
 
         authService.forgotPassword(TEST_EMAIL);
 
-        verify(verificationTokenRepository).save(any(VerificationToken.class));
+        verifyNoInteractions(verificationTokenRepository);
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
     }
 
@@ -1170,7 +1208,7 @@ class AuthServiceTest {
      * 驗證：未超過限制時 forgotPassword 應正常執行並儲存 Token、發布事件。
      */
     @Test
-    @DisplayName("forgotPassword → 未超過限制 → 應正常儲存 Token 並發布事件")
+    @DisplayName("forgotPassword → 未超過限制 → 應正常發布事件（不建立 token）")
     void forgotPassword_withinLimit_shouldProceedNormally() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class)))
@@ -1182,7 +1220,7 @@ class AuthServiceTest {
 
         authService.forgotPassword(TEST_EMAIL);
 
-        verify(verificationTokenRepository).save(any(VerificationToken.class));
+        verifyNoInteractions(verificationTokenRepository);
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
     }
 
@@ -1200,7 +1238,7 @@ class AuthServiceTest {
         VerificationToken resetToken = buildResetToken(tokenStr, LocalDateTime.now().plusMinutes(10));
         User mockUser = buildActiveUser();
 
-        when(verificationTokenRepository.findByTokenAndType(tokenStr, "PASSWORD_RESET"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenStr), "PASSWORD_RESET"))
                 .thenReturn(Optional.of(resetToken));
         when(userRepository.findById(1L)).thenReturn(Optional.of(mockUser));
         when(passwordEncoder.encode(anyString())).thenReturn("newEncodedPassword");
@@ -1223,7 +1261,7 @@ class AuthServiceTest {
         String tokenStr = "expired-token";
         VerificationToken expiredToken = buildResetToken(tokenStr, LocalDateTime.now().minusMinutes(1));
 
-        when(verificationTokenRepository.findByTokenAndType(tokenStr, "PASSWORD_RESET"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenStr), "PASSWORD_RESET"))
                 .thenReturn(Optional.of(expiredToken));
 
         assertThatThrownBy(() -> authService.resetPassword(tokenStr, "newPassword"))
@@ -1237,7 +1275,7 @@ class AuthServiceTest {
     @DisplayName("resetPassword → Token 不存在 → 應拋出 TOKEN_INVALID BusinessException")
     void resetPassword_withNonExistentToken_shouldThrowTokenInvalid() {
         String tokenStr = "non-existent-reset-token";
-        when(verificationTokenRepository.findByTokenAndType(tokenStr, "PASSWORD_RESET"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenStr), "PASSWORD_RESET"))
                 .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> authService.resetPassword(tokenStr, "newPassword"))
@@ -1358,7 +1396,7 @@ class AuthServiceTest {
      * 驗證：有效 PENDING 狀態用戶應成功發送驗證信。
      */
     @Test
-    @DisplayName("resendVerification → 有效 PENDING 用戶 → 應發送驗證信")
+    @DisplayName("resendVerification → 有效 PENDING 用戶 → 發布事件與 Redis 驗證碼，不建立 token（A1）")
     void resendVerification_validPendingUser_shouldSendEmail() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
@@ -1369,7 +1407,7 @@ class AuthServiceTest {
 
         authService.resendVerification(TEST_EMAIL);
 
-        verify(verificationTokenRepository).save(any(VerificationToken.class));
+        verifyNoInteractions(verificationTokenRepository);
         ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
         verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
         ArgumentCaptor<String> codeCaptor = ArgumentCaptor.forClass(String.class);
@@ -1550,7 +1588,7 @@ class AuthServiceTest {
         String tokenStr = "orphan-email-token";
         VerificationToken emailToken = buildEmailVerificationToken(tokenStr, LocalDateTime.now().plusHours(24));
 
-        when(verificationTokenRepository.findByTokenAndType(tokenStr, "EMAIL_VERIFICATION"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenStr), "EMAIL_VERIFICATION"))
                 .thenReturn(Optional.of(emailToken));
         when(userRepository.findById(1L)).thenReturn(Optional.empty());
 
@@ -1634,7 +1672,7 @@ class AuthServiceTest {
         String tokenStr = "orphan-reset-token";
         VerificationToken resetToken = buildResetToken(tokenStr, LocalDateTime.now().plusMinutes(10));
 
-        when(verificationTokenRepository.findByTokenAndType(tokenStr, "PASSWORD_RESET"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenStr), "PASSWORD_RESET"))
                 .thenReturn(Optional.of(resetToken));
         when(userRepository.findById(1L)).thenReturn(Optional.empty());
 
@@ -1910,7 +1948,7 @@ class AuthServiceTest {
         VerificationToken token = new VerificationToken();
         token.setId(1L);
         token.setUserId(1L);
-        token.setToken(tokenStr);
+        token.setTokenHash(TokenHasher.sha256Hex(tokenStr));
         token.setType("PASSWORD_RESET");
         token.setExpiresAt(expiresAt);
         return token;
@@ -2071,7 +2109,7 @@ class AuthServiceTest {
         VerificationToken token = new VerificationToken();
         token.setId(2L);
         token.setUserId(1L);
-        token.setToken(tokenStr);
+        token.setTokenHash(TokenHasher.sha256Hex(tokenStr));
         token.setType("EMAIL_VERIFICATION");
         token.setExpiresAt(expiresAt);
         return token;

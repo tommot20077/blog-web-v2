@@ -340,7 +340,7 @@ class UserAccountDeletionIntegrationTest {
      * @param type   token 類型
      */
     private void insertToken(Long userId, String type) {
-        jdbc.update("INSERT INTO verification_tokens (user_id, token, type, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+        jdbc.update("INSERT INTO verification_tokens (user_id, token_hash, type, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
                 userId, UUID.randomUUID().toString(), type,
                 Timestamp.valueOf(LocalDateTime.now().plusHours(1)), Timestamp.valueOf(LocalDateTime.now()));
     }

@@ -9,6 +9,7 @@ import dowob.xyz.blog.module.user.model.event.UserPasswordResetRequestedEvent;
 import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
+import dowob.xyz.blog.module.user.util.TokenHasher;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.InternetAddress;
@@ -21,6 +22,7 @@ import org.springframework.mail.MailPreparationException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
@@ -31,21 +33,35 @@ import java.util.UUID;
  * 用戶安全郵件服務
  *
  * <p>負責寄送信箱驗證與密碼重設等安全通知信。寄信事件不含個資與 token（ARCH-24），
- * 本服務於寄信當下依 {@code userUuid} 查詢 users、verification_tokens 與 Redis。</p>
+ * 本服務於寄信當下依 {@code userUuid} 查詢 users 與 Redis，並在此時<b>產生</b>驗證／重設 token（A1）：
+ * 信件內容是明文 token，{@code verification_tokens} 只存其 SHA-256（見 {@link TokenHasher}）。</p>
+ *
+ * <p><b>交易與冪等（寄信失敗重試）</b>：兩個產生 token 的方法標 {@link Transactional}，被 consumer 的
+ * {@code executeIdempotent} 呼叫時加入其交易，順序為「冪等標記 → 刪同類舊 token → 存新雜湊 → 寄信 → commit」。
+ * 寄信（外部副作用）失敗 → 例外往外拋 → 交易 rollback，<b>標記、新雜湊、舊 token 的刪除一起消失</b>，
+ * 重試時會重新產生 token 並再寄，不會因為「已標記處理過」而不寄，舊 token 也在新信寄出前一直保持有效。
+ * 代價與既有的 Z3-a 取捨相同：寄信成功但 commit 失敗時，使用者拿到的 token 不在 DB（rollback），
+ * 重送會再寄一封並產生新 token 取代；使用者最多多收一封，且只有最新那封有效。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserMailService {
 
-    /** 電子信箱驗證 token 類型（與 {@code AuthService} 寫入的值一致） */
+    /** 電子信箱驗證 token 類型（與 {@code AuthService} 查詢的值一致） */
     private static final String TOKEN_TYPE_EMAIL_VERIFICATION = "EMAIL_VERIFICATION";
 
-    /** 密碼重設 token 類型（與 {@code AuthService} 寫入的值一致） */
+    /** 密碼重設 token 類型（與 {@code AuthService} 查詢的值一致） */
     private static final String TOKEN_TYPE_PASSWORD_RESET = "PASSWORD_RESET";
+
+    /** 電子信箱驗證 token 有效期（小時） */
+    private static final long EMAIL_VERIFICATION_TTL_HOURS = 24;
+
+    /** 密碼重設 token 有效期（分鐘） */
+    private static final long PASSWORD_RESET_TTL_MINUTES = 15;
 
     /** Spring Mail 發送器 */
     private final JavaMailSender mailSender;
@@ -53,7 +69,7 @@ public class UserMailService {
     /** 用戶 Repository（寄信當下查 email、暱稱與狀態） */
     private final UserRepository userRepository;
 
-    /** 驗證 Token Repository（寄信當下查要寄出的 token） */
+    /** 驗證 Token Repository（寄信當下刪舊 token、存新 token 的 SHA-256） */
     private final VerificationTokenRepository verificationTokenRepository;
 
     /** Redis 操作模板（寄信當下查 6 位數驗證碼） */
@@ -74,33 +90,31 @@ public class UserMailService {
     /**
      * 寄送信箱驗證信
      *
-     * <p><b>事件不含個資與 token（ARCH-24）</b>，本方法於寄信當下以 {@code event.userUuid()} 查詢：
-     * email、暱稱查 {@code users}；驗證連結 token 查 {@code verification_tokens}
-     * 該使用者<b>最新一筆</b>且未過期的 {@code EMAIL_VERIFICATION}；驗證碼查 Redis（Redis 故障時降級為只寄連結）。</p>
+     * <p><b>事件不含個資與 token（ARCH-24）</b>，本方法於寄信當下以 {@code event.userUuid()} 查詢 email、暱稱
+     * （{@code users}）與驗證碼（Redis，故障時降級為只寄連結），並<b>產生新的驗證連結 token</b>（A1）：
+     * 先刪該使用者同類舊 token（讓「最新＝唯一」，舊連結立即失效）、存入新 token 的 SHA-256、最後才寄信，
+     * 信中是明文。順序與交易語意見類別說明。</p>
      *
-     * <p><b>為何查「最新有效」而非事件指定的那一筆</b>：token 表只有 Long 主鍵（事件契約禁止 Long，且本任務不新增 migration），
-     * 而「重寄」本來就會刪舊建新（{@code deleteByUserIdAndType}）。查最新有效即可保證晚到的舊事件<b>絕不會寄出
-     * 已被取代或已過期的 token</b>；代價是舊事件與新事件各自寄出同一個（最新的）連結——使用者最多收到內容相同的兩封，
-     * 且兩封都是有效連結。</p>
-     *
-     * <p><b>略過不寄的情況</b>（皆以 INFO 記一行，不記 email 與 token，回傳 {@code false}，呼叫端正常 ack）：
-     * 使用者不存在、使用者已刪帳（{@code DELETED}，email 已是墓碑值）、沒有 token 列（已驗證或已被刪除）、token 已過期。
-     * 驗證連結與驗證碼視為同一次驗證：沒有有效連結就整封不寄（驗證碼也隨 token 的驗證流程一起失效）。
-     * 連結有效但 Redis 已沒有驗證碼（TTL 10 分鐘，比連結 24 小時短）→ 照寄，信中只含連結。</p>
+     * <p><b>略過不寄的情況</b>（皆以 INFO 記一行，不記 email 與 token，不產生 token，回傳 {@code false}，呼叫端正常 ack）：
+     * 使用者不存在、使用者已刪帳（{@code DELETED}，email 已是墓碑值）、帳號已不是 {@code PENDING_VERIFICATION}
+     * （已驗證，晚到的舊事件不該再發驗證連結）。連結有效但 Redis 已沒有驗證碼（TTL 10 分鐘，比連結 24 小時短）→ 照寄，信中只含連結。</p>
      *
      * @param event 用戶註冊事件
      * @return 是否真的寄出
      */
+    @Transactional
     public boolean sendVerificationEmail(UserRegisteredEvent event) {
         Optional<User> user = findDeliverableUser(event.userUuid(), "驗證信");
         if (user.isEmpty()) {
             return false;
         }
-        Optional<VerificationToken> token = findValidToken(user.get(), TOKEN_TYPE_EMAIL_VERIFICATION, "驗證信");
-        if (token.isEmpty()) {
+        if (user.get().getStatus() != UserStatus.PENDING_VERIFICATION) {
+            log.info("略過驗證信：帳號已不需驗證（status={}） - userUuid={}", user.get().getStatus(), user.get().getUuid());
             return false;
         }
-        String verifyUrl = buildUrl("/verify-email", token.get().getToken());
+        String plainToken = issueToken(user.get(), TOKEN_TYPE_EMAIL_VERIFICATION,
+                LocalDateTime.now().plusHours(EMAIL_VERIFICATION_TTL_HOURS));
+        String verifyUrl = buildUrl("/verify-email", plainToken);
         String code = readVerificationCode(user.get());
         String codePart = code == null ? "" : """
 
@@ -124,22 +138,21 @@ public class UserMailService {
      * 寄送密碼重設信
      *
      * <p><b>事件不含個資與 token（ARCH-24）</b>，本方法以 {@code event.userUuid()} 查 {@code users} 取得 email，
-     * 並查該使用者最新一筆未過期的 {@code PASSWORD_RESET} token（選擇「最新有效」的理由同
-     * {@link #sendVerificationEmail}）。使用者已刪帳、token 已被使用（列已刪）或已過期時不寄，回傳 {@code false}。</p>
+     * 並<b>產生新的重設 token</b>（A1，15 分鐘有效）：先刪該使用者同類舊 token、存新 token 的 SHA-256、最後才寄信，
+     * 信中是明文。使用者不存在或已刪帳時不寄、不產生 token，回傳 {@code false}。</p>
      *
      * @param event 密碼重設事件
      * @return 是否真的寄出
      */
+    @Transactional
     public boolean sendPasswordResetEmail(UserPasswordResetRequestedEvent event) {
         Optional<User> user = findDeliverableUser(event.userUuid(), "密碼重設信");
         if (user.isEmpty()) {
             return false;
         }
-        Optional<VerificationToken> token = findValidToken(user.get(), TOKEN_TYPE_PASSWORD_RESET, "密碼重設信");
-        if (token.isEmpty()) {
-            return false;
-        }
-        String resetUrl = buildUrl("/reset-password", token.get().getToken());
+        String plainToken = issueToken(user.get(), TOKEN_TYPE_PASSWORD_RESET,
+                LocalDateTime.now().plusMinutes(PASSWORD_RESET_TTL_MINUTES));
+        String resetUrl = buildUrl("/reset-password", plainToken);
         String body = """
                 Hi,
 
@@ -229,25 +242,28 @@ public class UserMailService {
     }
 
     /**
-     * 查使用者指定類型最新一筆 token，且必須未過期；否則回 empty 並記 INFO（不記 token 內容）。
+     * 產生新的高熵 token（UUID，沿用既有格式與長度），先刪該使用者同類舊 token，再存入新 token 的 SHA-256。
      *
-     * @param user     收件使用者
-     * @param type     token 類型
-     * @param mailKind 信件種類（日誌用）
-     * @return 最新且未過期的 token
+     * <p>必須在呼叫端的交易內執行，且<b>寄信要在本方法之後</b>：寄信失敗 → 交易 rollback → 刪除與新雜湊一起撤銷。
+     * 明文只回傳給呼叫端組信，不寫 DB、不寫日誌。</p>
+     *
+     * @param user      收件使用者
+     * @param type      token 類型
+     * @param expiresAt 過期時間
+     * @return 明文 token（僅供組成信中連結）
      */
-    private Optional<VerificationToken> findValidToken(User user, String type, String mailKind) {
-        Optional<VerificationToken> token =
-                verificationTokenRepository.findFirstByUserIdAndTypeOrderByIdDesc(user.getId(), type);
-        if (token.isEmpty()) {
-            log.info("略過{}：已無有效 token（已使用或已被取代刪除） - userUuid={}", mailKind, user.getUuid());
-            return Optional.empty();
-        }
-        if (token.get().getExpiresAt().isBefore(LocalDateTime.now())) {
-            log.info("略過{}：token 已過期 - userUuid={}", mailKind, user.getUuid());
-            return Optional.empty();
-        }
-        return token;
+    private String issueToken(User user, String type, LocalDateTime expiresAt) {
+        String plainToken = UUID.randomUUID().toString();
+        verificationTokenRepository.deleteByUserIdAndType(user.getId(), type);
+
+        VerificationToken token = new VerificationToken();
+        token.setUserId(user.getId());
+        token.setTokenHash(TokenHasher.sha256Hex(plainToken));
+        token.setType(type);
+        token.setExpiresAt(expiresAt);
+        token.setCreatedAt(LocalDateTime.now());
+        verificationTokenRepository.save(token);
+        return plainToken;
     }
 
     private void sendSecurityMail(String to, String subject, String body) {

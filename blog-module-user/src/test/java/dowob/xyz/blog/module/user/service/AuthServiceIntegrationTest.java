@@ -6,6 +6,7 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
+import dowob.xyz.blog.module.user.util.TokenHasher;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -170,11 +171,11 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
         VerificationToken mockToken = new VerificationToken();
         mockToken.setId(99L);
         mockToken.setUserId(user.getId());
-        mockToken.setToken(tokenValue);
+        mockToken.setTokenHash(TokenHasher.sha256Hex(tokenValue));
         mockToken.setType("EMAIL_VERIFICATION");
         mockToken.setExpiresAt(LocalDateTime.now().plusHours(24));
 
-        when(verificationTokenRepository.findByTokenAndType(tokenValue, "EMAIL_VERIFICATION"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenValue), "EMAIL_VERIFICATION"))
                 .thenReturn(Optional.of(mockToken));
 
         authService.verifyEmail(tokenValue);
@@ -264,10 +265,10 @@ class AuthServiceIntegrationTest extends AbstractIntegrationTest {
         VerificationToken resetToken = new VerificationToken();
         resetToken.setId(88L);
         resetToken.setUserId(user.getId());
-        resetToken.setToken(tokenValue);
+        resetToken.setTokenHash(TokenHasher.sha256Hex(tokenValue));
         resetToken.setType("PASSWORD_RESET");
         resetToken.setExpiresAt(LocalDateTime.now().plusHours(1));
-        when(verificationTokenRepository.findByTokenAndType(tokenValue, "PASSWORD_RESET"))
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenValue), "PASSWORD_RESET"))
                 .thenReturn(Optional.of(resetToken));
 
         authService.resetPassword(tokenValue, "newPassword456");
