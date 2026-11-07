@@ -26,6 +26,9 @@ import org.springframework.data.elasticsearch.core.SearchHits;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import org.springframework.data.elasticsearch.core.query.FetchSourceFilterBuilder;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Metrics;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -97,6 +100,11 @@ public class SearchServiceImpl implements SearchService {
      * 搜尋建議最大回傳筆數
      */
     private static final int SUGGEST_MAX_SIZE = 10;
+
+    /**
+     * 重建變動紀錄（Redis）寫入失敗、仍照常更新 ES 的次數（tag {@code kind}：{@code article}／{@code author}，決策 D1-1）
+     */
+    public static final String JOURNAL_FAILED_METRIC = "search.reindex.journal.failed";
 
     /** 可計入全站熱門搜尋詞的最大長度（正規化後；超過者搜尋照常但不進榜，SEC-05） */
     static final int HOT_TERM_MAX_LENGTH = 50;
@@ -259,9 +267,9 @@ public class SearchServiceImpl implements SearchService {
      * {@inheritDoc}
      */
     @Override
-    public void indexArticle(ArticleDocument document) {
+    public void indexArticle(ArticleDocument document, UUID eventId) {
         /* 先記錄、再寫入（D1）：重建進行中時這次寫入只會落在舊索引，記錄讓重建在切換前後補進新索引 */
-        reindexJournal.recordArticle(document.getId());
+        recordJournalTolerantly(() -> reindexJournal.recordArticle(document.getId()), "article", document.getId(), eventId);
         articleSearchRepository.save(document);
         log.info("文章已索引至 Elasticsearch：id={}", document.getId());
     }
@@ -270,9 +278,9 @@ public class SearchServiceImpl implements SearchService {
      * {@inheritDoc}
      */
     @Override
-    public void deleteIndex(String articleUuid) {
+    public void deleteIndex(String articleUuid, UUID eventId) {
         /* 先記錄、再刪除（D1）：重建補齊時回查 DB，已非 PUBLISHED 者從新索引移除 */
-        reindexJournal.recordArticle(articleUuid);
+        recordJournalTolerantly(() -> reindexJournal.recordArticle(articleUuid), "article", articleUuid, eventId);
         articleSearchRepository.deleteById(articleUuid);
         log.info("文章已從 Elasticsearch 移除：uuid={}", articleUuid);
     }
@@ -281,9 +289,9 @@ public class SearchServiceImpl implements SearchService {
      * {@inheritDoc}
      */
     @Override
-    public long updateAuthorNickname(UUID authorUuid, String nickname) {
+    public long updateAuthorNickname(UUID authorUuid, String nickname, UUID eventId) {
         /* 先記錄、再改寫（D1）：重建進行中時新索引的該作者文件可能帶著舊暱稱，切換前後以當下暱稱再改寫一次 */
-        reindexJournal.recordAuthor(authorUuid);
+        recordJournalTolerantly(() -> reindexJournal.recordAuthor(authorUuid), "author", authorUuid.toString(), eventId);
         long updated = indexAdmin.updateAuthorNickname(authorUuid, nickname, ArticleIndexAdmin.ALIAS);
         log.info("已改寫索引內作者暱稱：authorUuid={}, updated={}", authorUuid, updated);
         return updated;
@@ -320,6 +328,48 @@ public class SearchServiceImpl implements SearchService {
         } catch (Exception e) {
             log.error("查詢 Elasticsearch 索引文件數失敗：{}", e.getMessage(), e);
             return null;
+        }
+    }
+
+    /**
+     * 寫入重建變動紀錄；Redis 故障（資料存取例外）時記 WARN 並計數，<b>照常繼續更新 ES</b>，不往外拋（決策 D1-1，Yuan 2026-11-07）。
+     *
+     * <p><b>取捨</b>：若把 Redis 故障往外拋，listener 會重試、耗盡進 DLQ——平常沒有重建時，Redis 抖動就會讓文章發布／下架
+     * 進不了搜尋索引，代價遠大於收益。照常寫 ES 的代價只在「剛好有重建進行中」時出現：這一筆變動寫進了舊索引、
+     * 沒被記下，切換後可能沒進新索引；再跑一次重建即可補回（{@value #JOURNAL_FAILED_METRIC} 計數與 WARN 用來發現這種情況）。
+     * Redis 長時間中斷時，重建本身會因無法續鎖、無法續期變動紀錄而自行中止且不切換 alias，因此不會出現「長時間漏記卻照樣切換」。</p>
+     *
+     * <p>只接住 {@link DataAccessException}（Spring Data Redis 把連線失敗、逾時、指令錯誤都轉成它的子類別）；
+     * 其他例外代表程式錯誤，原樣往外拋。計數本身絕不外拋。</p>
+     *
+     * @param record  寫入變動紀錄的動作
+     * @param kind    {@code article} 或 {@code author}（指標 tag）
+     * @param subject 文章或作者 UUID 字串（寫進日誌）
+     * @param eventId 觸發本次寫入的事件 id（寫進日誌；可為 {@code null}）
+     */
+    private void recordJournalTolerantly(Runnable record, String kind, String subject, UUID eventId) {
+        try {
+            record.run();
+        } catch (DataAccessException e) {
+            log.warn("搜尋索引重建變動紀錄寫入失敗（Redis），照常更新 ES：{}Uuid={}, eventId={}；若此刻有全量重建進行中，"
+                    + "這筆變動可能不會進入新索引，再執行一次重建即可補回。原因：{}", kind, subject, eventId, e.getMessage());
+            incrementJournalFailed(kind);
+        }
+    }
+
+    /**
+     * 累加 {@value #JOURNAL_FAILED_METRIC}；旁路觀測，絕不外拋。全域 registry 未掛任何子 registry 時跳過。
+     *
+     * @param kind {@code article} 或 {@code author}
+     */
+    private static void incrementJournalFailed(String kind) {
+        try {
+            if (Metrics.globalRegistry.getRegistries().isEmpty()) {
+                return;
+            }
+            Counter.builder(JOURNAL_FAILED_METRIC).tag("kind", kind).register(Metrics.globalRegistry).increment();
+        } catch (RuntimeException e) {
+            log.warn("指標 {}（kind={}）計數失敗，已忽略", JOURNAL_FAILED_METRIC, kind, e);
         }
     }
 

@@ -71,7 +71,7 @@ public class UserDeletedSearchListener {
                     }
                     UserDisplayInfo info = userFacade.getDisplayInfoByUuids(List.of(userUuid)).get(userUuid);
                     String nickname = info != null && info.nickname() != null ? info.nickname() : FALLBACK_NICKNAME;
-                    long updated = searchService.updateAuthorNickname(userUuid, nickname);
+                    long updated = searchService.updateAuthorNickname(userUuid, nickname, event.eventId());
                     searchService.clearHistory(userUuid);
                     log.info("使用者刪除連動：已改寫索引內作者暱稱並清除搜尋歷史 userUuid={} eventId={} documents={}",
                             userUuid, event.eventId(), updated);

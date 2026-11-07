@@ -137,8 +137,9 @@ public class ReindexJournal {
     /**
      * 重建進行中時記下這篇文章有變動（沒有重建時不寫入任何東西）。
      *
-     * <p>必須在寫入 alias <b>之前</b>呼叫。Redis 故障時例外原樣往外拋：listener 會失敗並由 MQ 容器重試，
-     * 而不是在不知道有沒有重建的情況下照寫，讓變動可能隨切換靜默遺失。</p>
+     * <p>必須在寫入 alias <b>之前</b>呼叫。Redis 故障時例外原樣往外拋，由呼叫端決定處置：
+     * {@code SearchServiceImpl} 依決策 D1-1 記 WARN、累加 {@code search.reindex.journal.failed} 後照常寫 ES
+     * （重建期間遇到 Redis 抖動的那一筆可能沒進新索引，再跑一次重建補回）。</p>
      *
      * @param articleUuid 文章 UUID 字串（文件 id）
      */

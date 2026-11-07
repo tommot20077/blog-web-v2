@@ -426,7 +426,7 @@ class ArticleIndexElasticsearchIT {
         UUID othersDoc = saveDocumentOf(otherAuthor, "Elasticsearch three");
         template.indexOps(ArticleDocument.class).refresh();
 
-        long updated = searchService.updateAuthorNickname(deletedAuthor, "已刪除使用者#abcd1234");
+        long updated = searchService.updateAuthorNickname(deletedAuthor, "已刪除使用者#abcd1234", UUID.randomUUID());
 
         assertThat(updated).isEqualTo(2);
         assertThat(rawAuthorSource(doc1).get("nickname")).isEqualTo("已刪除使用者#abcd1234");
@@ -446,9 +446,9 @@ class ArticleIndexElasticsearchIT {
         UUID doc = saveDocumentOf(author, "Elasticsearch one");
         template.indexOps(ArticleDocument.class).refresh();
 
-        assertThat(searchService.updateAuthorNickname(UUID.randomUUID(), "已刪除使用者#00000000")).isZero();
-        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234");
-        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234");
+        assertThat(searchService.updateAuthorNickname(UUID.randomUUID(), "已刪除使用者#00000000", UUID.randomUUID())).isZero();
+        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234", UUID.randomUUID());
+        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234", UUID.randomUUID());
 
         assertThat(rawAuthorSource(doc).get("nickname")).isEqualTo("已刪除使用者#abcd1234");
     }

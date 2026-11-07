@@ -107,7 +107,7 @@ class ReindexJournalTest {
     }
 
     @Test
-    @DisplayName("Redis 故障時 record 例外原樣往外拋（由 MQ 容器重試），不吞掉而讓重建期間的變動靜默遺失")
+    @DisplayName("Redis 故障時 record 例外原樣往外拋，由呼叫端決定處置（SearchServiceImpl 依 D1-1 記 WARN 後照常寫 ES）")
     void record_redisFailure_propagates() {
         when(redis.execute(any(RedisScript.class), anyList(), any())).thenThrow(new IllegalStateException("redis down"));
 

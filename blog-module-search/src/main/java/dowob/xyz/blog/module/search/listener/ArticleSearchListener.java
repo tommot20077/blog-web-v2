@@ -72,7 +72,7 @@ public class ArticleSearchListener {
         consumerExecutor.execute(CONSUMER_NAME_INDEX, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 () -> {
                     ArticleDocument document = toDocument(message);
-                    searchService.indexArticle(document);
+                    searchService.indexArticle(document, message.getEventId());
                     log.debug("文章索引建立成功：uuid={}", message.getArticleUuid());
                 });
     }
@@ -93,7 +93,7 @@ public class ArticleSearchListener {
         consumerExecutor.execute(CONSUMER_NAME_INDEX_UPDATE, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 () -> {
                     ArticleDocument document = toDocument(message);
-                    searchService.indexArticle(document);
+                    searchService.indexArticle(document, message.getEventId());
                     log.debug("文章索引更新成功：uuid={}", message.getArticleUuid());
                 });
     }
@@ -108,7 +108,7 @@ public class ArticleSearchListener {
         log.info("收到文章刪除事件，移除索引：uuid={}, eventId={}", message.getArticleUuid(), message.getEventId());
         consumerExecutor.execute(CONSUMER_NAME_INDEX_DELETE, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 () -> {
-                    searchService.deleteIndex(message.getArticleUuid().toString());
+                    searchService.deleteIndex(message.getArticleUuid().toString(), message.getEventId());
                     log.debug("文章索引移除成功：uuid={}", message.getArticleUuid());
                 });
     }
@@ -142,7 +142,7 @@ public class ArticleSearchListener {
         consumerExecutor.execute(CONSUMER_NAME_INDEX_ARCHIVE,
                 () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 () -> {
-                    searchService.deleteIndex(message.getArticleUuid().toString());
+                    searchService.deleteIndex(message.getArticleUuid().toString(), message.getEventId());
                     log.debug("已下架文章索引移除成功：uuid={}", message.getArticleUuid());
                 });
     }

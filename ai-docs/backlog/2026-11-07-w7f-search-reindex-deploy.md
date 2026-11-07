@@ -35,13 +35,21 @@
 - **rolling update 進行中**：舊版 pod 的 listener 不會把變動記進重建變動紀錄（journal），重建期間由舊版 pod 處理的發布／下架
   會在切換後遺失。
 
-## 4. ES index template（若有）
+## 4. Redis 故障時的增量索引（決策 D1-1，Yuan 2026-11-07）
+
+- listener 寫 ES 前會先把文章／刪帳作者記進重建變動紀錄（Redis）。**Redis 寫入失敗時仍照常更新 ES**：記一筆 WARN（帶 articleUuid
+  或 authorUuid 與 eventId）、累加指標 `search.reindex.journal.failed`（tag `kind=article|author`），不往外拋，事件不進 DLQ。
+- **取捨**：重建期間若剛好遇到 Redis 短暫抖動，那一筆變動寫進了舊索引但沒被記下，切換後可能沒進新索引——**再跑一次重建即可補回**。
+  Redis 長時間中斷時，重建本身會因無法續鎖、無法續期變動紀錄而自行中止、不切換 alias，不會「長時間漏記卻照樣切換」。
+- **維運**：重建完成後若 `search.reindex.journal.failed` 在重建期間有增加，或日誌有「搜尋索引重建變動紀錄寫入失敗」，就再跑一次重建。
+
+## 5. ES index template（若有）
 
 - 若 ES 以 index template 套用 IK 分詞器，template 的 `index_patterns` **必須涵蓋 `blog_articles_v*`**（實體索引名稱）；
   alias 名稱 `blog_articles` 不會被 template 比對。只比對 `blog_articles` 的 template 對新建的實體索引不生效，中文分詞會退回預設。
 - 本 repo 內找不到 template 設定（應在 infrastructure repo），部署前請確認。
 
-## 5. 異常處置
+## 6. 異常處置
 
 - 狀態訊息含「狀態不明，需人工檢查 GET _alias/blog_articles」：alias 切換請求回報失敗且當下無法確認結果，系統未刪任何索引。
   執行 `GET _alias/blog_articles` 確認 alias **只指向一個**實體索引，再以實體名稱刪除多餘的 `blog_articles_v*`。

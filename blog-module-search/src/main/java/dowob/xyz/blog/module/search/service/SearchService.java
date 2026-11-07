@@ -81,23 +81,26 @@ public interface SearchService {
      * <p>
      * 將 ArticleDocument 經 alias 儲存至 Elasticsearch。
      * 供 MQ 消費者在文章發布時呼叫。全量重建進行中時，寫入前先記進重建變動紀錄（供切換前後補進新索引）；
-     * 記錄失敗時例外往外拋、不寫入（由 MQ 容器重試）。
+     * 記錄因 Redis 故障失敗時記 WARN 與計數、照常寫入 ES，不往外拋（決策 D1-1）。
      * </p>
      *
      * @param document 文章 ES document
+     * @param eventId  觸發本次寫入的事件 id（寫進日誌供追查；舊格式訊息可為 {@code null}）
      */
-    void indexArticle(ArticleDocument document);
+    void indexArticle(ArticleDocument document, UUID eventId);
 
     /**
      * 從索引中移除文章
      *
      * <p>
-     * 供文章狀態變更（下架/封存）或刪除時呼叫。全量重建進行中時，刪除前先記進重建變動紀錄。
+     * 供文章狀態變更（下架/封存）或刪除時呼叫。全量重建進行中時，刪除前先記進重建變動紀錄；
+     * 記錄因 Redis 故障失敗時同樣照常刪除（決策 D1-1）。
      * </p>
      *
      * @param articleUuid 文章 UUID 字串
+     * @param eventId     觸發本次刪除的事件 id（寫進日誌供追查；舊格式訊息可為 {@code null}）
      */
-    void deleteIndex(String articleUuid);
+    void deleteIndex(String articleUuid, UUID eventId);
 
     /**
      * 查詢搜尋索引狀態
@@ -117,11 +120,13 @@ public interface SearchService {
      *
      * <p>以 {@code update_by_query}（條件為 {@code author.uuid}）只改寫該欄位，不需要取回文章內容；
      * 該作者沒有任何索引文件時回傳 0。改寫是「設定為某值」，重複執行結果相同（冪等）。
-     * 版本衝突（與同時進行的 reindex 競爭）不中止，繼續處理其餘文件。</p>
+     * 版本衝突（與同時進行的 reindex 競爭）不中止，繼續處理其餘文件。全量重建進行中時，改寫前先把作者記進重建變動紀錄；
+     * 記錄因 Redis 故障失敗時記 WARN 與計數、照常改寫（決策 D1-1）。</p>
      *
      * @param authorUuid 作者公開 UUID
      * @param nickname   新的作者暱稱（匿名暱稱）
+     * @param eventId    觸發本次改寫的事件 id（寫進日誌供追查；可為 {@code null}）
      * @return 被更新的文件數
      */
-    long updateAuthorNickname(UUID authorUuid, String nickname);
+    long updateAuthorNickname(UUID authorUuid, String nickname, UUID eventId);
 }

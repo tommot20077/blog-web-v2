@@ -74,6 +74,9 @@ class SearchServiceTest {
     /** 測試用使用者 uuid（搜尋紀錄 Redis key 以 uuid 為鍵） */
     private static final UUID USER_UUID = UUID.fromString("11111111-2222-3333-4444-555555555555");
 
+    /** 測試用事件 id（寫入路徑把它帶進日誌） */
+    private static final UUID EVENT_ID = UUID.fromString("9b2f1c7e-5d3a-4e8b-a1c4-6f0e2d7b8a90");
+
     /**
      * Elasticsearch 操作工具（Mock）
      */
@@ -737,7 +740,7 @@ class SearchServiceTest {
         void indexArticle_savesToRepository() {
             ArticleDocument doc = buildTestDocument();
 
-            searchService.indexArticle(doc);
+            searchService.indexArticle(doc, EVENT_ID);
 
             verify(articleSearchRepository).save(doc);
         }
@@ -752,7 +755,7 @@ class SearchServiceTest {
         void indexArticle_recordsJournalBeforeWriting() {
             ArticleDocument doc = buildTestDocument();
 
-            searchService.indexArticle(doc);
+            searchService.indexArticle(doc, EVENT_ID);
 
             org.mockito.InOrder order = org.mockito.Mockito.inOrder(reindexJournal, articleSearchRepository);
             order.verify(reindexJournal).recordArticle(doc.getId());
@@ -760,12 +763,12 @@ class SearchServiceTest {
         }
 
         @Test
-        @DisplayName("D1：記錄變動失敗（Redis 故障）時不寫入、例外往外拋，由 MQ 容器重試")
-        void indexArticle_journalFailure_propagatesWithoutWriting() {
+        @DisplayName("D1-1：記錄變動時發生非資料存取類的例外（程式錯誤）→ 不寫入、例外往外拋；只有 Redis／資料存取例外會被接住")
+        void indexArticle_nonDataAccessFailure_propagatesWithoutWriting() {
             ArticleDocument doc = buildTestDocument();
             doThrow(new IllegalStateException("redis down")).when(reindexJournal).recordArticle(doc.getId());
 
-            assertThatThrownBy(() -> searchService.indexArticle(doc)).hasMessage("redis down");
+            assertThatThrownBy(() -> searchService.indexArticle(doc, EVENT_ID)).hasMessage("redis down");
             verify(articleSearchRepository, never()).save(any());
         }
     }
@@ -785,7 +788,7 @@ class SearchServiceTest {
         void deleteIndex_deletesFromRepository() {
             String uuid = UUID.randomUUID().toString();
 
-            searchService.deleteIndex(uuid);
+            searchService.deleteIndex(uuid, EVENT_ID);
 
             verify(articleSearchRepository).deleteById(uuid);
         }
@@ -795,7 +798,7 @@ class SearchServiceTest {
         void deleteIndex_recordsJournalBeforeDeleting() {
             String uuid = UUID.randomUUID().toString();
 
-            searchService.deleteIndex(uuid);
+            searchService.deleteIndex(uuid, EVENT_ID);
 
             org.mockito.InOrder order = org.mockito.Mockito.inOrder(reindexJournal, articleSearchRepository);
             order.verify(reindexJournal).recordArticle(uuid);
@@ -816,12 +819,123 @@ class SearchServiceTest {
             UUID author = UUID.randomUUID();
             when(indexAdmin.updateAuthorNickname(author, "已刪除使用者#ab12", ArticleIndexAdmin.ALIAS)).thenReturn(2L);
 
-            long updated = searchService.updateAuthorNickname(author, "已刪除使用者#ab12");
+            long updated = searchService.updateAuthorNickname(author, "已刪除使用者#ab12", EVENT_ID);
 
             assertThat(updated).isEqualTo(2L);
             org.mockito.InOrder order = org.mockito.Mockito.inOrder(reindexJournal, indexAdmin);
             order.verify(reindexJournal).recordAuthor(author);
             order.verify(indexAdmin).updateAuthorNickname(author, "已刪除使用者#ab12", ArticleIndexAdmin.ALIAS);
+        }
+    }
+
+    /**
+     * 決策 D1-1（Yuan 2026-11-07）：重建變動紀錄（Redis）寫入失敗時仍照常更新 ES——記 WARN（帶 uuid 與 eventId）
+     * 並累加 {@code search.reindex.journal.failed}，不往外拋（事件不進 DLQ）。
+     */
+    @Nested
+    @DisplayName("D1-1：變動紀錄寫入失敗（Redis 故障）時仍照常更新 ES")
+    class JournalFailureTests {
+
+        private io.micrometer.core.instrument.simple.SimpleMeterRegistry registry;
+        private final List<org.apache.logging.log4j.core.LogEvent> events = new ArrayList<>();
+        private org.apache.logging.log4j.core.appender.AbstractAppender appender;
+        private org.apache.logging.log4j.Level previousLevel;
+
+        @BeforeEach
+        void attach() {
+            registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+            io.micrometer.core.instrument.Metrics.addRegistry(registry);
+            appender = new org.apache.logging.log4j.core.appender.AbstractAppender("journal-failure-capture", null, null, true,
+                    org.apache.logging.log4j.core.config.Property.EMPTY_ARRAY) {
+                @Override
+                public void append(org.apache.logging.log4j.core.LogEvent event) {
+                    events.add(event.toImmutable());
+                }
+            };
+            appender.start();
+            org.apache.logging.log4j.core.Logger logger =
+                    (org.apache.logging.log4j.core.Logger) org.apache.logging.log4j.LogManager.getLogger(SearchServiceImpl.class);
+            logger.addAppender(appender);
+            previousLevel = logger.getLevel();
+            logger.setLevel(org.apache.logging.log4j.Level.INFO);
+        }
+
+        @org.junit.jupiter.api.AfterEach
+        void detach() {
+            io.micrometer.core.instrument.Metrics.removeRegistry(registry);
+            org.apache.logging.log4j.core.Logger logger =
+                    (org.apache.logging.log4j.core.Logger) org.apache.logging.log4j.LogManager.getLogger(SearchServiceImpl.class);
+            logger.removeAppender(appender);
+            logger.setLevel(previousLevel);
+            appender.stop();
+        }
+
+        private double failures(String kind) {
+            io.micrometer.core.instrument.Counter counter = registry.find(SearchServiceImpl.JOURNAL_FAILED_METRIC)
+                    .tag("kind", kind).counter();
+            return counter == null ? 0 : counter.count();
+        }
+
+        private void assertWarnMentions(String... values) {
+            assertThat(events).anySatisfy(e -> {
+                assertThat(e.getLevel()).isEqualTo(org.apache.logging.log4j.Level.WARN);
+                for (String value : values) {
+                    assertThat(e.getMessage().getFormattedMessage()).contains(value);
+                }
+            });
+        }
+
+        @Test
+        @DisplayName("indexArticle：journal 拋 RedisConnectionFailureException → ES 仍寫入、counter（kind=article）加 1、WARN 帶 articleUuid 與 eventId、不拋例外")
+        void indexArticle_redisFailure_stillWritesEs() {
+            ArticleDocument doc = buildTestDocument();
+            doThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"))
+                    .when(reindexJournal).recordArticle(doc.getId());
+
+            assertThatCode(() -> searchService.indexArticle(doc, EVENT_ID)).doesNotThrowAnyException();
+
+            verify(articleSearchRepository).save(doc);
+            assertThat(failures("article")).isEqualTo(1.0);
+            assertWarnMentions(doc.getId(), EVENT_ID.toString());
+        }
+
+        @Test
+        @DisplayName("deleteIndex：journal 拋 Redis 例外 → 仍從 ES 刪除、counter 加 1、不拋例外")
+        void deleteIndex_redisFailure_stillDeletes() {
+            String uuid = UUID.randomUUID().toString();
+            doThrow(new org.springframework.data.redis.RedisSystemException("redis down", new RuntimeException()))
+                    .when(reindexJournal).recordArticle(uuid);
+
+            assertThatCode(() -> searchService.deleteIndex(uuid, EVENT_ID)).doesNotThrowAnyException();
+
+            verify(articleSearchRepository).deleteById(uuid);
+            assertThat(failures("article")).isEqualTo(1.0);
+            assertWarnMentions(uuid, EVENT_ID.toString());
+        }
+
+        @Test
+        @DisplayName("刪帳作者 updateAuthorNickname：journal 拋 RedisConnectionFailureException → 仍改寫 ES 暱稱並回傳筆數、counter（kind=author）加 1、WARN 帶 authorUuid 與 eventId")
+        void updateAuthorNickname_redisFailure_stillRewrites() {
+            UUID author = UUID.randomUUID();
+            doThrow(new org.springframework.data.redis.RedisConnectionFailureException("redis down"))
+                    .when(reindexJournal).recordAuthor(author);
+            when(indexAdmin.updateAuthorNickname(author, "已刪除使用者#ab12", ArticleIndexAdmin.ALIAS)).thenReturn(3L);
+
+            long updated = searchService.updateAuthorNickname(author, "已刪除使用者#ab12", EVENT_ID);
+
+            assertThat(updated).isEqualTo(3L);
+            verify(indexAdmin).updateAuthorNickname(author, "已刪除使用者#ab12", ArticleIndexAdmin.ALIAS);
+            assertThat(failures("author")).isEqualTo(1.0);
+            assertWarnMentions(author.toString(), EVENT_ID.toString());
+        }
+
+        @Test
+        @DisplayName("journal 正常時不計數、不記 WARN")
+        void journalHealthy_noCountNoWarn() {
+            searchService.indexArticle(buildTestDocument(), EVENT_ID);
+
+            assertThat(failures("article")).isZero();
+            assertThat(events).noneSatisfy(e -> assertThat(e.getLevel()).isEqualTo(org.apache.logging.log4j.Level.WARN));
         }
     }
 

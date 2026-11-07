@@ -288,9 +288,9 @@ class ArticleIndexRebuildIT {
         /* 重建已讀走「變動前」的快照（含 archived、不含 fresh），此時 listener 處理兩個事件 */
         ArticleIndexData fresh = article(UUID.randomUUID(), "Concurrency fresh", null);
         db.put(fresh.articleUuid(), fresh);
-        searchService.indexArticle(document(fresh, "快照暱稱"));
+        searchService.indexArticle(document(fresh, "快照暱稱"), UUID.randomUUID());
         db.remove(archived.articleUuid());
-        searchService.deleteIndex(archived.articleUuid().toString());
+        searchService.deleteIndex(archived.articleUuid().toString(), UUID.randomUUID());
         assertThat(searchUuids("Concurrency")).as("重建期間 alias 仍指向舊索引，listener 的寫入進到舊索引")
                 .containsExactlyInAnyOrder(kept.articleUuid(), fresh.articleUuid());
         proceed.countDown();
@@ -318,7 +318,7 @@ class ArticleIndexRebuildIT {
 
         UUID jobId = reindexService.start().job().getJobId();
         await(() -> null, reading);
-        searchService.updateAuthorNickname(author, "已刪除使用者#ab12");
+        searchService.updateAuthorNickname(author, "已刪除使用者#ab12", UUID.randomUUID());
         proceed.countDown();
 
         assertThat(awaitFinished(jobId).getState()).isEqualTo(ReindexJobState.COMPLETED);
@@ -394,7 +394,7 @@ class ArticleIndexRebuildIT {
         new ReindexJournal(redis).begin(jobB);
         ArticleIndexData during = article(UUID.randomUUID(), "Stale job during", null);
         db.put(during.articleUuid(), during);
-        searchService.indexArticle(document(during, "快照暱稱"));
+        searchService.indexArticle(document(during, "快照暱稱"), UUID.randomUUID());
         proceed.countDown();
 
         /* 鎖已屬於 B 時狀態端點會立刻把 A 報成中斷；這裡等 A 自己寫下結束時間（收尾完成後才寫） */
@@ -468,8 +468,8 @@ class ArticleIndexRebuildIT {
         await(() -> null, reading);
         ArticleIndexData fresh = article(UUID.randomUUID(), "Refresh fresh", author);
         db.put(fresh.articleUuid(), fresh);
-        searchService.indexArticle(document(fresh, "愛麗絲"));
-        searchService.updateAuthorNickname(author, "已刪除使用者#cd34");
+        searchService.indexArticle(document(fresh, "愛麗絲"), UUID.randomUUID());
+        searchService.updateAuthorNickname(author, "已刪除使用者#cd34", UUID.randomUUID());
         proceed.countDown();
 
         assertThat(awaitFinished(jobId).getState()).isEqualTo(ReindexJobState.COMPLETED);
