@@ -72,7 +72,7 @@ class ThumbnailConsumerTest {
 
     /** 真實的設定實例（圖片總像素上限預設 100MP） */
     @Spy
-    private FileProperties fileProperties = new FileProperties(java.util.Map.of(), java.util.Set.of(), null);
+    private FileProperties fileProperties = new FileProperties(java.util.Map.of(), java.util.Set.of(), null, null, null);
 
     @InjectMocks
     private ThumbnailConsumer thumbnailConsumer;
@@ -304,7 +304,7 @@ class ThumbnailConsumerTest {
     void handleImageUploaded_withConfiguredSmallerPixelLimit_skipsThumbnail() throws Exception {
         ReflectionTestUtils.setField(thumbnailConsumer, "bucketName", "test-bucket");
         ReflectionTestUtils.setField(thumbnailConsumer, "fileProperties",
-                new FileProperties(java.util.Map.of(), java.util.Set.of(), 99L));
+                new FileProperties(java.util.Map.of(), java.util.Set.of(), 99L, null, null));
         UUID fileId = UUID.randomUUID();
         ImageUploadedEvent event = new ImageUploadedEvent(
                 UUID.randomUUID(), fileId, "articles/2024/01/01/uuid.jpg", "image/jpeg");

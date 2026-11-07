@@ -56,9 +56,6 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class FileServiceImpl implements FileService {
 
-    /** 單檔最大大小：5MB（與 application.yaml 的 spring.servlet.multipart.max-file-size 對齊，由 MultipartYamlBindingTest 守住） */
-    public static final long MAX_FILE_SIZE = 5L * 1024 * 1024;
-
     /** 檔案模組設定（配額、允許的 MIME 類型） */
     private final FileProperties fileProperties;
 
@@ -132,7 +129,8 @@ public class FileServiceImpl implements FileService {
         if (ext == null || !fileProperties.allowedMimeTypes().contains(detectedMimeType)) {
             throw new BusinessException(FileErrorCode.INVALID_FILE_TYPE);
         }
-        if (fileBytes.length > MAX_FILE_SIZE) {
+        /* A6b：單檔上限依用途不同（文章圖片 20MB、頭像 5MB），來自 blog.file.max-*-size 屬性 */
+        if (fileBytes.length > fileProperties.maxFileSizeBytes(usageType)) {
             throw new BusinessException(FileErrorCode.FILE_TOO_LARGE);
         }
         /*
