@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.tag.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.tag.model.Tag;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
+import io.swagger.v3.oas.annotations.Operation;
 
 /**
  * 標籤公開 API 控制器
@@ -30,6 +32,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@io.swagger.v3.oas.annotations.tags.Tag(name = "標籤")
 @RestController
 @RequestMapping("/api/v1/tags")
 @RequiredArgsConstructor
@@ -47,6 +50,8 @@ public class TagController {
      * @param limit  最大返回數量，預設 10；上限 20，超過者夾為 20，非正數回傳空列表（見 {@code TagServiceImpl}）
      * @return 建議的 Slug 列表
      */
+    @Operation(summary = "標籤自動完成",
+            description = "公開。依前綴回傳標籤名稱建議，limit 上限 20。")
     @GetMapping("/suggest")
     public ApiResponse<List<String>> suggest(
             @RequestParam("q") String prefix,
@@ -60,6 +65,8 @@ public class TagController {
      * @param limit 最大返回數量，預設 20；上限 20，超過者夾為 20，非正數回傳空列表（見 {@code TagServiceImpl}）
      * @return 熱門標籤列表
      */
+    @Operation(summary = "熱門標籤",
+            description = "公開。回傳熱門標籤，limit 上限 20。")
     @GetMapping("/hot")
     public ApiResponse<List<Tag>> getHotTags(
             @RequestParam(value = "limit", defaultValue = "20") int limit) {
@@ -81,6 +88,8 @@ public class TagController {
      *
      * @return 全部標籤列表，依文章數遞減排序；無標籤時回傳空列表
      */
+    @Operation(summary = "所有標籤",
+            description = "公開。列出所有標籤。")
     @GetMapping("/all")
     public ApiResponse<List<Tag>> getAllTags() {
         return ApiResponse.success(tagService.getAllTags());
@@ -96,6 +105,9 @@ public class TagController {
      * @param user 當前登入者（AuthUser；可為 null，未認證時不注入）
      * @return 標籤詳情
      */
+    @Operation(summary = "取得標籤詳情",
+            description = "公開。以 slug 取得標籤詳情；登入者會帶入是否已追蹤。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0301 標籤不存在")
     @GetMapping("/{slug}")
     public ApiResponse<TagDetailResponse> getTagDetail(
             @PathVariable String slug,
@@ -113,8 +125,11 @@ public class TagController {
      * @param user 當前登入者（AuthUser；從 JWT 注入）
      * @return 成功回應
      */
+    @Operation(summary = "追蹤標籤",
+            description = "登入。追蹤指定標籤，重複追蹤為冪等。")
     @PreAuthorize("isAuthenticated()")
     @PostMapping("/{id}/follow")
+    @RateLimited("interaction-write")
     public ApiResponse<Void> followTag(
             @PathVariable UUID id,
             @AuthenticationPrincipal AuthUser user) {
@@ -131,6 +146,8 @@ public class TagController {
      * @param user 當前登入者（AuthUser；從 JWT 注入）
      * @return 成功回應
      */
+    @Operation(summary = "取消追蹤標籤",
+            description = "登入。取消追蹤指定標籤，未追蹤時為冪等。")
     @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/{id}/follow")
     public ApiResponse<Void> unfollowTag(

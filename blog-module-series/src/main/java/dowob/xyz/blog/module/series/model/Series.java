@@ -16,7 +16,7 @@ import java.util.UUID;
  * 系列文 (Series) 實體（series 表映射）。
  *
  * <p>一個 series 對 N 篇 articles（articles.series_uuid，V32 起無 FK；系列刪除時由 article 訂閱 SeriesDeletedEvent 清空歸屬）。articles 內按
- * series_position 排序。article_count 為反正規化欄位由 service 維護。</p>
+ * series_position 排序。篇數不存欄位，一律由 article facade 即時計數（V36 已移除 article_count，DATA-10）。</p>
  *
  * <p>M4-b 起作者以 {@code author_uuid} 識別（V29），表上沒有指向其他模組的 Long 欄位與 FK。</p>
  *
@@ -45,9 +45,6 @@ public class Series {
     /** 作者的公開 UUID（不建 FK：跨模組識別一律 UUID，設計 §0；使用者只軟刪除） */
     @Column("author_uuid")
     private UUID authorUuid;
-
-    @Column("article_count")
-    private Integer articleCount;
 
     @CreatedDate
     @Column("created_at")

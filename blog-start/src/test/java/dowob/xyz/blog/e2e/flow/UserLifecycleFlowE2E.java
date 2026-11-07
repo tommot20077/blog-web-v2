@@ -6,6 +6,7 @@ import dowob.xyz.blog.e2e.support.AuthHelper;
 import dowob.xyz.blog.e2e.support.DataBuilder;
 import dowob.xyz.blog.e2e.support.DatabaseCleaner;
 import dowob.xyz.blog.e2e.support.E2EAssertions;
+import dowob.xyz.blog.e2e.support.MailInterceptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,6 +42,9 @@ class UserLifecycleFlowE2E extends AbstractE2ETest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private MailInterceptor mailInterceptor;
+
     @AfterEach
     void tearDown() {
         databaseCleaner.cleanAll();
@@ -65,12 +69,8 @@ class UserLifecycleFlowE2E extends AbstractE2ETest {
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 
-        // ===== 2. 從 DB 取得驗證 Token =====
-        String verificationToken = jdbcTemplate.queryForObject(
-                "SELECT vt.token FROM verification_tokens vt " +
-                        "JOIN users u ON u.id = vt.user_id " +
-                        "WHERE u.email = ? AND vt.type = 'EMAIL_VERIFICATION'",
-                String.class, email);
+        // ===== 2. 攔截驗證信取得明文 Token（DB 只存 SHA-256，A1） =====
+        String verificationToken = mailInterceptor.interceptVerificationToken(email);
 
         // ===== 3. 驗證信箱 =====
         mockMvc.perform(post("/api/v1/auth/verify-email")

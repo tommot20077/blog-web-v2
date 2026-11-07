@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -34,14 +35,17 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1")
 @RequiredArgsConstructor
-@Tag(name = "Highlight")
+@Tag(name = "劃線")
 public class HighlightController {
 
     private final HighlightService highlightService;
 
     @PostMapping("/articles/{articleUuid}/highlights")
+    @RateLimited("interaction-write")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "建立 highlight + 可選 note")
+    @Operation(summary = "建立劃線",
+            description = "登入。在可讀的文章上建立劃線，可附筆記。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0201 文章不存在或對呼叫者不可讀")
     public ApiResponse<HighlightResponse> create(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
@@ -51,7 +55,8 @@ public class HighlightController {
 
     @GetMapping("/articles/{articleUuid}/highlights")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "撈我在這篇文章的所有 highlight")
+    @Operation(summary = "列出我在文章上的劃線",
+            description = "登入。只回傳自己的劃線。")
     public ApiResponse<List<HighlightResponse>> list(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user) {
@@ -59,8 +64,11 @@ public class HighlightController {
     }
 
     @PutMapping("/highlights/{uuid}")
+    @RateLimited("interaction-write")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "更新 highlight (color/note)")
+    @Operation(summary = "更新劃線",
+            description = "登入；僅劃線擁有者。可更新顏色與筆記，未帶的欄位不變。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；R0201 劃線不存在；R0202 不可變更他人的劃線；A0201 文章不存在或對呼叫者不可讀")
     public ApiResponse<HighlightResponse> update(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user,
@@ -70,7 +78,9 @@ public class HighlightController {
 
     @DeleteMapping("/highlights/{uuid}")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "硬刪除 highlight")
+    @Operation(summary = "刪除劃線",
+            description = "登入；僅劃線擁有者。硬刪除。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "R0201 劃線不存在；R0202 不可變更他人的劃線")
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user) {

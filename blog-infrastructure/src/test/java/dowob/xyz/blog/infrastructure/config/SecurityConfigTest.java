@@ -268,6 +268,18 @@ class SecurityConfigTest {
             return "comment";
         }
 
+        /** 回覆分頁端點（D3）：對齊 CommentController#listReplies 的實際 URL 形狀 */
+        @GetMapping("/api/v1/comments/{uuid}/replies")
+        public String listCommentReplies(@PathVariable String uuid) {
+            return "replies";
+        }
+
+        /** 留言編輯／刪除的實際 URL 形狀（需認證；用來證明回覆端點的 permitAll 沒有外溢） */
+        @GetMapping("/api/v1/comments/{uuid}")
+        public String getCommentByUuid(@PathVariable String uuid) {
+            return "comment-by-uuid";
+        }
+
         @GetMapping("/swagger-ui/index.html")
         public String swagger() {
             return "swagger";
@@ -361,6 +373,36 @@ class SecurityConfigTest {
                 .andExpect(status().isOk());
     }
 
+    @Test
+    @DisplayName("D3：未認證 GET /api/v1/comments/{uuid}/replies 應回傳 200（與留言列表一致，匿名可讀）")
+    void unauthenticatedListCommentReplies_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/" + ARTICLE_UUID + "/replies"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("D3：permitAll 只開放 GET .../replies：同前綴的 GET /api/v1/comments/{uuid} 仍回 401")
+    void unauthenticatedGetCommentByUuid_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/" + ARTICLE_UUID))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("D3：非 UUID 形狀的路徑變數不落入 replies 的 permitAll 規則（fail-closed）")
+    void unauthenticatedListCommentRepliesWithNonUuid_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/not-a-uuid/replies"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("D3：未認證 POST /api/v1/comments/{uuid}/replies 應回傳 401（只開放 GET）")
+    void unauthenticatedPostCommentReplies_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/comments/" + ARTICLE_UUID + "/replies")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
+    }
+
     // ── actuator：暴露 metrics 後的授權面（只有 health/info 是公開的）──
 
     @Test
@@ -371,16 +413,32 @@ class SecurityConfigTest {
     }
 
     @Test
-    @DisplayName("未認證 GET /actuator/health 仍應可達（K3s probe 依賴）")
-    void unauthenticatedGetActuatorHealth_shouldNotBeUnauthorized() throws Exception {
-        mockMvc.perform(get("/actuator/health"))
-                .andExpect(result -> {
-                    int status = result.getResponse().getStatus();
-                    if (status == 401) {
-                        throw new AssertionError("/actuator/health 不得需要認證——K3s liveness/readiness "
-                                + "probe 依賴它（security.md 公開端點表）");
-                    }
-                });
+    @DisplayName("主 port 上未認證 GET /actuator/health 與 /actuator/info 應回 401（fail-closed；健康檢查改走 /livez、/readyz，management port 上才匿名）")
+    void unauthenticatedGetActuatorHealthAndInfoOnMainPort_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/health")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/actuator/info")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /livez 與 /readyz 不得回 401（management port 搬走後，K3s probe 走主 port 的 additional path）")
+    void unauthenticatedGetProbePaths_shouldNotBeUnauthorized() throws Exception {
+        for (String path : new String[]{"/livez", "/readyz"}) {
+            mockMvc.perform(get(path))
+                    .andExpect(result -> {
+                        int status = result.getResponse().getStatus();
+                        if (status == 401 || status == 403) {
+                            throw new AssertionError(path + " 不得需要認證——K3s liveness/readiness probe 依賴它，"
+                                    + "收緊會讓 pod 反覆重啟（security.md），實得 " + status);
+                        }
+                    });
+        }
+    }
+
+    @Test
+    @DisplayName("未認證 GET /actuator/prometheus 應回傳 401（主 port 上 fail-closed；匯出端點只在 management port）")
+    void unauthenticatedGetActuatorPrometheus_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -761,6 +819,15 @@ class SecurityConfigTest {
                             .header("Access-Control-Request-Method", "GET"))
                     .andExpect(status().isOk())
                     .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
+        }
+
+        @Test
+        @DisplayName("跨域回應暴露 Retry-After（SEC-23：前端跨域時才讀得到 429 的重試秒數）")
+        void corsResponse_shouldExposeRetryAfterHeader() throws Exception {
+            mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID)
+                            .header("Origin", "http://localhost:5500"))
+                    .andExpect(header().string("Access-Control-Expose-Headers",
+                            org.hamcrest.Matchers.containsString("Retry-After")));
         }
     }
 

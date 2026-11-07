@@ -69,7 +69,7 @@ class ArticleFacadeUuidFieldsTest {
         facade = new ArticleFacadeImpl(
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
-                assembler, null, null, null);
+                assembler, null, null, null, null);
     }
 
     private static Article article(long id, UUID seriesUuid) {
@@ -145,14 +145,14 @@ class ArticleFacadeUuidFieldsTest {
     }
 
     @Test
-    @DisplayName("findAllPublishedForIndex → 每筆 authorUuid 取自文章，整批作者暱稱只呼叫 UserFacade 一次（不逐篇 N+1）")
-    void findAllPublishedForIndex_fillsAuthorUuid_andResolvesNicknamesWithSingleCall() {
-        when(articleMapper.findAllPublished()).thenReturn(List.of(article(1L, null), article(2L, null)));
-        when(articleMapper.findTagsByArticleUuid(org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
+    @DisplayName("findPublishedForIndexAfter → 每筆 authorUuid 取自文章，整批作者暱稱只呼叫 UserFacade 一次（不逐篇 N+1）")
+    void findPublishedForIndexAfter_fillsAuthorUuid_andResolvesNicknamesWithSingleCall() {
+        when(articleMapper.findPublishedForIndexAfter(null, 200)).thenReturn(List.of(article(1L, null), article(2L, null)));
+        when(articleMapper.findTagsByArticleUuids(org.mockito.ArgumentMatchers.anyList())).thenReturn(List.of());
         when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(
                 Map.of(AUTHOR_UUID, new UserDisplayInfo(AUTHOR_UUID, "愛麗絲", null)));
 
-        List<ArticleIndexData> result = facade.findAllPublishedForIndex();
+        List<ArticleIndexData> result = facade.findPublishedForIndexAfter(null, 200);
 
         assertThat(result).hasSize(2);
         assertThat(result).extracting(ArticleIndexData::authorUuid).containsOnly(AUTHOR_UUID);

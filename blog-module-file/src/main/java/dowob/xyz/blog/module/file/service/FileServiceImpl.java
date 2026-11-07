@@ -36,14 +36,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.unit.DataSize;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.stream.ImageInputStream;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -59,9 +55,6 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class FileServiceImpl implements FileService {
-
-    /** 單檔最大大小：5MB（與 application.yaml 的 spring.servlet.multipart.max-file-size 對齊，由 MultipartYamlBindingTest 守住） */
-    public static final long MAX_FILE_SIZE = 5L * 1024 * 1024;
 
     /** 檔案模組設定（配額、允許的 MIME 類型） */
     private final FileProperties fileProperties;
@@ -136,9 +129,22 @@ public class FileServiceImpl implements FileService {
         if (ext == null || !fileProperties.allowedMimeTypes().contains(detectedMimeType)) {
             throw new BusinessException(FileErrorCode.INVALID_FILE_TYPE);
         }
-        if (fileBytes.length > MAX_FILE_SIZE) {
+        /* A6b：單檔上限依用途不同（文章圖片 20MB、頭像 5MB），來自 blog.file.max-*-size 屬性 */
+        if (fileBytes.length > fileProperties.maxFileSizeBytes(usageType)) {
             throw new BusinessException(FileErrorCode.FILE_TOO_LARGE);
         }
+        /*
+         * FILE-04（A6）：總像素上限（寬×高，不限單邊）。在寫入 MinIO 之前只讀 header 檢查，
+         * 超限者不落地；讀不到寬高的檔案（ImageIO 無法解析）縮圖端也解不開，放行但不記錄寬高。
+         */
+        ImageDimensionReader.Dimensions dimensions = ImageDimensionReader.read(fileBytes).orElse(null);
+        if (dimensions != null && dimensions.pixels() > fileProperties.maxImagePixels()) {
+            log.warn("拒絕上傳：圖片總像素超過上限 {}x{}={} > {}, uploaderId={}",
+                    dimensions.width(), dimensions.height(), dimensions.pixels(), fileProperties.maxImagePixels(), uploaderId);
+            throw new BusinessException(FileErrorCode.INVALID_IMAGE_DIMENSIONS);
+        }
+        Integer width = dimensions == null ? null : (int) dimensions.width();
+        Integer height = dimensions == null ? null : (int) dimensions.height();
         long quota = resolveQuota(uploaderRole);
         boolean quotaLimited = quota != Long.MAX_VALUE;
         /* RACE-12：不加鎖的快速預檢，明顯超額就直接拒絕（省一次 MinIO 上傳）；權威檢查在下方交易內加鎖後重做 */
@@ -161,23 +167,6 @@ public class FileServiceImpl implements FileService {
         } catch (Exception e) {
             log.error("MinIO 上傳失敗: {}", storagePath, e);
             throw new SystemException(CommonErrorCode.STORAGE_ERROR);
-        }
-        Integer width = null;
-        Integer height = null;
-        try (ImageInputStream iis = ImageIO.createImageInputStream(new ByteArrayInputStream(fileBytes))) {
-            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
-            if (readers.hasNext()) {
-                ImageReader reader = readers.next();
-                try {
-                    reader.setInput(iis);
-                    width = reader.getWidth(0);
-                    height = reader.getHeight(0);
-                } finally {
-                    reader.dispose();
-                }
-            }
-        } catch (IOException e) {
-            log.warn("無法讀取圖片尺寸: {}", e.getMessage());
         }
         FileMetadata metadata = new FileMetadata();
         metadata.setId(fileId);
@@ -273,6 +262,39 @@ public class FileServiceImpl implements FileService {
         removeObjectOrThrow(metadata.getStoragePath());
         removeObjectOrThrow(buildThumbPath(metadata.getStoragePath()));
         transactionTemplate.executeWithoutResult(status -> fileMetadataRepository.deleteById(fileId));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean deleteUnboundFileIfUnreferenced(UUID fileId, LocalDateTime createdBefore) {
+        /*
+         * 整段在同一個交易內：FOR UPDATE 鎖列 → 重驗 → 刪 MinIO → 刪 DB 列。
+         * 持鎖期間綁定 consumer 對該列的 UPDATE 會等待，TOCTOU 窗口縮到只剩 facade 查詢與兩次 MinIO 呼叫。
+         * MinIO 失敗（拋例外）使交易回滾：列與鎖都還原，留到下次處理；DB 刪除排在 MinIO 之後，不會留下「物件在、紀錄沒了」的孤兒。
+         * 本方法只供低並行度的批次 job 使用，不在使用者請求路徑上，持鎖時間可接受。
+         */
+        Boolean deleted = transactionTemplate.execute(status -> {
+            FileMetadata file = fileMetadataRepository.findByIdForUpdate(fileId).orElse(null);
+            if (file == null) {
+                return false;
+            }
+            if (file.getArticleUuid() != null || file.getUsageType() == UsageType.AVATAR
+                    || file.getCreatedAt() == null || !file.getCreatedAt().isBefore(createdBefore)) {
+                log.info("未綁定檔清理：重驗不通過（已綁定、頭像或未滿保留天數），保留 fileId={}", fileId);
+                return false;
+            }
+            if (articleLookupFacade.findFileUuidsReferencedByAuthorArticles(file.getUploaderId()).contains(fileId)) {
+                log.info("未綁定檔清理：重驗發現已被上傳者的文章引用，保留 fileId={}", fileId);
+                return false;
+            }
+            removeObjectOrThrow(file.getStoragePath());
+            removeObjectOrThrow(buildThumbPath(file.getStoragePath()));
+            fileMetadataRepository.deleteById(fileId);
+            return true;
+        });
+        return Boolean.TRUE.equals(deleted);
     }
 
     /**

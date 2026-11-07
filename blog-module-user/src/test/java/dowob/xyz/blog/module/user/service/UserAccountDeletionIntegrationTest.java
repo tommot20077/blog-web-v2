@@ -85,6 +85,7 @@ class UserAccountDeletionIntegrationTest {
     @MockitoBean private JavaMailSender mailSender;
     /** PublicAuthorService 依賴；article 模組不在 user 模組的測試 classpath，與 AbstractIntegrationTest 一致以 mock 提供 */
     @MockitoBean private ArticleFacade articleFacade;
+    @MockitoBean private dowob.xyz.blog.infrastructure.facade.FileLookupFacade fileLookupFacade;
 
     @Autowired private UserService userService;
     @Autowired private AuthService authService;
@@ -340,7 +341,7 @@ class UserAccountDeletionIntegrationTest {
      * @param type   token 類型
      */
     private void insertToken(Long userId, String type) {
-        jdbc.update("INSERT INTO verification_tokens (user_id, token, type, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+        jdbc.update("INSERT INTO verification_tokens (user_id, token_hash, type, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
                 userId, UUID.randomUUID().toString(), type,
                 Timestamp.valueOf(LocalDateTime.now().plusHours(1)), Timestamp.valueOf(LocalDateTime.now()));
     }

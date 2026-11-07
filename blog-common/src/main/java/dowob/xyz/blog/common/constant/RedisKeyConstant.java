@@ -265,6 +265,73 @@ public class RedisKeyConstant {
     }
 
     /**
+     * 忘記密碼 IP 層級限流 Key 前綴 (String)
+     * Key: auth:forgot-password:ip:{ip}
+     * <p>SEC-22／A3：與 per-email 限流並存；三個端點各自計數，互不影響。</p>
+     */
+    public static final String FORGOT_PASSWORD_IP_PREFIX = "auth:forgot-password:ip:";
+
+    /**
+     * 重寄驗證信 IP 層級限流 Key 前綴 (String)
+     * Key: auth:resend-verification:ip:{ip}
+     */
+    public static final String RESEND_VERIFICATION_IP_PREFIX = "auth:resend-verification:ip:";
+
+    /**
+     * 驗證碼校驗 IP 層級限流 Key 前綴 (String)
+     * Key: auth:verify-code:ip:{ip}
+     */
+    public static final String VERIFY_CODE_IP_PREFIX = "auth:verify-code:ip:";
+
+    /** 忘記密碼：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3；獨立常數方便日後分開調整） */
+    public static final int FORGOT_PASSWORD_IP_MAX = 10;
+
+    /** 忘記密碼 IP 限流窗口（分鐘），等同每小時 */
+    public static final long FORGOT_PASSWORD_IP_TTL_MINUTES = 60L;
+
+    /** 重寄驗證信：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3） */
+    public static final int RESEND_VERIFICATION_IP_MAX = 10;
+
+    /** 重寄驗證信 IP 限流窗口（分鐘），等同每小時 */
+    public static final long RESEND_VERIFICATION_IP_TTL_MINUTES = 60L;
+
+    /** 驗證碼校驗：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3） */
+    public static final int VERIFY_CODE_IP_MAX = 10;
+
+    /** 驗證碼校驗 IP 限流窗口（分鐘），等同每小時 */
+    public static final long VERIFY_CODE_IP_TTL_MINUTES = 60L;
+
+    /**
+     * 生成忘記密碼 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getForgotPasswordIpKey(String ip) {
+        return FORGOT_PASSWORD_IP_PREFIX + ip;
+    }
+
+    /**
+     * 生成重寄驗證信 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getResendVerificationIpKey(String ip) {
+        return RESEND_VERIFICATION_IP_PREFIX + ip;
+    }
+
+    /**
+     * 生成驗證碼校驗 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getVerifyCodeIpKey(String ip) {
+        return VERIFY_CODE_IP_PREFIX + ip;
+    }
+
+    /**
      * 重複信箱註冊通知限流 Key 前綴 (String)
      * Key: rate:register-dup-notice:{email}
      * <p>SEC-14／Q8：註冊時 email 已存在會寄通知信給原信箱主人；以此 key 限制同一信箱在
@@ -346,10 +413,34 @@ public class RedisKeyConstant {
     /**
      * 搜尋索引全量重建時間戳 Key (String，值為 ISO-8601 時間字串)
      * Key: search:reindex:at
-     * <p>由 {@code SearchServiceImpl.reindexAll()} 於重建完成後寫入，
+     * <p>由 {@code SearchReindexService} 於背景全量重建完成（alias 已切換）後寫入，
      * 供 Admin 後台查詢索引狀態時讀取「最後重建時間」；從未重建過時該 Key 不存在。</p>
      */
     public static final String SEARCH_REINDEX_AT_KEY = "search:reindex:at";
+
+    /**
+     * 搜尋索引全量重建作業狀態 Key (Hash：jobId／state／processed／total／startedAt／finishedAt／error)
+     * Key: search:reindex:job
+     */
+    public static final String SEARCH_REINDEX_JOB_KEY = "search:reindex:job";
+
+    /**
+     * 搜尋索引全量重建進行中標記 Key (String，值為重建中的新實體索引名稱；附 TTL，重建期間續期)
+     * Key: search:reindex:active
+     */
+    public static final String SEARCH_REINDEX_ACTIVE_KEY = "search:reindex:active";
+
+    /**
+     * 全量重建期間有變動的文章 Set Key（文章 UUID 字串；切換 alias 前後回查 DB 補進新索引）
+     * Key: search:reindex:dirty:articles
+     */
+    public static final String SEARCH_REINDEX_DIRTY_ARTICLES_KEY = "search:reindex:dirty:articles";
+
+    /**
+     * 全量重建期間暱稱被改寫（刪帳匿名化）的作者 Set Key（作者 UUID 字串）
+     * Key: search:reindex:dirty:authors
+     */
+    public static final String SEARCH_REINDEX_DIRTY_AUTHORS_KEY = "search:reindex:dirty:authors";
 
     /** ===================== Recommend ===================== */
 
@@ -390,6 +481,12 @@ public class RedisKeyConstant {
      * Key: lock:trending-refresh
      */
     public static final String LOCK_TRENDING_REFRESH = "lock:trending-refresh";
+
+    /**
+     * 搜尋索引全量重建分散式鎖 Key（值為持有中的 jobId）
+     * Key: lock:search-reindex
+     */
+    public static final String LOCK_SEARCH_REINDEX = "lock:search-reindex";
 
     /**
      * 孤兒校正分散式鎖 Key 前綴
@@ -455,4 +552,30 @@ public class RedisKeyConstant {
 
     /** 視為已讀完的進度門檻（>= 0.95 觸發單調 UPSERT DB，並把快取設成完讀值但不標 dirty、不 DEL hash）*/
     public static final java.math.BigDecimal READING_PROGRESS_COMPLETED_THRESHOLD = new java.math.BigDecimal("0.95");
+
+    /** ===================== 應用層限流（SEC-23 / A4）===================== */
+
+    /**
+     * 通用應用層限流計數 Key 前綴 (String，固定窗口)
+     * Key: ratelimit:{rule}:u:{userUuid} 或 ratelimit:{rule}:ip:{clientIp}
+     */
+    public static final String RATE_LIMIT_PREFIX = "ratelimit:";
+
+    /** 限流計數主體標記：已登入使用者 */
+    public static final String RATE_LIMIT_SUBJECT_USER = "u";
+
+    /** 限流計數主體標記：client IP */
+    public static final String RATE_LIMIT_SUBJECT_IP = "ip";
+
+    /**
+     * 生成通用應用層限流計數 Redis Key。
+     *
+     * @param rule        規則名稱（對應 {@code app.rate-limit.rules.<rule>}）
+     * @param subjectType 計數主體標記，{@link #RATE_LIMIT_SUBJECT_USER} 或 {@link #RATE_LIMIT_SUBJECT_IP}
+     * @param subjectId   主體識別（userUuid 或 client IP）
+     * @return Redis Key
+     */
+    public static String getRateLimitKey(String rule, String subjectType, String subjectId) {
+        return RATE_LIMIT_PREFIX + rule + ":" + subjectType + ":" + subjectId;
+    }
 }

@@ -1,5 +1,7 @@
 package dowob.xyz.blog.module.tag.controller;
 
+import static org.mockito.Mockito.verifyNoInteractions;
+import dowob.xyz.blog.common.api.enums.Permission;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.exception.GlobalExceptionHandler;
@@ -285,5 +287,43 @@ class AdminTagControllerTest {
                 .andExpect(jsonPath("$.code").value("00000"));
 
         verify(tagService).adminDeleteTag(TAG_ID);
+    }
+
+    // =========================================================================
+    // A9：持有 ROLE_ADMIN、但缺少該端點對應 permission（手工構造 authorities）→ 方法層 403
+    // =========================================================================
+
+    /** ROLE_ADMIN + 除了 {@code missing} 之外的所有 permission：URL 層放行，方法層必須擋下。 */
+    private static RequestPostProcessor asAdminWithout(Permission missing) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().stream().filter(p -> p != missing).forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 1L), Role.ADMIN), null, authorities);
+        return authentication(auth);
+    }
+
+    @Test
+    @DisplayName("PUT /{id} — ROLE_ADMIN 但缺 ADMIN_TAG → 403，且不更新")
+    void updateTag_adminWithoutTagPermission_returns403() throws Exception {
+        UpdateTagRequest request = new UpdateTagRequest();
+        request.setColor("#FF0000");
+
+        mockMvc.perform(put("/api/v1/admin/tags/{id}", TAG_ID)
+                        .with(asAdminWithout(Permission.ADMIN_TAG))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(tagService);
+    }
+
+    @Test
+    @DisplayName("DELETE /{id} — ROLE_ADMIN 但缺 ADMIN_TAG → 403，且不刪除")
+    void deleteTag_adminWithoutTagPermission_returns403() throws Exception {
+        mockMvc.perform(delete("/api/v1/admin/tags/{id}", TAG_ID)
+                        .with(asAdminWithout(Permission.ADMIN_TAG)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(tagService);
     }
 }

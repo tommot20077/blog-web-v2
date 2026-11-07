@@ -100,7 +100,7 @@ class ArticleSeriesConditionalAssignmentIT {
     /** 以 JDBC 直接建立 series（只需要一個存在的 series 列）。 */
     private UUID insertSeries(String slug) {
         UUID uuid = UUID.randomUUID();
-        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid, article_count) VALUES (?, ?, ?, ?, 0)",
+        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid) VALUES (?, ?, ?, ?)",
                 uuid, "T-" + slug, slug, SeededUsers.USER1_UUID);
         return uuid;
     }

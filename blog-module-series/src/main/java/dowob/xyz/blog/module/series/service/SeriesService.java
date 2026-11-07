@@ -9,14 +9,14 @@ import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
-import dowob.xyz.blog.module.series.exception.SeriesErrorCode;
+import dowob.xyz.blog.common.api.errorcode.SeriesErrorCode;
 import dowob.xyz.blog.module.series.mapper.SeriesMapper;
 import dowob.xyz.blog.module.series.model.Series;
 import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
 import dowob.xyz.blog.module.series.model.dto.response.MyProgress;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesArticleItem;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
 import dowob.xyz.blog.module.series.model.dto.response.SeriesSummaryResponse;
 import dowob.xyz.blog.module.series.repository.SeriesRepository;
@@ -109,8 +109,7 @@ public class SeriesService {
      *       再以 {@link UserFacade#getDisplayInfoByUuids} <b>一次</b>解析整頁的作者。</li>
      * </ol>
      * {@code total} 即第 2 步過濾後的可見集合大小，不再需要獨立 COUNT 查詢；
-     * {@code articleCount} 為即時 PUBLISHED 計數，不沿用 {@code series.article_count}
-     * 這個含非公開文章的反正規化欄位。
+     * {@code articleCount} 為即時 PUBLISHED 計數（V36 已移除 {@code series.article_count}，篇數不存欄位）。
      * </p>
      *
      * @param page 當前頁碼（1-based）
@@ -211,7 +210,6 @@ public class SeriesService {
         r.setSlug(row.getSlug());
         r.setDescription(row.getDescription());
         r.setCoverImageUrl(row.getCoverImageUrl());
-        r.setArticleCount(row.getArticleCount());
         r.setCreatedAt(row.getCreatedAt());
         r.setUpdatedAt(row.getUpdatedAt());
         r.setAuthor(toAuthorSummary(row.getAuthorUuid(), authors));
@@ -259,7 +257,6 @@ public class SeriesService {
         s.setDescription(req.getDescription());
         s.setCoverImageUrl(req.getCoverImageUrl());
         s.setAuthorUuid(userUuid);
-        s.setArticleCount(0);
         /* 時間由 Java 傳入（與 @CreatedDate／@LastModifiedDate 同一個時鐘來源），不用 DB 的 CURRENT_TIMESTAMP */
         LocalDateTime now = LocalDateTime.now();
         s.setCreatedAt(now);
@@ -269,7 +266,10 @@ public class SeriesService {
         }
         Series saved = repo.findByUuid(s.getUuid())
                 .orElseThrow(() -> new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND));
-        return toSummaryResponse(saved, resolveAuthors(List.of(saved)));
+        SeriesSummaryResponse response = toSummaryResponse(saved, resolveAuthors(List.of(saved)));
+        /* 剛建立的系列不可能有任何文章：直接為 0，不為此多打一次 facade */
+        response.setArticleCount(0);
+        return response;
     }
 
     /**
@@ -302,7 +302,14 @@ public class SeriesService {
         }
         Series updated = repo.findByUuid(seriesUuid)
                 .orElseThrow(() -> new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND));
-        return toSummaryResponse(updated, resolveAuthors(List.of(updated)));
+        SeriesSummaryResponse response = toSummaryResponse(updated, resolveAuthors(List.of(updated)));
+        /*
+         * 篇數與公開列表、詳情同口徑：即時的 PUBLISHED 數（DATA-10 / 決策 B6，不再讀已移除的 series.article_count）。
+         * facade 只回 count > 0 者，查無即 0。
+         */
+        response.setArticleCount(articleFacade.countPublishedBySeriesUuids(List.of(updated.getUuid()))
+                .getOrDefault(updated.getUuid(), 0));
+        return response;
     }
 
     /**
@@ -340,7 +347,7 @@ public class SeriesService {
      * 就會成為作者已匿名、裡面 0 篇文章的空系列並出現在公開系列列表，所以在這裡刪除；仍有保留文章的系列保留，
      * 作者顯示為匿名（users 列已匿名化，讀取路徑自動套用）。</p>
      *
-     * <p><b>不依賴 {@code series.article_count}</b>：article 模組刪除草稿與本方法的執行順序不確定，計數可能尚未遞減。
+     * <p><b>不依賴任何計數</b>：article 模組刪除草稿與本方法的執行順序不確定。
      * 「是否仍有保留文章」一律回問 {@link ArticleFacade#filterSeriesUuidsWithRetainedArticles}
      * （去留政策的唯一真相是 {@code ArticleStatus#isRemovedWithAuthorAccount}）。</p>
      *
@@ -376,23 +383,22 @@ public class SeriesService {
      *   <li>文章必須為 PUBLISHED 狀態（S0103）</li>
      *   <li>非 admin 只能加入自己的文章（S0102，以 {@code authorUuid} 比對）</li>
      *   <li>文章若已屬於另一個 <b>仍存在的</b> Series 則拒絕（S0106）；若舊歸屬指向<b>已被刪除</b>的 series
-     *       （刪除事件尚未被 article 消費的最終一致視窗），先以條件式寫入清掉殘留歸屬再加入，
-     *       不動任何 article_count（舊 series 已不在）</li>
-     *   <li>文章已在同一個 Series 中時，僅更新位置，不重複 +1 計數</li>
+     *       （刪除事件尚未被 article 消費的最終一致視窗），先以條件式寫入清掉殘留歸屬再加入</li>
+     *   <li>文章已在同一個 Series 中時，僅更新位置</li>
      * </ul>
      * </p>
      *
      * <p><b>RACE-14</b>：「是否為新成員」不再由先前讀到的 {@code seriesUuid} 推論（check-then-act：
-     * 兩個請求同時加入同一篇文章，都讀到「無 series」，都 +1），而是由寫入本身決定——
-     * {@link ArticleFacade#assignToSeriesIfUnassigned} 回傳 true 才 {@code article_count + 1}。
+     * 兩個請求同時加入同一篇文章，都讀到「無 series」），而是由寫入本身決定——
+     * {@link ArticleFacade#assignToSeriesIfUnassigned} 回傳 true 才是新成員。
      * 回傳 false 代表文章已屬於某個 series（含同一個，或剛被另一個請求加入），此時重讀判斷：
      * 同一個 series 以條件式 UPDATE（{@code WHERE series_uuid = ?}）只更新位置——同樣不是讀改寫，
-     * 兩個請求同時更新位置不會因樂觀鎖衝突失敗，與併發移出交錯時也不會把文章重新寫回 series 而漏算計數；
+     * 兩個請求同時更新位置不會因樂觀鎖衝突失敗，與併發移出交錯時也不會把文章重新寫回 series；
      * 其他 series 回 S0106。條件式更新回 false（文章剛被移出或移到別處）時回到迴圈重新判斷；
      * 兩次嘗試都無法定案則回 {@code ARTICLE_CONCURRENT_UPDATE}。</p>
      *
-     * <p><b>ghost 歸屬防護</b>：加入的條件式 UPDATE 成功後，{@code article_count + 1} 若影響 0 列，代表 series 在讀取之後
-     * 被另一個交易刪除並 commit（沒有 FK 擋下寫入）。此時拋 {@code SERIES_NOT_FOUND} 讓整個交易回滾，
+     * <p><b>ghost 歸屬防護</b>：加入的條件式 UPDATE 成功後，對 series 列加共享鎖（{@link SeriesMapper#lockExistingById}）；
+     * 回 null 代表 series 在讀取之後被另一個交易刪除並 commit（沒有 FK 擋下寫入）。此時拋 {@code SERIES_NOT_FOUND} 讓整個交易回滾，
      * 文章不會歸屬到已不存在的 series。</p>
      *
      * @param seriesUuid  Series 公開 UUID
@@ -422,8 +428,12 @@ public class SeriesService {
 
         for (int attempt = 1; attempt <= MAX_ASSIGN_ATTEMPTS; attempt++) {
             if (articleFacade.assignToSeriesIfUnassigned(articleUuid, s.getUuid(), position)) {
-                if (mapper.incrementArticleCount(s.getId()) == 0) {
-                    /* series 在讀取後被另一個交易刪除：回滾，避免文章歸屬到已不存在的 series（ghost） */
+                /*
+                 * 不再維護 article_count（DATA-10）。原本 +1 順帶提供的「series 列仍存在」保證改由共享鎖承擔：
+                 * series 在讀取後被另一個交易刪除並 commit → 回滾，避免文章歸屬到已不存在的 series（ghost）；
+                 * 刪除尚未 commit 時，共享鎖會等它結束，行為與原本的 UPDATE 等待列鎖一致。
+                 */
+                if (mapper.lockExistingById(s.getId()) == null) {
                     throw new BusinessException(SeriesErrorCode.SERIES_NOT_FOUND);
                 }
                 return;
@@ -452,7 +462,7 @@ public class SeriesService {
      *
      * <p>文章的 {@code seriesUuid} 為 null、等於目標系列，或舊系列仍存在時原樣回傳（舊系列仍存在代表文章真的屬於它，
      * 呼叫端照舊以 S0106 拒絕）。舊系列已不存在時，以 {@link ArticleFacade#removeFromSeriesIfAssigned} 條件式清空
-     * 歸屬——<b>不動任何 article_count</b>（舊系列已不在，沒有計數可扣）——再重讀文章。
+     * 歸屬再重讀文章。
      * 條件式寫入回 false（已被 consumer 或另一個請求清掉）也無妨，重讀即可。</p>
      *
      * @param article    目前讀到的文章
@@ -477,9 +487,8 @@ public class SeriesService {
      *
      * <p>文章不屬於此 Series 時拋出 S0105。</p>
      *
-     * <p><b>RACE-14</b>：移出以 {@link ArticleFacade#removeFromSeriesIfAssigned} 的 affected rows 決定是否
-     * {@code article_count - 1}。兩個請求同時移出同一篇文章，只有一個得到 true；另一個與依序第二次移出相同，
-     * 得到 S0105，計數不會被多扣。</p>
+     * <p><b>RACE-14</b>：移出以 {@link ArticleFacade#removeFromSeriesIfAssigned} 的 affected rows 決定成敗。
+     * 兩個請求同時移出同一篇文章，只有一個得到 true；另一個與依序第二次移出相同，得到 S0105。</p>
      *
      * @param seriesUuid  Series 公開 UUID
      * @param articleUuid 文章公開 UUID
@@ -501,7 +510,6 @@ public class SeriesService {
         if (!articleFacade.removeFromSeriesIfAssigned(articleUuid, s.getUuid())) {
             throw new BusinessException(SeriesErrorCode.ARTICLE_NOT_IN_SERIES);
         }
-        mapper.decrementArticleCount(s.getId());
     }
 
     /**
@@ -519,7 +527,7 @@ public class SeriesService {
      * 不限狀態（見 ArticleFacade javadoc「caller 自行依 status 判斷」），過濾責任在此。
      * DRAFT / REJECTED / ARCHIVED / PENDING_REVIEW 皆非公開可見，故採白名單而非排除 DRAFT。
      * 過濾後的列表同時餵給 toDetailResponse 與 myProgress，確保文章列表、articleCount 與進度分母口徑一致
-     * （articleCount 亦取過濾後大小，不沿用 series.article_count 這個含非公開文章的非正規化計數）。
+     * （articleCount 亦取過濾後大小）。
      * </p>
      *
      * <p>
@@ -583,9 +591,8 @@ public class SeriesService {
         r.setDescription(row.getDescription());
         r.setCoverImageUrl(row.getCoverImageUrl());
         /*
-         * articleCount 對齊已過濾的對外可見列表，與回傳的 articles 清單口徑一致；不用
-         * row.getArticleCount()（非正規化計數，含 DRAFT/REJECTED/ARCHIVED/PENDING_REVIEW，
-         * 直接沿用會出現「count=N 但只列 M 篇」並反推出隱藏文章數）。
+         * articleCount 對齊已過濾的對外可見列表，與回傳的 articles 清單口徑一致，
+         * 避免出現「count=N 但只列 M 篇」並反推出隱藏文章數。
          */
         r.setArticleCount(articles.size());
         r.setCreatedAt(row.getCreatedAt());
@@ -593,14 +600,16 @@ public class SeriesService {
         r.setAuthor(toAuthorSummary(row.getAuthorUuid(), resolveAuthors(List.of(row))));
 
         List<UUID> articleUuids = articles.stream().map(ArticleData::uuid).toList();
-        List<ArticleSummaryResponse> summaries = articleUuids.isEmpty()
+        List<SeriesArticleItem> items = articleUuids.isEmpty()
                 ? List.of()
-                : articleFacade.getSummariesByUuids(articleUuids);
-        summaries.forEach(s -> {
-            s.setSeriesUuid(row.getUuid());
-            s.setSeriesTitle(row.getTitle());
+                : articleFacade.getSummariesByUuids(articleUuids).stream()
+                        .map(SeriesArticleItem::from)
+                        .toList();
+        items.forEach(item -> {
+            item.setSeriesUuid(row.getUuid());
+            item.setSeriesTitle(row.getTitle());
         });
-        r.setArticles(summaries);
+        r.setArticles(items);
         return r;
     }
 }

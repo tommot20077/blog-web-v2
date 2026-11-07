@@ -216,6 +216,40 @@ class VersionControllerIT {
     // ─────────────────────────────── GET DETAIL ─────────────────────────────
 
     @Test
+    @DisplayName("A9 GET /versions - Role.USER（無 ARTICLE_EDIT 權限）→ 403，即使是文章 owner")
+    void list_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("A9 GET /versions/{versionUuid} - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void getDetail_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}", article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("A9 GET /versions、/versions/{versionUuid} - 未認證 → 401")
+    void readEndpoints_unauthenticated_returns401() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid()))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}", article.getUuid(), v.getUuid()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     @DisplayName("GET /versions/{versionUuid} - owner 取得詳情 200 含 content")
     void getDetail_byOwner_returns200WithContent() throws Exception {
         Article article = createArticle(USER1_ID);

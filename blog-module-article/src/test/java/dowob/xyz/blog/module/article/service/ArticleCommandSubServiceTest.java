@@ -6,6 +6,8 @@ import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
+import org.springframework.http.HttpStatus;
 import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
@@ -2722,6 +2724,91 @@ class ArticleCommandSubServiceTest {
                 verify(articleEventPublisher, never()).publishArchived(any());
                 verify(archiveCache, never()).evict();
             }
+        }
+    }
+
+    /**
+     * RACE-05 / 決策 B2：內容更新帶樂觀鎖版本號。
+     */
+    @Nested
+    @DisplayName("updateArticle 樂觀鎖版本（RACE-05）")
+    class UpdateArticleVersionTests {
+
+        private Article articleAtVersion(long version) {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            article.setVersion(version);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(articleRepository.save(any(Article.class))).thenAnswer(inv -> inv.getArgument(0));
+            return article;
+        }
+
+        @Test
+        @DisplayName("帶的 version 與 DB 不一致 → 409 ARTICLE_CONCURRENT_UPDATE，不 save、不發事件、entity 不被改動")
+        void staleVersion_throws409_andWritesNothing() {
+            Article article = articleAtVersion(5L);
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("覆蓋別人的標題");
+            request.setContent("覆蓋別人的內容");
+            request.setVersion(4L);
+
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(HttpStatusBusinessException.class)
+                    .satisfies(e -> {
+                        HttpStatusBusinessException ex = (HttpStatusBusinessException) e;
+                        assertThat(ex.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                        assertThat(ex.getCode()).isEqualTo(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getCode());
+                    });
+
+            assertThat(article.getTitle()).isEqualTo("測試標題");
+            assertThat(article.getContent()).isEqualTo("測試內容");
+            verify(articleRepository, never()).save(any(Article.class));
+            verifyNoInteractions(articleEventPublisher);
+        }
+
+        @Test
+        @DisplayName("帶的 version 與 DB 一致 → 成功存檔")
+        void matchingVersion_succeeds() {
+            articleAtVersion(5L);
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("新標題");
+            request.setVersion(5L);
+
+            EditorArticleResponse response = commandSubService.updateArticle(
+                    AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            assertThat(response).isNotNull();
+            verify(articleRepository).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("沒帶 version → 行為與現行相同（不做版本比對）")
+        void absentVersion_keepsLegacyBehaviour() {
+            articleAtVersion(5L);
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("新標題");
+
+            commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request);
+
+            verify(articleRepository).save(any(Article.class));
+        }
+
+        @Test
+        @DisplayName("save 時撞到樂觀鎖（兩請求同時通過比對）→ 同樣回 409 ARTICLE_CONCURRENT_UPDATE")
+        void saveOptimisticLockFailure_isAlso409() {
+            articleAtVersion(5L);
+            when(articleRepository.save(any(Article.class)))
+                    .thenThrow(new OptimisticLockingFailureException("lock"));
+            UpdateArticleRequest request = new UpdateArticleRequest();
+            request.setTitle("新標題");
+            request.setVersion(5L);
+
+            assertThatThrownBy(() -> commandSubService.updateArticle(AUTHOR_UUID, Role.AUTHOR, ARTICLE_UUID, request))
+                    .isInstanceOf(HttpStatusBusinessException.class)
+                    .satisfies(e -> {
+                        assertThat(((HttpStatusBusinessException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                        assertThat(((HttpStatusBusinessException) e).getCode())
+                                .isEqualTo(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE.getCode());
+                    });
         }
     }
 

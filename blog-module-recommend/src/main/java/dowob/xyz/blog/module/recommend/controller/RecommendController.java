@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 /**
  * 推薦文章 REST API 控制器
@@ -24,6 +26,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@Tag(name = "推薦")
 @RestController
 @RequestMapping("/api/v1/recommend")
 @RequiredArgsConstructor
@@ -43,6 +46,8 @@ public class RecommendController {
      * @param limit       最多回傳筆數（預設 5，最大 20）
      * @return 推薦文章列表
      */
+    @Operation(summary = "相關文章推薦",
+            description = "公開。回傳與指定文章相關的已發布文章；limit 夾在 1 到 20。文章不存在時回空清單。")
     @GetMapping("/related/{articleUuid}")
     public ApiResponse<List<RecommendArticleResponse>> getRelatedArticles(
             @PathVariable UUID articleUuid,
@@ -62,6 +67,8 @@ public class RecommendController {
      * @param limit  最多回傳筆數（預設 10，最大 50）
      * @return 熱門文章列表
      */
+    @Operation(summary = "熱門文章",
+            description = "公開。回傳指定期間（預設 7d）的熱門文章；limit 夾在 1 到 50。")
     @GetMapping("/trending")
     public ApiResponse<List<RecommendArticleResponse>> getTrendingArticles(
             @RequestParam(defaultValue = "7d") String period,

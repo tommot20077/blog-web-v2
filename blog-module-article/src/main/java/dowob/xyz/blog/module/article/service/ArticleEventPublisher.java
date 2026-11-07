@@ -93,7 +93,7 @@ public class ArticleEventPublisher {
                     article.getPublishedAt(),
                     article.getSlug(),
                     article.getSummary(),
-                    stripMarkdown(article.getContent()),
+                    MarkdownPlainText.strip(article.getContent()),
                     resolveAuthorNickname(article),
                     tags);
             rabbitTemplate.convertAndSend(
@@ -141,7 +141,7 @@ public class ArticleEventPublisher {
                     article.getPublishedAt(),
                     article.getSlug(),
                     article.getSummary(),
-                    stripMarkdown(article.getContent()),
+                    MarkdownPlainText.strip(article.getContent()),
                     resolveAuthorNickname(article),
                     tags);
             rabbitTemplate.convertAndSend(
@@ -161,7 +161,7 @@ public class ArticleEventPublisher {
      * 發 ArticleDeletedEvent — rich payload，因文章已刪 consumer 撈不到 entity。
      *
      * <p><b>失敗一律 ERROR（與 {@link #publishArchived(Article)} 同一判準）</b>：
-     * 這條事件是「把文章從 ES 索引移除」的唯一觸發（另有 series 模組訂閱以遞減 article_count）。
+     * 這條事件是「把文章從 ES 索引移除」的唯一觸發。
      * 送不出去就會留下一筆搜尋得到、點進去 404 的幽靈 document，而該 document 本身
      * 還帶著 title / summary / content。「端點回 200 刪除成功」與「文章仍搜尋得到」
      * 同時成立而無人察覺，正是 warn 蓋不住的狀態；訊息帶 eventId 與 articleUuid，
@@ -295,27 +295,5 @@ public class ArticleEventPublisher {
         }
         UserDisplayInfo author = userFacade.getDisplayInfoByUuids(List.of(authorUuid)).get(authorUuid);
         return author == null ? null : author.nickname();
-    }
-
-    /**
-     * 去除 Markdown 格式，回傳純文字（供 Elasticsearch 索引）。
-     *
-     * @param markdown Markdown 原文
-     * @return 純文字內容
-     */
-    private String stripMarkdown(String markdown) {
-        if (markdown == null)
-            return "";
-        return markdown
-                .replaceAll("```[\\s\\S]*?```", "")
-                .replaceAll("`[^`]*`", "")
-                .replaceAll("(?m)^#{1,6}\\s*", "")
-                .replaceAll("\\*{1,2}([^*]+)\\*{1,2}", "$1")
-                .replaceAll("_{1,2}([^_]+)_{1,2}", "$1")
-                .replaceAll("!\\[[^]]*]\\([^)]*\\)", "")
-                .replaceAll("\\[([^]]+)]\\([^)]*\\)", "$1")
-                .replaceAll("(?m)^[-*_]{3,}$", "")
-                .replaceAll("\\s{2,}", " ")
-                .trim();
     }
 }

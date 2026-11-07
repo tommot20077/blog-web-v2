@@ -81,7 +81,7 @@ public class MinioConfig {
     private Duration readTimeout = Duration.ofSeconds(30);
 
     /**
-     * 寫入逾時（預設 30 秒）：上傳（單檔上限 5MB）過程中兩次寫出之間的最長等待
+     * 寫入逾時（預設 30 秒）：上傳（單檔上限最大 20MB）過程中兩次寫出之間的最長等待
      */
     private Duration writeTimeout = Duration.ofSeconds(30);
 

@@ -74,6 +74,10 @@ class UserServiceTest {
     @Mock
     private TransactionStatus transactionStatus;
 
+    /** Mock：檔案模組查詢 Facade */
+    @Mock
+    private dowob.xyz.blog.infrastructure.facade.FileLookupFacade fileLookupFacade;
+
     /** 受測物件 */
     private UserService userService;
 
@@ -84,7 +88,8 @@ class UserServiceTest {
     @BeforeEach
     void setUp() {
         userService = new UserService(userRepository, passwordEncoder, sessionRevoker,
-                verificationTokenRepository, new TransactionTemplate(transactionManager), userEventPublisher);
+                verificationTokenRepository, new TransactionTemplate(transactionManager), userEventPublisher,
+                fileLookupFacade);
     }
 
     /** 測試用用戶 ID */
@@ -222,6 +227,65 @@ class UserServiceTest {
         verifyNoInteractions(userRepository);
     }
 
+    private static final java.util.UUID AVATAR_FILE_UUID = java.util.UUID.fromString("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    private static final String AVATAR_FILE_URL = "/api/v1/files/" + AVATAR_FILE_UUID + "/content";
+
+    /** 站內檔案不是本人上傳的 AVATAR（用途為文章圖片，或他人的檔案）→ 400 INVALID_AVATAR_FILE，不儲存 */
+    @Test
+    @DisplayName("updateProfile → 頭貼指向的站內檔案不是本人的 AVATAR → INVALID_AVATAR_FILE，不儲存")
+    void updateProfile_internalFileNotOwnAvatar_rejected() {
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(buildActiveUser()));
+        when(fileLookupFacade.isAvatarOwnedBy(AVATAR_FILE_UUID, TEST_USER_UUID)).thenReturn(false);
+
+        assertThatThrownBy(() -> userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null,
+                null, null, AVATAR_FILE_URL, null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                        .isEqualTo(dowob.xyz.blog.common.api.errorcode.FileErrorCode.INVALID_AVATAR_FILE));
+
+        verify(userRepository, never()).save(any());
+    }
+
+    /** 本人的 AVATAR 檔 → 儲存 */
+    @Test
+    @DisplayName("updateProfile → 頭貼指向本人上傳的 AVATAR 檔案 → 成功儲存")
+    void updateProfile_internalFileOwnAvatar_saved() {
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(buildActiveUser()));
+        when(fileLookupFacade.isAvatarOwnedBy(AVATAR_FILE_UUID, TEST_USER_UUID)).thenReturn(true);
+
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null, null, null, AVATAR_FILE_URL, null);
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(captor.capture());
+        assertThat(captor.getValue().getAvatarUrl()).isEqualTo(AVATAR_FILE_URL);
+    }
+
+    /** 站外 URL、空值維持現行行為：不查 file */
+    @Test
+    @DisplayName("updateProfile → 站外 URL 或空值頭貼 → 維持現行行為，不查檔案模組")
+    void updateProfile_externalOrEmptyAvatar_doesNotConsultFileFacade() {
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(buildActiveUser()));
+
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null, null, null, "https://cdn.example.com/a.png", null);
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null, null, null, null, null);
+
+        verifyNoInteractions(fileLookupFacade);
+    }
+
+    /** 頭貼未變更（前端每次存檔都會帶回現值）→ 不重驗，舊資料不會因新規則而無法儲存其他欄位 */
+    @Test
+    @DisplayName("updateProfile → 頭貼與目前值相同 → 不重驗（舊資料不擋其他欄位的儲存）")
+    void updateProfile_unchangedAvatar_notRevalidated() {
+        User user = buildActiveUser();
+        user.setAvatarUrl(AVATAR_FILE_URL);
+        when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(user));
+
+        userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, "新簡介", null, null, AVATAR_FILE_URL, null);
+
+        verifyNoInteractions(fileLookupFacade);
+        verify(userRepository).save(any());
+    }
+
     /**
      * 驗證：socialLinks 的 value 含 scheme 時應被拒絕。
      */
@@ -259,6 +323,9 @@ class UserServiceTest {
         User mockUser = buildActiveUser();
         when(userRepository.findByUuid(TEST_USER_UUID)).thenReturn(Optional.of(mockUser));
         String path = "/api/v1/files/11111111-2222-3333-4444-555555555555/content";
+        /* 站內檔案路徑現在會經 FileLookupFacade 確認是本人上傳的 AVATAR */
+        when(fileLookupFacade.isAvatarOwnedBy(java.util.UUID.fromString("11111111-2222-3333-4444-555555555555"), TEST_USER_UUID))
+                .thenReturn(true);
 
         userService.updateProfile(TEST_USER_UUID, TEST_NICKNAME, null, null, null, path, null);
 

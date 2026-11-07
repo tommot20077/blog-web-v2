@@ -1,5 +1,7 @@
 package dowob.xyz.blog.module.article.controller;
 
+import static org.mockito.Mockito.verifyNoInteractions;
+import dowob.xyz.blog.common.api.enums.Permission;
 import dowob.xyz.blog.module.article.support.TestUsers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dowob.xyz.blog.common.api.enums.Role;
@@ -303,5 +305,58 @@ class AdminCategoryControllerTest {
                 .andExpect(status().isOk());
 
         verify(categoryService).deleteCategory(specificUuid);
+    }
+
+    // =========================================================================
+    // A9：持有 ROLE_ADMIN、但缺少該端點對應 permission（手工構造 authorities）→ 方法層 403
+    // =========================================================================
+
+    /** ROLE_ADMIN + 除了 {@code missing} 之外的所有 permission：URL 層放行，方法層必須擋下。 */
+    private static RequestPostProcessor asAdminWithout(Permission missing) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().stream().filter(p -> p != missing).forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(1L), Role.ADMIN), null, authorities);
+        return authentication(auth);
+    }
+
+    @Test
+    @DisplayName("POST / → ROLE_ADMIN 但缺 ADMIN_CATEGORY → 403，且不建立分類")
+    void createCategory_adminWithoutCategoryPermission_shouldReturn403() throws Exception {
+        CreateCategoryRequest request = new CreateCategoryRequest();
+        request.setName("技術");
+        request.setSlug("tech");
+
+        mockMvc.perform(post("/api/v1/admin/categories")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request))
+                        .with(asAdminWithout(Permission.ADMIN_CATEGORY)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(categoryService);
+    }
+
+    @Test
+    @DisplayName("PUT /{uuid} → ROLE_ADMIN 但缺 ADMIN_CATEGORY → 403，且不更新")
+    void updateCategory_adminWithoutCategoryPermission_shouldReturn403() throws Exception {
+        UpdateCategoryRequest request = new UpdateCategoryRequest();
+        request.setName("更新名稱");
+
+        mockMvc.perform(put("/api/v1/admin/categories/{uuid}", TEST_UUID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request))
+                        .with(asAdminWithout(Permission.ADMIN_CATEGORY)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(categoryService);
+    }
+
+    @Test
+    @DisplayName("DELETE /{uuid} → ROLE_ADMIN 但缺 ADMIN_CATEGORY → 403，且不刪除")
+    void deleteCategory_adminWithoutCategoryPermission_shouldReturn403() throws Exception {
+        mockMvc.perform(delete("/api/v1/admin/categories/{uuid}", TEST_UUID)
+                        .with(asAdminWithout(Permission.ADMIN_CATEGORY)))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(categoryService);
     }
 }

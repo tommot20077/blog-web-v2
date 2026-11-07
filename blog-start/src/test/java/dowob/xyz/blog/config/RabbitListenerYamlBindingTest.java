@@ -12,6 +12,7 @@ import dowob.xyz.blog.module.file.service.ArticleFileBindingService;
 import dowob.xyz.blog.module.file.service.FileArticleCleanupService;
 import org.mockito.Mockito;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
+import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
@@ -65,7 +66,7 @@ class RabbitListenerYamlBindingTest {
     }
 
     @Test
-    @DisplayName("yaml 的 Hikari maximum-pool-size=32（14 個 DB consumer 最壞佔 26 條：12×2＋2 條固定 1-1 的 file consumer，已由實際容器斷言 max=1，仍留 6 條給 HTTP／排程；Yuan 2026-11-05）、minimum-idle=10")
+    @DisplayName("yaml 的 Hikari maximum-pool-size=32（13 個 DB consumer 最壞佔 24 條：11×2＋2 條固定 1-1 的 file consumer，已由實際容器斷言 max=1，仍留 8 條給 HTTP／排程；W7-d1 移除 series.article-deleted 後的算式，池大小維持 Yuan 2026-11-05 的決定）、minimum-idle=10")
     void yamlHikariPoolSize_isThirtyTwo() {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
@@ -113,6 +114,18 @@ class RabbitListenerYamlBindingTest {
                         assertThat(ReflectionTestUtils.getField(container, "maxConcurrentConsumers")).as(queue).isEqualTo(1);
                     }
                 });
+    }
+
+    @Test
+    @DisplayName("yaml 的 connection-timeout=5s、channel-rpc-timeout=10s 套用到 RabbitMQ client（broker 黑洞時 DLQ refresh 等呼叫須在逾時內返回，不長時間佔住排程執行緒）")
+    void yamlRabbitTimeouts_areApplied() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+            CachingConnectionFactory cf = context.getBean(CachingConnectionFactory.class);
+
+            assertThat(cf.getRabbitConnectionFactory().getConnectionTimeout()).isEqualTo(5_000);
+            assertThat(cf.getRabbitConnectionFactory().getChannelRpcTimeout()).isEqualTo(10_000);
+        });
     }
 
     /** 啟用 {@code @RabbitListener} 處理，讓 registry 依 yaml 的 factory 建立真實容器（不啟動、不連線） */

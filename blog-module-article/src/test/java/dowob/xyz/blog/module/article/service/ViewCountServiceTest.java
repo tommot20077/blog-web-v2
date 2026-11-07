@@ -15,6 +15,9 @@ import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -206,5 +209,65 @@ class ViewCountServiceTest {
 
         assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
         verify(valueOps).increment(key, 5L);
+    }
+
+    /**
+     * B4：批次合併 DB 值與 Redis 增量，Redis 只能打一次 MGET，不得逐篇 GET
+     */
+    @Test
+    @DisplayName("addRedisDeltas：DB 值加上 Redis 增量；缺值與非數字視為 0；只一次 MGET、零次逐篇 GET")
+    void addRedisDeltas_mergesDbAndRedisWithSingleMget() {
+        UUID withDelta = UUID.randomUUID();
+        UUID noDelta = UUID.randomUUID();
+        UUID garbage = UUID.randomUUID();
+        Map<UUID, Long> db = new LinkedHashMap<>();
+        db.put(withDelta, 10L);
+        db.put(noDelta, 7L);
+        db.put(garbage, 3L);
+        when(valueOps.multiGet(anyList())).thenReturn(java.util.Arrays.asList("5", null, "abc"));
+
+        Map<UUID, Long> result = viewCountService.addRedisDeltas(db);
+
+        assertThat(result).containsEntry(withDelta, 15L).containsEntry(noDelta, 7L).containsEntry(garbage, 3L);
+        verify(valueOps, times(1)).multiGet(List.of(
+                "article:views:" + withDelta, "article:views:" + noDelta, "article:views:" + garbage));
+        verify(valueOps, never()).get(any());
+    }
+
+    /**
+     * B4：空輸入不連 Redis
+     */
+    @Test
+    @DisplayName("addRedisDeltas：空輸入回傳空 Map，不呼叫 Redis")
+    void addRedisDeltas_emptyInput_noRedisCall() {
+        assertThat(viewCountService.addRedisDeltas(Map.of())).isEmpty();
+        assertThat(viewCountService.addRedisDeltas(null)).isEmpty();
+
+        verify(valueOps, never()).multiGet(any());
+    }
+
+    /**
+     * B4 review：MGET 與 DB 查詢一樣依 BatchedQuery.BATCH_SIZE 切批
+     */
+    @Test
+    @DisplayName("addRedisDeltas：1200 筆切成 500／500／200 共三次 MGET，結果依輸入順序合併")
+    void addRedisDeltas_splitsMgetIntoBatches() {
+        Map<UUID, Long> db = new LinkedHashMap<>();
+        for (int i = 0; i < 1200; i++) {
+            db.put(UUID.randomUUID(), (long) i);
+        }
+        List<Integer> batchSizes = new java.util.ArrayList<>();
+        when(valueOps.multiGet(anyList())).thenAnswer(inv -> {
+            List<String> keys = inv.getArgument(0);
+            batchSizes.add(keys.size());
+            return keys.stream().map(k -> "1").toList();
+        });
+
+        Map<UUID, Long> result = viewCountService.addRedisDeltas(db);
+
+        verify(valueOps, times(3)).multiGet(anyList());
+        assertThat(batchSizes).containsExactly(500, 500, 200);
+        assertThat(result).hasSize(1200);
+        db.forEach((uuid, base) -> assertThat(result.get(uuid)).isEqualTo(base + 1));
     }
 }

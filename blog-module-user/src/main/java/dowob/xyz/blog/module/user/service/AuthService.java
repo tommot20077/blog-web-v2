@@ -2,6 +2,7 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.enums.UserStatus;
+import dowob.xyz.blog.module.user.util.TokenHasher;
 import dowob.xyz.blog.module.user.util.TokenVersionUtils;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
@@ -187,27 +188,15 @@ public class AuthService {
         user.setTokenVersion("v1");
 
         /**
-         * DB 操作（save user + save verificationToken）在同一個 transaction 內。
+         * DB 操作（save user）在 transaction 內。驗證連結 token 不在此建立（A1）：由寄信 consumer 於寄信當下
+         * 產生並只存 SHA-256，這裡只發事件。
          * users 的 INSERT 是交易內第一個寫入：撞到唯一約束時例外立即中止交易（之後不再執行任何 SQL），
          * 在交易之外轉成業務結果（RACE-02／RACE-03／Q8）。
          */
-        String tokenValue = UUID.randomUUID().toString();
         String verificationCode = generateVerificationCode();
         User savedUser;
         try {
-            savedUser = transactionTemplate.execute(status -> {
-                User saved = userRepository.save(user);
-
-                VerificationToken verificationToken = new VerificationToken();
-                verificationToken.setUserId(saved.getId());
-                verificationToken.setToken(tokenValue);
-                verificationToken.setType("EMAIL_VERIFICATION");
-                verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
-                verificationToken.setCreatedAt(LocalDateTime.now());
-                verificationTokenRepository.save(verificationToken);
-
-                return saved;
-            });
+            savedUser = transactionTemplate.execute(status -> userRepository.save(user));
         } catch (RuntimeException e) {
             if (isEmailConflict(e)) {
                 log.info("註冊併發落敗：寫入撞到 {}，改走重複 email 路徑（靜默成功並通知原信箱主人）",
@@ -447,7 +436,7 @@ public class AuthService {
     @Transactional
     public void verifyEmail(String token) {
         VerificationToken verificationToken = verificationTokenRepository
-                .findByTokenAndType(token, "EMAIL_VERIFICATION")
+                .findByTokenHashAndType(TokenHasher.sha256Hex(token), "EMAIL_VERIFICATION")
                 .orElseThrow(() -> new BusinessException(UserErrorCode.TOKEN_INVALID));
 
         if (verificationToken.getExpiresAt().isBefore(LocalDateTime.now())) {
@@ -466,16 +455,27 @@ public class AuthService {
     }
 
     /**
-     * 使用 6 位數驗證碼驗證電子信箱
+     * 使用 6 位數驗證碼驗證電子信箱（含 client IP 層級限流）
      *
      * <p>內建防暴力破解機制：失敗次數達 {@link RedisKeyConstant#EMAIL_VERIFY_CODE_MAX_ATTEMPTS}
      * 後拒絕後續請求，直至驗證碼過期或重新發送。
      * DB 在 {@link TransactionTemplate} 內提交後才清除 Redis 資料，避免 DB rollback 導致驗證碼遺失。</p>
      *
-     * @param email 電子信箱
-     * @param code  6 位數驗證碼
+     * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
+     * （{@link RedisKeyConstant#VERIFY_CODE_IP_MAX} 次 / {@link RedisKeyConstant#VERIFY_CODE_IP_TTL_MINUTES} 分鐘，
+     * 與忘記密碼、重寄各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}；發生在任何 email／驗證碼邏輯之前。
+     * {@code clientIp} 為 null 時跳過。</p>
+     *
+     * @param email    電子信箱
+     * @param code     6 位數驗證碼
+     * @param clientIp client IP（可為 null，表示無法解析，跳過 IP 限流）
      */
-    public void verifyEmailCode(String email, String code) {
+    public void verifyEmailCode(String email, String code, String clientIp) {
+        checkIpRateLimit(
+                clientIp == null ? null : RedisKeyConstant.getVerifyCodeIpKey(clientIp),
+                RedisKeyConstant.VERIFY_CODE_IP_MAX,
+                RedisKeyConstant.VERIFY_CODE_IP_TTL_MINUTES);
+
         String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(email);
         String failCountStr = redisTemplate.opsForValue().get(failKey);
         if (failCountStr != null && Integer.parseInt(failCountStr) >= RedisKeyConstant.EMAIL_VERIFY_CODE_MAX_ATTEMPTS) {
@@ -515,16 +515,27 @@ public class AuthService {
     }
 
     /**
-     * 申請忘記密碼
+     * 申請忘記密碼（含 client IP 層級限流）
      *
-     * <p>若信箱存在，建立密碼重設 Token（15 分鐘有效），並發布
-     * {@link UserPasswordResetRequestedEvent} 至 RabbitMQ。
+     * <p>若信箱存在，發布 {@link UserPasswordResetRequestedEvent} 至 RabbitMQ，由寄信 consumer 於寄信當下產生
+     * 15 分鐘有效的重設 token（只存 SHA-256，A1）。
      * 若信箱不存在，靜默忽略（安全考量，不洩漏信箱是否已註冊）。
      * 每封信箱每分鐘限呼叫 1 次、每日限 5 次，超過拋出 RATE_LIMIT_EXCEEDED。</p>
      *
-     * @param email 用戶電子信箱
+     * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
+     * （{@link RedisKeyConstant#FORGOT_PASSWORD_IP_MAX} 次 / {@link RedisKeyConstant#FORGOT_PASSWORD_IP_TTL_MINUTES} 分鐘，
+     * 與重寄、驗證碼各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。
+     * <b>必須先於「信箱是否存在」的判斷</b>，因此超限回應與信箱是否存在無關，不會洩漏帳號。{@code clientIp} 為 null 時跳過。</p>
+     *
+     * @param email    用戶電子信箱
+     * @param clientIp client IP（可為 null，表示無法解析，跳過 IP 限流）
      */
-    public void forgotPassword(String email) {
+    public void forgotPassword(String email, String clientIp) {
+        checkIpRateLimit(
+                clientIp == null ? null : RedisKeyConstant.getForgotPasswordIpKey(clientIp),
+                RedisKeyConstant.FORGOT_PASSWORD_IP_MAX,
+                RedisKeyConstant.FORGOT_PASSWORD_IP_TTL_MINUTES);
+
         /** 速率限制檢查（Redis 操作，不需要在 DB transaction 內） */
         String minKey = RedisKeyConstant.getForgotPwdMinKey(email);
         String dayKey = RedisKeyConstant.getForgotPwdDayKey(email);
@@ -540,22 +551,7 @@ public class AuthService {
         }
 
         userRepository.findByEmail(email).ifPresent(user -> {
-            /** DB 操作在 transaction 內 */
-            String tokenValue = UUID.randomUUID().toString();
-            transactionTemplate.executeWithoutResult(status -> {
-                /** 先刪同類舊 token，讓「最新」等於「唯一」：晚到的舊寄信事件不會寄出仍有效的舊 token（ARCH-24） */
-                verificationTokenRepository.deleteByUserIdAndType(user.getId(), "PASSWORD_RESET");
-
-                VerificationToken resetToken = new VerificationToken();
-                resetToken.setUserId(user.getId());
-                resetToken.setToken(tokenValue);
-                resetToken.setType("PASSWORD_RESET");
-                resetToken.setExpiresAt(LocalDateTime.now().plusMinutes(15));
-                resetToken.setCreatedAt(LocalDateTime.now());
-                verificationTokenRepository.save(resetToken);
-            });
-
-            /** DB 已 commit，best-effort 發 MQ（失敗不影響忘記密碼結果） */
+            /** token 由寄信 consumer 於寄信當下產生並只存雜湊（A1），這裡不碰 verification_tokens，只發事件（best-effort） */
             try {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
@@ -568,16 +564,27 @@ public class AuthService {
     }
 
     /**
-     * 重發驗證信
+     * 重發驗證信（含 client IP 層級限流）
      *
-     * <p>若信箱存在且帳號處於 PENDING_VERIFICATION 狀態，刪除舊有驗證 Token 並建立新的
-     * （24 小時有效），接著發布 {@link UserRegisteredEvent} 至 RabbitMQ。
+     * <p>若信箱存在且帳號處於 PENDING_VERIFICATION 狀態，重設 Redis 驗證碼並發布 {@link UserRegisteredEvent}
+     * 至 RabbitMQ；舊驗證連結 token 的取代與新 token 的產生由寄信 consumer 在寄信當下完成（A1）。
      * 若信箱不存在或帳號已啟用，靜默忽略（安全考量）。
      * 每封信箱每分鐘限呼叫 1 次、每日限 5 次，超過拋出 RATE_LIMIT_EXCEEDED。</p>
      *
-     * @param email 用戶電子信箱
+     * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
+     * （{@link RedisKeyConstant#RESEND_VERIFICATION_IP_MAX} 次 / {@link RedisKeyConstant#RESEND_VERIFICATION_IP_TTL_MINUTES} 分鐘，
+     * 與忘記密碼、驗證碼各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}，發生在信箱查詢之前。
+     * {@code clientIp} 為 null 時跳過。</p>
+     *
+     * @param email    用戶電子信箱
+     * @param clientIp client IP（可為 null，表示無法解析，跳過 IP 限流）
      */
-    public void resendVerification(String email) {
+    public void resendVerification(String email, String clientIp) {
+        checkIpRateLimit(
+                clientIp == null ? null : RedisKeyConstant.getResendVerificationIpKey(clientIp),
+                RedisKeyConstant.RESEND_VERIFICATION_IP_MAX,
+                RedisKeyConstant.RESEND_VERIFICATION_IP_TTL_MINUTES);
+
         /** 速率限制檢查（Redis 操作，不需要在 DB transaction 內） */
         String minKey = RedisKeyConstant.getResendVerifyMinKey(email);
         String dayKey = RedisKeyConstant.getResendVerifyDayKey(email);
@@ -597,22 +604,8 @@ public class AuthService {
                 return;
             }
 
-            /** DB 操作（delete + save）在 transaction 內 */
-            String tokenValue = UUID.randomUUID().toString();
+            /** 舊 token 的刪除與新 token 的產生都由寄信 consumer 在寄信當下於同一交易完成（A1），這裡只備好 Redis 驗證碼並發事件 */
             String verificationCode = generateVerificationCode();
-            transactionTemplate.executeWithoutResult(status -> {
-                verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
-
-                VerificationToken verificationToken = new VerificationToken();
-                verificationToken.setUserId(user.getId());
-                verificationToken.setToken(tokenValue);
-                verificationToken.setType("EMAIL_VERIFICATION");
-                verificationToken.setExpiresAt(LocalDateTime.now().plusHours(24));
-                verificationToken.setCreatedAt(LocalDateTime.now());
-                verificationTokenRepository.save(verificationToken);
-            });
-
-            /** DB 已 commit，best-effort 發 MQ（失敗不影響重發結果） */
             saveEmailVerificationCode(user.getEmail(), verificationCode);
             // 新碼發出，重置失敗計數讓使用者可從新碼開始驗證
             try {
@@ -647,7 +640,7 @@ public class AuthService {
     @Transactional
     public void resetPassword(String token, String newPassword) {
         VerificationToken resetToken = verificationTokenRepository
-                .findByTokenAndType(token, "PASSWORD_RESET")
+                .findByTokenHashAndType(TokenHasher.sha256Hex(token), "PASSWORD_RESET")
                 .orElseThrow(() -> new BusinessException(UserErrorCode.TOKEN_INVALID));
 
         if (resetToken.getExpiresAt().isBefore(LocalDateTime.now())) {

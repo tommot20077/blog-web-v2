@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.user.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
@@ -25,7 +26,7 @@ import org.springframework.web.bind.annotation.*;
  * @author Yuan
  * @version 1.0
  */
-@Tag(name = "User", description = "用戶自助服務 API")
+@Tag(name = "使用者", description = "用戶自助服務 API")
 @RestController
 @RequestMapping("/api/v1/users")
 @RequiredArgsConstructor
@@ -40,7 +41,8 @@ public class UserController {
      * @param user 當前登入者（AuthUser；由 Spring Security 自動注入）
      * @return 使用者個人資料
      */
-    @Operation(summary = "取得當前使用者資訊", description = "回傳當前登入使用者的個人資料")
+    @Operation(summary = "取得當前使用者資訊",
+            description = "登入。回傳當前登入使用者的個人資料。")
     @PreAuthorize("isAuthenticated()")
     @GetMapping("/me")
     public ApiResponse<UserProfileResponse> getMe(@AuthenticationPrincipal AuthUser user) {
@@ -54,9 +56,12 @@ public class UserController {
      * @param request 包含新暱稱與個人簡介的請求
      * @return 成功回應
      */
-    @Operation(summary = "更新個人資料", description = "更新當前登入用戶的暱稱、個人簡介、網站、社群連結、頭貼與所在地")
+    @Operation(summary = "更新個人資料",
+            description = "登入。更新暱稱、個人簡介、網站、社群連結、頭貼與所在地。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗（含保留暱稱、website／avatarUrl／socialLinks 格式不合法）；A0107 暱稱已被使用；A0407 頭像檔案無效（非本人上傳的頭像）；A0101 用戶不存在")
     @PreAuthorize("isAuthenticated()")
     @PatchMapping("/me/profile")
+    @RateLimited("account-write")
     public ApiResponse<Void> updateProfile(@AuthenticationPrincipal AuthUser user,
                                             @Valid @RequestBody UpdateProfileRequest request) {
         userService.updateProfile(user.uuid(), request.getNickname(), request.getBio(), request.getWebsite(),
@@ -71,9 +76,12 @@ public class UserController {
      * @param request 包含 5 個通知偏好開關的請求
      * @return 成功回應
      */
-    @Operation(summary = "更新通知偏好", description = "更新當前登入用戶的留言、按讚、審核、追蹤與電子報通知偏好")
+    @Operation(summary = "更新通知偏好",
+            description = "登入。更新留言、按讚、審核、追蹤與電子報通知偏好。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0101 用戶不存在")
     @PreAuthorize("isAuthenticated()")
     @PatchMapping("/me/notifications")
+    @RateLimited("account-write")
     public ApiResponse<Void> updateNotifications(@AuthenticationPrincipal AuthUser user,
                                                  @Valid @RequestBody NotificationPreferencesRequest request) {
         userService.updateNotificationPreferences(user.uuid(),
@@ -89,9 +97,12 @@ public class UserController {
      * @param request 包含舊密碼與新密碼的請求
      * @return 成功回應
      */
-    @Operation(summary = "修改密碼", description = "驗證舊密碼後更新密碼，所有現有 Token 將立即失效")
+    @Operation(summary = "修改密碼",
+            description = "登入。驗證舊密碼後更新密碼，所有現有 Token 將立即失效。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0102 舊密碼錯誤；A0101 用戶不存在")
     @PreAuthorize("isAuthenticated()")
     @PostMapping("/me/change-password")
+    @RateLimited("account-write")
     public ApiResponse<Void> changePassword(@AuthenticationPrincipal AuthUser user,
                                              @Valid @RequestBody ChangePasswordRequest request) {
         userService.changePassword(user.uuid(), request.getOldPassword(), request.getNewPassword());
@@ -105,7 +116,9 @@ public class UserController {
      * @param request 包含當前密碼的刪除帳號請求（用於二次身份確認）
      * @return 成功回應
      */
-    @Operation(summary = "刪除帳號", description = "驗證密碼後將帳號標記為已刪除，所有現有 Token 將立即失效")
+    @Operation(summary = "刪除帳號",
+            description = "登入。驗證密碼後將帳號標記為已刪除，所有現有 Token 將立即失效。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0102 密碼錯誤；A0101 用戶不存在")
     @PreAuthorize("isAuthenticated()")
     @DeleteMapping("/me")
     public ApiResponse<Void> deleteAccount(@AuthenticationPrincipal AuthUser user,

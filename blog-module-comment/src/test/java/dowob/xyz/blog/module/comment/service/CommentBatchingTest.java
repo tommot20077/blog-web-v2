@@ -29,11 +29,11 @@ import static org.mockito.Mockito.when;
 /**
  * CommentService 留言列表的批次查詢守衛。
  *
- * <p>本路徑有兩個無上界的 {@code IN (...)}：{@code findRepliesByParentIds}
+ * <p>本路徑有兩個無上界的 {@code IN (...)}：{@code findFirstRepliesByParentIds}
  * 的輸入為一頁 top-level 留言 id，{@code findLikedCommentIdsByUser} 的輸入是
  * <b>top-level ＋ 全部 replies</b>——後者可遠大於頁大小，是本 repo 最需要切批的一處。</p>
  *
- * <p>{@code findRepliesByParentIds} 帶 {@code ORDER BY c.parent_id, c.created_at}，
+ * <p>{@code findFirstRepliesByParentIds} 帶 {@code ORDER BY c.parent_id, c.created_at}，
  * 但呼叫端以 {@code groupingBy(parentId)} 消費，且同一 parent 的 replies 必落在同一批，
  * 故「同 parent 內按 created_at」這個唯一被消費的順序性質在切批後仍成立。</p>
  *
@@ -50,8 +50,11 @@ class CommentBatchingTest {
     @Mock private CommentMarkdownRenderer renderer;
     @InjectMocks private CommentService commentService;
 
-    /** findRepliesByParentIds 每次收到的批次大小 */
+    /** findFirstRepliesByParentIds 每次收到的批次大小 */
     private final List<Integer> replyBatchSizes = new ArrayList<>();
+
+    /** countRepliesByParentIds 每次收到的批次大小 */
+    private final List<Integer> replyCountBatchSizes = new ArrayList<>();
 
     /** findLikedCommentIdsByUser 每次收到的批次大小 */
     private final List<Integer> likedBatchSizes = new ArrayList<>();
@@ -69,7 +72,7 @@ class CommentBatchingTest {
     }
 
     @Test
-    @DisplayName("replies 與 liked 兩個 IN 查詢都切批")
+    @DisplayName("replies、replyCount 與 liked 三個 IN 查詢都切批")
     void bothInQueriesSplitIntoBatches() {
         int total = BatchedQuery.BATCH_SIZE + 100;
         UUID articleUuid = UUID.randomUUID();
@@ -79,10 +82,15 @@ class CommentBatchingTest {
                 new ArticleData(articleUuid, "PUBLISHED", null, UUID.randomUUID(), null)));
         when(commentMapper.findTopLevelByArticle(eq(articleUuid), anyString(), anyInt(), anyInt()))
                 .thenReturn(IntStream.rangeClosed(1, total).mapToObj(i -> topLevel(i)).toList());
-        when(commentMapper.findRepliesByParentIds(anyList())).thenAnswer(invocation -> {
+        when(commentMapper.findFirstRepliesByParentIds(anyList(), anyInt())).thenAnswer(invocation -> {
             List<Long> batch = invocation.getArgument(0);
             replyBatchSizes.add(batch.size());
             return List.<CommentRow>of();
+        });
+        when(commentMapper.countRepliesByParentIds(anyList())).thenAnswer(invocation -> {
+            List<Long> batch = invocation.getArgument(0);
+            replyCountBatchSizes.add(batch.size());
+            return List.<CommentMapper.ReplyCountRow>of();
         });
         when(commentMapper.findLikedCommentIdsByUser(eq(viewerUuid), anyList())).thenAnswer(invocation -> {
             List<Long> batch = invocation.getArgument(1);
@@ -93,6 +101,7 @@ class CommentBatchingTest {
         commentService.listComments(articleUuid, viewerUuid, false, "newest", 1, total);
 
         assertThat(replyBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
+        assertThat(replyCountBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
         assertThat(likedBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
     }
 }

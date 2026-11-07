@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.file.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
@@ -40,6 +41,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.UUID;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 /**
  * 檔案管理 REST Controller
@@ -53,6 +56,7 @@ import java.util.UUID;
  * @version 1.0
  */
 @Slf4j
+@Tag(name = "檔案")
 @RestController
 @RequiredArgsConstructor
 public class FileController {
@@ -79,7 +83,11 @@ public class FileController {
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 上傳成功的檔案資訊（{@code url} 為相對路徑 {@code /api/v1/files/{id}/content}）
      */
+    @Operation(summary = "上傳圖片",
+            description = "需 FILE_UPLOAD 權限。multipart 上傳文章圖片或頭像，依實際內容偵測型別；單檔大小、圖片總像素與個人儲存配額皆有上限。傳入的 articleUuid 非本人文章時會被忽略（不報錯、不綁定）。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0004 缺少 file 或 usageType 參數；A0001 參數校驗失敗（usageType 不是合法值）；A0404 不支援的檔案類型；A0402 檔案大小超過限制；A0406 圖片尺寸過大；A0403 儲存空間配額已滿")
     @PostMapping("/api/v1/files/upload")
+    @RateLimited("upload")
     @PreAuthorize("hasAuthority('FILE_UPLOAD')")
     @RequestBody(
             required = true,
@@ -116,6 +124,10 @@ public class FileController {
      * @param authentication 當前認證資訊（用於判斷是否為 ADMIN）
      * @return 檔案元資料
      */
+    @Operation(summary = "取得檔案 metadata",
+            description = "公開檔案可匿名讀取；非公開檔案限擁有者或管理員。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0401 檔案不存在")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "A0405 無權限讀取此檔案")
     @GetMapping("/api/v1/files/{id}")
     public ApiResponse<FileMetadata> getFileMetadata(
             @PathVariable UUID id,
@@ -164,6 +176,12 @@ public class FileController {
      * @param response       HTTP 回應（寫入標頭與內容）
      * @throws IOException 寫出內容失敗（例如用戶端中斷連線）
      */
+    @Operation(summary = "取得檔案內容",
+            description = "公開檔案可匿名讀取；非公開檔案限擁有者或管理員。回傳二進位串流，支援 ETag／If-None-Match；公開檔案帶公開快取標頭，非公開檔案為 private, no-store。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "檔案內容（二進位串流）")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "304", description = "ETag 未變更，無 body")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "A0405 無權限讀取此檔案")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "A0401 檔案不存在")
     @GetMapping("/api/v1/files/{id}/content")
     public void getFileContent(
             @PathVariable UUID id,
@@ -269,6 +287,9 @@ public class FileController {
      * @param authentication 當前認證資訊（用於判斷是否為管理員）
      * @return 空回應
      */
+    @Operation(summary = "刪除檔案",
+            description = "登入；擁有者或管理員。刪除檔案。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0401 檔案不存在；A0405 無權限操作此檔案")
     @DeleteMapping("/api/v1/files/{id}")
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<Void> deleteFile(
@@ -291,6 +312,9 @@ public class FileController {
      * @param pageable 分頁參數
      * @return 檔案列表
      */
+    @Operation(summary = "我的檔案列表",
+            description = "登入。分頁列出自己上傳的檔案。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗（size 必須介於 1 與上限之間）")
     @GetMapping("/api/v1/users/me/files")
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<List<FileMetadata>> getUserFiles(
@@ -307,6 +331,8 @@ public class FileController {
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 配額資訊
      */
+    @Operation(summary = "我的儲存配額",
+            description = "登入。回傳依角色計算的配額與已使用量。")
     @GetMapping("/api/v1/users/me/quota")
     @PreAuthorize("isAuthenticated()")
     public ApiResponse<QuotaResponse> getQuota(

@@ -42,8 +42,8 @@ public final class DeadLetterTopology {
     /**
      * 帶 DLQ 的 queue arguments，供 {@code new Queue(name, durable, exclusive, autoDelete, arguments)} 使用。
      *
-     * <p>每次呼叫回傳<b>新的可變</b> Map：呼叫端可在其上追加額外參數（例如 version 模組的
-     * {@code x-message-ttl}，見 {@code VersionRabbitMqConfig} 的 ARCH-18 待決註解）而不影響其他 queue。</p>
+     * <p>每次呼叫回傳<b>新的可變</b> Map：呼叫端可在其上追加額外參數而不影響其他 queue
+     * （目前全站無 queue 追加額外參數，version 的 TTL 已於 ARCH-18／C5 移除）。</p>
      *
      * @return 恰含 {@code x-dead-letter-exchange} 與 {@code x-dead-letter-routing-key} 兩項的新 Map
      */

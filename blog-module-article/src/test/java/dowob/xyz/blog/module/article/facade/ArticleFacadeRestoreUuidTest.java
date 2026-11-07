@@ -105,7 +105,7 @@ class ArticleFacadeRestoreUuidTest {
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
                 new ArticleDataAssembler(),
-                null, renderer, tocCodec);
+                null, renderer, tocCodec, null);
         when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
             TransactionCallback<?> callback = invocation.getArgument(0);
             return callback.doInTransaction(mock(TransactionStatus.class));

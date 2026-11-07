@@ -41,7 +41,7 @@ public interface ArticleMapper {
      *
      * <p>刻意<b>排除</b> {@code content_md}、{@code content_html}、{@code toc}：列表只組摘要／{@code ArticleData}，
      * 用不到這三個 TEXT 欄位，{@code SELECT *} 卻會讓 PostgreSQL 讀出並傳輸整頁文章的正文。
-     * 詳情頁（{@code ArticleRepository}）、ES 全量索引（{@link #findAllPublished()}）、版本快照與檔案綁定需要正文，
+     * 詳情頁（{@code ArticleRepository}）、ES 全量索引（{@link #INDEX_COLUMNS}）、版本快照與檔案綁定需要正文，
      * 不使用本常數。{@link Article} 新增欄位時須同步補進這裡（{@code ArticleMapperListColumnsSqlTest} 守衛）。</p>
      */
     String LIST_COLUMNS = "id, uuid, author_uuid, title, slug, summary, cover_image_url, status, reject_reason, "
@@ -226,24 +226,57 @@ public interface ArticleMapper {
     List<TagInfo> findTagsByArticleUuid(@Param("articleUuid") UUID articleUuid);
 
     /**
-     * 查詢所有已發布文章（供全量重建 Elasticsearch 索引使用）
+     * ES 索引用途的明確選欄（PERF-01）：只有組 {@code ArticleIndexData} 需要的欄位。
      *
-     * <p>需要正文（{@code content}），但不需要 {@code content_html}／{@code toc}。MyBatis 以欄名自動映射，
-     * 而實體欄位叫 {@code content}、資料庫欄位叫 {@code content_md}，必須明寫 {@code content_md AS content}，
-     * 否則 content 恆為 null，全量重建會把內文索引成空字串。</p>
-     *
-     * @return 所有已發布文章列表
+     * <p>需要正文，但只要 Markdown 原文：MyBatis 以欄名自動映射，實體欄位叫 {@code content}、資料庫欄位叫
+     * {@code content_md}，必須明寫 {@code content_md AS content}（否則 content 恆為 null，見 {@code ArticleIndexContentIT}）；
+     * {@code content_html}／{@code toc} 用不到，不讀。</p>
      */
-    @Select("SELECT " + LIST_COLUMNS + ", content_md AS content FROM articles WHERE status = 'PUBLISHED' "
-            + "ORDER BY published_at DESC NULLS LAST")
-    List<Article> findAllPublished();
+    String INDEX_COLUMNS = "uuid, author_uuid, title, slug, summary, content_md AS content, "
+            + "view_count, like_count, published_at ";
+
+    /**
+     * 以 keyset 分頁讀取一批已發布文章（ES 全量重建用，PERF-01）。
+     *
+     * <p>依 {@code uuid} 升冪、取游標之後的至多 {@code limit} 篇；游標為 {@code null} 時從頭開始。
+     * keyset 而非 OFFSET：OFFSET 越翻越慢（每批都要先掃過前面所有列），且重建期間有文章發布或下架時會重複或漏讀。
+     * 排序鍵 {@code uuid} 有唯一索引 {@code articles_uuid_key}，可依索引順序讀取、在 LIMIT 處停止，不需 Sort。</p>
+     *
+     * @param afterUuid 游標（不含）；{@code null} 表示從頭
+     * @param limit     本批筆數上限（呼叫端負責夾界）
+     * @return 已發布文章（僅 {@link #INDEX_COLUMNS} 欄位），依 uuid 升冪
+     */
+    @Select("<script>SELECT " + INDEX_COLUMNS + "FROM articles WHERE status = 'PUBLISHED' "
+            + "<if test='afterUuid != null'>AND uuid > #{afterUuid}::uuid </if>"
+            + "ORDER BY uuid LIMIT #{limit}</script>")
+    List<Article> findPublishedForIndexAfter(@Param("afterUuid") UUID afterUuid, @Param("limit") int limit);
+
+    /**
+     * 讀取給定 UUID 中目前為 PUBLISHED 的文章（ES 全量重建期間的增量補齊用）。
+     *
+     * <p>呼叫端須保證 {@code uuids} 非空，並經 {@code BatchedQuery} 切批。</p>
+     *
+     * @param uuids 文章公開 UUID（不得為空）
+     * @return 其中目前為 PUBLISHED 者（僅 {@link #INDEX_COLUMNS} 欄位）
+     */
+    @Select("<script>SELECT " + INDEX_COLUMNS + "FROM articles WHERE status = 'PUBLISHED' AND uuid IN "
+            + "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>"
+            + "</script>")
+    List<Article> findPublishedForIndexByUuids(@Param("list") List<UUID> uuids);
+
+    /**
+     * 已發布文章總數（ES 全量重建的進度分母）。
+     *
+     * @return PUBLISHED 文章數
+     */
+    @Select("SELECT COUNT(*) FROM articles WHERE status = 'PUBLISHED'")
+    long countPublished();
 
     /**
      * 歸檔頁用的輕量投影：全部已發布文章的 uuid／title／slug／published_at。
      *
-     * <p>與 {@link #findAllPublished()} 刻意分開：後者 {@code SELECT *} 會把 {@code content_md}／{@code content_html}／
-     * {@code toc} 一併撈出（供 ES 全量重建索引使用，需要正文）；歸檔頁只要四個欄位，沿用它等於每次請求把全站語料
-     * 搬進 JVM 堆（PERF-04）。</p>
+     * <p>刻意只選四個欄位：原本與 ES 全量重建共用的查詢會把 {@code content_md}／{@code content_html}／{@code toc}
+     * 一併撈出；歸檔頁沿用它等於每次請求把全站語料搬進 JVM 堆（PERF-04）。</p>
      *
      * <p>排序 {@code published_at DESC NULLS LAST, id DESC} 與 V22 的 partial index
      * {@code idx_articles_published_latest} <b>逐字一致</b>（欄位、方向、NULLS 位置、{@code WHERE status = 'PUBLISHED'}），
@@ -268,6 +301,23 @@ public interface ArticleMapper {
      */
     @Select("SELECT view_count FROM articles WHERE uuid = #{uuid}::uuid")
     Long findViewCountByUuid(@Param("uuid") UUID uuid);
+
+    /**
+     * 批次查詢多篇文章的 DB 互動計數（瀏覽數與按讚數同一條 SQL）。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序須與 {@link EngagementRow} 的元件順序一致。不篩狀態；查無的 uuid 不回傳。
+     * 呼叫端須保證 {@code uuids} 非空，並經 {@code BatchedQuery} 切批。</p>
+     *
+     * @param uuids 文章公開 UUID（不得為空）
+     * @return 每篇存在文章的 DB 計數
+     */
+    @Select("<script>" +
+            "SELECT uuid AS uuid, view_count AS viewCount, like_count AS likeCount FROM articles " +
+            "WHERE uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<EngagementRow> findEngagementRowsIn(@Param("list") List<UUID> uuids);
 
     /**
      * 以批次增量更新文章瀏覽計數（原子性加法）
@@ -541,6 +591,15 @@ public interface ArticleMapper {
      * @param likeCount      按讚數總和
      */
     record AuthorStatsRow(Long publishedCount, Long viewCount, Long likeCount) {}
+
+    /**
+     * {@link #findEngagementRowsIn} 的投影列。
+     *
+     * @param uuid      文章公開 UUID
+     * @param viewCount DB 的瀏覽數（不含 Redis 暫存增量）
+     * @param likeCount DB 的按讚數
+     */
+    record EngagementRow(UUID uuid, Long viewCount, Long likeCount) {}
 
     /**
      * {@link #countPublishedBySeriesUuids} 的投影列。

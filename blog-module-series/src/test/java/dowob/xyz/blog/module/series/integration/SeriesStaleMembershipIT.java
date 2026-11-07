@@ -53,9 +53,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ul>
  *   <li><b>視窗 A</b>：series 被刪除之後、article 的 {@code ArticleSeriesDeletedConsumer} 處理完之前，
  *       把該文章加入另一個 series 不得誤回 S0106（舊 FK 同步清空歸屬，這種情況過去不可能發生）；
- *       殘留的舊歸屬由 {@code SeriesService} 條件式清掉，且不動任何 article_count。</li>
+ *       殘留的舊歸屬由 {@code SeriesService} 條件式清掉，。</li>
  *   <li><b>視窗 B</b>：加入流程讀到 series 存在 → 另一個交易刪掉該 series 並 commit → 加入的條件式 UPDATE 才寫入。
- *       沒有 FK 擋下，article_count 的 +1 影響 0 列，此時必須回 S0101 並讓整個交易回滾，不得留下指向
+ *       沒有 FK 擋下，加入流程對 series 列加的共享鎖查無此列，此時必須回 S0101 並讓整個交易回滾，不得留下指向
  *       已不存在系列的 ghost 歸屬。</li>
  * </ul>
  *
@@ -119,7 +119,7 @@ class SeriesStaleMembershipIT {
 
     private UUID insertSeries(String slug) {
         UUID uuid = UUID.randomUUID();
-        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid, article_count) VALUES (?, ?, ?, ?, 0)",
+        jdbc.update("INSERT INTO series (uuid, title, slug, author_uuid) VALUES (?, ?, ?, ?)",
                 uuid, "T-" + slug, slug, SeededUsers.USER1_UUID);
         return uuid;
     }
@@ -132,8 +132,8 @@ class SeriesStaleMembershipIT {
         return uuid;
     }
 
-    private int articleCountOf(UUID seriesUuid) {
-        return jdbc.queryForObject("SELECT article_count FROM series WHERE uuid = ?", Integer.class, seriesUuid);
+    private int memberCountOf(UUID seriesUuid) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM articles WHERE series_uuid = ?", Integer.class, seriesUuid);
     }
 
     private UUID seriesUuidOf(UUID articleUuid) {
@@ -141,12 +141,11 @@ class SeriesStaleMembershipIT {
     }
 
     @Test
-    @DisplayName("視窗 A：series 被刪除、consumer 尚未處理 → 把文章加入另一個 series 應成功（清掉殘留歸屬，舊 series 已不在，不動任何 article_count）")
+    @DisplayName("視窗 A：series 被刪除、consumer 尚未處理 → 把文章加入另一個 series 應成功（清掉殘留歸屬，舊 series 已不在）")
     void addArticleToOtherSeries_afterSeriesDeleted_beforeConsumerRuns_succeeds() throws Exception {
         UUID oldSeries = insertSeries("stale-old");
         UUID newSeries = insertSeries("stale-new");
         UUID article = insertPublishedArticle(oldSeries, 4);
-        jdbc.update("UPDATE series SET article_count = 1 WHERE uuid = ?", oldSeries);
         mockMvc.perform(delete("/api/v1/series/{uuid}", oldSeries).with(asAuthor())).andExpect(status().isOk());
         assertThat(seriesUuidOf(article)).as("V32 起沒有 FK、consumer 也還沒跑：殘留舊歸屬").isEqualTo(oldSeries);
 
@@ -158,7 +157,7 @@ class SeriesStaleMembershipIT {
                 .andExpect(jsonPath("$.code").value("00000"));
 
         assertThat(seriesUuidOf(article)).isEqualTo(newSeries);
-        assertThat(articleCountOf(newSeries)).isEqualTo(1);
+        assertThat(memberCountOf(newSeries)).isEqualTo(1);
     }
 
     @Test
@@ -176,7 +175,7 @@ class SeriesStaleMembershipIT {
                 .andExpect(jsonPath("$.code").value("S0106"));
 
         assertThat(seriesUuidOf(article)).isEqualTo(oldSeries);
-        assertThat(articleCountOf(newSeries)).isZero();
+        assertThat(memberCountOf(newSeries)).isZero();
     }
 
     @Test

@@ -110,7 +110,7 @@ class ArticleQuerySubService {
     /**
      * 組裝歸檔頁清單：全部已發布文章的 uuid／title／slug／publishedAt／標籤名稱，依發布時間由新到舊。
      *
-     * <p>以 {@link ArticleMapper#findArchiveRows()} 的四欄投影取代 {@code findAllPublished()} 的 {@code SELECT *}，
+     * <p>以 {@link ArticleMapper#findArchiveRows()} 的四欄投影取代原本撈整列（含正文）的全量查詢，
      * 正文欄位不進 JVM；標籤整批查詢，且 {@code batchToTagResponsesMap} 內部經 {@code BatchedQuery} 切批，
      * 不會組出含全部文章 UUID 的單一 {@code IN (...)}。結果的快取在 {@code ArticleQueryService}（本方法不碰 Redis，
      * 保持單純的 DB 讀取）。</p>

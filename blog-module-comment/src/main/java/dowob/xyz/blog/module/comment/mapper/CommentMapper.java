@@ -52,37 +52,114 @@ public interface CommentMapper {
                                            @Param("offset") int offset);
 
     /**
-     * 一次撈多個 top-level 的所有 replies（按 parent_id 分組、created_at ASC）。
-     * 過濾軟刪除 leaf reply。
+     * 每個頂層留言各取前 N 則「未刪除」回覆（D3／PERF-22），依 created_at 升冪、id 為次序鍵。
      *
-     * <p>parent uuid 以 {@code LEFT JOIN comments p} 取得（PERF-22；原為逐列執行的相關子查詢，結果相同）。
-     * {@code p.id} 為主鍵，每列至多匹配一列，不會讓結果列數增加；父留言已軟刪除時仍會帶出其 uuid。</p>
+     * <p><b>為什麼用 {@code LATERAL ... LIMIT}</b>：對每個頂層各自走 {@code idx_comments_replies}
+     * （parent_id, created_at）取前 N 列就停，資料庫端只讀 N × 頂層數 列；不是撈出全部回覆再由 Java 截斷
+     * （熱門討論串的全部回覆含兩個 TEXT 欄位，可達數十 MB）。軟刪除的回覆先被濾掉，不佔名額。</p>
+     *
+     * <p>parent uuid 由外層的 {@code comments p} 直接取得（{@code p.id} 為主鍵，不會讓列數增加；
+     * 父留言已軟刪除時仍帶出其 uuid）。結果依 parent_id 再 created_at 排序，呼叫端以 {@code groupingBy(parentId)} 消費。</p>
+     *
+     * @param parentIds 頂層留言主鍵（不得為空；由 {@code BatchedQuery} 切批）
+     * @param perParent 每個頂層最多取幾則
+     * @return 各頂層的前 N 則回覆
      */
     @Select({
         "<script>",
+        "SELECT r.id, r.uuid, r.article_uuid, r.parent_id,",
+        "       p.uuid AS parent_uuid,",
+        "       r.user_uuid, r.content, r.content_html, r.like_count,",
+        "       r.edited_at, r.deleted_at, r.deleted_by_role, r.created_at",
+        "  FROM comments p",
+        "  JOIN LATERAL (",
+        "        SELECT c.id, c.uuid, c.article_uuid, c.parent_id, c.user_uuid, c.content, c.content_html,",
+        "               c.like_count, c.edited_at, c.deleted_at, c.deleted_by_role, c.created_at",
+        "          FROM comments c",
+        "         WHERE c.parent_id = p.id AND c.deleted_at IS NULL",
+        "         ORDER BY c.created_at ASC, c.id ASC",
+        "         LIMIT #{perParent}",
+        "       ) r ON TRUE",
+        " WHERE p.id IN",
+        "<foreach collection='parentIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        " ORDER BY p.id, r.created_at ASC, r.id ASC",
+        "</script>"
+    })
+    List<CommentRow> findFirstRepliesByParentIds(@Param("parentIds") List<Long> parentIds,
+                                                 @Param("perParent") int perParent);
+
+    /**
+     * 多個頂層各自的「未刪除」回覆總數（供列表的 {@code replyCount}）。
+     *
+     * <p>沒有任何未刪除回覆的頂層<b>不會出現在結果中</b>，呼叫端以 0 補。
+     * MyBatis 對 record 建構子採位置對應（見 Ruling F1），SELECT 欄位順序須與 {@link ReplyCountRow} 一致。</p>
+     *
+     * @param parentIds 頂層留言主鍵（不得為空；由 {@code BatchedQuery} 切批，各頂層只出現在一批，結果可直接串接）
+     * @return 各頂層的未刪除回覆數
+     */
+    @Select({
+        "<script>",
+        "SELECT parent_id AS parentId, COUNT(*) AS replyCount",
+        "  FROM comments",
+        " WHERE deleted_at IS NULL AND parent_id IN",
+        "<foreach collection='parentIds' item='id' open='(' separator=',' close=')'>",
+        "  #{id}",
+        "</foreach>",
+        " GROUP BY parent_id",
+        "</script>"
+    })
+    List<ReplyCountRow> countRepliesByParentIds(@Param("parentIds") List<Long> parentIds);
+
+    /**
+     * 單一頂層留言的回覆分頁（未刪除者；created_at 升冪、id 為次序鍵，與列表內嵌的前 N 則同序）。
+     *
+     * @param parentId 頂層留言主鍵
+     * @param limit    分頁筆數
+     * @param offset   跳過筆數
+     * @return 該頁回覆
+     */
+    @Select({
         "SELECT c.id, c.uuid, c.article_uuid, c.parent_id,",
         "       p.uuid AS parent_uuid,",
         "       c.user_uuid, c.content, c.content_html, c.like_count,",
         "       c.edited_at, c.deleted_at, c.deleted_by_role, c.created_at",
         "  FROM comments c",
         "  LEFT JOIN comments p ON p.id = c.parent_id",
-        " WHERE c.parent_id IN",
-        "<foreach collection='parentIds' item='id' open='(' separator=',' close=')'>",
-        "  #{id}",
-        "</foreach>",
-        "   AND c.deleted_at IS NULL",
-        " ORDER BY c.parent_id, c.created_at ASC",
-        "</script>"
+        " WHERE c.parent_id = #{parentId} AND c.deleted_at IS NULL",
+        " ORDER BY c.created_at ASC, c.id ASC",
+        " LIMIT #{limit} OFFSET #{offset}"
     })
-    List<CommentRow> findRepliesByParentIds(@Param("parentIds") List<Long> parentIds);
+    List<CommentRow> findReplyPage(@Param("parentId") Long parentId,
+                                   @Param("limit") int limit,
+                                   @Param("offset") int offset);
 
     /**
-     * 文章總留言數，與列表顯示規則一致：
-     * - 保留 top-level 軟刪除留言（顯示為 [已刪除] tombstone）
-     * - 排除軟刪除的 replies（列表 findRepliesByParentIds 會過濾，count 也應排除）
+     * 單一頂層留言的「未刪除」回覆總數（回覆分頁的 total）。
+     *
+     * @param parentId 頂層留言主鍵
+     * @return 未刪除回覆數
      */
-    @Select("SELECT COUNT(*) FROM comments WHERE article_uuid = #{articleUuid}::uuid "
-            + "AND (parent_id IS NULL OR deleted_at IS NULL)")
+    @Select("SELECT COUNT(*) FROM comments WHERE parent_id = #{parentId} AND deleted_at IS NULL")
+    int countRepliesByParentId(@Param("parentId") Long parentId);
+
+    /**
+     * {@link #countRepliesByParentIds} 的投影列。
+     *
+     * @param parentId   頂層留言主鍵
+     * @param replyCount 該頂層的未刪除回覆數
+     */
+    record ReplyCountRow(Long parentId, Long replyCount) {}
+
+    /**
+     * 文章的「未刪除留言數」（頂層加回覆合計），<b>不含任何已刪除的留言，包括頂層墓碑</b>（B5／DATA-06）。
+     *
+     * <p>與 {@code articles.comment_count} 同一口徑：新增留言時 +1，每次首次軟刪除（頂層、回覆、admin 刪除皆然）
+     * 時 -1，因此該欄位恆等於本查詢的結果。墓碑雖仍出現在列表（讓下方回覆保有脈絡），
+     * 但已不算一則「留言」，不計入此數。</p>
+     */
+    @Select("SELECT COUNT(*) FROM comments WHERE article_uuid = #{articleUuid}::uuid AND deleted_at IS NULL")
     int countByArticle(@Param("articleUuid") UUID articleUuid);
 
     /** 文章 top-level 留言數（用於分頁 totalElements） */

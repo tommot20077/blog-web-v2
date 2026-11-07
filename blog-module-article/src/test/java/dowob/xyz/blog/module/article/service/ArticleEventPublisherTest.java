@@ -555,7 +555,7 @@ class ArticleEventPublisherTest {
         }
 
         @Test
-        @DisplayName("契約：下架事件不得共用 article.deleted（該 key 另有 series 訂閱並遞減 article_count）")
+        @DisplayName("契約：下架事件不得共用 article.deleted（該 key 代表資料列已刪除，訂閱者會清除衍生資料）")
         void publishArchived_doesNotReuseDeletedRoutingKey() {
             assertThat(ArticleEventContract.ROUTING_KEY_ARCHIVED)
                     .isEqualTo("article.archived")

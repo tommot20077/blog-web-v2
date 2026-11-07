@@ -2,8 +2,10 @@ package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.UserStatus;
 
+import dowob.xyz.blog.infrastructure.facade.FileLookupFacade;
 import dowob.xyz.blog.module.user.util.TokenVersionUtils;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.module.user.model.User;
@@ -61,6 +63,9 @@ public class UserService {
 
     /** 使用者事件發布元件 */
     private final UserEventPublisher userEventPublisher;
+
+    /** 檔案模組查詢 Facade：確認頭像指向的站內檔案是本人上傳的 AVATAR */
+    private final FileLookupFacade fileLookupFacade;
 
     /**
      * 取得使用者個人資料
@@ -125,6 +130,8 @@ public class UserService {
         User user = userRepository.findByUuid(userUuid)
                 .orElseThrow(() -> new BusinessException(UserErrorCode.USER_NOT_FOUND));
 
+        validateAvatarFile(userUuid, user.getAvatarUrl(), avatarUrl);
+
         if (!user.getNickname().equals(nickname) && userRepository.existsByNickname(nickname)) {
             throw new BusinessException(UserErrorCode.NICKNAME_DUPLICATED);
         }
@@ -167,6 +174,30 @@ public class UserService {
         if (!SafeSocialLinksValidator.isSafe(socialLinks)) {
             throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR, "socialLinks: 社群連結格式不正確");
         }
+    }
+
+    /**
+     * 頭貼指向本站檔案（{@code /api/v1/files/{uuid}/content}）時，確認該檔案是本人上傳的 AVATAR。
+     *
+     * <p>上傳端點的 {@code usageType} 由 client 自行指定，頭像 5MB 的單檔上限只對 AVATAR 生效；若不在這裡把關，
+     * 選 ARTICLE_CONTENT 上傳（上限 20MB）再設成頭像即可繞過上限，也能把別人的檔案設成自己的頭像。
+     * 站外 URL、空值維持現行行為；<b>值未變更時不重驗</b>（前端每次存檔都會帶回現值，
+     * 舊資料不應因新規則而無法儲存其他欄位）。</p>
+     *
+     * @param userUuid  使用者 UUID
+     * @param currentUrl 目前已儲存的頭貼 URL（可為 null）
+     * @param newUrl    本次要儲存的頭貼 URL（可為 null）
+     * @throws BusinessException 檔案不是本人上傳的 AVATAR（{@link FileErrorCode#INVALID_AVATAR_FILE}，HTTP 400）
+     */
+    private void validateAvatarFile(UUID userUuid, String currentUrl, String newUrl) {
+        if (java.util.Objects.equals(currentUrl, newUrl)) {
+            return;
+        }
+        SafeHttpUrlValidator.extractFileUuid(newUrl).ifPresent(fileUuid -> {
+            if (!fileLookupFacade.isAvatarOwnedBy(fileUuid, userUuid)) {
+                throw new BusinessException(FileErrorCode.INVALID_AVATAR_FILE);
+            }
+        });
     }
 
     /**

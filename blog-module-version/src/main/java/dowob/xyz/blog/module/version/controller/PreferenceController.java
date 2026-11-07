@@ -1,9 +1,10 @@
 package dowob.xyz.blog.module.version.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.security.AuthUser;
-import dowob.xyz.blog.module.version.exception.VersionErrorCode;
+import dowob.xyz.blog.common.api.errorcode.VersionErrorCode;
 import dowob.xyz.blog.module.version.model.dto.request.UpdatePreferenceRequest;
 import dowob.xyz.blog.module.version.model.dto.response.EffectiveConfigResponse;
 import dowob.xyz.blog.module.version.service.PreferenceResolver;
@@ -38,7 +39,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/me/preferences/version")
 @RequiredArgsConstructor
-@Tag(name = "Version Preference")
+@Tag(name = "版本偏好")
 public class PreferenceController {
 
     private final PreferenceResolver preferenceResolver;
@@ -49,7 +50,8 @@ public class PreferenceController {
      */
     @GetMapping
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "取得 effective version config")
+    @Operation(summary = "取得生效中的版本設定",
+            description = "登入。回傳套用個人覆寫後的自動快照設定（enabled、retain、intervalSeconds、diffChars）。")
     public ApiResponse<EffectiveConfigResponse> get(@AuthenticationPrincipal AuthUser user) {
         return ApiResponse.success(preferenceResolver.getEffectiveResponse(user.uuid()));
     }
@@ -59,8 +61,11 @@ public class PreferenceController {
      * 更新 user override（partial update，只更新非 null 欄位）。
      */
     @PutMapping
+    @RateLimited("account-write")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "更新 user override（partial）")
+    @Operation(summary = "更新版本偏好",
+            description = "登入。部分更新個人覆寫值，未帶的欄位不變。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；V0105 配置值超出合理範圍")
     public ApiResponse<EffectiveConfigResponse> update(
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody UpdatePreferenceRequest req) {
@@ -73,7 +78,9 @@ public class PreferenceController {
      */
     @DeleteMapping("/{key}")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "重置某 key 為系統預設")
+    @Operation(summary = "重置偏好為系統預設",
+            description = "登入。將指定 key（enabled、retain、intervalSeconds、diffChars）重置為系統預設。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "V0107 未知的 preference key")
     public ApiResponse<EffectiveConfigResponse> reset(
             @AuthenticationPrincipal AuthUser user,
             @PathVariable String key) {

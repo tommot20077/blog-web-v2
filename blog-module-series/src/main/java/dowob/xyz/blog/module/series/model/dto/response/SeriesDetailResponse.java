@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.series.model.dto.response;
 
 import dowob.xyz.blog.common.api.dto.AuthorSummary;
-import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -23,7 +22,7 @@ public class SeriesDetailResponse {
     private String coverImageUrl;
     private AuthorSummary author;
     private Integer articleCount;
-    private List<ArticleSummaryResponse> articles;
+    private List<SeriesArticleItem> articles;
     private MyProgress myProgress;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

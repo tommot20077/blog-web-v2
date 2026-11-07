@@ -39,6 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -156,9 +158,9 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
     /**
      * 斷言併發註冊中「輸的那一方」沒有留下任何副作用，且贏的那一方的副作用完整只有一份：
      * <ul>
-     *   <li>DB：沒有輸家的 {@code users} 列；{@code verification_tokens} 只儲存過一次，且屬於贏家
-     *       （本模組測試基底把 {@code VerificationTokenRepository} 換成 mock，故以其 {@code save} 呼叫驗證，
-     *       不查真實資料表）；</li>
+     *   <li>DB：沒有輸家的 {@code users} 列；註冊流程不寫 {@code verification_tokens}
+     *       （A1：token 改由寄信 consumer 產生；本模組測試基底把 {@code VerificationTokenRepository} 換成 mock，
+     *       故以其 {@code save} 從未被呼叫來驗證）；</li>
      *   <li>MQ：只發出一個註冊事件，事件屬於贏家；</li>
      *   <li>Redis：驗證碼 key 的值是贏家事件的驗證碼；email 不同時，輸家的 email 沒有任何驗證碼 key。</li>
      * </ul>
@@ -175,9 +177,8 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
         assertThat(countWhere(keyColumn, keys[loser])).as("輸家不得有 users 列").isZero();
         Long winnerId = jdbc.queryForObject("SELECT id FROM users WHERE " + keyColumn + " = ?", Long.class, keys[winner]);
 
-        ArgumentCaptor<VerificationToken> token = ArgumentCaptor.forClass(VerificationToken.class);
-        verify(verificationTokenRepository, times(1)).save(token.capture());
-        assertThat(token.getValue().getUserId()).as("唯一儲存的驗證 token 屬於贏家").isEqualTo(winnerId);
+        /* A1：註冊不再建立 token（改由寄信 consumer 產生並只存雜湊），因此贏、輸雙方都不應寫 verification_tokens */
+        verify(verificationTokenRepository, never()).save(any(VerificationToken.class));
 
         ArgumentCaptor<UserRegisteredEvent> event = ArgumentCaptor.forClass(UserRegisteredEvent.class);
         verify(rabbitTemplate, times(1)).convertAndSend(anyString(), anyString(), event.capture());

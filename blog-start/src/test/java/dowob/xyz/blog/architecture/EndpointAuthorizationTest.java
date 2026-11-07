@@ -1,6 +1,9 @@
 package dowob.xyz.blog.architecture;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
+import dowob.xyz.blog.common.api.enums.Permission;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.RequestMapping;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
@@ -9,6 +12,11 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -57,6 +65,7 @@ class EndpointAuthorizationTest {
             "ArticleController#getArticle", "GET /api/v1/articles/{uuid}",
             "ArticleController#getArticleBySlug", "GET /api/v1/articles/slug/{slug}",
             "CommentController#list", "GET /api/v1/articles/{uuid}/comments",
+            "CommentController#listReplies", "GET /api/v1/comments/{uuid}/replies",
             "FileController#getFileContent", "GET /api/v1/files/**（實際授權在 FileService#canRead()）",
             "FileController#getFileMetadata", "GET /api/v1/files/**（實際授權在 FileService#canRead()）",
             "SearchController#search", "GET /api/v1/search",
@@ -110,6 +119,134 @@ class EndpointAuthorizationTest {
                 .as("有 @PreAuthorize 者與無 mapping 標註者皆合規，被抓到即為假陽性")
                 .doesNotContain("UnauthorizedEndpointFixture#usesPrincipalWithPreAuthorize")
                 .doesNotContain("UnauthorizedEndpointFixture#notAHandler");
+    }
+
+    // =========================================================================
+    // A9（AUTH-10）：權限命名統一
+    // =========================================================================
+
+    /** 所有合法的 Permission 名稱（真相來源是 {@link Permission} enum） */
+    private static final Set<String> PERMISSION_NAMES = Arrays.stream(Permission.values())
+            .map(Enum::name).collect(Collectors.toSet());
+
+    /** 抓出 {@code hasAuthority('X')} 的 X */
+    private static final Pattern HAS_AUTHORITY = Pattern.compile("hasAuthority\\('([A-Z_]+)'\\)");
+
+    @Test
+    @DisplayName("守衛 A9-1：/api/v1/admin/** 底下每個 handler 都必須是 hasAuthority('ADMIN_*')（與 URL 層 hasRole(ADMIN) 構成雙層）")
+    void adminEndpointsMustRequireAdminPermission() {
+        assertThat(findAdminPermissionViolations(importProductionControllers()))
+                .as("admin 端點須宣告 @PreAuthorize(\"hasAuthority('ADMIN_*')\")，且 ADMIN_* 必須是 Permission enum 內存在的名稱；"
+                  + "不得沿用已廢除的泛用 SYSTEM_CONFIG，也不得只靠 isAuthenticated()（security.md 原則 1、AUTH-10）")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("守衛 A9-2：所有 @PreAuthorize 引用的 hasAuthority('X') 都必須是現存 Permission（防拼錯／改名後漏改）")
+    void everyReferencedAuthorityMustBeAnExistingPermission() {
+        assertThat(findUnknownAuthorityReferences(importProductionControllers()))
+                .as("hasAuthority 引用了不存在的 Permission：Spring 不會報錯，只會讓該端點對所有人 403（或被誤放行的假象）")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("守衛 A9-3：POST /api/v1/articles/{uuid}/reject（不在 /admin URL 層）必須是 ADMIN_ARTICLE_REVIEW")
+    void rejectEndpointMustRequireAdminArticleReview() {
+        JavaClasses classes = importProductionControllers();
+
+        String value = classes.stream()
+                .filter(c -> c.getSimpleName().equals("ArticleController"))
+                .flatMap(c -> c.getMethods().stream())
+                .filter(m -> m.getName().equals("rejectArticle"))
+                .map(m -> m.tryGetAnnotationOfType(PreAuthorize.class).map(PreAuthorize::value).orElse("<none>"))
+                .findFirst().orElse("<missing method>");
+
+        assertThat(value).isEqualTo("hasAuthority('ADMIN_ARTICLE_REVIEW')");
+    }
+
+    @Test
+    @DisplayName("守衛 A9-4：VersionController 的讀取端點不再只靠 isAuthenticated()，需 hasAuthority('ARTICLE_EDIT')（owner／admin 檢查仍在 service 層）")
+    void versionReadEndpointsMustRequireArticleEdit() {
+        JavaClasses classes = importProductionControllers();
+
+        List<String> values = classes.stream()
+                .filter(c -> c.getSimpleName().equals("VersionController"))
+                .flatMap(c -> c.getMethods().stream())
+                .filter(EndpointAuthorizationTest::isHandler)
+                .filter(m -> m.getName().equals("list") || m.getName().equals("getDetail"))
+                .map(m -> m.getName() + "=" + m.tryGetAnnotationOfType(PreAuthorize.class).map(PreAuthorize::value).orElse("<none>"))
+                .sorted().toList();
+
+        assertThat(values).containsExactly(
+                "getDetail=hasAuthority('ARTICLE_EDIT')", "list=hasAuthority('ARTICLE_EDIT')");
+    }
+
+    @Test
+    @DisplayName("反向驗證 A9：守衛抓得到泛用／缺失／只登入／拼錯的 admin 端點，且不誤判合規者")
+    void adminPermissionGuardDetectsKnownViolations() {
+        JavaClasses fixtures = new ClassFileImporter().importPackages("dowob.xyz.blog.architecture.fixture");
+
+        assertThat(findAdminPermissionViolations(fixtures))
+                .containsExactlyInAnyOrder(
+                        "AdminPermissionFixture#legacyGenericPermission",
+                        "AdminPermissionFixture#missingPreAuthorize",
+                        "AdminPermissionFixture#authenticatedOnly",
+                        "AdminPermissionFixture#unknownPermission")
+                .doesNotContain("AdminPermissionFixture#compliant");
+        assertThat(findUnknownAuthorityReferences(fixtures))
+                .contains("AdminPermissionFixture#unknownPermission", "AdminPermissionFixture#legacyGenericPermission")
+                .doesNotContain("AdminPermissionFixture#compliant");
+    }
+
+    /**
+     * 找出 admin URL 底下不符 {@code hasAuthority('ADMIN_*')}（且名稱須為現存 Permission）的 handler。
+     *
+     * @param classes 待掃描的類集合
+     * @return 違規方法的 {@code 類別#方法} 描述
+     */
+    private static List<String> findAdminPermissionViolations(JavaClasses classes) {
+        return classes.stream()
+                .filter(c -> c.getSimpleName().endsWith("Controller") || c.getSimpleName().endsWith("Fixture"))
+                .filter(c -> c.tryGetAnnotationOfType(RequestMapping.class)
+                        .map(a -> Arrays.stream(a.value()).anyMatch(p -> p.startsWith("/api/v1/admin")))
+                        .orElse(false))
+                .flatMap(c -> c.getMethods().stream())
+                .filter(EndpointAuthorizationTest::isHandler)
+                .filter(m -> !hasAdminPermission(m))
+                .map(m -> m.getOwner().getSimpleName() + "#" + m.getName())
+                .distinct().sorted().toList();
+    }
+
+    private static boolean hasAdminPermission(JavaMethod method) {
+        String expression = method.tryGetAnnotationOfType(PreAuthorize.class).map(PreAuthorize::value).orElse("");
+        Matcher m = HAS_AUTHORITY.matcher(expression);
+        return m.matches() && m.group(1).startsWith("ADMIN_") && PERMISSION_NAMES.contains(m.group(1));
+    }
+
+    /**
+     * 找出 {@code @PreAuthorize} 內引用了不存在 Permission 名稱的方法（方法層或類層）。
+     *
+     * @param classes 待掃描的類集合
+     * @return 違規方法的 {@code 類別#方法} 描述
+     */
+    private static List<String> findUnknownAuthorityReferences(JavaClasses classes) {
+        return classes.stream()
+                .filter(c -> c.getSimpleName().endsWith("Controller") || c.getSimpleName().endsWith("Fixture"))
+                .flatMap(c -> c.getMethods().stream())
+                .filter(m -> m.tryGetAnnotationOfType(PreAuthorize.class)
+                        .map(a -> unknownAuthorityIn(a.value())).orElse(false))
+                .map(m -> m.getOwner().getSimpleName() + "#" + m.getName())
+                .distinct().sorted().toList();
+    }
+
+    private static boolean unknownAuthorityIn(String expression) {
+        Matcher m = Pattern.compile("hasAuthority\\('([A-Za-z_]+)'\\)").matcher(expression);
+        while (m.find()) {
+            if (!PERMISSION_NAMES.contains(m.group(1))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

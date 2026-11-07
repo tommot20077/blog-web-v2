@@ -88,7 +88,6 @@ class SeriesMapperIT {
         s.setDescription("d-" + slug);
         s.setCoverImageUrl("https://img/" + slug);
         s.setAuthorUuid(SeededUsers.USER1_UUID);
-        s.setArticleCount(0);
         LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MICROS);
         s.setCreatedAt(now);
         s.setUpdatedAt(now);
@@ -111,9 +110,9 @@ class SeriesMapperIT {
         assertThat(affected).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT author_uuid FROM series WHERE uuid = ?", UUID.class, s.getUuid()))
                 .isEqualTo(SeededUsers.USER1_UUID);
-        assertThat(jdbc.queryForObject("SELECT title || '|' || slug || '|' || description || '|' || article_count "
+        assertThat(jdbc.queryForObject("SELECT title || '|' || slug || '|' || description "
                 + "FROM series WHERE uuid = ?", String.class, s.getUuid()))
-                .isEqualTo("T-mapper-insert|mapper-insert|d-mapper-insert|0");
+                .isEqualTo("T-mapper-insert|mapper-insert|d-mapper-insert");
         assertThat(jdbc.queryForObject("SELECT created_at FROM series WHERE uuid = ?", LocalDateTime.class, s.getUuid()))
                 .as("created_at 為呼叫端傳入的 Java 時間").isEqualTo(s.getCreatedAt());
         assertThat(jdbc.queryForObject("SELECT updated_at FROM series WHERE uuid = ?", LocalDateTime.class, s.getUuid()))
@@ -154,17 +153,16 @@ class SeriesMapperIT {
     }
 
     @Test
-    @DisplayName("updateBasicFields：四個欄位都給值 → 全部更新，author_uuid 與 article_count 不受影響")
-    void updateBasicFields_allFields_updatesAllButAuthorAndCount() {
+    @DisplayName("updateBasicFields：四個欄位都給值 → 全部更新，author_uuid 不受影響")
+    void updateBasicFields_allFields_updatesAllButAuthor() {
         Series s = newSeries("mapper-upd-all");
-        s.setArticleCount(4);
         mapper.insertIfSlugAbsent(s);
 
         mapper.updateBasicFields(idOf(s.getUuid()), "t2", "mapper-upd-all-2", "d2", "https://img/2", LocalDateTime.now());
 
         assertThat(jdbc.queryForObject("SELECT title || '|' || slug || '|' || description || '|' || cover_image_url "
-                + "|| '|' || article_count || '|' || author_uuid FROM series WHERE uuid = ?", String.class, s.getUuid()))
-                .isEqualTo("t2|mapper-upd-all-2|d2|https://img/2|4|" + SeededUsers.USER1_UUID);
+                + "|| '|' || author_uuid FROM series WHERE uuid = ?", String.class, s.getUuid()))
+                .isEqualTo("t2|mapper-upd-all-2|d2|https://img/2|" + SeededUsers.USER1_UUID);
     }
 
     @Test
@@ -203,20 +201,28 @@ class SeriesMapperIT {
         assertThat(affected).isEqualTo(1);
     }
 
-    // ─── decrementArticleCountByUuid ────────────────────────────────────────
+    // ─── V36：移除 article_count ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("decrementArticleCountByUuid：計數 > 0 時 -1；已為 0 時不再扣（守衛）；未知 uuid 影響 0 列")
-    void decrementArticleCountByUuid_guardsAgainstUnderflow() {
-        Series s = newSeries("mapper-dec");
-        s.setArticleCount(1);
-        mapper.insertIfSlugAbsent(s);
+    @DisplayName("V36：series 表已沒有 article_count 欄位（篇數改為即時計數）")
+    void articleCountColumnIsDropped() {
+        Integer columns = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                        + "WHERE table_name = 'series' AND column_name = 'article_count'", Integer.class);
+        assertThat(columns).isZero();
+    }
 
-        assertThat(mapper.decrementArticleCountByUuid(s.getUuid())).isEqualTo(1);
-        assertThat(mapper.decrementArticleCountByUuid(s.getUuid())).isZero();
-        assertThat(mapper.decrementArticleCountByUuid(UUID.randomUUID())).isZero();
-        assertThat(jdbc.queryForObject("SELECT article_count FROM series WHERE uuid = ?", Integer.class, s.getUuid()))
-                .isZero();
+    // ─── lockExistingById（取代 article_count + 1 順帶提供的「列仍存在」保證）─────────
+
+    @Test
+    @DisplayName("lockExistingById：列存在 → 回其主鍵；列不存在 → null")
+    void lockExistingById_returnsIdWhenPresentAndNullWhenAbsent() {
+        Series s = newSeries("mapper-lock");
+        mapper.insertIfSlugAbsent(s);
+        long id = idOf(s.getUuid());
+
+        assertThat(mapper.lockExistingById(id)).isEqualTo(id);
+        assertThat(mapper.lockExistingById(-1L)).isNull();
     }
 
     // ─── 以 UUID 為鍵的列表查詢 ──────────────────────────────────────────────
@@ -239,10 +245,9 @@ class SeriesMapperIT {
     }
 
     @Test
-    @DisplayName("findByUuids：回傳指定 uuid 的 series（含 author_uuid、不含 article_count），不認識的 uuid 略過")
+    @DisplayName("findByUuids：回傳指定 uuid 的 series（含 author_uuid），不認識的 uuid 略過")
     void findByUuids_returnsRequestedRowsWithAuthorUuid() {
         Series a = newSeries("mapper-by-1");
-        a.setArticleCount(9);
         Series b = newSeries("mapper-by-2");
         b.setAuthorUuid(SeededUsers.USER2_UUID);
         Series c = newSeries("mapper-by-3");
@@ -258,8 +263,6 @@ class SeriesMapperIT {
         assertThat(rowB.getTitle()).isEqualTo("T-mapper-by-2");
         assertThat(rowB.getSlug()).isEqualTo("mapper-by-2");
         assertThat(rowB.getCreatedAt()).isNotNull();
-        assertThat(rows).extracting(Series::getArticleCount)
-                .as("列表查詢不投影 article_count（改用即時計數）").containsOnlyNulls();
     }
 
     @Test

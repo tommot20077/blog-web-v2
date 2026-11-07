@@ -33,10 +33,10 @@ public final class ArticleEventContract {
     public static final String ROUTING_KEY_UPDATED = "article.updated";
 
     /**
-     * 文章已刪除 Routing Key（series、search 訂閱）。事件類別為 {@link ArticleDeletedEvent}。
+     * 文章已刪除 Routing Key（comment、reading、tag、version、file、search 訂閱）。事件類別為 {@link ArticleDeletedEvent}。
      *
-     * <p>與 {@link #ROUTING_KEY_ARCHIVED} 刻意分開：series 訂閱本 key 並遞減 {@code series.article_count}，
-     * 下架若共用本 key 會讓該計數多扣一次。</p>
+     * <p>與 {@link #ROUTING_KEY_ARCHIVED} 刻意分開：本 key 代表資料列已刪除，各訂閱者會清除自己持有的衍生資料，
+     * 下架（資料列仍在）若共用本 key 會讓它們誤清。</p>
      */
     public static final String ROUTING_KEY_DELETED = "article.deleted";
 

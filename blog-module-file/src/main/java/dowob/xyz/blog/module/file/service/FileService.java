@@ -70,6 +70,28 @@ public interface FileService {
     void deleteFile(UUID fileId, UUID requesterId, boolean isAdmin);
 
     /**
+     * 未綁定檔清理專用的刪除（D6）：<b>鎖列、重驗、刪 MinIO、刪 DB 列</b>於同一個交易內完成。
+     *
+     * <p>與 {@link #deleteFile} 的差異：清理 job 先掃描、之後才刪除，兩者之間作者可能把圖貼進新文章並存檔
+     * （綁定回填或文章內文引用都會讓檔案「變成有人用」）。若沿用 {@code deleteFile}（交易外刪 MinIO、不重驗），
+     * 圖會被誤刪、文章破圖。本方法在交易內依序：</p>
+     * <ol>
+     *   <li>{@code SELECT ... FOR UPDATE} 鎖住該檔案列（此後綁定 consumer 對該列的 UPDATE 會等待）</li>
+     *   <li>重新確認：仍未綁定、仍非頭像、建立早於 {@code createdBefore}、仍未被上傳者任何文章（不分狀態）引用
+     *       （就地重呼叫 facade）；任一不成立即放棄，不動 MinIO 與 DB</li>
+     *   <li>刪除 MinIO 原檔與縮圖（先 MinIO 後 DB；失敗即拋例外、交易回滾、列保留，留到下次）</li>
+     *   <li>刪除 DB 列</li>
+     * </ol>
+     * <p>持鎖時間只有一次 facade 查詢加兩次 MinIO 呼叫；清理是低並行度的批次作業，可接受。</p>
+     *
+     * @param fileId        要刪除的檔案 UUID
+     * @param createdBefore 建立時間上界（不含）；通常為「現在 − 保留天數」
+     * @return 實際刪除了則 true；檔案已不存在或重驗不通過（保留）則 false
+     * @throws RuntimeException facade 查詢或 MinIO 刪除失敗（交易回滾，檔案與列都保留）
+     */
+    boolean deleteUnboundFileIfUnreferenced(UUID fileId, java.time.LocalDateTime createdBefore);
+
+    /**
      * 查詢使用者的儲存配額資訊
      *
      * @param uploaderId   使用者 UUID
