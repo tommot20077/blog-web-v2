@@ -22,6 +22,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 /**
  * 文章管理員 REST Controller
@@ -34,6 +36,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@Tag(name = "文章管理")
 @RestController
 @RequestMapping("/api/v1/admin/articles")
 @RequiredArgsConstructor
@@ -56,6 +59,8 @@ public class AdminArticleController {
      *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @return 分頁待審文章摘要列表
      */
+    @Operation(summary = "待審文章列表",
+            description = "需 ADMIN_ARTICLE_REVIEW 權限。分頁列出 PENDING_REVIEW 的文章。")
     @PreAuthorize("hasAuthority('ADMIN_ARTICLE_REVIEW')")
     @GetMapping("/pending")
     public ApiResponse<PageResult<ArticleSummaryResponse>> getPendingArticles(
@@ -90,6 +95,9 @@ public class AdminArticleController {
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 下架後的文章完整資訊
      */
+    @Operation(summary = "下架文章",
+            description = "需 ADMIN_ARTICLE_ARCHIVE 權限。將已發布文章轉為 ARCHIVED。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在；A0203 非管理員；A0204 目前狀態不允許此操作")
     @PreAuthorize("hasAuthority('ADMIN_ARTICLE_ARCHIVE')")
     @PostMapping("/{uuid}/archive")
     public ApiResponse<ArticleResponse> archiveArticle(@PathVariable UUID uuid,
@@ -117,6 +125,9 @@ public class AdminArticleController {
      * @param authentication 當前認證資訊（用於解析角色）
      * @return 復原後的文章完整資訊
      */
+    @Operation(summary = "復原下架文章",
+            description = "需 ADMIN_ARTICLE_ARCHIVE 權限。將 ARCHIVED 文章復原為 DRAFT，退回作者重新編輯。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在；A0203 非管理員；A0204 目前狀態不允許此操作（來源不是 ARCHIVED）")
     @PreAuthorize("hasAuthority('ADMIN_ARTICLE_ARCHIVE')")
     @PostMapping("/{uuid}/unarchive")
     public ApiResponse<ArticleResponse> unarchiveArticle(@PathVariable UUID uuid,
