@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.comment.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -34,6 +35,7 @@ public class CommentLikeController {
     private final CommentLikeService likeService;
 
     @PostMapping
+    @RateLimited("interaction-write")
     @PreAuthorize("hasAuthority('COMMENT_WRITE')")
     @Operation(summary = "按讚留言（idempotent；軟刪除留言阻擋 C0104）")
     public ApiResponse<Void> like(@AuthenticationPrincipal AuthUser user, @PathVariable UUID uuid) {

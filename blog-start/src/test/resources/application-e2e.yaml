@@ -40,3 +40,17 @@ management:
 app:
   mail:
     consumer-enabled: false
+  # 應用層限流（SEC-23）：E2E 全部 MockMvc 請求共用 127.0.0.1 與少數測試帳號，且許多測試短時間內重複呼叫同一端點，
+  # 故一般 E2E 把門檻調高到不會觸發；RateLimitE2E 以 @TestPropertySource 還原正式門檻驗證限流本身。
+  rate-limit:
+    rules:
+      comment-write:
+        limit: 100000
+      interaction-write:
+        limit: 100000
+      upload:
+        limit: 100000
+      article-write:
+        limit: 100000
+      search:
+        limit: 100000

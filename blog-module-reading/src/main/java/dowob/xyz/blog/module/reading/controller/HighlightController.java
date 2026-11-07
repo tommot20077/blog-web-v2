@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -40,6 +41,7 @@ public class HighlightController {
     private final HighlightService highlightService;
 
     @PostMapping("/articles/{articleUuid}/highlights")
+    @RateLimited("interaction-write")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "建立 highlight + 可選 note")
     public ApiResponse<HighlightResponse> create(
@@ -59,6 +61,7 @@ public class HighlightController {
     }
 
     @PutMapping("/highlights/{uuid}")
+    @RateLimited("interaction-write")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "更新 highlight (color/note)")
     public ApiResponse<HighlightResponse> update(

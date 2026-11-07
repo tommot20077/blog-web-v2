@@ -231,6 +231,35 @@ app:
       name: ${APP_MAIL_SECURITY_FROM_NAME:Blog Security Bot}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5500,http://127.0.0.1:5500}
+  # 應用層限流（SEC-23 / A4，Yuan 2026-11-07 拍板）：handler 上的 @RateLimited("<rule>") 對應下列規則。
+  # 超限回 429（錯誤碼 A0009）並帶 Retry-After（秒）。固定窗口，Redis key：ratelimit:{rule}:{u|ip}:{id}。
+  #   subject=USER：已登入者以 userUuid 計、匿名者以 client IP 計（ClientIpResolver，prod 須設 APP_HTTP_TRUSTED_PROXY_COUNT）
+  #   subject=IP  ：一律以 IP 計，登入者也一樣
+  # 每條規則的 limit／window 可用環境變數覆寫（APP_RATE_LIMIT_<RULE>_LIMIT／_WINDOW；window 例：30s、1m、1h）。
+  # 規則名稱打錯或缺漏 → 啟動失敗（RateLimitRuleValidator），不會靜默不限流。
+  rate-limit:
+    rules:
+      # 留言新增、編輯、回覆：每人每分鐘 10 次
+      comment-write:
+        limit: ${APP_RATE_LIMIT_COMMENT_WRITE_LIMIT:10}
+        window: ${APP_RATE_LIMIT_COMMENT_WRITE_WINDOW:1m}
+      # 按讚（文章／留言）、收藏、劃線新增與更新、閱讀進度：每人每分鐘 60 次
+      interaction-write:
+        limit: ${APP_RATE_LIMIT_INTERACTION_WRITE_LIMIT:60}
+        window: ${APP_RATE_LIMIT_INTERACTION_WRITE_WINDOW:1m}
+      # 檔案上傳：每人每小時 30 次
+      upload:
+        limit: ${APP_RATE_LIMIT_UPLOAD_LIMIT:30}
+        window: ${APP_RATE_LIMIT_UPLOAD_WINDOW:1h}
+      # 文章建立、更新：每人每分鐘 30 次
+      article-write:
+        limit: ${APP_RATE_LIMIT_ARTICLE_WRITE_LIMIT:30}
+        window: ${APP_RATE_LIMIT_ARTICLE_WRITE_WINDOW:1m}
+      # 搜尋：每 IP 每分鐘 30 次（一律以 IP 計，登入者也一樣）
+      search:
+        limit: ${APP_RATE_LIMIT_SEARCH_LIMIT:30}
+        window: ${APP_RATE_LIMIT_SEARCH_WINDOW:1m}
+        subject: ip
 
 # Version 模組設定
 version:

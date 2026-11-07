@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.comment.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
@@ -130,6 +131,7 @@ public class CommentController {
     }
 
     @PostMapping("/articles/{articleUuid}/comments")
+    @RateLimited("comment-write")
     @PreAuthorize("hasAuthority('COMMENT_WRITE')")
     @Operation(summary = "建立留言（top-level 或 reply）")
     public ApiResponse<CommentResponse> create(
@@ -140,6 +142,7 @@ public class CommentController {
     }
 
     @PutMapping("/comments/{uuid}")
+    @RateLimited("comment-write")
     @PreAuthorize("hasAuthority('COMMENT_WRITE')")
     @Operation(summary = "編輯留言（5 分鐘窗，Admin 不受限）")
     public ApiResponse<CommentResponse> edit(

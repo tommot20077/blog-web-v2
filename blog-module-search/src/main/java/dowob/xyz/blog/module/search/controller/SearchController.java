@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.search.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
 import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
 import dowob.xyz.blog.common.api.request.PageQuery;
@@ -79,6 +80,7 @@ public class SearchController {
      * @return 分頁搜尋結果
      */
     @GetMapping
+    @RateLimited("search")
     @Operation(summary = "全文搜尋文章（匿名可存取）",
             description = "viewCount／likeCount 與文章詳情頁同源（瀏覽數 = DB 值 + Redis 暫存增量；按讚數 = DB 值）。"
                     + "sort 僅支援 relevance（預設）與 latest（不分大小寫），其他值（含已移除的 hot）回 400 A0001。")
