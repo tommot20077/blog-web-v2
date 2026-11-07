@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code ORDER BY published_at DESC} 預設 NULLS FIRST，與索引順序不符，planner 只能全掃再 Sort；
  * 補上 {@code NULLS LAST} 後即可依索引順序讀取。已發布文章的 published_at 恆有值，加 NULLS LAST 不改變結果。</p>
  *
- * <p>EXPLAIN 在單一連線內以 {@code SET LOCAL enable_seqscan = off} 取得計畫（測試資料列數太少，不關閉時 planner 本就選全表掃描），
+ * <p>EXPLAIN 在單一連線內以 {@code SET LOCAL enable_seqscan = off}、{@code enable_sort = off}（後者讓計畫不受過時統計影響）取得計畫（測試資料列數太少，不關閉時 planner 本就選全表掃描），
  * 方法與 {@link ArticleArchiveMapperIT} 相同。</p>
  *
  * @author Yuan
@@ -78,6 +78,10 @@ class ArticlePublishedOrderIndexIT extends ArticleSeriesITSupport {
             con.setAutoCommit(false);
             try (Statement st = con.createStatement()) {
                 st.execute("SET LOCAL enable_seqscan = off");
+                // 計畫不可受統計值影響：autovacuum 可能在別的測試資料上 analyze，留下過時統計，planner 便改選
+                // Bitmap Heap Scan（不保序）＋ Sort（CI 曾因此紅）。關閉 sort 後，若索引能提供順序就不會出現 Sort；
+                // 若索引無法提供順序（例如排序子句與索引不一致），Sort 仍無可避免地出現，斷言語意不變。
+                st.execute("SET LOCAL enable_sort = off");
                 List<String> lines = new ArrayList<>();
                 try (ResultSet rs = st.executeQuery("EXPLAIN " + sql)) {
                     while (rs.next()) {

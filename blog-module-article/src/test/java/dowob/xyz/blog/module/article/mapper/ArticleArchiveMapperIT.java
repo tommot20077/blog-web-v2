@@ -117,8 +117,8 @@ class ArticleArchiveMapperIT extends ArticleSeriesITSupport {
     }
 
     /**
-     * 在單一連線、交易內以 {@code SET LOCAL enable_seqscan = off} 取得 EXPLAIN 計畫（測試資料列數太少，
-     * 不關閉 seqscan 時 planner 本就會選全表掃描，無法驗證索引可用性），結束即 rollback，不污染連線池。
+     * 在單一連線、交易內以 {@code SET LOCAL enable_seqscan = off}、{@code enable_sort = off} 取得 EXPLAIN 計畫（測試資料列數太少，
+     * 不關閉 seqscan 時 planner 本就會選全表掃描，無法驗證索引可用性；關閉 sort 讓結果不受過時統計影響），結束即 rollback，不污染連線池。
      */
     private List<String> explain(String sql) {
         return jdbc.execute((java.sql.Connection con) -> {
@@ -126,6 +126,10 @@ class ArticleArchiveMapperIT extends ArticleSeriesITSupport {
             con.setAutoCommit(false);
             try (Statement st = con.createStatement()) {
                 st.execute("SET LOCAL enable_seqscan = off");
+                // 計畫不可受統計值影響：autovacuum 可能在別的測試資料上 analyze，留下過時統計，planner 便改選
+                // Bitmap Heap Scan（不保序）＋ Sort（CI 曾因此紅）。關閉 sort 後，若索引能提供順序就不會出現 Sort；
+                // 若索引無法提供順序（例如排序子句與索引不一致），Sort 仍無可避免地出現，斷言語意不變。
+                st.execute("SET LOCAL enable_sort = off");
                 List<String> lines = new ArrayList<>();
                 try (ResultSet rs = st.executeQuery("EXPLAIN " + sql)) {
                     while (rs.next()) {
