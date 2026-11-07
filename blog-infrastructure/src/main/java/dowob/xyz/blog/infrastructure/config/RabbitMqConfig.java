@@ -5,6 +5,7 @@ import dowob.xyz.blog.infrastructure.mq.BoundedRetryContextCache;
 import dowob.xyz.blog.infrastructure.mq.DeadLetterCountingErrorHandler;
 import dowob.xyz.blog.infrastructure.mq.EventIdJackson2JsonMessageConverter;
 import dowob.xyz.blog.infrastructure.mq.MessageIdAwareRetryInterceptor;
+import dowob.xyz.blog.infrastructure.mq.MeteredRabbitTemplate;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -229,7 +230,7 @@ public class RabbitMqConfig {
             cachingCf.setPublisherReturns(true);
         }
 
-        RabbitTemplate template = new RabbitTemplate(connectionFactory);
+        RabbitTemplate template = new MeteredRabbitTemplate(connectionFactory);
         template.setMessageConverter(messageConverter());
         template.setMandatory(true);
 

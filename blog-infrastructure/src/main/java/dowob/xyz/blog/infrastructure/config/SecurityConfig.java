@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -21,6 +22,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -77,6 +80,8 @@ public class SecurityConfig {
 
     private final ObjectMapper objectMapper;
 
+    private final Environment environment;
+
     /**
      * CORS 允許的來源清單，透過環境變數注入。
      *
@@ -94,6 +99,28 @@ public class SecurityConfig {
      */
     @Value("${springdoc.api-docs.enabled:false}")
     private boolean springdocEnabled;
+
+    /**
+     * 比對「從 management port 進來的 {@code /actuator/**} 請求」（C7）。
+     *
+     * <p>以請求的<b>實際連線 port</b>（{@code getLocalPort()}，不是可被偽造的 Host header）與
+     * {@code local.management.port} 比對。{@code local.*.port} 要等 web server 啟動後才有值，而本 bean 建立得更早，
+     * 所以在<b>請求時</b>才讀取。fail-closed 條件：沒有設定獨立的 management port、或其值等於主 port
+     * （共用同一個對外 port）時，一律不匹配，{@code /actuator/**} 退回需要 ADMIN。</p>
+     *
+     * @return 匹配 management port 上 actuator 請求的 matcher
+     */
+    private RequestMatcher managementPortActuatorRequest() {
+        RequestMatcher actuatorPath = new AntPathRequestMatcher("/actuator/**");
+        return request -> {
+            Integer managementPort = environment.getProperty("local.management.port", Integer.class);
+            Integer serverPort = environment.getProperty("local.server.port", Integer.class);
+            return managementPort != null
+                    && !managementPort.equals(serverPort)
+                    && request.getLocalPort() == managementPort
+                    && actuatorPath.matches(request);
+        };
+    }
 
     /**
      * 建立 Spring Security 過濾器鏈
@@ -118,12 +145,22 @@ public class SecurityConfig {
                         auth.requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll();
                     }
                     auth
-                        // Actuator Health（K3s liveness/readiness probe）
-                        .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
+                        // K3s liveness/readiness probe（C7）：actuator 搬到獨立的 management port 後，
+                        // 主 port 以 management.endpoint.health.probes.add-additional-paths 提供 /livez、/readyz。
+                        .requestMatchers("/livez", "/readyz").permitAll()
 
-                        // Actuator 其餘端點（metrics 等運維資訊）限 ADMIN。
-                        // 必須排在上面 permitAll 之後（health/info 仍公開）、anyRequest 之前；
+                        // 從 management port 進來的 /actuator/**（health、info、Prometheus 抓取端都不帶 JWT）：匿名放行。
+                        // 刻意不另設 /actuator/health/**、/actuator/info 的全域 permitAll：那會在 management port
+                        // 被誤設成主 port 時讓 health／info 匿名可讀，與 fail-closed 矛盾。
+                        // 前提是「management port 不對外」（不經 ingress／Service 發布，見 security.md 部署注意事項）；
+                        // 主 port 的同一路徑落入下一條 hasRole("ADMIN")，維持 fail-closed。
+                        .requestMatchers(managementPortActuatorRequest()).permitAll()
+
+                        // 主 port 上所有 /actuator/**（health、info、metrics、prometheus 等）限 ADMIN。
+                        // 必須排在上面 management port 規則之後、anyRequest 之前；
                         // 少了這條，暴露 metrics 等於讓任何已登入使用者讀到端點清單與呼叫量。
+                        // 這是主 port 上的 fail-closed 兜底：Prometheus 端點正常只在 management port，
+                        // 主 port 不存在該路徑（見 ActuatorManagementPortE2E）。
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         // 靜態資源與 Swagger

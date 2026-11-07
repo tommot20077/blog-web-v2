@@ -164,7 +164,8 @@ public void changePassword(...) {
 
 | Method | Path | Description |
 |--------|------|-------------|
-| ANY | `/actuator/health/**`, `/actuator/info` | K3s liveness/readiness probe 與服務資訊 |
+| ANY | `/livez`, `/readyz` | K3s liveness/readiness probe（主 port）。actuator 搬到獨立 management port 後，由 `management.endpoint.health.probes.add-additional-paths=true` 在主 port 提供 |
+| ANY（限 management port） | `/actuator/**`（含 health、info、prometheus） | **僅「從 management port 進來」的請求**匿名放行（抓取端不帶 JWT），前提是該 port 不對外，見下方說明；主 port 的同一路徑（包括 `/actuator/health/**`、`/actuator/info`）不放行，一律 ADMIN |
 | ANY | `/swagger-ui/**`, `/v3/api-docs/**`, `/swagger-ui.html` | API documentation。僅在 springdoc 啟用時（dev／demo／`SPRINGDOC_ENABLED=true`）存在；正式環境關閉（SEC-21，Yuan 2026-11-04）：關閉時這些路徑**不在 permitAll**，匿名請求落入 `anyRequest().authenticated()` 回 401；已登入者打到則由 `GlobalExceptionHandler` 回 404 |
 | ANY | `/favicon.ico`, `/error` | favicon 與 Servlet 容器的錯誤轉發路徑 |
 | ANY | `/api/v1/auth/**` | Login, registration, refresh 等。**例外**:`POST /api/v1/auth/logout` 已在上一條規則設為 `authenticated()` |
@@ -186,18 +187,37 @@ public void changePassword(...) {
 
 > (2026-11 公開作者功能,Yuan 已同意(設計 §3.4,`docs/plans/2026-10-23-public-author-profile-design.md`)新增 `GET /api/v1/users/{uuid}/profile` 與 `GET /api/v1/authors` 兩條 permitAll。兩者皆不取用 `@AuthenticationPrincipal`、回應不隨登入者而變,故不在原則 7 的豁免清單內,也不需要 `@PreAuthorize`。守衛:`SecurityConfigTest` 的 `unauthenticatedGetPublicProfile_shouldReturn200` / `unauthenticatedGetAuthors_shouldReturn200` 與反向 `unauthenticatedGetMeProfile_shouldReturn401` / `unauthenticatedPatchProfile_shouldReturn401` / `unauthenticatedPostAuthors_shouldReturn401`;`PublicAuthorControllerTest` 以 JSON 欄位白名單防止日後在 DTO 加 `email`／`username`／`role`。)
 
-> **Actuator 只有上表兩條是公開的，其餘限 ADMIN**（2026-09-06）：
-> `management.endpoints.web.exposure.include` 自 `health,info` 增為 `health,info,metrics`
-> （用於觀察 `BatchedQuery` 的輸入分佈，是 `findings.md` **ARCH-16** 的第一步）。
-> `SecurityConfig` 於 actuator 的 permitAll 之後緊接
-> `.requestMatchers("/actuator/**").hasRole("ADMIN")`，故 `/actuator/metrics`
-> 未認證回 401、一般登入使用者回 403。**少了這條，暴露 metrics 等於讓任何已登入使用者
-> 讀到端點清單與呼叫量**——這正是 BUG-2026-001 FIN-3+4「新端點沒順手確認授權面」的形態。
-> 守衛：`SecurityConfigTest` 的 `unauthenticatedGetActuatorMetrics_shouldReturn401`、
-> `authenticatedNonAdminGetActuatorMetrics_shouldReturn403`、
-> `adminGetActuatorMetrics_shouldPassAuthorization`，
-> 以及 `unauthenticatedGetActuatorHealth_shouldNotBeUnauthorized`
-> （最後一條防止日後收緊時誤傷 K3s probe，那會讓 pod 反覆重啟）。
+> **Actuator 的暴露面（ARCH-16／決策 C7，Yuan 2026-11-07 拍板；2026-11-07 實作）**：
+> actuator 搬到獨立的 **management port**（`management.server.port`，預設 `9091`，可用環境變數
+> `MANAGEMENT_SERVER_PORT` 覆寫），`exposure.include` 為 `health,info,metrics,prometheus`。
+> `/actuator/prometheus` 是 Prometheus 文字格式匯出，內含 `mq.consumer.*`、`mq.publisher.failed`、`mq.dlq.depth` 等運維指標。
+>
+> - **主 port（`server.port`，對外）**：只有 `/livez`、`/readyz`（K3s probe）；沒有 `/actuator/**`。
+>   `SecurityConfig` 對主 port 的 `/actuator/**` 維持 `hasRole("ADMIN")`（fail-closed 兜底）。
+> - **management port（不對外）**：同一條 `SecurityFilterChain` 也套用在這個 port（E2E 實測）。
+>   `SecurityConfig` 以請求的實際連線 port（`getLocalPort()`，非 Host header）等於 `local.management.port`
+>   且路徑為 `/actuator/**` 時匿名放行，讓抓取端不需 JWT。若 management port 未設或**等於主 port**
+>   （共用對外 port），此規則不匹配，退回 `ADMIN`——誤設不會把指標匿名公開到公網。
+> - **「此 port 不對外」是安全前提，不是程式能保證的事**：部署時 management port **不得**被 ingress、Service
+>   （LoadBalancer／NodePort）或 `docker -p` 對外發布；只允許叢集內部（Prometheus 抓取端）連線。
+>   K3s probe 也可改打 management port 的 `/actuator/health/liveness`、`/actuator/health/readiness`，
+>   但預設走主 port 的 `/livez`、`/readyz`（不依賴 management port 的網路規則）。
+> - 守衛：`SecurityConfigManagementPortTest`（management port 放行、主 port 401、不順帶放行 API）、
+>   `SecurityConfigManagementPortSamePortTest`（兩 port 相同時 fail-closed）、
+>   `SecurityConfigTest` 的 `unauthenticatedGetActuatorMetrics_shouldReturn401`、
+>   `unauthenticatedGetActuatorPrometheus_shouldReturn401`、`authenticatedNonAdminGetActuatorMetrics_shouldReturn403`、
+>   `adminGetActuatorMetrics_shouldPassAuthorization`，以及
+>   `unauthenticatedGetProbePaths_shouldNotBeUnauthorized`（防止日後收緊時誤傷 `/livez`、`/readyz`，那會讓 pod 反覆重啟）；
+>   端到端見 `ActuatorManagementPortE2E`（management port 取得 Prometheus 輸出、主 port 取不到）。
+> - **部署注意事項**：
+>   1. management port 預設綁在**所有網卡**（未設 `management.server.address`），不得經由 Service（含 ClusterIP 以外的型別）、
+>      ingress 或 host network 發布；Pod 若用 `hostNetwork: true`，9091 會直接暴露在節點上。
+>   2. K3s probe **必須**改打主 port 的 `/livez`、`/readyz`（或 management port 的 `/actuator/health/liveness|readiness`）；
+>      主 port 已沒有 `/actuator/health`，仍打舊路徑會得到 404（探針失敗），pod 會反覆重啟。
+>   3. `spring.rabbitmq.connection-timeout`（預設 5s）與 `channel-rpc-timeout`（預設 10s）為全站 MQ 連線層逾時，
+>      可用 `RABBITMQ_CONNECTION_TIMEOUT`、`RABBITMQ_CHANNEL_RPC_TIMEOUT` 覆寫。
+> - 歷史：2026-09-06 曾將 `exposure.include` 自 `health,info` 增為 `health,info,metrics`（BatchedQuery 輸入分佈，ARCH-16 第一步），
+>   並加上 `.requestMatchers("/actuator/**").hasRole("ADMIN")`，避免「新端點沒順手確認授權面」（BUG-2026-001 FIN-3+4）；該規則保留。
 
 **`/api/v1/articles/**` 底下明確「不公開」的端點**(SEC-09 收窄後由 URL 層 + 方法層雙重把關):
 

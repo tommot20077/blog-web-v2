@@ -9,6 +9,9 @@ import java.util.List;
  * {@code article.events} 的 {@code article.deleted} binding——series 篇數改為即時計數後，該 consumer 成為空殼而被移除。
  * 其餘條目維持原錄製值。</p>
  *
+ * <p><b>與原錄製的刻意差異（W7-e，ARCH-18／決策 C5）</b>：version 三個 queue（snapshot、article-deleted、user-deleted）
+ * 移除 {@code x-message-ttl=600000}，改為與全站一致只帶 DLQ 參數。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -46,9 +49,9 @@ final class MqTopologySnapshotData {
             "Q user.email.verification | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
             "Q user.password.reset | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
             "Q user.registration.duplicate-email | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
-            "Q version.article-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter, x-message-ttl=600000}",
-            "Q version.snapshot | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter, x-message-ttl=600000}",
-            "Q version.user-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter, x-message-ttl=600000}");
+            "Q version.article-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
+            "Q version.snapshot | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}",
+            "Q version.user-deleted | durable=true exclusive=false autoDelete=false | args={x-dead-letter-exchange=blog.dlq, x-dead-letter-routing-key=dead-letter}");
 
     /** 全站 exchange 快照（以名稱去重） */
     static final List<String> EXCHANGES = List.of(

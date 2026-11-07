@@ -32,6 +32,11 @@ blog:
       - image/webp
       - image/gif
 
+# management port 用隨機 port：同一個 JVM 內會快取多個 Spring context，固定 port 會互相衝突
+management:
+  server:
+    port: 0
+
 app:
   mail:
     consumer-enabled: false

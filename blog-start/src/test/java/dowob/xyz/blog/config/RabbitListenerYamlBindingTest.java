@@ -12,6 +12,7 @@ import dowob.xyz.blog.module.file.service.ArticleFileBindingService;
 import dowob.xyz.blog.module.file.service.FileArticleCleanupService;
 import org.mockito.Mockito;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
+import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
@@ -113,6 +114,18 @@ class RabbitListenerYamlBindingTest {
                         assertThat(ReflectionTestUtils.getField(container, "maxConcurrentConsumers")).as(queue).isEqualTo(1);
                     }
                 });
+    }
+
+    @Test
+    @DisplayName("yaml 的 connection-timeout=5s、channel-rpc-timeout=10s 套用到 RabbitMQ client（broker 黑洞時 DLQ refresh 等呼叫須在逾時內返回，不長時間佔住排程執行緒）")
+    void yamlRabbitTimeouts_areApplied() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+            CachingConnectionFactory cf = context.getBean(CachingConnectionFactory.class);
+
+            assertThat(cf.getRabbitConnectionFactory().getConnectionTimeout()).isEqualTo(5_000);
+            assertThat(cf.getRabbitConnectionFactory().getChannelRpcTimeout()).isEqualTo(10_000);
+        });
     }
 
     /** 啟用 {@code @RabbitListener} 處理，讓 registry 依 yaml 的 factory 建立真實容器（不啟動、不連線） */

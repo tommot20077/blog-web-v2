@@ -67,7 +67,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 跨模組整合測試：Article ↔ Version。
+ * 模組整合測試：Article ↔ Version。
  *
  * <p>驗證以下端對端流程：</p>
  * <ol>
@@ -81,6 +81,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>使用 VersionTestApplication，已掃 article 模組（ArticleController 可用），
  * RabbitMQ 由 @MockitoBean 替換，consumer 直接呼叫以模擬 event 處理。</p>
  *
+ * <p>定位：模組內整合測試（真 DB），跨模組 facade 以 mock 取代；跨模組接縫由 blog-start 的 E2E 覆蓋。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -88,8 +90,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Testcontainers
 @ActiveProfiles("test")
-@DisplayName("跨模組整合測試 — Article ↔ Version")
-class CrossModuleVersionIT {
+@DisplayName("模組整合測試 — Article ↔ Version")
+class VersionModuleIT {
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")

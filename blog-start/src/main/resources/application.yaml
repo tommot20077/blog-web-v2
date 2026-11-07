@@ -68,6 +68,14 @@ spring:
     virtual-host: ${RABBITMQ_VHOST:blog}
     publisher-confirm-type: correlated
     publisher-returns: true
+    # 逾時（全站 MQ 共用的連線層設定）：未設時 connection-timeout 為 client 預設 60s、channel-rpc-timeout 為 10 分鐘。
+    # broker 黑洞（網路丟封包而非拒絕連線）時，所有呼叫端——publisher 的 convertAndSend、DlqDepthMetrics.refresh()
+    # 的 passive declare、@RabbitListener 容器重連——都會卡到逾時才返回；其中排程池只有 4 條
+    # （spring.task.scheduling.pool.size），卡住的 refresh 會佔掉其中一條而拖慢其他 job。
+    # 5s／10s 讓失敗在數秒內浮現（publisher 照舊 best-effort 吞掉並計 mq.publisher.failed）。
+    # 影響面：連線建立超過 5s、或單一 channel RPC（declare、confirm 等）超過 10s 會判定失敗。
+    connection-timeout: ${RABBITMQ_CONNECTION_TIMEOUT:5s}
+    channel-rpc-timeout: ${RABBITMQ_CHANNEL_RPC_TIMEOUT:10s}
     listener:
       simple:
         # AUTO：listener 正常返回即 ack、拋例外即 nack(requeue)，重試攔截器才有機會介入。
@@ -174,20 +182,30 @@ blog:
       - image/gif
 
 # Actuator 配置
+#
+# 暴露面設計（ARCH-16／決策 C7，Yuan 2026-11-07）：actuator 搬到獨立的 management port，該 port「不對外」——
+# 不經過 ingress／Service，只由叢集內部（Prometheus 抓取端）存取。因此 /actuator/prometheus 不需要 JWT，
+# 暴露面就是「能連到這個 port 的網路」。部署時務必確認 management port 沒有被 ingress、Service(LoadBalancer／NodePort)
+# 或 docker -p 對外發布（見 ai-docs/security.md）。
+# 主 port 只保留 K3s probe 用的 /livez、/readyz（add-additional-paths），其餘 /actuator/** 在主 port 不存在。
 management:
+  server:
+    # 預設 9091；以 MANAGEMENT_SERVER_PORT 覆寫。e2e profile 用隨機 port（0）。
+    port: ${MANAGEMENT_SERVER_PORT:9091}
   endpoints:
     web:
       exposure:
-        # metrics 用於觀察 BatchedQuery 的輸入分佈（ARCH-16 的第一步）。
-        # 授權面：SecurityConfig 只 permitAll /actuator/health/** 與 /actuator/info，
-        # /actuator/metrics 落入 anyRequest().authenticated()（fail-closed），
-        # 守衛見 SecurityConfigTest#unauthenticatedGetActuatorMetrics_shouldReturn401。
-        include: health,info,metrics
+        # metrics：BatchedQuery 輸入分佈（ARCH-16 第一步）；prometheus：Prometheus 文字格式匯出。
+        # 授權面：這些端點只在 management port；主 port 的 SecurityConfig 對 /actuator/** 維持 fail-closed
+        # （守衛見 SecurityConfigTest 的 *Actuator* 案例與 ActuatorManagementPortE2E）。
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: never
       probes:
         enabled: true
+        # 在主 port 額外提供 /livez、/readyz（K3s probe 用），management port 搬走後探針不需改打另一個 port
+        add-additional-paths: true
 
 # CORS 配置：此為開發環境預設白名單。
 # 生產環境同域部署（前端與 /api 同網域）時，「同域請求不觸發 CORS」的前提是 app 還原得出 client 看到的
