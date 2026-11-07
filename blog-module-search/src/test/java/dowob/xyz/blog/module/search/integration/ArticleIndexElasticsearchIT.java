@@ -316,6 +316,80 @@ class ArticleIndexElasticsearchIT {
     }
 
     /**
+     * 寫入一份只有指定 title／summary／content 的已發布文件並 refresh。
+     *
+     * @return 文章公開 UUID
+     */
+    private UUID saveSearchableDocument(String title, String summary, String content) {
+        UUID articleUuid = UUID.randomUUID();
+        repository.save(ArticleDocument.builder().id(articleUuid.toString()).uuid(articleUuid.toString())
+                .title(title).summary(summary).content(content).slug("slug-" + articleUuid)
+                .status("PUBLISHED").publishedAt(LocalDateTime.of(2026, 10, 24, 12, 0))
+                .author(new ArticleDocument.AuthorInfo(UUID.randomUUID().toString(), "愛麗絲")).build());
+        template.indexOps(ArticleDocument.class).refresh();
+        return articleUuid;
+    }
+
+    @Test
+    @DisplayName("D4：標題打錯一個字仍能命中（title 保留 fuzziness）")
+    void search_titleTypo_stillMatches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("Kubernetes deployment guide", "無關摘要", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("Kubernetez", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：摘要打錯一個字仍能命中（summary 保留 fuzziness）")
+    void search_summaryTypo_stillMatches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("無關標題", "Introduction to observability", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("observabilitt", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：只有內文含近似字（打錯一個字）時不命中（content 不套 fuzziness）")
+    void search_contentOnlyTypo_doesNotMatch() {
+        initializer.ensureCorrectMapping();
+        saveSearchableDocument("無關標題", "無關摘要", "zebrafishuniquetoken 內文專屬字詞");
+
+        PageResult<SearchResultResponse> result =
+                searchService.search("zebrafishuniquetokem", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("D4：內文精確字仍可命中")
+    void search_contentExactWord_matches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("無關標題", "無關摘要", "zebrafishuniquetoken 內文專屬字詞");
+
+        PageResult<SearchResultResponse> result =
+                searchService.search("zebrafishuniquetoken", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：標題命中的權重仍高於僅內文命中（title^3 > content^1）")
+    void search_titleHitRanksAboveContentOnlyHit() {
+        initializer.ensureCorrectMapping();
+        UUID contentOnly = saveSearchableDocument("無關標題甲", "無關摘要", "rankingprobe appears only in content");
+        UUID titleHit = saveSearchableDocument("rankingprobe in the title", "無關摘要", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("rankingprobe", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid)
+                .containsExactly(titleHit, contentOnly);
+    }
+
+    /**
      * 直接寫入一份已發布文件（作者暱稱為原值）。
      *
      * @param authorUuid 作者公開 UUID

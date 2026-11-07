@@ -149,13 +149,23 @@ public class SearchServiceImpl implements SearchService {
 
         BoolQuery.Builder boolQuery = new BoolQuery.Builder();
 
-        /** 全文搜尋：MultiMatch，title^3, summary^2, content^1 */
+        /*
+         * 全文搜尋（D4／PERF-35）：標題與摘要保留 fuzziness（短欄位，容錯成本低、打錯字很常見），
+         * 內文改為精確比對——對整篇正文每個 term 展開編輯距離內的變體既昂貴，又會讓近似字
+         * 在長文裡大量誤中。兩個 should 至少須命中一個；權重沿用原本的 title^3、summary^2、content^1。
+         */
         if (StringUtils.hasText(q)) {
-            boolQuery.must(Query.of(qb -> qb.multiMatch(mm -> mm
-                    .query(q)
-                    .fields("title^3", "summary^2", "content^1")
-                    .type(TextQueryType.BestFields)
-                    .fuzziness("AUTO"))));
+            boolQuery.must(Query.of(qb -> qb.bool(b -> b
+                    .should(Query.of(sq -> sq.multiMatch(mm -> mm
+                            .query(q)
+                            .fields("title^3", "summary^2")
+                            .type(TextQueryType.BestFields)
+                            .fuzziness("AUTO"))))
+                    .should(Query.of(sq -> sq.match(m -> m
+                            .field("content")
+                            .query(q)
+                            .boost(1.0f))))
+                    .minimumShouldMatch("1"))));
         }
 
         /** 僅搜尋已發布文章（status — ES index uses explicit keyword mapping via createWithMapping()） */
