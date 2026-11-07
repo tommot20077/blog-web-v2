@@ -369,6 +369,48 @@ class FileServiceTest {
                     UsageType.AVATAR, uploaderId, "AUTHOR");
         }
 
+        /** A6b 邊界：文章圖片剛好 20MB 通過、20MB+1 位元組被拒（判斷為「大於」才拒絕） */
+        @Test
+        @DisplayName("uploadFile_articleImage_exactlyTwentyMbPasses_oneByteOverRejected")
+        void uploadFile_articleImageBoundary() throws Exception {
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            UUID uploaderId = UUID.randomUUID();
+            int twentyMb = 20 * 1024 * 1024;
+
+            FileUploadResponse ok = fileService.uploadFile(
+                    new MockMultipartFile("file", "a.jpg", "image/jpeg", jpegLike(twentyMb)),
+                    UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR");
+
+            assertThat(ok.getSize()).isEqualTo(twentyMb);
+            assertThatThrownBy(() -> fileService.uploadFile(
+                    new MockMultipartFile("file", "a.jpg", "image/jpeg", jpegLike(twentyMb + 1)),
+                    UsageType.ARTICLE_CONTENT, uploaderId, "AUTHOR"))
+                    .isInstanceOfSatisfying(BusinessException.class, e ->
+                            assertThat(e.getCode()).isEqualTo(FileErrorCode.FILE_TOO_LARGE.getCode()));
+        }
+
+        /** A6b 邊界：頭像剛好 5MB 通過、5MB+1 位元組被拒 */
+        @Test
+        @DisplayName("uploadFile_avatar_exactlyFiveMbPasses_oneByteOverRejected")
+        void uploadFile_avatarBoundary() throws Exception {
+            when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
+            when(fileMetadataRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            UUID uploaderId = UUID.randomUUID();
+            int fiveMb = 5 * 1024 * 1024;
+
+            FileUploadResponse ok = fileService.uploadFile(
+                    new MockMultipartFile("file", "av.jpg", "image/jpeg", jpegLike(fiveMb)),
+                    UsageType.AVATAR, uploaderId, "AUTHOR");
+
+            assertThat(ok.getSize()).isEqualTo(fiveMb);
+            assertThatThrownBy(() -> fileService.uploadFile(
+                    new MockMultipartFile("file", "av.jpg", "image/jpeg", jpegLike(fiveMb + 1)),
+                    UsageType.AVATAR, uploaderId, "AUTHOR"))
+                    .isInstanceOfSatisfying(BusinessException.class, e ->
+                            assertThat(e.getCode()).isEqualTo(FileErrorCode.FILE_TOO_LARGE.getCode()));
+        }
+
         /** A6b：單檔上限來自屬性（可調），不是寫死的常數 */
         @Test
         @DisplayName("uploadFile_withConfiguredSizeLimits_followsProperties")
