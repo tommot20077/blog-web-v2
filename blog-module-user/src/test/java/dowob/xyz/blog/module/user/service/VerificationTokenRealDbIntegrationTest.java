@@ -60,6 +60,7 @@ class VerificationTokenRealDbIntegrationTest {
     @MockitoBean private RabbitTemplate rabbitTemplate;
     @MockitoBean private JavaMailSender mailSender;
     @MockitoBean private ArticleFacade articleFacade;
+    @MockitoBean private dowob.xyz.blog.infrastructure.facade.FileLookupFacade fileLookupFacade;
 
     @Autowired private VerificationTokenRepository tokenRepository;
     @Autowired private UserRepository userRepository;

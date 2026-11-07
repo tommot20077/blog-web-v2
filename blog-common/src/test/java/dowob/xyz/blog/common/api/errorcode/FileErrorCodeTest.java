@@ -51,4 +51,10 @@ class FileErrorCodeTest {
     void invalidImageDimensions_code_isA0406() {
         assertThat(FileErrorCode.INVALID_IMAGE_DIMENSIONS.getCode()).isEqualTo("A0406");
     }
+
+    @Test
+    @DisplayName("INVALID_AVATAR_FILE 錯誤碼應為 A0407")
+    void invalidAvatarFile_code_isA0407() {
+        assertThat(FileErrorCode.INVALID_AVATAR_FILE.getCode()).isEqualTo("A0407");
+    }
 }

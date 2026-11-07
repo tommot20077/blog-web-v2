@@ -29,7 +29,10 @@ public enum FileErrorCode implements IErrorCode {
     FILE_ACCESS_DENIED("A0405", "無權限操作此檔案"),
 
     /** 圖片總像素超過上限（FILE-04：防 decompression bomb） */
-    INVALID_IMAGE_DIMENSIONS("A0406", "圖片尺寸過大");
+    INVALID_IMAGE_DIMENSIONS("A0406", "圖片尺寸過大"),
+
+    /** 頭像指向的站內檔案不是本人上傳的 AVATAR 檔案 */
+    INVALID_AVATAR_FILE("A0407", "頭像檔案無效");
 
     /**
      * 錯誤碼
