@@ -44,8 +44,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 宣告（5 個模組各自 {@code new TopicExchange}）收斂到單一來源時，確保拓撲<b>逐一不變</b>——RabbitMQ 對既有
  * queue／exchange 的參數不一致會回 406 PRECONDITION_FAILED，使應用程式啟動失敗，因此任何參數漂移都必須在這裡被攔下。</p>
  *
- * <p>期望值是從 ARCH-19 重構<b>之前</b>的程式碼跑出來的快照（含 version 模組 DLQ 的 {@code x-message-ttl=600000}，
- * 是否移除待 ARCH-18 決策）。刻意新增、移除或改參數時，必須同步修改這份期望值並在 PR 說明：
+ * <p>期望值是從 ARCH-19 重構<b>之前</b>的程式碼跑出來的快照（version 模組原有的 {@code x-message-ttl=600000}
+ * 已依 ARCH-18／決策 C5 移除，差異記於 MqTopologySnapshotData 檔頭）。刻意新增、移除或改參數時，必須同步修改這份期望值並在 PR 說明：
  * queue 參數變動在既有部署上需要先刪 queue 再重建。</p>
  *
  * @author Yuan
@@ -104,7 +104,7 @@ class MqTopologySnapshotTest {
     }
 
     @Test
-    @DisplayName("每個 queue 的名稱與全部參數（含 DLQ 的 x-dead-letter-*、version 的 x-message-ttl）與重構前快照完全相同")
+    @DisplayName("每個 queue 的名稱與全部參數（含 DLQ 的 x-dead-letter-*）與快照完全相同")
     void queues_matchSnapshot() {
         List<String> actual = context.getBeansOfType(Queue.class).values().stream()
                 .map(MqTopologySnapshotTest::describeQueue).sorted().toList();
