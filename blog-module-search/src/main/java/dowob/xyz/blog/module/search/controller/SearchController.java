@@ -9,6 +9,9 @@ import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.service.SearchService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -64,18 +67,26 @@ public class SearchController {
      * 同時記錄搜尋歷史（需登入）與熱門搜尋統計。
      * </p>
      *
+     * <p>結果中的 {@code viewCount}／{@code likeCount} 與文章詳情頁<b>同源</b>：
+     * 瀏覽數 = DB 值 + Redis 暫存增量，按讚數 = DB 值（B4）。{@code sort=hot} 已移除，傳入回 400。</p>
+     *
      * @param q    搜尋關鍵字（長度上限 {@value #MAX_QUERY_LENGTH}，超過回 400）
      * @param tag  標籤 slug 過濾（可選）
-     * @param sort 排序：{@code relevance}（預設）/ {@code latest} / {@code hot}
+     * @param sort 排序：{@code relevance}（預設）/ {@code latest}；{@code hot} 已移除，傳入回 400 {@code PARAM_VALID_ERROR}
      * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
      *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
      * @param user 當前登入用戶（匿名為 null，用於記錄搜尋歷史）
      * @return 分頁搜尋結果
      */
     @GetMapping
+    @Operation(summary = "全文搜尋文章（匿名可存取）",
+            description = "viewCount／likeCount 與文章詳情頁同源（瀏覽數 = DB 值 + Redis 暫存增量；按讚數 = DB 值）。"
+                    + "sort 僅支援 relevance（預設）與 latest；sort=hot 已移除，傳入回 400。")
     public ApiResponse<PageResult<SearchResultResponse>> search(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String tag,
+            @Parameter(description = "排序：relevance（預設）/ latest；hot 已移除（400）",
+                    schema = @Schema(allowableValues = {"relevance", "latest"}))
             @RequestParam(defaultValue = "relevance") String sort,
             PageQuery pageQuery,
             @AuthenticationPrincipal AuthUser user) {

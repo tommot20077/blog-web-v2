@@ -270,6 +270,23 @@ public interface ArticleMapper {
     Long findViewCountByUuid(@Param("uuid") UUID uuid);
 
     /**
+     * 批次查詢多篇文章的 DB 互動計數（瀏覽數與按讚數同一條 SQL）。
+     *
+     * <p><b>注意</b>：MyBatis 對 record 建構子採位置對應（見 Ruling F1），
+     * SELECT 欄位順序須與 {@link EngagementRow} 的元件順序一致。不篩狀態；查無的 uuid 不回傳。
+     * 呼叫端須保證 {@code uuids} 非空，並經 {@code BatchedQuery} 切批。</p>
+     *
+     * @param uuids 文章公開 UUID（不得為空）
+     * @return 每篇存在文章的 DB 計數
+     */
+    @Select("<script>" +
+            "SELECT uuid AS uuid, view_count AS viewCount, like_count AS likeCount FROM articles " +
+            "WHERE uuid IN " +
+            "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>" +
+            "</script>")
+    List<EngagementRow> findEngagementRowsIn(@Param("list") List<UUID> uuids);
+
+    /**
      * 以批次增量更新文章瀏覽計數（原子性加法）
      *
      * @param uuid  文章公開 UUID
@@ -541,6 +558,15 @@ public interface ArticleMapper {
      * @param likeCount      按讚數總和
      */
     record AuthorStatsRow(Long publishedCount, Long viewCount, Long likeCount) {}
+
+    /**
+     * {@link #findEngagementRowsIn} 的投影列。
+     *
+     * @param uuid      文章公開 UUID
+     * @param viewCount DB 的瀏覽數（不含 Redis 暫存增量）
+     * @param likeCount DB 的按讚數
+     */
+    record EngagementRow(UUID uuid, Long viewCount, Long likeCount) {}
 
     /**
      * {@link #countPublishedBySeriesUuids} 的投影列。

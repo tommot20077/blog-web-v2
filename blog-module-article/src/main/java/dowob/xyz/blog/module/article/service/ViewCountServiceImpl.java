@@ -9,6 +9,10 @@ import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -52,6 +56,19 @@ public class ViewCountServiceImpl implements ViewCountService {
         Long dbCount = articleMapper.findViewCountByUuid(articleUuid);
         String redisVal = stringRedisTemplate.opsForValue()
                 .get(RedisKeyConstant.ARTICLE_VIEWS_PREFIX + articleUuid);
+        return combine(articleUuid, dbCount, redisVal);
+    }
+
+    /**
+     * 合併 DB 基礎值與 Redis 暫存增量——單篇（{@link #getViewCount}）與批次（{@link #addRedisDeltas}）
+     * 共用的<b>唯一</b>一份規則：DB 為 null 視為 0；Redis 缺值視為 0；非數字記警告並視為 0。
+     *
+     * @param articleUuid 文章公開 UUID（僅供警告日誌）
+     * @param dbCount     DB 的 {@code view_count}（可為 null）
+     * @param redisVal    Redis 暫存增量的字串值（可為 null）
+     * @return 總瀏覽數
+     */
+    private static long combine(UUID articleUuid, Long dbCount, String redisVal) {
         long base = (dbCount != null) ? dbCount : 0L;
         long delta;
         try {
@@ -61,6 +78,29 @@ public class ViewCountServiceImpl implements ViewCountService {
             delta = 0L;
         }
         return base + delta;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Redis 以單次 {@code MGET} 取回全部 key（輸入大小由呼叫端的頁大小界定；搜尋頁上限
+     * {@code PageQuery.MAX_SIZE} = 100）。</p>
+     */
+    @Override
+    public Map<UUID, Long> addRedisDeltas(Map<UUID, Long> dbViewCounts) {
+        if (dbViewCounts == null || dbViewCounts.isEmpty()) {
+            return Map.of();
+        }
+        List<UUID> uuids = new ArrayList<>(dbViewCounts.keySet());
+        List<String> keys = uuids.stream().map(u -> RedisKeyConstant.ARTICLE_VIEWS_PREFIX + u).toList();
+        List<String> redisVals = stringRedisTemplate.opsForValue().multiGet(keys);
+        Map<UUID, Long> result = new LinkedHashMap<>();
+        for (int i = 0; i < uuids.size(); i++) {
+            UUID uuid = uuids.get(i);
+            String redisVal = (redisVals != null && i < redisVals.size()) ? redisVals.get(i) : null;
+            result.put(uuid, combine(uuid, dbViewCounts.get(uuid), redisVal));
+        }
+        return result;
     }
 
     /**

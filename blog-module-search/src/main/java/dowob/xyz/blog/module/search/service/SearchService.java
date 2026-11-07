@@ -31,7 +31,7 @@ public interface SearchService {
      *
      * @param q       搜尋關鍵字
      * @param tag     標籤 slug 過濾（null 表示不過濾）
-     * @param sort    排序方式：{@code relevance}（預設）/ {@code latest} / {@code hot}
+     * @param sort    排序方式：{@code relevance}（預設）/ {@code latest}；{@code hot} 已移除，傳入拋 400（{@code PARAM_VALID_ERROR}）
      * @param page    頁碼（從 1 開始）
      * @param size    每頁筆數
      * @param userUuid 當前用戶 UUID（匿名為 null，用於記錄搜尋歷史）

@@ -171,8 +171,6 @@ public class ArticleSearchListener {
                         resolveCurrentNickname(message)))
                 .tags(tags)
                 .publishedAt(message.getPublishedAt())
-                .viewCount(0L)
-                .likeCount(0L)
                 .status("PUBLISHED")
                 .build();
     }

@@ -97,18 +97,6 @@ public class ArticleDocument {
     private LocalDateTime publishedAt;
 
     /**
-     * 瀏覽次數（Function Score 排序用）
-     */
-    @Field(type = FieldType.Integer)
-    private long viewCount;
-
-    /**
-     * 按讚次數（Function Score 排序用）
-     */
-    @Field(type = FieldType.Integer)
-    private long likeCount;
-
-    /**
      * 文章狀態（keyword，僅索引 PUBLISHED）
      */
     @Field(type = FieldType.Keyword)

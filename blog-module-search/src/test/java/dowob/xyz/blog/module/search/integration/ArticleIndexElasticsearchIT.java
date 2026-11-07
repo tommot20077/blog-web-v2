@@ -273,6 +273,48 @@ class ArticleIndexElasticsearchIT {
         assertThat(result.getRecords()).isEmpty();
     }
 
+    @Test
+    @DisplayName("B4：舊索引文件殘留 viewCount／likeCount 欄位仍可搜尋，結果計數取自 ArticleFacade 而非索引內的舊值")
+    void search_legacyDocWithStaleCounters_usesFacadeCounts() throws Exception {
+        initializer.ensureCorrectMapping();
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        client.index(i -> i.index("blog_articles").id(articleUuid.toString()).refresh(Refresh.True).document(Map.of(
+                "id", articleUuid.toString(), "uuid", articleUuid.toString(),
+                "title", "Legacy counters guide", "slug", "legacy-" + articleUuid, "status", "PUBLISHED",
+                "viewCount", 0, "likeCount", 0,
+                "author", Map.of("uuid", authorUuid.toString(), "nickname", "愛麗絲"))));
+        when(articleFacade.getEngagementCounts(org.mockito.ArgumentMatchers.any())).thenReturn(Map.of(articleUuid,
+                new dowob.xyz.blog.infrastructure.facade.dto.ArticleEngagementCounts(105L, 7L)));
+
+        PageResult<SearchResultResponse> result = searchService.search("Legacy", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).singleElement().satisfies(r -> {
+            assertThat(r.getViewCount()).isEqualTo(105L);
+            assertThat(r.getLikeCount()).isEqualTo(7L);
+        });
+    }
+
+    @Test
+    @DisplayName("B4：reindexAll 寫入的 _source 不含 viewCount／likeCount（覆寫掉舊文件的殘留欄位）")
+    @SuppressWarnings("unchecked")
+    void reindexAll_sourceHasNoCounterFields() throws Exception {
+        initializer.ensureCorrectMapping();
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
+                articleUuid, "Counter free", "counter-free", "s", "content", "愛麗絲",
+                LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
+        when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Set.of(articleUuid));
+
+        searchService.reindexAll();
+        template.indexOps(ArticleDocument.class).refresh();
+
+        Map<String, Object> source = client.get(g -> g.index("blog_articles").id(articleUuid.toString()), Map.class).source();
+        assertThat(source).doesNotContainKeys("viewCount", "likeCount");
+    }
+
     /**
      * 直接寫入一份已發布文件（作者暱稱為原值）。
      *

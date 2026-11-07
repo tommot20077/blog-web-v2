@@ -69,7 +69,7 @@ class ArticleFacadeUuidFieldsTest {
         facade = new ArticleFacadeImpl(
                 articleMapper, userFacade, recommendMapper, articleService,
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
-                assembler, null, null, null);
+                assembler, null, null, null, null);
     }
 
     private static Article article(long id, UUID seriesUuid) {

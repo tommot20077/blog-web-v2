@@ -61,7 +61,7 @@ class ArticleFacadeBatchingTest {
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, userFacade, recommendMapper, articleService, null, null, null, null,
-                new ArticleDataAssembler(), null, null, null);
+                new ArticleDataAssembler(), null, null, null, null);
     }
 
     /** findByUuids 每次收到的批次大小 */

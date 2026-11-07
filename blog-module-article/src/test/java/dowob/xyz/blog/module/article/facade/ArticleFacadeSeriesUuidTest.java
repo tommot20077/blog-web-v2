@@ -63,7 +63,7 @@ class ArticleFacadeSeriesUuidTest {
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, null, null, articleService, null, null, null, null,
-                new ArticleDataAssembler(), null, null, null);
+                new ArticleDataAssembler(), null, null, null, null);
     }
 
     private static Article article(long id, UUID seriesUuid, int position) {

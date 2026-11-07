@@ -9,6 +9,7 @@ import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleEngagementCounts;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
@@ -135,6 +136,17 @@ public class SearchServiceImpl implements SearchService {
                     "搜尋結果深度超出上限：page × size 不可超過 " + MAX_RESULT_WINDOW);
         }
 
+        /*
+         * B4（DATA-05）：sort=hot 已移除。它依賴索引內的 viewCount／likeCount，而那兩個值在增量索引時
+         * 硬編 0、之後也沒有任何路徑更新，排序等於沒排。要讓它有意義得靠高頻更新 ES（每次瀏覽／按讚都要寫索引），
+         * 代價遠大於效益，且熱門排序在前端已無使用者。靜默退回相關度排序會讓呼叫端以為拿到了熱門榜，
+         * 故明確回 400，讓仍傳 hot 的舊客戶端能被看見並修正。
+         */
+        if ("hot".equalsIgnoreCase(sort)) {
+            throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR,
+                    "sort=hot 已移除，請改用 relevance 或 latest");
+        }
+
         BoolQuery.Builder boolQuery = new BoolQuery.Builder();
 
         /** 全文搜尋：MultiMatch，title^3, summary^2, content^1 */
@@ -169,17 +181,18 @@ public class SearchServiceImpl implements SearchService {
         /** 排序策略 */
         if ("latest".equalsIgnoreCase(sort)) {
             queryBuilder.withSort(sb -> sb.field(f -> f.field("publishedAt").order(SortOrder.Desc)));
-        } else if ("hot".equalsIgnoreCase(sort)) {
-            queryBuilder.withSort(sb -> sb.field(f -> f.field("viewCount").order(SortOrder.Desc)));
-            queryBuilder.withSort(sb -> sb.field(f -> f.field("likeCount").order(SortOrder.Desc)));
         }
 
         SearchHits<ArticleDocument> hits =
                 elasticsearchOperations.search(queryBuilder.build(), ArticleDocument.class);
 
-        List<SearchResultResponse> results = hits.getSearchHits().stream()
+        List<ArticleDocument> documents = hits.getSearchHits().stream()
                 .map(SearchHit::getContent)
-                .map(this::toSearchResult)
+                .collect(Collectors.toList());
+        /* 計數與詳情頁同源（B4）：整頁一次批次查詢，不使用 ES 文件內的值 */
+        Map<UUID, ArticleEngagementCounts> counts = loadEngagementCounts(documents);
+        List<SearchResultResponse> results = documents.stream()
+                .map(doc -> toSearchResult(doc, counts))
                 .collect(Collectors.toList());
 
         long total = hits.getTotalHits();
@@ -190,6 +203,21 @@ public class SearchServiceImpl implements SearchService {
         }
 
         return PageResult.of(page, size, total, results);
+    }
+
+    /**
+     * 整頁搜尋結果的互動計數，一次批次向 article 模組取得（DB 一條批次 SQL + Redis 一次 MGET）。
+     *
+     * @param documents 本頁命中的 ES 文件
+     * @return 文章 UUID 對應互動計數；沒有命中時不查詢，回傳空 Map
+     */
+    private Map<UUID, ArticleEngagementCounts> loadEngagementCounts(List<ArticleDocument> documents) {
+        List<UUID> uuids = documents.stream()
+                .map(ArticleDocument::getId)
+                .map(SearchServiceImpl::parseUuidOrNull)
+                .filter(Objects::nonNull)
+                .toList();
+        return uuids.isEmpty() ? Map.of() : articleFacade.getEngagementCounts(uuids);
     }
 
     /**
@@ -510,10 +538,13 @@ public class SearchServiceImpl implements SearchService {
     /**
      * 將 ArticleDocument 轉換為 SearchResultResponse
      *
-     * @param doc ES document
+     * @param doc    ES document
+     * @param counts 文章互動計數（與詳情頁同源）；查無該篇時計數為 0
      * @return 搜尋結果 DTO
      */
-    private SearchResultResponse toSearchResult(ArticleDocument doc) {
+    private SearchResultResponse toSearchResult(ArticleDocument doc, Map<UUID, ArticleEngagementCounts> counts) {
+        ArticleEngagementCounts engagement =
+                counts.getOrDefault(parseUuidOrNull(doc.getId()), ArticleEngagementCounts.ZERO);
         List<String> tagNames = doc.getTags() == null ? List.of() :
                 doc.getTags().stream().map(ArticleDocument.TagInfo::getName).collect(Collectors.toList());
         return SearchResultResponse.builder()
@@ -525,8 +556,8 @@ public class SearchServiceImpl implements SearchService {
                 .authorUuid(doc.getAuthor() != null ? parseUuidOrNull(doc.getAuthor().getUuid()) : null)
                 .tagNames(tagNames)
                 .publishedAt(doc.getPublishedAt())
-                .viewCount(doc.getViewCount())
-                .likeCount(doc.getLikeCount())
+                .viewCount(engagement.viewCount())
+                .likeCount(engagement.likeCount())
                 .build();
     }
 
@@ -574,8 +605,6 @@ public class SearchServiceImpl implements SearchService {
                         currentNickname(data, authors)))
                 .tags(tags)
                 .publishedAt(data.publishedAt())
-                .viewCount(data.viewCount())
-                .likeCount(data.likeCount())
                 .status("PUBLISHED")
                 .build();
     }

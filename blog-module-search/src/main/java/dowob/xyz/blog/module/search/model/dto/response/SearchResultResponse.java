@@ -63,12 +63,12 @@ public class SearchResultResponse {
     private LocalDateTime publishedAt;
 
     /**
-     * 瀏覽次數
+     * 瀏覽次數（與文章詳情頁同源：DB 值 + Redis 暫存增量；不取自 ES 文件）
      */
     private long viewCount;
 
     /**
-     * 按讚次數
+     * 按讚次數（與文章詳情頁同源：DB 值；不取自 ES 文件）
      */
     private long likeCount;
 }
