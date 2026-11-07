@@ -159,6 +159,14 @@ blog:
     # 上傳端（FileServiceImpl）只讀 header 檢查，超過回 400 INVALID_IMAGE_DIMENSIONS；
     # 縮圖端（ThumbnailConsumer）解碼前再擋一次，超限不產生縮圖。防 decompression bomb 讓 worker OOM。
     max-image-pixels: 100000000
+    # 每日綁定校正（B1）與未綁定檔清理（D6），04:17 執行（FileBindingReconcileJob）：先補綁定、再清理。
+    # - recent-article-days：補綁定掃描「最近 N 天 updated_at 有變動」的文章（不分狀態，含草稿，使草稿引用的圖不被清理誤刪）。
+    # - unbound-file-retention-days：未綁定、非頭像、且不被作者任何文章引用的檔案，建立超過 N 天才清理。
+    # - max-deletes-per-run：單次最多刪除的檔案數（每個含 MinIO 呼叫）；超過的留到隔天，以游標續跑。
+    binding-reconcile:
+      recent-article-days: 3
+      unbound-file-retention-days: 7
+      max-deletes-per-run: 500
     allowed-mime-types:
       - image/jpeg
       - image/png

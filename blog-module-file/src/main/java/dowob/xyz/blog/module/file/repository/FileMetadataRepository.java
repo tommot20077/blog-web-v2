@@ -6,6 +6,7 @@ import org.springframework.data.jdbc.repository.query.Query;
 import org.springframework.data.repository.CrudRepository;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -144,4 +145,23 @@ public interface FileMetadataRepository extends CrudRepository<FileMetadata, UUI
             + "AND (CAST(:after AS uuid) IS NULL OR article_uuid > CAST(:after AS uuid)) "
             + "ORDER BY article_uuid LIMIT :limit")
     List<UUID> findDistinctArticleUuidsAfter(@Param("after") UUID after, @Param("limit") int limit);
+
+    /**
+     * 以 keyset 分頁（依 id 升冪）取得「建立早於 {@code createdBefore}、尚未綁定任何文章、且不是頭像」的檔案，
+     * 供每日未綁定檔清理（D6）使用。
+     *
+     * <p>只回傳<b>候選</b>：是否真的可刪還要再經 article 模組確認未被作者的任何文章內文／封面引用。
+     * 排序與游標比較由資料庫決定，{@code after} 請傳 nil UUID（{@code 00000000-0000-0000-0000-000000000000}，
+     * 在 PostgreSQL uuid 排序中最小）表示從頭開始。</p>
+     *
+     * @param createdBefore 建立時間上界（不含）
+     * @param after         游標（不含）；從頭開始傳 nil UUID
+     * @param limit         本頁筆數上限
+     * @return 候選檔案，id 升冪；無則為空清單
+     */
+    @Query("SELECT * FROM file_metadata WHERE article_uuid IS NULL AND usage_type <> 'AVATAR' "
+            + "AND created_at < :createdBefore AND id > :after ORDER BY id LIMIT :limit")
+    List<FileMetadata> findUnboundNonAvatarCreatedBefore(@Param("createdBefore") LocalDateTime createdBefore,
+                                                          @Param("after") UUID after,
+                                                          @Param("limit") int limit);
 }

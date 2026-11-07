@@ -53,9 +53,43 @@ public record FileProperties(
         /**
          * 頭像單檔大小上限；未設定時為 {@link #DEFAULT_MAX_AVATAR_SIZE}（A6b）
          */
-        DataSize maxAvatarSize
+        DataSize maxAvatarSize,
+
+        /**
+         * 每日綁定校正與未綁定檔清理的參數（B1／D6）；未設定時使用預設值
+         */
+        BindingReconcile bindingReconcile
 
 ) {
+    /**
+     * 每日綁定校正（B1）與未綁定檔清理（D6）的參數。
+     *
+     * @param recentArticleDays        掃描「最近幾天內 updated_at 有變動」的文章來補綁定；預設 3
+     * @param unboundFileRetentionDays 未綁定檔建立超過幾天才清理；預設 7
+     * @param maxDeletesPerRun         單次執行最多刪除幾個檔案（每個檔案含 MinIO 網路呼叫，需有上限）；預設 500
+     */
+    public record BindingReconcile(Integer recentArticleDays, Integer unboundFileRetentionDays, Integer maxDeletesPerRun) {
+
+        /** 預設：近 3 天 */
+        public static final int DEFAULT_RECENT_ARTICLE_DAYS = 3;
+
+        /** 預設：未綁定檔保留 7 天 */
+        public static final int DEFAULT_UNBOUND_FILE_RETENTION_DAYS = 7;
+
+        /** 預設：單次最多刪 500 個 */
+        public static final int DEFAULT_MAX_DELETES_PER_RUN = 500;
+
+        /** 未設定的欄位套用預設值；設定為非正數視為設定錯誤 */
+        public BindingReconcile {
+            if (recentArticleDays == null) recentArticleDays = DEFAULT_RECENT_ARTICLE_DAYS;
+            if (unboundFileRetentionDays == null) unboundFileRetentionDays = DEFAULT_UNBOUND_FILE_RETENTION_DAYS;
+            if (maxDeletesPerRun == null) maxDeletesPerRun = DEFAULT_MAX_DELETES_PER_RUN;
+            if (recentArticleDays <= 0 || unboundFileRetentionDays <= 0 || maxDeletesPerRun <= 0) {
+                throw new IllegalArgumentException("blog.file.binding-reconcile.* 必須為正數");
+            }
+        }
+    }
+
     /** 圖片總像素預設上限：100MP（100,000,000 像素） */
     public static final long DEFAULT_MAX_IMAGE_PIXELS = 100_000_000L;
 
@@ -72,6 +106,7 @@ public record FileProperties(
         if (maxImagePixels == null) maxImagePixels = DEFAULT_MAX_IMAGE_PIXELS;
         if (maxArticleImageSize == null) maxArticleImageSize = DEFAULT_MAX_ARTICLE_IMAGE_SIZE;
         if (maxAvatarSize == null) maxAvatarSize = DEFAULT_MAX_AVATAR_SIZE;
+        if (bindingReconcile == null) bindingReconcile = new BindingReconcile(null, null, null);
     }
 
     /**

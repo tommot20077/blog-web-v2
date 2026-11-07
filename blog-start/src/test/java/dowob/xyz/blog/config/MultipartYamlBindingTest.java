@@ -92,4 +92,19 @@ class MultipartYamlBindingTest {
             assertThat(file.quotas().get("USER")).isEqualTo(DataSize.ofMegabytes(10));
         });
     }
+
+    @Test
+    @DisplayName("blog.file.binding-reconcile 在 yaml 明確設定：近 3 天、保留 7 天（B1／D6）")
+    void yamlBindingReconcile_isExplicit() {
+        runner.run(context -> {
+            assertThat(context.getEnvironment().getProperty("blog.file.binding-reconcile.recent-article-days")).isEqualTo("3");
+            assertThat(context.getEnvironment().getProperty("blog.file.binding-reconcile.unbound-file-retention-days")).isEqualTo("7");
+            FileProperties file = Binder.get(context.getEnvironment())
+                    .bind("blog.file", FileProperties.class)
+                    .orElseThrow(() -> new AssertionError("blog.file 未設定"));
+
+            assertThat(file.bindingReconcile().recentArticleDays()).isEqualTo(3);
+            assertThat(file.bindingReconcile().unboundFileRetentionDays()).isEqualTo(7);
+        });
+    }
 }

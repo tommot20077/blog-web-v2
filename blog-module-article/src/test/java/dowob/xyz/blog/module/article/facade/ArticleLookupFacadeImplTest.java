@@ -13,11 +13,13 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -302,5 +304,39 @@ class ArticleLookupFacadeImplTest {
     @DisplayName("findContentByUuid → articleUuid 為 null → empty 且不查 DB")
     void findContentByUuid_nullUuid_returnsEmpty() {
         assertThat(articleLookupFacadeImpl.findContentByUuid(null)).isEmpty();
+    }
+
+    /** B1：近期更新文章的 keyset 分頁委派 mapper，字串轉回 UUID，游標與頁大小原樣傳遞 */
+    @Test
+    @DisplayName("findUuidsUpdatedSinceAnyStatus → 委派 mapper（since／游標／頁大小原樣傳遞）並轉回 UUID")
+    void findUuidsUpdatedSinceAnyStatus_delegatesToMapperAndParsesUuids() {
+        LocalDateTime since = LocalDateTime.of(2026, 11, 4, 4, 17);
+        UUID after = UUID.randomUUID();
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        when(articleAuthorCleanupMapper.findUuidsUpdatedSince(since, after, 2))
+                .thenReturn(List.of(a.toString(), b.toString()));
+
+        List<UUID> result = articleLookupFacadeImpl.findUuidsUpdatedSinceAnyStatus(since, after, 2);
+
+        assertThat(result).containsExactly(a, b);
+    }
+
+    /** B1：limit 非正數不查 DB，直接回空清單 */
+    @Test
+    @DisplayName("findUuidsUpdatedSinceAnyStatus → limit <= 0 → 空清單且不碰 mapper")
+    void findUuidsUpdatedSinceAnyStatus_nonPositiveLimit_returnsEmptyWithoutQuery() {
+        assertThat(articleLookupFacadeImpl.findUuidsUpdatedSinceAnyStatus(LocalDateTime.now(), null, 0)).isEmpty();
+        assertThat(articleLookupFacadeImpl.findUuidsUpdatedSinceAnyStatus(LocalDateTime.now(), null, -5)).isEmpty();
+        verifyNoInteractions(articleAuthorCleanupMapper);
+    }
+
+    /** B1 fail-safe：since 為 null 不得退化成「全部文章」 */
+    @Test
+    @DisplayName("findUuidsUpdatedSinceAnyStatus → since 為 null → IllegalArgumentException（不可退化成全部文章）")
+    void findUuidsUpdatedSinceAnyStatus_nullSince_throws() {
+        assertThatThrownBy(() -> articleLookupFacadeImpl.findUuidsUpdatedSinceAnyStatus(null, null, 10))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(articleAuthorCleanupMapper);
     }
 }

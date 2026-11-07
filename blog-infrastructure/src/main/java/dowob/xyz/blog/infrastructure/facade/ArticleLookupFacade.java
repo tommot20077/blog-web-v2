@@ -2,7 +2,9 @@ package dowob.xyz.blog.infrastructure.facade;
 
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -100,4 +102,23 @@ public interface ArticleLookupFacade {
      * @return 仍存在的 UUID 子集
      */
     Set<UUID> filterExistingUuids(Collection<UUID> uuids);
+
+    /**
+     * 以 keyset 分頁取得「自 {@code since} 起有更新過」的文章公開 UUID，<b>不分文章狀態</b>（草稿、待審、已發布、退回、封存皆含）。
+     *
+     * <p>用途：file 模組的每日綁定校正（B1）——重新解析近期更新過的文章內文並回填「檔案 → 文章」綁定。
+     * 刻意不限 PUBLISHED：草稿內文引用的圖片若停在未綁定，後續的未綁定檔清理（D6）會把它當成無主檔刪掉。
+     * 「有更新」以 {@code articles.updated_at >= since} 判定。</p>
+     *
+     * <p>排序與游標比較都由資料庫決定（PostgreSQL uuid 以位元組序比較），呼叫端以上一頁最後一筆當
+     * {@code afterUuidExclusive} 取下一頁，不可在 Java 端排序後當游標。回傳筆數少於 {@code limit} 即為最後一頁。
+     * 傳輸量與 {@code limit}（頁大小）成正比，不隨資料量成長，故不需 {@code BatchedQuery} 切批。</p>
+     *
+     * @param since              更新時間下界（含）；不可為 null
+     * @param afterUuidExclusive 游標（不含）；null 表示從頭
+     * @param limit              本頁筆數上限；小於等於 0 回傳空清單
+     * @return 升冪（由資料庫排序）的文章 UUID；無則為空清單
+     * @throws IllegalArgumentException {@code since} 為 null（不可退化成「全部文章」）
+     */
+    List<UUID> findUuidsUpdatedSinceAnyStatus(LocalDateTime since, UUID afterUuidExclusive, int limit);
 }

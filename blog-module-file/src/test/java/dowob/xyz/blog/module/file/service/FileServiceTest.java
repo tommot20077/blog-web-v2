@@ -92,7 +92,7 @@ class FileServiceTest {
     private final FileProperties fileProperties = new FileProperties(
             Map.of("USER", DataSize.ofMegabytes(10), "AUTHOR", DataSize.ofMegabytes(500)),
             Set.of("image/jpeg", "image/png", "image/webp", "image/gif"),
-            null, null, null
+            null, null, null, null
     );
 
     @InjectMocks
@@ -280,7 +280,7 @@ class FileServiceTest {
         @DisplayName("uploadFile_withConfiguredSmallerPixelLimit_rejectsAccordingToProperty")
         void uploadFile_withConfiguredSmallerPixelLimit_rejectsAccordingToProperty() throws Exception {
             ReflectionTestUtils.setField(fileService, "fileProperties", new FileProperties(
-                    Map.of("AUTHOR", DataSize.ofMegabytes(500)), Set.of("image/png"), 1000L, null, null));
+                    Map.of("AUTHOR", DataSize.ofMegabytes(500)), Set.of("image/png"), 1000L, null, null, null));
             MockMultipartFile file = new MockMultipartFile(
                     "file", "small.png", "image/png", TestImages.solidPng(50, 50));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
@@ -375,7 +375,7 @@ class FileServiceTest {
         void uploadFile_withConfiguredSizeLimits_followsProperties() throws Exception {
             ReflectionTestUtils.setField(fileService, "fileProperties", new FileProperties(
                     Map.of("AUTHOR", DataSize.ofMegabytes(500)), Set.of("image/jpeg"), null,
-                    DataSize.ofMegabytes(2), DataSize.ofMegabytes(1)));
+                    DataSize.ofMegabytes(2), DataSize.ofMegabytes(1), null));
             when(fileMetadataRepository.sumSizeByUploaderId(any())).thenReturn(0L);
             UUID uploaderId = UUID.randomUUID();
 
