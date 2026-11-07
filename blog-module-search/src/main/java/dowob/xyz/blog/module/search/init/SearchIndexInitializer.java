@@ -3,6 +3,7 @@ package dowob.xyz.blog.module.search.init;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.index.ArticleIndexAdmin;
 import dowob.xyz.blog.module.search.index.IndexState;
+import dowob.xyz.blog.module.search.index.SwitchOutcome;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.SmartLifecycle;
@@ -177,22 +178,59 @@ public class SearchIndexInitializer implements SmartLifecycle {
     private void migrateToVersionedIndex(IndexState state, String source, String reason) {
         String target = indexAdmin.newVersionedIndexName();
         log.warn("{}；遷移至新的實體索引 {}（複製既有文件後原子切換 alias）", reason, target);
+        long copied;
         try {
             indexAdmin.createIndex(target);
-            long copied = indexAdmin.copyDocuments(source, target);
+            copied = indexAdmin.copyDocuments(source, target);
             indexAdmin.switchAlias(target, state);
-            if (state.kind() == IndexState.Kind.ALIAS) {
-                indexAdmin.deleteIndexQuietly(source);
-            }
-            log.info("Elasticsearch alias 'blog_articles' 已遷移至 {}，複製 {} 份文件", target, copied);
         } catch (RuntimeException e) {
-            indexAdmin.deleteIndexQuietly(target);
-            if (migratedByAnotherInstance(state)) {
-                log.info("Elasticsearch alias 'blog_articles' 已由其他實例完成遷移，捨棄本實例建立的 {}", target);
+            if (!resolveFailedMigration(state, source, target, e)) {
                 return;
             }
-            log.error("Elasticsearch 索引遷移失敗，維持原索引 {} 不變（搜尋與增量索引仍可運作）。{}。原因：{}",
-                    source, RECOVERY_HINT, e.getMessage(), e);
+            copied = -1;
+        }
+        if (state.kind() == IndexState.Kind.ALIAS) {
+            indexAdmin.deleteIndexQuietly(source);
+        }
+        log.info("Elasticsearch alias 'blog_articles' 已遷移至 {}，複製 {} 份文件", target, copied < 0 ? "?" : copied);
+    }
+
+    /**
+     * 遷移的某一步失敗後，<b>先</b>確認 alias 的實際狀態，再決定刪不刪新索引（審查 M3）。
+     *
+     * <p>切換請求可能回報失敗但 ES 端已套用；從實體索引遷移時舊索引已在同一個請求內被 remove_index，
+     * 這時刪掉新索引等於連 alias 與全部資料一起刪掉。</p>
+     *
+     * @param state  遷移前的狀態
+     * @param source 文件來源
+     * @param target 本實例建立的新索引
+     * @param cause  失敗原因
+     * @return 切換其實已套用（呼叫端繼續完成遷移）時 true；其餘情況已處置完畢，回 false
+     */
+    private boolean resolveFailedMigration(IndexState state, String source, String target, RuntimeException cause) {
+        SwitchOutcome outcome = indexAdmin.verifySwitch(target);
+        switch (outcome) {
+            case APPLIED -> {
+                log.warn("Elasticsearch alias 切換請求回報失敗，但 ES 端已套用（alias 只指向 {}），視為遷移成功：{}",
+                        target, cause.getMessage());
+                return true;
+            }
+            case UNKNOWN -> {
+                log.error("Elasticsearch 索引遷移結果狀態不明（{}）：新索引 {} 與原索引 {} 都未刪除，需人工檢查 GET _alias/blog_articles，"
+                        + "確認 alias 只指向一個索引後再刪除多餘的實體索引", cause.getMessage(), target, source, cause);
+                return false;
+            }
+            default -> {
+                boolean anotherInstance = migratedByAnotherInstance(state);
+                indexAdmin.deleteIndexQuietly(target);
+                if (anotherInstance) {
+                    log.info("Elasticsearch alias 'blog_articles' 已由其他實例完成遷移，捨棄本實例建立的 {}", target);
+                } else {
+                    log.error("Elasticsearch 索引遷移失敗，維持原索引 {} 不變（搜尋與增量索引仍可運作）。{}。原因：{}",
+                            source, RECOVERY_HINT, cause.getMessage(), cause);
+                }
+                return false;
+            }
         }
     }
 

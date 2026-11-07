@@ -108,6 +108,8 @@ class ArticleIndexRebuilderTest {
         when(journal.drainAuthors(anyInt())).thenReturn(List.of());
         when(articleFacade.findPublishedForIndexAfter(any(), anyInt())).thenReturn(List.of());
         when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of());
+        /* 切換請求失敗時的實際結果：預設為「確實沒有套用」（個別測試覆寫） */
+        when(admin.verifySwitch(anyString())).thenReturn(dowob.xyz.blog.module.search.index.SwitchOutcome.NOT_APPLIED);
         rebuilder = new ArticleIndexRebuilder(admin, journal, articleFacade, userFacade, clock);
     }
 
@@ -403,6 +405,56 @@ class ArticleIndexRebuilderTest {
             assertThatThrownBy(() -> rebuild()).hasMessage("es down");
             verify(journal, never()).begin(anyString());
             verify(admin, never()).switchAlias(anyString(), any());
+        }
+    }
+
+    /**
+     * 審查 M3：切換請求回報失敗不代表沒套用（例如 socket 逾時）。先確認 alias 實際狀態，才決定要不要刪新索引。
+     */
+    @Nested
+    @DisplayName("切換請求回報失敗時先確認實際狀態（M3）")
+    class SwitchOutcomeUncertain {
+
+        @Test
+        @DisplayName("ES 其實已套用（alias 只指向新索引）：視為成功，不刪新索引，照常補齊、結束記錄、刪舊索引")
+        void switchReportedFailureButApplied_continuesAsSuccess() {
+            when(articleFacade.findPublishedForIndexAfter(null, 200)).thenReturn(batch(2));
+            doThrow(new java.io.UncheckedIOException(new java.net.SocketTimeoutException("read timed out")))
+                    .when(admin).switchAlias(eq(NEW), any());
+            when(admin.verifySwitch(NEW)).thenReturn(dowob.xyz.blog.module.search.index.SwitchOutcome.APPLIED);
+
+            long written = rebuild();
+
+            assertThat(written).isEqualTo(2);
+            verify(admin, never()).deleteIndexQuietly(NEW);
+            verify(admin).deleteIndexQuietly(OLD);
+            verify(journal).end();
+        }
+
+        @Test
+        @DisplayName("確實沒有套用（alias 仍指向舊索引）：才刪新索引，原例外往外拋")
+        void switchNotApplied_deletesNewIndex() {
+            IllegalStateException failure = new IllegalStateException("aliases_not_found");
+            doThrow(failure).when(admin).switchAlias(eq(NEW), any());
+
+            assertThatThrownBy(() -> rebuild()).isSameAs(failure);
+            InOrder order = inOrder(admin);
+            order.verify(admin).verifySwitch(NEW);
+            order.verify(admin).deleteIndexQuietly(NEW);
+            verify(admin, never()).deleteIndexQuietly(OLD);
+        }
+
+        @Test
+        @DisplayName("無法判斷（ES 不可達）：不刪任何索引，錯誤訊息寫明狀態不明與人工檢查方式")
+        void switchOutcomeUnknown_deletesNothing() {
+            doThrow(new java.io.UncheckedIOException(new java.net.SocketTimeoutException("read timed out")))
+                    .when(admin).switchAlias(eq(NEW), any());
+            when(admin.verifySwitch(NEW)).thenReturn(dowob.xyz.blog.module.search.index.SwitchOutcome.UNKNOWN);
+
+            assertThatThrownBy(() -> rebuild())
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("狀態不明").hasMessageContaining("GET _alias/blog_articles").hasMessageContaining(NEW);
+            verify(admin, never()).deleteIndexQuietly(anyString());
         }
     }
 

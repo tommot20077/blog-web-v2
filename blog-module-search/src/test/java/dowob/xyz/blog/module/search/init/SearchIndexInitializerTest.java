@@ -75,6 +75,8 @@ class SearchIndexInitializerTest {
     void setUp() {
         admin = mock(ArticleIndexAdmin.class);
         when(admin.newVersionedIndexName()).thenReturn(NEW_INDEX);
+        /* 遷移失敗時的實際結果：預設為「確實沒有套用」（個別測試覆寫） */
+        when(admin.verifySwitch(anyString())).thenReturn(dowob.xyz.blog.module.search.index.SwitchOutcome.NOT_APPLIED);
         initializer = new SearchIndexInitializer(admin);
     }
 
@@ -228,6 +230,73 @@ class SearchIndexInitializerTest {
 
             verify(admin).deleteIndexQuietly(NEW_INDEX);
             assertThat(events).noneSatisfy(e -> assertThat(e.getLevel()).isEqualTo(Level.ERROR));
+        }
+    }
+
+    /**
+     * 審查 M3：從實體索引遷移時，舊索引在同一個切換請求內被 remove_index；切換回報失敗但其實已套用時，
+     * 若照舊刪掉新索引，alias 與全部資料一起消失。必須先確認實際狀態、再決定刪不刪。
+     */
+    @Nested
+    @DisplayName("遷移的切換回報失敗時先確認實際狀態（M3）")
+    class MigrationSwitchOutcome {
+
+        @Test
+        @DisplayName("切換回報失敗但其實已套用：不刪新索引（舊實體索引已在同一請求內移除，刪了資料就全沒了），記 warn 不記 ERROR")
+        void concrete_switchAppliedDespiteError_keepsNewIndex() {
+            when(admin.inspect()).thenReturn(IndexState.concrete());
+            doThrow(new java.io.UncheckedIOException(new java.net.SocketTimeoutException("read timed out")))
+                    .when(admin).switchAlias(NEW_INDEX, IndexState.concrete());
+            when(admin.verifySwitch(NEW_INDEX)).thenReturn(dowob.xyz.blog.module.search.index.SwitchOutcome.APPLIED);
+
+            List<LogEvent> events = runCapturing(() -> initializer.ensureCorrectMapping());
+
+            verify(admin, never()).deleteIndexQuietly(NEW_INDEX);
+            assertThat(events).noneSatisfy(e -> assertThat(e.getLevel()).isEqualTo(Level.ERROR));
+        }
+
+        @Test
+        @DisplayName("alias 遷移的切換回報失敗但其實已套用：照常刪除舊實體索引，不刪新索引")
+        void alias_switchAppliedDespiteError_deletesOldOnly() {
+            aliasPointingTo(mappingWith("status", Map.of("type", "text")));
+            doThrow(new java.io.UncheckedIOException(new java.net.SocketTimeoutException("read timed out")))
+                    .when(admin).switchAlias(eq(NEW_INDEX), any());
+            when(admin.verifySwitch(NEW_INDEX)).thenReturn(dowob.xyz.blog.module.search.index.SwitchOutcome.APPLIED);
+
+            initializer.ensureCorrectMapping();
+
+            verify(admin, never()).deleteIndexQuietly(NEW_INDEX);
+            verify(admin).deleteIndexQuietly(PHYSICAL);
+        }
+
+        @Test
+        @DisplayName("無法判斷：不刪任何索引，記 ERROR 寫明人工檢查 GET _alias/blog_articles，不擋啟動")
+        void switchOutcomeUnknown_deletesNothing() {
+            when(admin.inspect()).thenReturn(IndexState.concrete());
+            doThrow(new java.io.UncheckedIOException(new java.net.SocketTimeoutException("read timed out")))
+                    .when(admin).switchAlias(NEW_INDEX, IndexState.concrete());
+            when(admin.verifySwitch(NEW_INDEX)).thenReturn(dowob.xyz.blog.module.search.index.SwitchOutcome.UNKNOWN);
+
+            List<LogEvent> events = runCapturing(() -> initializer.ensureCorrectMapping());
+
+            verify(admin, never()).deleteIndexQuietly(anyString());
+            assertThat(events).anySatisfy(e -> {
+                assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(e.getMessage().getFormattedMessage()).contains("GET _alias/blog_articles");
+            });
+        }
+
+        @Test
+        @DisplayName("確實沒有套用：先確認實際狀態，之後才刪新索引（順序不可顛倒）")
+        void switchNotApplied_verifiesBeforeDeleting() {
+            when(admin.inspect()).thenReturn(IndexState.concrete());
+            doThrow(new IllegalStateException("index_not_found")).when(admin).switchAlias(NEW_INDEX, IndexState.concrete());
+
+            initializer.ensureCorrectMapping();
+
+            var order = inOrder(admin);
+            order.verify(admin).verifySwitch(NEW_INDEX);
+            order.verify(admin).deleteIndexQuietly(NEW_INDEX);
         }
     }
 

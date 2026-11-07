@@ -7,6 +7,7 @@ import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import dowob.xyz.blog.module.search.index.ArticleIndexAdmin;
 import dowob.xyz.blog.module.search.index.IndexState;
+import dowob.xyz.blog.module.search.index.SwitchOutcome;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -128,12 +129,12 @@ public class ArticleIndexRebuilder {
             drainJournal(target);
             progress.onProgress(written);
             checkStillAllowed(deadline);
-            indexAdmin.switchAlias(target, before);
         } catch (RuntimeException e) {
             endJournalQuietly();
             indexAdmin.deleteIndexQuietly(target);
             throw e;
         }
+        switchAliasOrResolve(target, before);
         try {
             drainJournal(target);
         } catch (RuntimeException e) {
@@ -145,6 +146,39 @@ public class ArticleIndexRebuilder {
         }
         log.info("搜尋索引全量重建完成：alias 已切換至 {}，寫入 {} 篇文章", target, written);
         return written;
+    }
+
+    /**
+     * 原子切換 alias；請求回報失敗時先確認 ES 端的實際結果再處置（審查 M3）。
+     *
+     * <ul>
+     *   <li>其實已套用（alias 只指向新索引）：視為成功，繼續切換後的流程</li>
+     *   <li>確實沒有套用：此時才刪除新索引，原例外往外拋（alias 仍指向舊索引）</li>
+     *   <li>無法判斷：不刪任何索引（刪錯會連 alias 一起刪掉、讓 ES 自動建出 dynamic mapping 的同名索引），
+     *       以「狀態不明、需人工檢查」的訊息往外拋</li>
+     * </ul>
+     *
+     * @param target 新實體索引
+     * @param before 切換前的狀態
+     */
+    private void switchAliasOrResolve(String target, IndexState before) {
+        try {
+            indexAdmin.switchAlias(target, before);
+            return;
+        } catch (RuntimeException e) {
+            SwitchOutcome outcome = indexAdmin.verifySwitch(target);
+            if (outcome == SwitchOutcome.APPLIED) {
+                log.warn("alias 切換請求回報失敗，但 ES 端已套用（alias 只指向 {}），視為切換成功：{}", target, e.getMessage());
+                return;
+            }
+            endJournalQuietly();
+            if (outcome == SwitchOutcome.NOT_APPLIED) {
+                indexAdmin.deleteIndexQuietly(target);
+                throw e;
+            }
+            throw new IllegalStateException("alias 切換結果狀態不明（" + e.getMessage() + "）：新索引 " + target
+                    + " 與舊索引都未刪除，需人工檢查 GET _alias/blog_articles，確認 alias 只指向一個索引後再刪除多餘的實體索引", e);
+        }
     }
 
     /**

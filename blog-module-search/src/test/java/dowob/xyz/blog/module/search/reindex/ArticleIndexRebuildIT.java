@@ -187,9 +187,14 @@ class ArticleIndexRebuildIT {
     }
 
     private SearchReindexJobResponse awaitFinished(UUID jobId) throws InterruptedException {
+        return awaitFinishedOn(reindexService, jobId);
+    }
+
+    private static SearchReindexJobResponse awaitFinishedOn(SearchReindexService service, UUID jobId)
+            throws InterruptedException {
         long deadline = System.nanoTime() + WAIT.toNanos();
         while (System.nanoTime() < deadline) {
-            SearchReindexJobResponse job = reindexService.currentJob().orElseThrow();
+            SearchReindexJobResponse job = service.currentJob().orElseThrow();
             if (job.getJobId().equals(jobId) && job.getState() != ReindexJobState.RUNNING) {
                 return job;
             }
@@ -302,6 +307,36 @@ class ArticleIndexRebuildIT {
         refreshLive();
         ArticleDocument indexed = repository.findById(data.articleUuid().toString()).orElseThrow();
         assertThat(indexed.getAuthor().getNickname()).isEqualTo("已刪除使用者#ab12");
+    }
+
+    /**
+     * 審查 M3：切換請求回報失敗（socket 逾時）但 ES 已套用。若照舊刪新索引，alias 會一起被刪，
+     * 下一次寫入讓 ES 自動建出 dynamic mapping 的同名實體索引，搜尋全壞。
+     */
+    @Test
+    @DisplayName("M3：切換回報失敗但 ES 已套用 → 視為成功（COMPLETED），新索引保留且 alias 指向它，仍可搜尋")
+    void rebuild_switchAppliedButReportedFailure_completes() throws Exception {
+        ArticleIndexData alpha = publishedAndIndexed("Timeout switch alpha");
+        ArticleIndexAdmin flaky = org.mockito.Mockito.spy(admin);
+        org.mockito.Mockito.doAnswer(inv -> {
+            inv.callRealMethod();
+            throw new java.io.UncheckedIOException(new java.net.SocketTimeoutException("read timed out"));
+        }).when(flaky).switchAlias(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any());
+        ReindexJournal journal = new ReindexJournal(redis);
+        ReindexJobStore jobStore = new ReindexJobStore(redis);
+        SearchReindexService flakyService = new SearchReindexService(jobStore,
+                new ArticleIndexRebuilder(flaky, journal, articleFacade, userFacade), articleFacade, redis);
+        try {
+            SearchReindexJobResponse job = awaitFinishedOn(flakyService, flakyService.start().job().getJobId());
+
+            assertThat(job.getState()).isEqualTo(ReindexJobState.COMPLETED);
+            IndexState state = admin.inspect();
+            assertThat(state.kind()).isEqualTo(IndexState.Kind.ALIAS);
+            assertThat(state.aliasTargets()).singleElement().asString().isNotEqualTo(ArticleIndexAdmin.INITIAL_INDEX);
+            assertThat(searchUuids("Timeout")).containsExactly(alpha.articleUuid());
+        } finally {
+            flakyService.destroy();
+        }
     }
 
     @Test

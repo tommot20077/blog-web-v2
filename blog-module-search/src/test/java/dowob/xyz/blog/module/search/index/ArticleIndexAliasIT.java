@@ -274,6 +274,44 @@ class ArticleIndexAliasIT {
         repository.save(doc(UUID.randomUUID(), "Writable after race"));
     }
 
+    /**
+     * 審查 M3：遷移實體索引時，舊索引在切換請求內被 remove_index。切換回報失敗（例如 socket 逾時）但 ES 已套用時，
+     * 若照舊刪新索引，alias 與全部資料一起消失。
+     */
+    @Test
+    @DisplayName("M3：實體索引遷移的切換回報失敗但 ES 已套用 → 不刪新索引，alias 指向它、文件全數保留")
+    void initializer_concreteMigration_switchAppliedButReported_keepsData() throws Exception {
+        createLegacyConcreteIndex("""
+                {"properties":{"status":{"type":"keyword"},"tags":{"type":"nested"},"title":{"type":"text"}}}""");
+        UUID a = UUID.randomUUID();
+        indexRaw(ArticleIndexAdmin.ALIAS, a, Map.of("title", "Timeout alpha", "status", "PUBLISHED"));
+        ArticleIndexAdmin flaky = org.mockito.Mockito.spy(admin);
+        org.mockito.Mockito.doAnswer(inv -> {
+            inv.callRealMethod();
+            throw new java.io.UncheckedIOException(new java.net.SocketTimeoutException("read timed out"));
+        }).when(flaky).switchAlias(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any());
+
+        new SearchIndexInitializer(flaky).ensureCorrectMapping();
+
+        IndexState state = admin.inspect();
+        assertThat(state.kind()).isEqualTo(IndexState.Kind.ALIAS);
+        assertThat(state.aliasTargets()).singleElement().asString().startsWith(ArticleIndexAdmin.VERSIONED_PREFIX);
+        assertThat(repository.existsById(a.toString())).isTrue();
+    }
+
+    @Test
+    @DisplayName("verifySwitch：alias 只指向 target → APPLIED；不指向 → NOT_APPLIED；同時指向 target 與其他 → UNKNOWN")
+    void verifySwitch_reportsActualAliasState() throws Exception {
+        initializer.ensureCorrectMapping();
+        String other = "blog_articles_v20261107000000003";
+        admin.createIndex(other);
+
+        assertThat(admin.verifySwitch(ArticleIndexAdmin.INITIAL_INDEX)).isEqualTo(SwitchOutcome.APPLIED);
+        assertThat(admin.verifySwitch(other)).isEqualTo(SwitchOutcome.NOT_APPLIED);
+        template.execute(c -> c.indices().updateAliases(u -> u.actions(x -> x.add(ad -> ad.index(other).alias(ArticleIndexAdmin.ALIAS)))));
+        assertThat(admin.verifySwitch(other)).isEqualTo(SwitchOutcome.UNKNOWN);
+    }
+
     @Test
     @DisplayName("copyDocuments 以 _reindex 複製全部文件；deleteDocument 只刪指定實體索引內的文件")
     void copyAndDeleteDocument() {

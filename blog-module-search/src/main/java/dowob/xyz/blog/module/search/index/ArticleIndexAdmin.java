@@ -169,12 +169,12 @@ public class ArticleIndexAdmin {
      * <p><b>為什麼 remove 必須 {@code must_exist}</b>（審查 M1）：ES 對「alias 不在該索引上」的 remove 預設當 no-op。
      * 若 {@code previous} 已過時（鎖遺失後兩個重建並行、兩個實例同時遷移），不帶 must_exist 的請求會成功，
      * alias 變成同時指向兩個索引，之後經 alias 的寫入一律回 400 {@code no write index is defined for alias}。
-     * 帶 must_exist 時整個請求失敗、alias 不變。</p>
+     * 帶 must_exist 時整個請求失敗、alias 不變，呼叫端再以 {@link #verifySwitch} 判斷後續處置。</p>
      *
      * @param newIndex 新的實體索引
      * @param previous 切換前的狀態（{@link #inspect()} 的結果）
      * @throws RuntimeException 任何一個 action 失敗（整個請求不生效）；連線逾時等 I/O 失敗包成 {@link UncheckedIOException}
-     *                          ——此時 ES 端可能其實已套用
+     *                          ——此時 ES 端可能其實已套用，呼叫端須以 {@link #verifySwitch} 確認後才能決定要不要刪新索引
      */
     public void switchAlias(String newIndex, IndexState previous) {
         List<Action> actions = new ArrayList<>();
@@ -193,6 +193,29 @@ public class ArticleIndexAdmin {
             throw new UncheckedIOException("切換 alias " + ALIAS + " 至 " + newIndex + " 時 I/O 失敗（ES 端是否已套用不明）", e);
         }
         log.info("alias {} 已切換至 {}（切換前：{} {}）", ALIAS, newIndex, previous.kind(), previous.aliasTargets());
+    }
+
+    /**
+     * 切換請求回報失敗後，確認 ES 端的實際結果（審查 M3）。
+     *
+     * <p>alias 只指向 {@code target} → {@link SwitchOutcome#APPLIED}；alias 不指向 {@code target}（含名稱不存在、仍是實體索引）
+     * → {@link SwitchOutcome#NOT_APPLIED}；alias 同時指向 {@code target} 與其他索引、或查詢本身失敗 → {@link SwitchOutcome#UNKNOWN}。
+     * 本方法不拋例外。</p>
+     *
+     * @param target 本次要切換過去的新實體索引
+     * @return 實際結果
+     */
+    public SwitchOutcome verifySwitch(String target) {
+        try {
+            IndexState now = inspect();
+            if (now.kind() != IndexState.Kind.ALIAS || !now.aliasTargets().contains(target)) {
+                return SwitchOutcome.NOT_APPLIED;
+            }
+            return now.aliasTargets().size() == 1 ? SwitchOutcome.APPLIED : SwitchOutcome.UNKNOWN;
+        } catch (RuntimeException e) {
+            log.warn("確認 alias {} 的實際狀態失敗：{}", ALIAS, e.getMessage());
+            return SwitchOutcome.UNKNOWN;
+        }
     }
 
     /**
