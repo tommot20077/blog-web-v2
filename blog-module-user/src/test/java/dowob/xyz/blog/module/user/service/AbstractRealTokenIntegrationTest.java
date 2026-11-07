@@ -46,6 +46,10 @@ abstract class AbstractRealTokenIntegrationTest {
     @MockitoBean
     protected ArticleFacade articleFacade;
 
+    /** UserService 的頭像歸屬驗證依賴（W7-c）；file 模組不在 user 測試 classpath。 */
+    @MockitoBean
+    protected dowob.xyz.blog.infrastructure.facade.FileLookupFacade fileLookupFacade;
+
     /**
      * 注入容器連線屬性（沿用 {@link AbstractIntegrationTest} 的 singleton 容器）。
      *

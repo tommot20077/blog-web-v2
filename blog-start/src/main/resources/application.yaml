@@ -15,15 +15,18 @@ spring:
     pathmatch:
       matching-strategy: ant_path_matcher
 
-  # 上傳大小上限（FILE-05）：未設定時框架預設只有 1MB，與 FileServiceImpl.MAX_FILE_SIZE（5MB）矛盾。
-  # max-file-size 必須等於程式常數（MultipartYamlBindingTest 守住）；程式內的 5MB 檢查保留為第二道防線。
-  # max-request-size = 6MB：單檔 5MB 再加 1MB 容納 multipart boundary／其他 part 的 overhead，
-  # 不放更大以免放行「多檔合計很大」的請求。前端 nginx client_max_body_size 與正式環境 ingress
-  # proxy-body-size 需 >= 此值（屬部署項，不在本 repo 設定）。
+  # 上傳大小上限（FILE-05／A6b）：未設定時框架預設只有 1MB，合法圖片會在進入 service 前被擋下。
+  # - max-file-size = 20MB：必須等於文章圖片單檔上限 blog.file.max-article-image-size（MultipartYamlBindingTest 守住）。
+  #   頭像單檔上限 5MB（blog.file.max-avatar-size）較小，由 FileServiceImpl 依 usageType 在 service 層擋下，
+  #   超過同樣回 400 FILE_TOO_LARGE。
+  # - max-request-size = 21MB：單檔 20MB 再加 1MB 容納 multipart boundary／其他 part（usageType、articleUuid）的 overhead，
+  #   不放更大以免放行「多檔合計很大」的請求。
+  # - server.tomcat.max-swallow-size = 32MB（見檔案下方 server 區塊）：必須大於 max-request-size，理由見該處。
+  # 前方 nginx client_max_body_size 與正式環境 ingress proxy-body-size 需 >= max-request-size（屬部署項，建議 24MB，不在本 repo 設定）。
   servlet:
     multipart:
-      max-file-size: 5MB
-      max-request-size: 6MB
+      max-file-size: 20MB
+      max-request-size: 21MB
 
   # 排程池（findings PERF-16）：預設只有 1 條執行緒，flush／trending 等 fixedDelay job 與
   # 每日孤兒校正 job 會互相等待；孤兒校正框架另有單次頁數上限避免長掃描佔住執行緒。
@@ -125,12 +128,12 @@ mybatis:
 # Tomcat 吞掉超限請求剩餘 body 的上限（FILE-05）：
 # 上傳超過 multipart 上限時，Spring 回 400 FILE_TOO_LARGE，但 Tomcat 為了讓連線可重用，會先把請求剩下的 body
 # 讀掉；剩餘量超過 max-swallow-size（Tomcat 預設 2MB）就直接斷線，前端拿不到 400。
-# 設為 10MB：略大於可預期的誤傳大小（max-request-size 6MB 之上再容許約 4MB 超量；FileUploadSizeLimitE2E 以 8MB 驗證）。
+# 設為 32MB：略大於可預期的誤傳大小（max-request-size 21MB 之上再容許約 11MB 超量；FileUploadSizeLimitE2E 以 28MB 驗證）。
 # 不設 -1（無上限）：那會讓攻擊者以巨大 body 長時間占住連線。更大的 body 仍會被斷線，這是刻意的。
-# 部署提醒：前方 nginx／ingress 的 body 上限應再比 max-request-size 寬一點（例如 7MB），否則超限請求會先被代理以 413 擋下。
+# 部署提醒：前方 nginx／ingress 的 body 上限應再比 max-request-size 寬一點（建議 24MB），否則超限請求會先被代理以 413 擋下。
 server:
   tomcat:
-    max-swallow-size: 10MB
+    max-swallow-size: 32MB
 
 # MinIO Config
 minio:
@@ -148,7 +151,22 @@ blog:
   file:
     quotas:
       USER: 10MB
-      AUTHOR: 500MB
+      AUTHOR: 2GB
+    # 單檔大小上限（A6b）：文章圖片（封面、內文）20MB、頭像 5MB；文章圖片值須等於 spring.servlet.multipart.max-file-size。
+    max-article-image-size: 20MB
+    max-avatar-size: 5MB
+    # 圖片總像素上限（寬 × 高，不限單邊；FILE-04／A6）：100MP。全景圖（例如 30000×3000＝90MP）可通過。
+    # 上傳端（FileServiceImpl）只讀 header 檢查，超過回 400 INVALID_IMAGE_DIMENSIONS；
+    # 縮圖端（ThumbnailConsumer）解碼前再擋一次，超限不產生縮圖。防 decompression bomb 讓 worker OOM。
+    max-image-pixels: 100000000
+    # 每日綁定校正（B1）與未綁定檔清理（D6），04:17 執行（FileBindingReconcileJob）：先補綁定、再清理。
+    # - recent-article-days：補綁定掃描「最近 N 天 updated_at 有變動」的文章（不分狀態，含草稿，使草稿引用的圖不被清理誤刪）。
+    # - unbound-file-retention-days：未綁定、非頭像、且不被作者任何文章引用的檔案，建立超過 N 天才清理。
+    # - max-deletes-per-run：單次最多刪除的檔案數（每個含 MinIO 呼叫）；超過的留到隔天，以游標續跑。
+    binding-reconcile:
+      recent-article-days: 3
+      unbound-file-retention-days: 7
+      max-deletes-per-run: 500
     allowed-mime-types:
       - image/jpeg
       - image/png

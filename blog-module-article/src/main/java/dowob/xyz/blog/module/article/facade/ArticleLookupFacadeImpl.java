@@ -9,6 +9,7 @@ import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -122,5 +123,20 @@ public class ArticleLookupFacadeImpl implements ArticleLookupFacade {
         return BatchedQuery.queryInBatches(distinct, articleAuthorCleanupMapper::findExistingUuidsIn).stream()
                 .map(UUID::fromString)
                 .collect(Collectors.toSet());
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public List<UUID> findUuidsUpdatedSinceAnyStatus(LocalDateTime since, UUID afterUuidExclusive, int limit) {
+        if (since == null) {
+            throw new IllegalArgumentException("since 不可為 null（否則會退化成掃描全部文章）");
+        }
+        if (limit <= 0) {
+            return List.of();
+        }
+        return articleAuthorCleanupMapper.findUuidsUpdatedSince(since, afterUuidExclusive, limit)
+                .stream().map(UUID::fromString).toList();
     }
 }

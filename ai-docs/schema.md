@@ -371,6 +371,8 @@ PRIMARY KEY (user_id, tag_id)
 
 > 使用者刪除帳號（匿名化，DATA-02）時，`FileUserDeletedConsumer` 刪除該使用者上傳、且**未被保留文章引用**的檔案（metadata 列與 MinIO 物件）：頭像、`article_uuid IS NULL`、綁定的文章已不存在或屬 DRAFT／PENDING_REVIEW／REJECTED 者刪除；綁定 PUBLISHED／ARCHIVED 文章者保留（圖片不能破）。
 
+> 每日 04:17 `FileBindingReconcileJob`（B1／D6）：先對最近 3 天內 `articles.updated_at` 有變動的文章（不分狀態）重新解析內文並回填 `article_uuid`；再清理「建立超過 7 天、`article_uuid IS NULL`、非 AVATAR、且不被上傳者任何文章（不分狀態）內文或封面引用」的檔案（先刪物件、再刪列）。查詢走 `file_metadata` 主鍵掃描（`id` keyset），目前無 `(created_at)` 或 partial 索引；表規模成長到掃描明顯變慢時再評估補索引。
+
 ---
 
 ### user_bookmarks

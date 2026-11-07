@@ -57,6 +57,20 @@ public class SafeHttpUrlValidator implements ConstraintValidator<SafeHttpUrl, St
     }
 
     /**
+     * 若值恰為本站檔案內容路徑 {@code /api/v1/files/{uuid}/content}，取出其中的檔案 UUID。
+     *
+     * @param value 待檢查字串（可為 null）
+     * @return 檔案 UUID；不是本站檔案路徑時為 empty
+     */
+    public static java.util.Optional<java.util.UUID> extractFileUuid(String value) {
+        if (value == null || !FILE_CONTENT_PATH.matcher(value).matches()) {
+            return java.util.Optional.empty();
+        }
+        String[] segments = value.split("/");
+        return java.util.Optional.of(java.util.UUID.fromString(segments[segments.length - 2]));
+    }
+
+    /**
      * Bean Validation 入口。
      *
      * @param value   欄位值

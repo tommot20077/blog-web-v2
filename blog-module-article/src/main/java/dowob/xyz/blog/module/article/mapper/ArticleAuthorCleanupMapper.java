@@ -4,6 +4,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -76,4 +77,26 @@ public interface ArticleAuthorCleanupMapper {
             + "<foreach collection='list' item='u' open='(' separator=',' close=')'>#{u}::uuid</foreach>"
             + "</script>")
     List<String> findExistingUuidsIn(@Param("list") List<UUID> uuids);
+
+    /**
+     * 以 keyset 分頁查詢 {@code updated_at >= since} 的文章公開 UUID（不分狀態，依 uuid 升冪）。
+     *
+     * <p>供 {@code ArticleLookupFacadeImpl#findUuidsUpdatedSinceAnyStatus} 使用；排序與游標比較都在資料庫端
+     * （uuid 位元組序），{@code after} 為 null 時從頭開始。</p>
+     *
+     * @param since 更新時間下界（含）
+     * @param after 游標（不含）；null 表示從頭
+     * @param limit 本頁筆數上限（正數）
+     * @return 文章 UUID 字串（升冪）
+     */
+    @Select({
+        "<script>",
+        "SELECT uuid::text FROM articles WHERE updated_at &gt;= #{since}",
+        "<if test='after != null'>AND uuid &gt; #{after}::uuid</if>",
+        "ORDER BY uuid LIMIT #{limit}",
+        "</script>"
+    })
+    List<String> findUuidsUpdatedSince(@Param("since") LocalDateTime since,
+                                       @Param("after") UUID after,
+                                       @Param("limit") int limit);
 }

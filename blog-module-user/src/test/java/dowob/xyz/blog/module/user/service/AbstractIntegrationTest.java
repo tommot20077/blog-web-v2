@@ -95,6 +95,13 @@ public abstract class AbstractIntegrationTest {
     protected ArticleFacade articleFacade;
 
     /**
+     * UserService 設定頭貼時依賴 FileLookupFacade 確認站內檔案是本人的 AVATAR；
+     * file 模組不在 user 模組的測試 classpath，由此 MockBean 提供，各測試按需 stubbing。
+     */
+    @MockitoBean
+    protected dowob.xyz.blog.infrastructure.facade.FileLookupFacade fileLookupFacade;
+
+    /**
      * PostgreSQL 測試容器（singleton：整個測試 JVM 只啟動一次，所有子類別共用）
      *
      * <p><b>不可改回 {@code @Container}</b>：JUnit 的 Testcontainers extension 會在<b>每個測試類別結束時</b>
