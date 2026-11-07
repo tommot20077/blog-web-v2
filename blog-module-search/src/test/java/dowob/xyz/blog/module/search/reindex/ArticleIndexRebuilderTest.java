@@ -104,8 +104,9 @@ class ArticleIndexRebuilderTest {
         when(admin.inspect()).thenReturn(IndexState.alias(List.of(OLD)));
         when(admin.newVersionedIndexName()).thenReturn(NEW);
         when(admin.countLive()).thenReturn(0L);
-        when(journal.drainArticles(anyInt())).thenReturn(List.of());
-        when(journal.drainAuthors(anyInt())).thenReturn(List.of());
+        when(journal.drainArticles(any(), anyInt())).thenReturn(List.of());
+        when(journal.drainAuthors(any(), anyInt())).thenReturn(List.of());
+        when(journal.keepAlive(any())).thenReturn(true);
         when(articleFacade.findPublishedForIndexAfter(any(), anyInt())).thenReturn(List.of());
         when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of());
         /* 切換請求失敗時的實際結果：預設為「確實沒有套用」（個別測試覆寫） */
@@ -113,8 +114,10 @@ class ArticleIndexRebuilderTest {
         rebuilder = new ArticleIndexRebuilder(admin, journal, articleFacade, userFacade, clock);
     }
 
+    private static final UUID JOB = UUID.fromString("7c9e6679-7425-40de-944b-e07fc1f90ae7");
+
     private long rebuild() {
-        return rebuilder.rebuild(progress::add);
+        return rebuilder.rebuild(JOB, progress::add);
     }
 
     private static ArticleIndexData data(UUID uuid, UUID authorUuid, String snapshotNickname,
@@ -148,14 +151,15 @@ class ArticleIndexRebuilderTest {
             assertThat(written).isEqualTo(2);
             InOrder order = inOrder(admin, journal, articleFacade);
             order.verify(admin).createIndex(NEW);
-            order.verify(journal).begin(NEW);
+            order.verify(journal).begin(JOB);
             order.verify(articleFacade).findPublishedForIndexAfter(null, ArticleIndexRebuilder.BATCH_SIZE);
             order.verify(admin).bulkIndex(anyList(), eq(NEW));
             order.verify(admin).refresh(NEW);
-            order.verify(journal).drainArticles(anyInt());
+            order.verify(journal).drainArticles(eq(JOB), anyInt());
+            order.verify(journal).keepAlive(JOB);
             order.verify(admin).switchAlias(NEW, IndexState.alias(List.of(OLD)));
-            order.verify(journal).drainArticles(anyInt());
-            order.verify(journal).end();
+            order.verify(journal).drainArticles(eq(JOB), anyInt());
+            order.verify(journal).end(JOB);
             order.verify(admin).deleteIndexQuietly(OLD);
         }
 
@@ -176,7 +180,7 @@ class ArticleIndexRebuilderTest {
             assertThat(written).isEqualTo(450);
             verify(articleFacade, times(3)).findPublishedForIndexAfter(any(), eq(200));
             verify(admin, times(3)).bulkIndex(anyList(), eq(NEW));
-            verify(journal, times(3)).keepAlive();
+            verify(journal, org.mockito.Mockito.atLeast(3)).keepAlive(JOB);
             assertThat(progress).as("每批之後回報一次，切換前再回報一次").containsExactly(200L, 400L, 450L, 450L);
             assertThat(capturedDocuments()).hasSize(450);
         }
@@ -235,7 +239,7 @@ class ArticleIndexRebuilderTest {
             UUID republished = UUID.randomUUID();
             UUID archived = UUID.randomUUID();
             UUID lateUpdate = UUID.randomUUID();
-            when(journal.drainArticles(anyInt())).thenReturn(
+            when(journal.drainArticles(eq(JOB), anyInt())).thenReturn(
                     List.of(republished.toString(), archived.toString()), List.of(),
                     List.of(lateUpdate.toString()), List.of());
             when(articleFacade.findPublishedForIndexByUuids(List.of(republished, archived)))
@@ -252,7 +256,7 @@ class ArticleIndexRebuilderTest {
             order.verify(admin).switchAlias(NEW, IndexState.alias(List.of(OLD)));
             order.verify(admin).bulkIndex(org.mockito.ArgumentMatchers.argThat(docs ->
                     docs.size() == 1 && docs.get(0).getId().equals(lateUpdate.toString())), eq(NEW));
-            order.verify(journal).end();
+            order.verify(journal).end(JOB);
             verify(admin, never()).deleteDocument(republished.toString(), NEW);
         }
 
@@ -261,7 +265,7 @@ class ArticleIndexRebuilderTest {
         void rebuild_rewritesDirtyAuthorsOnNewIndex() {
             UUID anonymized = UUID.randomUUID();
             UUID vanished = UUID.randomUUID();
-            when(journal.drainAuthors(anyInt())).thenReturn(List.of(anonymized.toString(), vanished.toString()), List.of());
+            when(journal.drainAuthors(eq(JOB), anyInt())).thenReturn(List.of(anonymized.toString(), vanished.toString()), List.of());
             when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(Map.of(
                     anonymized, new UserDisplayInfo(anonymized, "已刪除使用者#ab12", null)));
 
@@ -274,7 +278,7 @@ class ArticleIndexRebuilderTest {
         @Test
         @DisplayName("紀錄中混入非 UUID 的值：直接從新索引刪除該 id，不送進 facade")
         void rebuild_garbageJournalEntry_deletedNotQueried() {
-            when(journal.drainArticles(anyInt())).thenReturn(List.of("not-a-uuid"), List.of());
+            when(journal.drainArticles(eq(JOB), anyInt())).thenReturn(List.of("not-a-uuid"), List.of());
 
             rebuild();
 
@@ -285,7 +289,7 @@ class ArticleIndexRebuilderTest {
         @Test
         @DisplayName("切換後的補齊失敗：alias 已在新索引上，不刪新索引；錯誤說明已切換並建議重跑；舊索引照樣刪除、記錄照樣結束")
         void rebuild_postSwitchCatchUpFails_reportsSwitched() {
-            when(journal.drainArticles(anyInt())).thenReturn(List.of()).thenThrow(new IllegalStateException("redis down"));
+            when(journal.drainArticles(eq(JOB), anyInt())).thenReturn(List.of()).thenThrow(new IllegalStateException("redis down"));
 
             assertThatThrownBy(() -> rebuild())
                     .isInstanceOf(IllegalStateException.class)
@@ -293,7 +297,7 @@ class ArticleIndexRebuilderTest {
             verify(admin).switchAlias(NEW, IndexState.alias(List.of(OLD)));
             verify(admin, never()).deleteIndexQuietly(NEW);
             verify(admin).deleteIndexQuietly(OLD);
-            verify(journal).end();
+            verify(journal).end(JOB);
         }
     }
 
@@ -305,7 +309,7 @@ class ArticleIndexRebuilderTest {
             verify(admin, never()).switchAlias(anyString(), any());
             verify(admin).deleteIndexQuietly(NEW);
             verify(admin, never()).deleteIndexQuietly(OLD);
-            verify(journal).end();
+            verify(journal).end(JOB);
         }
 
         @Test
@@ -335,7 +339,7 @@ class ArticleIndexRebuilderTest {
         void rebuild_progressRejects() {
             when(articleFacade.findPublishedForIndexAfter(null, 200)).thenReturn(batch(1));
 
-            assertThatThrownBy(() -> rebuilder.rebuild(p -> {
+            assertThatThrownBy(() -> rebuilder.rebuild(JOB, p -> {
                 throw new IllegalStateException("lock lost");
             })).hasMessage("lock lost");
             assertAliasUntouchedAndNewIndexDeleted();
@@ -344,7 +348,7 @@ class ArticleIndexRebuilderTest {
         @Test
         @DisplayName("切換前的補齊失敗：不切換、刪除新索引")
         void rebuild_preSwitchCatchUpFails() {
-            when(journal.drainArticles(anyInt())).thenReturn(List.of(UUID.randomUUID().toString()));
+            when(journal.drainArticles(eq(JOB), anyInt())).thenReturn(List.of(UUID.randomUUID().toString()));
             when(articleFacade.findPublishedForIndexByUuids(any())).thenThrow(new IllegalStateException("db down"));
 
             assertThatThrownBy(() -> rebuild()).hasMessage("db down");
@@ -398,12 +402,32 @@ class ArticleIndexRebuilderTest {
         }
 
         @Test
+        @DisplayName("M2：寫入期間變動紀錄已被別的作業接手（keepAlive 回 false）→ 中止，不切換")
+        void rebuild_journalTakenOverDuringBulk() {
+            when(articleFacade.findPublishedForIndexAfter(null, 200)).thenReturn(batch(200));
+            when(journal.keepAlive(JOB)).thenReturn(false);
+
+            assertThatThrownBy(() -> rebuild()).isInstanceOf(IllegalStateException.class).hasMessageContaining("變動紀錄");
+            assertAliasUntouchedAndNewIndexDeleted();
+        }
+
+        @Test
+        @DisplayName("M2：切換前再確認一次變動紀錄仍屬於本作業；已被接手 → 不切換")
+        void rebuild_journalTakenOverJustBeforeSwitch() {
+            when(articleFacade.findPublishedForIndexAfter(null, 200)).thenReturn(batch(1));
+            when(journal.keepAlive(JOB)).thenReturn(true, false);
+
+            assertThatThrownBy(() -> rebuild()).isInstanceOf(IllegalStateException.class).hasMessageContaining("變動紀錄");
+            assertAliasUntouchedAndNewIndexDeleted();
+        }
+
+        @Test
         @DisplayName("建立新索引失敗：沒有開始記錄變動、也沒有東西可清")
         void rebuild_createIndexFails() {
             doThrow(new IllegalStateException("es down")).when(admin).createIndex(NEW);
 
             assertThatThrownBy(() -> rebuild()).hasMessage("es down");
-            verify(journal, never()).begin(anyString());
+            verify(journal, never()).begin(any());
             verify(admin, never()).switchAlias(anyString(), any());
         }
     }
@@ -428,7 +452,7 @@ class ArticleIndexRebuilderTest {
             assertThat(written).isEqualTo(2);
             verify(admin, never()).deleteIndexQuietly(NEW);
             verify(admin).deleteIndexQuietly(OLD);
-            verify(journal).end();
+            verify(journal).end(JOB);
         }
 
         @Test

@@ -38,7 +38,7 @@ import java.util.stream.Collectors;
  * <p>新索引只寫入 PUBLISHED 文章，切換後不會有幽靈文件——這取代了原本 {@code reindexAll} 的「掃描並清除幽靈」。</p>
  *
  * <h3>失敗語意</h3>
- * <p>切換前任何一步失敗（讀取、寫入、補齊、鎖遺失、逾時、應用程式關閉、切換本身）：結束記錄、刪除新索引、例外往外拋；
+ * <p>切換前任何一步失敗（讀取、寫入、補齊、鎖遺失、變動紀錄被接手、逾時、應用程式關閉）：結束記錄、刪除新索引、例外往外拋；
  * alias 維持指向舊索引，<b>不會指到半成品</b>。切換後的補齊失敗：alias 已在新索引上，不刪新索引，
  * 以「已切換、請再執行一次」的訊息往外拋。</p>
  *
@@ -115,33 +115,34 @@ public class ArticleIndexRebuilder {
      * @return 寫入新索引的文章數（不含補齊）
      * @throws RuntimeException 任何失敗；切換前失敗時 alias 維持原狀、新索引已刪除
      */
-    public long rebuild(ReindexProgress progress) {
+    public long rebuild(UUID jobId, ReindexProgress progress) {
         Instant deadline = clock.instant().plus(MAX_DURATION);
         IndexState before = indexAdmin.inspect();
         String target = indexAdmin.newVersionedIndexName();
         indexAdmin.createIndex(target);
-        journal.begin(target);
+        journal.begin(jobId);
         long written;
         try {
-            written = bulkLoad(target, progress, deadline);
+            written = bulkLoad(jobId, target, progress, deadline);
             guardAgainstEmptySnapshot(written, before);
             indexAdmin.refresh(target);
-            drainJournal(target);
+            drainJournal(jobId, target);
             progress.onProgress(written);
             checkStillAllowed(deadline);
+            ensureJournalOwned(jobId);
         } catch (RuntimeException e) {
-            endJournalQuietly();
+            endJournalQuietly(jobId);
             indexAdmin.deleteIndexQuietly(target);
             throw e;
         }
-        switchAliasOrResolve(target, before);
+        switchAliasOrResolve(jobId, target, before);
         try {
-            drainJournal(target);
+            drainJournal(jobId, target);
         } catch (RuntimeException e) {
             throw new IllegalStateException("alias 已切換至新索引 " + target + "，但切換後的增量補齊失敗（" + e.getMessage()
                     + "）；重建期間的部分變動可能未反映，請再執行一次重建", e);
         } finally {
-            endJournalQuietly();
+            endJournalQuietly(jobId);
             deleteOldIndices(before);
         }
         log.info("搜尋索引全量重建完成：alias 已切換至 {}，寫入 {} 篇文章", target, written);
@@ -161,7 +162,7 @@ public class ArticleIndexRebuilder {
      * @param target 新實體索引
      * @param before 切換前的狀態
      */
-    private void switchAliasOrResolve(String target, IndexState before) {
+    private void switchAliasOrResolve(UUID jobId, String target, IndexState before) {
         try {
             indexAdmin.switchAlias(target, before);
             return;
@@ -171,7 +172,7 @@ public class ArticleIndexRebuilder {
                 log.warn("alias 切換請求回報失敗，但 ES 端已套用（alias 只指向 {}），視為切換成功：{}", target, e.getMessage());
                 return;
             }
-            endJournalQuietly();
+            endJournalQuietly(jobId);
             if (outcome == SwitchOutcome.NOT_APPLIED) {
                 indexAdmin.deleteIndexQuietly(target);
                 throw e;
@@ -189,7 +190,7 @@ public class ArticleIndexRebuilder {
      * @param deadline 逾時時點
      * @return 寫入篇數
      */
-    private long bulkLoad(String target, ReindexProgress progress, Instant deadline) {
+    private long bulkLoad(UUID jobId, String target, ReindexProgress progress, Instant deadline) {
         long written = 0;
         UUID cursor = null;
         while (true) {
@@ -200,12 +201,26 @@ public class ArticleIndexRebuilder {
             }
             indexAdmin.bulkIndex(toDocuments(batch), target);
             written += batch.size();
-            journal.keepAlive();
+            ensureJournalOwned(jobId);
             progress.onProgress(written);
             if (batch.size() < BATCH_SIZE) {
                 return written;
             }
             cursor = batch.get(batch.size() - 1).articleUuid();
+        }
+    }
+
+    /**
+     * 續期變動紀錄並確認它仍屬於本作業；已被別的作業接手或已到期時中止（審查 M2）。
+     *
+     * <p>每批之後與切換前各呼叫一次（取空期間由 drain 的 Lua 一併續期與比對）。</p>
+     *
+     * @param jobId 本作業 id
+     */
+    private void ensureJournalOwned(UUID jobId) {
+        if (!journal.keepAlive(jobId)) {
+            throw new IllegalStateException("重建變動紀錄已不屬於本作業（已被其他重建接手或已到期），中止且不切換 alias，"
+                    + "以免切換後遺失重建期間的增量");
         }
     }
 
@@ -245,13 +260,13 @@ public class ArticleIndexRebuilder {
      *
      * @param target 新實體索引
      */
-    private void drainJournal(String target) {
-        for (List<String> ids = journal.drainArticles(DRAIN_BATCH_SIZE); !ids.isEmpty();
-             ids = journal.drainArticles(DRAIN_BATCH_SIZE)) {
+    private void drainJournal(UUID jobId, String target) {
+        for (List<String> ids = journal.drainArticles(jobId, DRAIN_BATCH_SIZE); !ids.isEmpty();
+             ids = journal.drainArticles(jobId, DRAIN_BATCH_SIZE)) {
             applyArticleChanges(ids, target);
         }
-        for (List<String> ids = journal.drainAuthors(DRAIN_BATCH_SIZE); !ids.isEmpty();
-             ids = journal.drainAuthors(DRAIN_BATCH_SIZE)) {
+        for (List<String> ids = journal.drainAuthors(jobId, DRAIN_BATCH_SIZE); !ids.isEmpty();
+             ids = journal.drainAuthors(jobId, DRAIN_BATCH_SIZE)) {
             applyAuthorChanges(ids, target);
         }
     }
@@ -318,9 +333,9 @@ public class ArticleIndexRebuilder {
     /**
      * 結束變動紀錄；失敗只記 warn（標記有 TTL，會自行到期）。
      */
-    private void endJournalQuietly() {
+    private void endJournalQuietly(UUID jobId) {
         try {
-            journal.end();
+            journal.end(jobId);
         } catch (RuntimeException e) {
             log.warn("結束搜尋索引重建的變動紀錄失敗（標記將於 TTL 到期後消失）：{}", e.getMessage());
         }

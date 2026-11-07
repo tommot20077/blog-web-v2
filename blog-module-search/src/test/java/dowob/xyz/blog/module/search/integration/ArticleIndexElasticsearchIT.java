@@ -108,9 +108,11 @@ class ArticleIndexElasticsearchIT {
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
         when(redis.opsForZSet()).thenReturn(mock(ZSetOperations.class));
-        /* 變動紀錄的 SPOP 回 null 視為沒有變動（本類別不測重建期間的增量，見 ArticleIndexRebuildIT） */
-        when(redis.opsForSet()).thenReturn(mock(org.springframework.data.redis.core.SetOperations.class));
-        journal = new dowob.xyz.blog.module.search.reindex.ReindexJournal(redis);
+        /* 本類別不測重建期間的增量（見 ArticleIndexRebuildIT，真 Redis）：變動紀錄以替身表示「一直屬於本作業、沒有變動」 */
+        journal = mock(dowob.xyz.blog.module.search.reindex.ReindexJournal.class);
+        when(journal.keepAlive(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        when(journal.drainArticles(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
+        when(journal.drainAuthors(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
         jobStore = new dowob.xyz.blog.module.search.reindex.ReindexJobStore(redis);
         searchService = new SearchServiceImpl(template, repository, redis, articleFacade, indexAdmin, journal, jobStore);
         rebuilder = new dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder(indexAdmin, journal, articleFacade, userFacade);
@@ -188,7 +190,7 @@ class ArticleIndexElasticsearchIT {
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));
-        rebuilder.rebuild(processed -> { });
+        rebuilder.rebuild(UUID.randomUUID(), processed -> { });
         indexOps.refresh();
 
         Map<String, Object> author = rawAuthorSource(articleUuid);
@@ -211,7 +213,7 @@ class ArticleIndexElasticsearchIT {
         when(userFacade.getDisplayInfoByUuids(org.mockito.ArgumentMatchers.any())).thenReturn(java.util.Map.of(
                 authorUuid, new dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo(authorUuid, "愛麗絲", null)));
 
-        rebuilder.rebuild(processed -> { });
+        rebuilder.rebuild(UUID.randomUUID(), processed -> { });
         template.indexOps(ArticleDocument.class).refresh();
 
         Map<String, Object> author = rawAuthorSource(articleUuid);
@@ -317,7 +319,7 @@ class ArticleIndexElasticsearchIT {
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));
 
-        rebuilder.rebuild(processed -> { });
+        rebuilder.rebuild(UUID.randomUUID(), processed -> { });
         template.indexOps(ArticleDocument.class).refresh();
 
         Map<String, Object> source = client.get(g -> g.index("blog_articles").id(articleUuid.toString()), Map.class).source();

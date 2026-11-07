@@ -157,7 +157,7 @@ public class SearchReindexService implements DisposableBean {
     void run(UUID jobId) {
         try {
             jobStore.updateTotal(jobId, articleFacade.countPublished());
-            long written = rebuilder.rebuild(processed -> {
+            long written = rebuilder.rebuild(jobId, processed -> {
                 if (!jobStore.renewLock(jobId)) {
                     throw new IllegalStateException("重建鎖已遺失（TTL 到期或被其他實例取得），中止以免兩個重建同時切換 alias");
                 }

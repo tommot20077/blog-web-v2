@@ -137,7 +137,7 @@ class SearchReindexServiceTest {
         verify(jobStore).tryLock(job.getJobId());
         verify(jobStore).start(job);
         assertThat(executor.submitted).hasSize(1);
-        verify(rebuilder, never()).rebuild(any());
+        verify(rebuilder, never()).rebuild(any(), any());
         verify(articleFacade, never()).countPublished();
     }
 
@@ -191,8 +191,8 @@ class SearchReindexServiceTest {
     @DisplayName("背景成功：寫入總數、每批進度並續期鎖，完成後標記 COMPLETED、寫入最後重建時間、釋放鎖")
     void run_success_recordsProgressAndCompletion() {
         when(articleFacade.countPublished()).thenReturn(450L);
-        when(rebuilder.rebuild(any())).thenAnswer(inv -> {
-            ReindexProgress progress = inv.getArgument(0);
+        when(rebuilder.rebuild(any(), any())).thenAnswer(inv -> {
+            ReindexProgress progress = inv.getArgument(1);
             progress.onProgress(200);
             progress.onProgress(450);
             return 450L;
@@ -215,8 +215,8 @@ class SearchReindexServiceTest {
     @DisplayName("鎖已遺失（續期失敗）：進度回報拋例外中止重建，作業 FAILED 並說明原因")
     void run_lockLost_abortsRebuild() {
         when(jobStore.renewLock(any())).thenReturn(false);
-        when(rebuilder.rebuild(any())).thenAnswer(inv -> {
-            ((ReindexProgress) inv.getArgument(0)).onProgress(200);
+        when(rebuilder.rebuild(any(), any())).thenAnswer(inv -> {
+            ((ReindexProgress) inv.getArgument(1)).onProgress(200);
             return 200L;
         });
         UUID jobId = startedJobId();
@@ -233,7 +233,7 @@ class SearchReindexServiceTest {
     @Test
     @DisplayName("重建失敗：作業 FAILED、錯誤摘要含例外類型與訊息、釋放鎖；不寫最後重建時間")
     void run_rebuildFails_marksFailed() {
-        when(rebuilder.rebuild(any())).thenThrow(new IllegalStateException("bulk failed"));
+        when(rebuilder.rebuild(any(), any())).thenThrow(new IllegalStateException("bulk failed"));
         UUID jobId = startedJobId();
 
         executor.runAll();
@@ -246,7 +246,7 @@ class SearchReindexServiceTest {
     @Test
     @DisplayName("錯誤摘要有長度上限（避免把整串堆疊塞進狀態）")
     void run_errorSummaryIsTruncated() {
-        when(rebuilder.rebuild(any())).thenThrow(new IllegalStateException("x".repeat(5000)));
+        when(rebuilder.rebuild(any(), any())).thenThrow(new IllegalStateException("x".repeat(5000)));
         UUID jobId = startedJobId();
 
         executor.runAll();
@@ -259,7 +259,7 @@ class SearchReindexServiceTest {
     @Test
     @DisplayName("最後重建時間寫入失敗：best-effort，作業仍為 COMPLETED")
     void run_lastReindexAtFailure_stillCompleted() {
-        when(rebuilder.rebuild(any())).thenReturn(3L);
+        when(rebuilder.rebuild(any(), any())).thenReturn(3L);
         doThrow(new IllegalStateException("redis down")).when(valueOps)
                 .set(eq(RedisKeyConstant.SEARCH_REINDEX_AT_KEY), anyString());
         UUID jobId = startedJobId();
@@ -276,7 +276,7 @@ class SearchReindexServiceTest {
         SearchReindexService real = new SearchReindexService(jobStore, rebuilder, articleFacade, redis);
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<String> threadName = new AtomicReference<>();
-        when(rebuilder.rebuild(any())).thenAnswer(inv -> {
+        when(rebuilder.rebuild(any(), any())).thenAnswer(inv -> {
             threadName.set(Thread.currentThread().getName());
             done.countDown();
             return 0L;

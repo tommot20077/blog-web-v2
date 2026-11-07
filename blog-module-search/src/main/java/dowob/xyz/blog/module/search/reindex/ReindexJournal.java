@@ -34,6 +34,9 @@ import java.util.UUID;
  *
  * <p>集合與標記放 Redis 而不是記憶體：listener 可能在任何一個實例上消費，重建只在取得分散式鎖的那一個實例上跑。</p>
  *
+ * <p><b>綁定作業身分</b>（審查 M2）：標記的值是 jobId；續期、取出、結束都以 Lua 先比對 jobId。鎖遺失的舊作業無法再續期
+ * （因而中止、不切換）、取不走新作業的變動、收尾也刪不掉新作業的標記與集合。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -52,6 +55,31 @@ public class ReindexJournal {
             "if redis.call('exists', KEYS[1]) == 1 then return redis.call('sadd', KEYS[2], ARGV[1]) end return -1",
             Long.class);
 
+    /**
+     * 只有標記仍是本作業才續期：KEYS[1] 標記；ARGV[1] jobId、ARGV[2] TTL 秒數。回 1 為已續期，0 為不是本作業或已到期。
+     */
+    private static final RedisScript<Long> KEEP_ALIVE_IF_OWNER = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], ARGV[2]) end return 0",
+            Long.class);
+
+    /**
+     * 只有標記仍是本作業才刪除標記與集合：KEYS[1] 標記、KEYS[2..] 集合；ARGV[1] jobId。
+     */
+    private static final RedisScript<Long> END_IF_OWNER = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', unpack(KEYS)) end return 0",
+            Long.class);
+
+    /**
+     * 只有標記仍是本作業才取出（同時續期）：KEYS[1] 標記、KEYS[2] 集合；ARGV[1] jobId、ARGV[2] 筆數、ARGV[3] TTL 秒數。
+     * 不是本作業時回 Redis 錯誤（呼叫端收到例外即中止重建），不取走任何成員。
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static final RedisScript<List> DRAIN_IF_OWNER = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) ~= ARGV[1] then return redis.error_reply('REINDEX_JOURNAL_NOT_OWNED') end "
+                    + "redis.call('expire', KEYS[1], ARGV[3]) "
+                    + "return redis.call('spop', KEYS[2], ARGV[2])",
+            List.class);
+
     /** Redis 操作 */
     private final StringRedisTemplate redis;
 
@@ -65,31 +93,45 @@ public class ReindexJournal {
     }
 
     /**
-     * 重建開始：清掉上一次殘留的集合，再設定進行中標記（值為新實體索引名稱，附 TTL）。
+     * 重建開始：清掉上一次殘留的集合，再設定進行中標記（值為本作業的 jobId，附 TTL）。
      *
-     * <p>順序不可顛倒：先設標記再清集合，會把標記設定後才記下的變動一起刪掉。</p>
+     * <p>順序不可顛倒：先設標記再清集合，會把標記設定後才記下的變動一起刪掉。標記一律覆寫：呼叫端已持有重建鎖，
+     * 若有前一個作業的殘留標記，代表那個作業的鎖已遺失，它之後的續期、取出、結束都會因 jobId 不符而失效（審查 M2）。</p>
      *
-     * @param targetIndex 本次重建的新實體索引
+     * @param jobId 本作業 id
      */
-    public void begin(String targetIndex) {
+    public void begin(UUID jobId) {
         redis.delete(List.of(RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY,
                 RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY));
-        redis.opsForValue().set(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, targetIndex, ACTIVE_TTL);
+        redis.opsForValue().set(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, jobId.toString(), ACTIVE_TTL);
     }
 
     /**
-     * 延長進行中標記的 TTL（重建每批呼叫）。
+     * 延長進行中標記的 TTL；只有標記仍是本作業時才續期（compare-and-expire）。
+     *
+     * <p>回 false 代表標記已被別的作業接手、或已到期——此時 listener 的變動可能記到別的作業名下或根本沒記，
+     * 呼叫端必須中止重建且<b>不切換</b>（審查 M2）。</p>
+     *
+     * @param jobId 本作業 id
+     * @return 仍屬於本作業並已續期時 true
      */
-    public void keepAlive() {
-        redis.expire(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, ACTIVE_TTL);
+    public boolean keepAlive(UUID jobId) {
+        Long renewed = redis.execute(KEEP_ALIVE_IF_OWNER, List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY),
+                jobId.toString(), String.valueOf(ACTIVE_TTL.toSeconds()));
+        return renewed != null && renewed == 1L;
     }
 
     /**
-     * 重建結束（成功或失敗）：先移除進行中標記，再刪除集合。
+     * 重建結束（成功或失敗）：只有標記仍是本作業時，才一併刪除標記與兩個集合（compare-and-delete）。
+     *
+     * <p>鎖遺失的舊作業在收尾時呼叫，不會刪掉已接手的新作業的標記與變動（審查 M2）。</p>
+     *
+     * @param jobId 本作業 id
      */
-    public void end() {
-        redis.delete(List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY,
-                RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY, RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY));
+    public void end(UUID jobId) {
+        redis.execute(END_IF_OWNER, List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY,
+                RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY, RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY),
+                jobId.toString());
     }
 
     /**
@@ -118,34 +160,41 @@ public class ReindexJournal {
     }
 
     /**
-     * 取出（並移除）至多 {@code max} 篇有變動的文章。
+     * 取出（並移除）至多 {@code max} 篇有變動的文章；只有標記仍是本作業時才取出，並同時續期。
      *
-     * @param max 上限
+     * @param jobId 本作業 id
+     * @param max   上限
      * @return 文章 UUID 字串；沒有時為空清單
+     * @throws RuntimeException 標記已不屬於本作業（不取走任何成員，呼叫端應中止重建）
      */
-    public List<String> drainArticles(int max) {
-        return pop(RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY, max);
+    public List<String> drainArticles(UUID jobId, int max) {
+        return pop(jobId, RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY, max);
     }
 
     /**
-     * 取出（並移除）至多 {@code max} 位暱稱被改寫的作者。
+     * 取出（並移除）至多 {@code max} 位暱稱被改寫的作者；只有標記仍是本作業時才取出，並同時續期。
      *
-     * @param max 上限
+     * @param jobId 本作業 id
+     * @param max   上限
      * @return 作者 UUID 字串；沒有時為空清單
+     * @throws RuntimeException 標記已不屬於本作業
      */
-    public List<String> drainAuthors(int max) {
-        return pop(RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY, max);
+    public List<String> drainAuthors(UUID jobId, int max) {
+        return pop(jobId, RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY, max);
     }
 
     /**
-     * SPOP count。
+     * 比對 jobId 後續期並 SPOP count（Lua，原子）。
      *
-     * @param key 集合 key
-     * @param max 上限
+     * @param jobId 本作業 id
+     * @param key   集合 key
+     * @param max   上限
      * @return 取出的成員
      */
-    private List<String> pop(String key, int max) {
-        List<String> popped = redis.opsForSet().pop(key, max);
+    @SuppressWarnings("unchecked")
+    private List<String> pop(UUID jobId, String key, int max) {
+        List<String> popped = redis.execute(DRAIN_IF_OWNER, List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, key),
+                jobId.toString(), String.valueOf(max), String.valueOf(ACTIVE_TTL.toSeconds()));
         return popped == null ? List.of() : popped;
     }
 }

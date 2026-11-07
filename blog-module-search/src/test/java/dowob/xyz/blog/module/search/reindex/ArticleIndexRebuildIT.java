@@ -204,6 +204,24 @@ class ArticleIndexRebuildIT {
     }
 
     /**
+     * 等到作業自己寫下結束時間（收尾完成後才寫；與「鎖已不在而被判定中斷」區分）。
+     *
+     * @param jobId 作業 id
+     * @return 作業狀態
+     */
+    private SearchReindexJobResponse awaitRecordedFinish(UUID jobId) throws InterruptedException {
+        long deadline = System.nanoTime() + WAIT.toNanos();
+        while (System.nanoTime() < deadline) {
+            SearchReindexJobResponse job = reindexService.currentJob().orElseThrow();
+            if (job.getJobId().equals(jobId) && job.getFinishedAt() != null) {
+                return job;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("作業在 " + WAIT + " 內沒有寫下結束時間");
+    }
+
+    /**
      * 讓重建在讀第一批時停住：先取下呼叫當下（變動前）的快照，通知測試執行緒，等放行後才回傳舊快照。
      *
      * @param reading 重建已讀完第一批（尚未寫入）時倒數
@@ -354,6 +372,42 @@ class ArticleIndexRebuildIT {
         assertThat(searchUuids("Failure")).containsExactly(alpha.articleUuid());
         assertThat(redis.hasKey(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY)).isFalse();
         assertThat(redis.hasKey(RedisKeyConstant.LOCK_SEARCH_REINDEX)).isFalse();
+    }
+
+    /**
+     * 審查 M2：作業 A 的鎖遺失 → 作業 B 開始（接手鎖與變動紀錄）→ A 的收尾若無條件刪掉變動紀錄，
+     * listener 之後不再記錄，B 照常切換、這段期間的增量遺失。
+     */
+    @Test
+    @DisplayName("M2：A 鎖遺失後 B 已開始，A 中止且不切換；A 的收尾不會刪掉 B 的進行中標記與已記下的變動")
+    void rebuild_staleJobAbort_keepsNewJobsJournal() throws Exception {
+        publishedAndIndexed("Stale job alpha");
+        CountDownLatch reading = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        pauseFirstBatch(reading, proceed);
+
+        UUID jobA = reindexService.start().job().getJobId();
+        await(() -> null, reading);
+        /* A 的鎖到期、B 取得鎖並開始記錄變動 */
+        UUID jobB = UUID.randomUUID();
+        redis.opsForValue().set(RedisKeyConstant.LOCK_SEARCH_REINDEX, jobB.toString());
+        new ReindexJournal(redis).begin(jobB);
+        ArticleIndexData during = article(UUID.randomUUID(), "Stale job during", null);
+        db.put(during.articleUuid(), during);
+        searchService.indexArticle(document(during, "快照暱稱"));
+        proceed.countDown();
+
+        /* 鎖已屬於 B 時狀態端點會立刻把 A 報成中斷；這裡等 A 自己寫下結束時間（收尾完成後才寫） */
+        SearchReindexJobResponse jobAResult = awaitRecordedFinish(jobA);
+
+        assertThat(jobAResult.getState()).isEqualTo(ReindexJobState.FAILED);
+        assertThat(jobAResult.getError()).containsAnyOf("變動紀錄", "鎖");
+        assertThat(admin.inspect()).as("A 不切換").isEqualTo(IndexState.alias(List.of(ArticleIndexAdmin.INITIAL_INDEX)));
+        assertThat(ArticleIndexTestSupport.articleIndexNames(template)).containsExactly(ArticleIndexAdmin.INITIAL_INDEX);
+        assertThat(redis.opsForValue().get(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY)).isEqualTo(jobB.toString());
+        assertThat(redis.opsForSet().members(RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY))
+                .containsExactly(during.articleUuid().toString());
+        assertThat(redis.opsForValue().get(RedisKeyConstant.LOCK_SEARCH_REINDEX)).as("A 也不會刪掉 B 的鎖").isEqualTo(jobB.toString());
     }
 
     @Test

@@ -5,7 +5,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
-import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -26,18 +25,20 @@ import static org.mockito.Mockito.when;
 /**
  * {@link ReindexJournal} 單元測試：全量重建期間的增量變動紀錄（D1）。
  *
- * <p>Redis 的實際語意（Lua 只在進行中時寫入、SPOP 取出即移除）由 {@code ArticleIndexRebuildIT} 以真 Redis 驗證；
- * 這裡鎖定 key、順序與 TTL。</p>
+ * <p>Redis 的實際語意（Lua 只在進行中時寫入、只有持有者能續期／取出／結束、SPOP 取出即移除）由 {@code ReindexJournalIT}
+ * 以真 Redis 驗證；這裡鎖定 key、參數順序與 TTL。審查 M2 起進行中標記的值是 jobId，續期／取出／結束都先比對 jobId。</p>
  *
  * @author Yuan
- * @version 1.0
+ * @version 2.0
  */
 @DisplayName("ReindexJournal 單元測試")
 class ReindexJournalTest {
 
+    private static final UUID JOB = UUID.fromString("3f2504e0-4f89-41d3-9a0c-0305e82c3301");
+    private static final String TTL_SECONDS = String.valueOf(ReindexJournal.ACTIVE_TTL.toSeconds());
+
     private StringRedisTemplate redis;
     private ValueOperations<String, String> valueOps;
-    private SetOperations<String, String> setOps;
     private ReindexJournal journal;
 
     @BeforeEach
@@ -45,38 +46,40 @@ class ReindexJournalTest {
     void setUp() {
         redis = mock(StringRedisTemplate.class);
         valueOps = mock(ValueOperations.class);
-        setOps = mock(SetOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
-        when(redis.opsForSet()).thenReturn(setOps);
         journal = new ReindexJournal(redis);
     }
 
     @Test
-    @DisplayName("begin：先清掉上次殘留的變動集合，再設定進行中標記（值為新實體索引、附 TTL）——順序顛倒會刪掉剛記下的變動")
-    void begin_clearsDirtySetsBeforeMarkingActive() {
-        journal.begin("blog_articles_v2");
+    @DisplayName("begin：先清掉上次殘留的變動集合，再設定進行中標記（值為 jobId、附 TTL）——順序顛倒會刪掉剛記下的變動")
+    void begin_clearsDirtySetsBeforeMarkingActiveWithJobId() {
+        journal.begin(JOB);
 
         InOrder order = inOrder(redis, valueOps);
         order.verify(redis).delete(List.of(RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY,
                 RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY));
-        order.verify(valueOps).set(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, "blog_articles_v2", ReindexJournal.ACTIVE_TTL);
+        order.verify(valueOps).set(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, JOB.toString(), ReindexJournal.ACTIVE_TTL);
     }
 
     @Test
-    @DisplayName("keepAlive：延長進行中標記的 TTL")
-    void keepAlive_extendsActiveMarker() {
-        journal.keepAlive();
+    @DisplayName("keepAlive：Lua compare-and-expire（標記仍是本作業才續期）；回 1 為 true、回 0（被別的作業接手或已到期）為 false")
+    void keepAlive_comparesJobIdBeforeExpire() {
+        when(redis.execute(any(RedisScript.class), eq(List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY)),
+                eq(JOB.toString()), eq(TTL_SECONDS))).thenReturn(1L, 0L);
 
-        verify(redis).expire(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, ReindexJournal.ACTIVE_TTL);
+        assertThat(journal.keepAlive(JOB)).isTrue();
+        assertThat(journal.keepAlive(JOB)).isFalse();
     }
 
     @Test
-    @DisplayName("end：先移除進行中標記，再刪除變動集合")
-    void end_removesMarkerThenSets() {
-        journal.end();
+    @DisplayName("end：Lua compare-and-delete，只有標記仍是本作業時才刪標記與兩個集合")
+    void end_comparesJobIdBeforeDeleting() {
+        journal.end(JOB);
 
-        verify(redis).delete(List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY,
-                RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY, RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY));
+        verify(redis).execute(any(RedisScript.class), eq(List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY,
+                RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY, RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY)),
+                eq(JOB.toString()));
+        verify(redis, org.mockito.Mockito.never()).delete(anyList());
     }
 
     @Test
@@ -112,12 +115,16 @@ class ReindexJournalTest {
     }
 
     @Test
-    @DisplayName("drainArticles／drainAuthors：以 SPOP count 取出（取出即移除）；沒有資料時回空清單")
-    void drain_popsUpToMax() {
-        when(setOps.pop(RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY, 200)).thenReturn(List.of("a", "b"));
-        when(setOps.pop(RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY, 200)).thenReturn(null);
+    @DisplayName("drainArticles／drainAuthors：Lua 比對 jobId 後續期並 SPOP count；沒有資料時回空清單")
+    void drain_isOwnerCheckedAndExtendsTtl() {
+        when(redis.execute(any(RedisScript.class),
+                eq(List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY)),
+                eq(JOB.toString()), eq("200"), eq(TTL_SECONDS))).thenReturn(List.of("a", "b"));
+        when(redis.execute(any(RedisScript.class),
+                eq(List.of(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY, RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY)),
+                eq(JOB.toString()), eq("200"), eq(TTL_SECONDS))).thenReturn(null);
 
-        assertThat(journal.drainArticles(200)).containsExactly("a", "b");
-        assertThat(journal.drainAuthors(200)).isEmpty();
+        assertThat(journal.drainArticles(JOB, 200)).containsExactly("a", "b");
+        assertThat(journal.drainAuthors(JOB, 200)).isEmpty();
     }
 }
