@@ -24,6 +24,13 @@ class SearchErrorCodeTest {
     }
 
     @Test
+    @DisplayName("PRINCIPAL_UNRESOLVED 錯誤碼應為 A0502，訊息不為空")
+    void principalUnresolved_codeIsA0502() {
+        assertThat(SearchErrorCode.PRINCIPAL_UNRESOLVED.getCode()).isEqualTo("A0502");
+        assertThat(SearchErrorCode.PRINCIPAL_UNRESOLVED.getMessage()).isNotBlank();
+    }
+
+    @Test
     @DisplayName("所有 SearchErrorCode 的 code 以 A05 開頭、message 不為空")
     void allSearchErrorCodes_useA05Namespace() {
         for (SearchErrorCode errorCode : SearchErrorCode.values()) {

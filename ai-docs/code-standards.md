@@ -67,7 +67,7 @@
 | `ArticleErrorCode` | `A0201`～`A0210` | 10 | |
 | `TagErrorCode` | `A0301`～`A0305` | 5 | |
 | `FileErrorCode` | `A0401`～`A0407` | 7 | |
-| `SearchErrorCode` | `A05xx` | — | W7-f 新增（尚未合併；合併後 search 不再借用 `UserErrorCode`） |
+| `SearchErrorCode` | `A0501`～`A0502` | 2 | W7-f 新增（`A0501` 重建進行中）、W7-C2 補 `A0502`（principal 無法解析）；search 不再借用 `UserErrorCode` |
 | `CommentErrorCode` | `C0101`～`C0106` | 6 | W7-C3 自 comment 模組搬入 |
 | `ReadingErrorCode` | `R0201`～`R0202`、`R0301` | 3 | W7-C3 自 reading 模組搬入 |
 | `SeriesErrorCode` | `S0101`～`S0107` | 7 | W7-C3 自 series 模組搬入 |

@@ -2,7 +2,7 @@ package dowob.xyz.blog.module.search.controller;
 
 import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
-import dowob.xyz.blog.common.api.errorcode.UserErrorCode;
+import dowob.xyz.blog.common.api.errorcode.SearchErrorCode;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
@@ -129,7 +129,7 @@ public class SearchController {
     @GetMapping("/history")
     public ApiResponse<List<String>> getHistory(@AuthenticationPrincipal AuthUser user) {
         if (user == null) {
-            throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
+            throw new BusinessException(SearchErrorCode.PRINCIPAL_UNRESOLVED);
         }
         return ApiResponse.success(searchService.getHistory(user.uuid()));
     }
@@ -148,7 +148,7 @@ public class SearchController {
     @DeleteMapping("/history")
     public ApiResponse<Void> clearHistory(@AuthenticationPrincipal AuthUser user) {
         if (user == null) {
-            throw new BusinessException(UserErrorCode.USER_NOT_FOUND);
+            throw new BusinessException(SearchErrorCode.PRINCIPAL_UNRESOLVED);
         }
         searchService.clearHistory(user.uuid());
         return ApiResponse.success();

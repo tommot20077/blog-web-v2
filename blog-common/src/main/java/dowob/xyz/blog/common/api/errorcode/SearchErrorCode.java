@@ -16,7 +16,12 @@ public enum SearchErrorCode implements IErrorCode {
     /**
      * 已有搜尋索引全量重建作業執行中（對應 HTTP 409）
      */
-    REINDEX_IN_PROGRESS("A0501", "已有搜尋索引重建作業執行中");
+    REINDEX_IN_PROGRESS("A0501", "已有搜尋索引重建作業執行中"),
+
+    /**
+     * 已通過認證但 principal 無法解析為 AuthUser（對應 HTTP 400）
+     */
+    PRINCIPAL_UNRESOLVED("A0502", "無法識別當前登入用戶");
 
     /**
      * 錯誤碼
