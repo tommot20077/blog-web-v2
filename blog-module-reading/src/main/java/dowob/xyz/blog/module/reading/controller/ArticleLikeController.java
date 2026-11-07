@@ -35,7 +35,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/articles/{articleUuid}/like")
 @RequiredArgsConstructor
-@Tag(name = "Article Like")
+@Tag(name = "文章按讚")
 public class ArticleLikeController {
 
     private final ArticleLikeService likeService;
@@ -44,7 +44,9 @@ public class ArticleLikeController {
     @PostMapping
     @RateLimited("interaction-write")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "按讚文章（idempotent）")
+    @Operation(summary = "按讚文章",
+            description = "登入。重複按讚為冪等；僅能對自己可讀的文章按讚。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在或對呼叫者不可讀")
     public ApiResponse<Void> like(@AuthenticationPrincipal AuthUser user,
                                     @PathVariable UUID articleUuid) {
         requireReadable(articleUuid, user);
@@ -54,7 +56,9 @@ public class ArticleLikeController {
 
     @DeleteMapping
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "取消按讚（idempotent）")
+    @Operation(summary = "取消按讚文章",
+            description = "登入。未按讚時為冪等。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在")
     public ApiResponse<Void> unlike(@AuthenticationPrincipal AuthUser user,
                                       @PathVariable UUID articleUuid) {
         requireArticleExists(articleUuid);
