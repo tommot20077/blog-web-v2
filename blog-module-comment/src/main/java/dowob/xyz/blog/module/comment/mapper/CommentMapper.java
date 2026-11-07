@@ -77,12 +77,13 @@ public interface CommentMapper {
     List<CommentRow> findRepliesByParentIds(@Param("parentIds") List<Long> parentIds);
 
     /**
-     * 文章總留言數，與列表顯示規則一致：
-     * - 保留 top-level 軟刪除留言（顯示為 [已刪除] tombstone）
-     * - 排除軟刪除的 replies（列表 findRepliesByParentIds 會過濾，count 也應排除）
+     * 文章的「未刪除留言數」（頂層加回覆合計），<b>不含任何已刪除的留言，包括頂層墓碑</b>（B5／DATA-06）。
+     *
+     * <p>與 {@code articles.comment_count} 同一口徑：新增留言時 +1，每次首次軟刪除（頂層、回覆、admin 刪除皆然）
+     * 時 -1，因此該欄位恆等於本查詢的結果。墓碑雖仍出現在列表（讓下方回覆保有脈絡），
+     * 但已不算一則「留言」，不計入此數。</p>
      */
-    @Select("SELECT COUNT(*) FROM comments WHERE article_uuid = #{articleUuid}::uuid "
-            + "AND (parent_id IS NULL OR deleted_at IS NULL)")
+    @Select("SELECT COUNT(*) FROM comments WHERE article_uuid = #{articleUuid}::uuid AND deleted_at IS NULL")
     int countByArticle(@Param("articleUuid") UUID articleUuid);
 
     /** 文章 top-level 留言數（用於分頁 totalElements） */
