@@ -108,6 +108,7 @@ public class SearchController {
      * @return 搜尋詞建議列表
      */
     @GetMapping("/suggest")
+    @RateLimited("search-suggest")
     public ApiResponse<List<String>> suggest(
             @RequestParam(required = false, defaultValue = "") String q) {
         requireQueryLength(q);

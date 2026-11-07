@@ -266,6 +266,7 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/submit")
+    @RateLimited("article-write")
     public ApiResponse<ArticleResponse> submitForReview(@PathVariable UUID uuid,
                                                          @AuthenticationPrincipal AuthUser user,
                                                          Authentication authentication) {
@@ -293,6 +294,7 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/withdraw")
+    @RateLimited("article-write")
     public ApiResponse<ArticleResponse> withdrawArticle(@PathVariable UUID uuid,
                                                         @AuthenticationPrincipal AuthUser user,
                                                         Authentication authentication) {
@@ -310,6 +312,7 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/publish")
+    @RateLimited("article-write")
     public ApiResponse<ArticleResponse> publishArticle(@PathVariable UUID uuid,
                                                        @AuthenticationPrincipal AuthUser user,
                                                        Authentication authentication) {

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.tag.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.tag.model.Tag;
@@ -115,6 +116,7 @@ public class TagController {
      */
     @PreAuthorize("isAuthenticated()")
     @PostMapping("/{id}/follow")
+    @RateLimited("interaction-write")
     public ApiResponse<Void> followTag(
             @PathVariable UUID id,
             @AuthenticationPrincipal AuthUser user) {

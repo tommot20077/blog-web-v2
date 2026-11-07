@@ -39,7 +39,7 @@ public class ReadingProgressController {
     private final ArticleFacade articleFacade;
 
     @PutMapping
-    @RateLimited("interaction-write")
+    @RateLimited("reading-progress")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "更新閱讀進度（HSET Redis）")
     public ApiResponse<Void> update(

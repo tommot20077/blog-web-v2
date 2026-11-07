@@ -31,14 +31,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * 應用層限流 E2E（SEC-23 / A4）：完整應用程式 + 真實 Spring Security + 真實 Redis，
  * <b>在正式門檻下</b>驗證限流本身（其他 E2E 的 profile 把門檻調高，本類別以 {@code @TestPropertySource}
- * 還原 comment-write=10、search=30，窗口維持 application.yaml 的 1 分鐘）。
+ * 還原 comment-write=10、search=120，窗口維持 application.yaml 的 1 分鐘）。
  *
  * @author Yuan
  * @version 1.0
  */
 @TestPropertySource(properties = {
         "app.rate-limit.rules.comment-write.limit=10",
-        "app.rate-limit.rules.search.limit=30"
+        "app.rate-limit.rules.search.limit=120",
+        // 搜尋建議的正式門檻也是 120；為了在 E2E 內快速驗證「帶 Origin 的跨來源 429」，只有這條調低
+        "app.rate-limit.rules.search-suggest.limit=2"
 })
 @DisplayName("應用層限流 E2E（正式門檻）")
 class RateLimitE2E extends AbstractE2ETest {
@@ -151,13 +153,13 @@ class RateLimitE2E extends AbstractE2ETest {
     }
 
     @Test
-    @DisplayName("搜尋每 IP 每分鐘 30 次：第 31 次回 429；登入者也以 IP 計數（不產生使用者 key）")
-    void searchThirtyFirstRequest_returns429_evenWhenLoggedIn() throws Exception {
+    @DisplayName("搜尋每 IP 每分鐘 120 次：第 121 次回 429；登入者也以 IP 計數（不產生使用者 key）")
+    void searchRequest121_returns429_evenWhenLoggedIn() throws Exception {
         String reader = authHelper.createUserWithRole(
                 "rl-search@test.com", "Password1!", "rlsearch", "RlSearch", Role.USER);
         String ip = "198.51.100.77";
 
-        for (int i = 1; i <= 30; i++) {
+        for (int i = 1; i <= 120; i++) {
             mockMvc.perform(get("/api/v1/search").param("q", "limit").with(fromIp(ip)).with(bearerToken(reader)))
                     .andExpect(status().isOk());
         }
@@ -172,5 +174,28 @@ class RateLimitE2E extends AbstractE2ETest {
         // 換一個 IP 的匿名者不受影響
         mockMvc.perform(get("/api/v1/search").param("q", "limit").with(fromIp("198.51.100.78")))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("search-suggest 獨立計數；帶 Origin 的跨來源 429 同時帶 Retry-After 與 Access-Control-Expose-Headers（真 Security）")
+    void suggestLimited_crossOrigin429_exposesRetryAfter() throws Exception {
+        String ip = "198.51.100.90";
+        String origin = "http://localhost:3000";
+
+        for (int i = 1; i <= 2; i++) {
+            mockMvc.perform(get("/api/v1/search/suggest").param("q", "ab").header("Origin", origin).with(fromIp(ip)))
+                    .andExpect(status().isOk());
+        }
+        mockMvc.perform(get("/api/v1/search/suggest").param("q", "ab").header("Origin", origin).with(fromIp(ip)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists("Retry-After"))
+                .andExpect(header().string("Access-Control-Allow-Origin", origin))
+                .andExpect(header().string("Access-Control-Expose-Headers",
+                        org.hamcrest.Matchers.containsString("Retry-After")))
+                .andExpect(jsonPath("$.code").value("A0009"));
+
+        // 與 search 規則互不影響（各自計數）
+        assertThat(redis.keys("ratelimit:search:ip:" + ip)).isEmpty();
+        assertThat(redis.keys("ratelimit:search-suggest:ip:" + ip)).hasSize(1);
     }
 }

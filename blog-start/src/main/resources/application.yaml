@@ -243,22 +243,35 @@ app:
       comment-write:
         limit: ${APP_RATE_LIMIT_COMMENT_WRITE_LIMIT:10}
         window: ${APP_RATE_LIMIT_COMMENT_WRITE_WINDOW:1m}
-      # 按讚（文章／留言）、收藏、劃線新增與更新、閱讀進度：每人每分鐘 60 次
+      # 按讚（文章／留言）、收藏、劃線新增與更新、標籤追蹤：每人每分鐘 60 次
       interaction-write:
         limit: ${APP_RATE_LIMIT_INTERACTION_WRITE_LIMIT:60}
         window: ${APP_RATE_LIMIT_INTERACTION_WRITE_WINDOW:1m}
+      # 閱讀進度（捲動時高頻回報）：每人每分鐘 120 次（Yuan 2026-11-07 追加決策）
+      reading-progress:
+        limit: ${APP_RATE_LIMIT_READING_PROGRESS_LIMIT:120}
+        window: ${APP_RATE_LIMIT_READING_PROGRESS_WINDOW:1m}
       # 檔案上傳：每人每小時 30 次
       upload:
         limit: ${APP_RATE_LIMIT_UPLOAD_LIMIT:30}
         window: ${APP_RATE_LIMIT_UPLOAD_WINDOW:1h}
-      # 文章建立、更新：每人每分鐘 30 次
+      # 文章建立、更新與狀態轉換（submit／withdraw／publish）、版本手動快照／還原／升格、系列新增與修改：每人每分鐘 30 次
       article-write:
         limit: ${APP_RATE_LIMIT_ARTICLE_WRITE_LIMIT:30}
         window: ${APP_RATE_LIMIT_ARTICLE_WRITE_WINDOW:1m}
-      # 搜尋：每 IP 每分鐘 30 次（一律以 IP 計，登入者也一樣）
+      # 帳號設定（個人資料、通知偏好、改密碼、版本偏好）：每人每分鐘 30 次
+      account-write:
+        limit: ${APP_RATE_LIMIT_ACCOUNT_WRITE_LIMIT:30}
+        window: ${APP_RATE_LIMIT_ACCOUNT_WRITE_WINDOW:1m}
+      # 搜尋：每 IP 每分鐘 120 次（一律以 IP 計，登入者也一樣；前端邊打字邊搜尋且有 CGNAT 共用 IP，Yuan 2026-11-07 由 30 調高）
       search:
-        limit: ${APP_RATE_LIMIT_SEARCH_LIMIT:30}
+        limit: ${APP_RATE_LIMIT_SEARCH_LIMIT:120}
         window: ${APP_RATE_LIMIT_SEARCH_WINDOW:1m}
+        subject: ip
+      # 搜尋建議：每 IP 每分鐘 120 次（獨立計數，一律 IP）
+      search-suggest:
+        limit: ${APP_RATE_LIMIT_SEARCH_SUGGEST_LIMIT:120}
+        window: ${APP_RATE_LIMIT_SEARCH_SUGGEST_WINDOW:1m}
         subject: ip
 
 # Version 模組設定

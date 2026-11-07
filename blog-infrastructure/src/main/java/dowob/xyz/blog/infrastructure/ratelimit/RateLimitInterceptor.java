@@ -25,11 +25,16 @@ import java.util.Optional;
 /**
  * 應用層限流攔截器（SEC-23 / A4）。
  *
- * <p><b>為何用 HandlerInterceptor 而非 AOP</b>：攔截器在 controller 方法（含參數綁定、{@code @Valid}、
- * multipart 解析之前的 handler 解析階段）執行前就能直接寫出 429 與 {@code Retry-After}，不必丟例外再回頭改 header；
- * 取得 {@link HandlerMethod} 即可讀 {@link RateLimited}，不需要代理，也不受 controller 是否被 CGLIB 代理影響。
- * 攔截器屬 Spring MVC 層，因此一定在 Spring Security 過濾器鏈<b>之後</b>：未認證的寫入請求先被 Security 擋成 401，
- * 不會消耗限流額度（認證通過但 {@code @PreAuthorize} 之後才拒絕的 403 會消耗額度，屬可接受）。</p>
+ * <p><b>為何用 HandlerInterceptor 而非 AOP</b>：攔截器在 controller 方法（含參數綁定與 {@code @Valid}）執行前
+ * 就能直接寫出 429 與 {@code Retry-After}，不必丟例外再回頭改 header；取得 {@link HandlerMethod} 即可讀
+ * {@link RateLimited}，不需要代理，也不受 controller 是否被 CGLIB 代理影響。</p>
+ *
+ * <p><b>已知限制（multipart）</b>：{@code DispatcherServlet} 在進入攔截器<b>之前</b>會先執行 {@code checkMultipart}，
+ * 所以上傳端點的 multipart body 在被限流前就已經解析（可能已寫入暫存檔）。限流擋得住「後續的 controller／service／
+ * MinIO 處理」，但擋不住 multipart 解析本身的成本；這部分由 multipart 大小上限與 nginx／ingress 的 body 上限負責。</p>
+ *
+ * <p><b>與 Spring Security 的順序</b>：攔截器屬 Spring MVC 層，一定在 Security 過濾器鏈<b>之後</b>：
+ * 未認證的寫入請求先被 Security 擋成 401，不會消耗限流額度（認證通過但 {@code @PreAuthorize} 之後才拒絕的 403 會消耗額度，屬可接受）。</p>
  *
  * <p>計數主體：規則 {@code subject=USER} 時已登入者以 userUuid、匿名者以 client IP
  * （{@link ClientIpResolver}）；{@code subject=IP} 一律以 IP。key 為

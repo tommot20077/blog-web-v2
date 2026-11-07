@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.version.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
@@ -104,6 +105,7 @@ public class VersionController {
      * 完整內容複本，比照收斂為 {@code ARTICLE_EDIT}，避免被降級為 USER 的前作者仍能寫入。</p>
      */
     @PostMapping("/manual")
+    @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "建立手動快照")
     public ApiResponse<VersionDetailResponse> createManual(
@@ -129,6 +131,7 @@ public class VersionController {
      * 內容凍結檢查在 article 模組的 {@code ArticleFacade.applyRestoreContent}（F-H1）。</p>
      */
     @PostMapping("/{versionUuid}/restore")
+    @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "還原快照")
     public ApiResponse<Void> restore(
@@ -149,6 +152,7 @@ public class VersionController {
      * {@code retainAuto} 汰除的快照變成永久列，比照收斂為 {@code ARTICLE_EDIT}。</p>
      */
     @PostMapping("/{versionUuid}/promote")
+    @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @Operation(summary = "AUTO 升級為 MANUAL")
     public ApiResponse<VersionDetailResponse> promote(

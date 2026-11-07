@@ -27,3 +27,6 @@ app:
       interaction-write:
         limit: 100000
         window: 1m
+      reading-progress:
+        limit: 100000
+        window: 1m

@@ -32,3 +32,6 @@ app:
       article-write:
         limit: 100000
         window: 1m
+      account-write:
+        limit: 100000
+        window: 1m
