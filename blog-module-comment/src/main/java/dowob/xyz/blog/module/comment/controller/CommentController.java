@@ -48,7 +48,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1")
 @RequiredArgsConstructor
-@Tag(name = "Comment")
+@Tag(name = "留言")
 public class CommentController {
 
     private final CommentService commentService;
@@ -79,7 +79,8 @@ public class CommentController {
      * @return 留言列表（含軟刪除佔位）
      */
     @GetMapping("/articles/{articleUuid}/comments")
-    @Operation(summary = "列出文章留言（匿名可存取，含軟刪除佔位）")
+    @Operation(summary = "列出文章留言",
+            description = "公開（匿名可存取）。分頁列出頂層留言，每則內嵌前 3 則回覆；軟刪除的留言以佔位呈現。文章不存在或對檢視者不可讀時回 200 空頁，不形成存在性探測。sort 支援 newest（預設）與 oldest。")
     public ApiResponse<ArticleCommentListResponse> list(
             @PathVariable UUID articleUuid,
             PageQuery pageQuery,
@@ -116,11 +117,8 @@ public class CommentController {
      * @return 回覆分頁（{@code total} 為未刪除回覆總數）
      */
     @GetMapping("/comments/{commentUuid}/replies")
-    @Operation(summary = "列出頂層留言的回覆分頁（匿名可存取；不可讀、不存在或非頂層一律回 200 空頁）",
-            description = "列表 API 每則頂層留言只內嵌前 3 則回覆（replyCount 為未刪除回覆總數）；"
-                    + "其餘用本端點載入，排序為 created_at 升冪，page 自 1 起、size 上限 100。"
-                    + "留言不存在、傳入回覆（非頂層）的 uuid、文章對檢視者不可讀，三者一律回 200 且 total 為 0 的空頁，"
-                    + "與留言列表一致，不形成存在性探測。")
+    @Operation(summary = "列出頂層留言的回覆",
+            description = "公開（匿名可存取）。排序為 created_at 升冪，size 上限 100。留言不存在、傳入回覆（非頂層）的 uuid、文章對檢視者不可讀，三者一律回 200 且 total 為 0 的空頁，與留言列表一致，不形成存在性探測。")
     public ApiResponse<PageResult<CommentResponse>> listReplies(
             @PathVariable UUID commentUuid,
             PageQuery pageQuery,
@@ -133,7 +131,9 @@ public class CommentController {
     @PostMapping("/articles/{articleUuid}/comments")
     @RateLimited("comment-write")
     @PreAuthorize("hasAuthority('COMMENT_WRITE')")
-    @Operation(summary = "建立留言（top-level 或 reply）")
+    @Operation(summary = "建立留言",
+            description = "需 COMMENT_WRITE 權限。可建立頂層留言或回覆（最多 2 層巢狀）。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0201 文章不存在或對呼叫者不可讀；C0101 父留言不存在；C0105 父留言不屬於此文章；C0102 巢狀超過 2 層；C0106 父留言已凍結")
     public ApiResponse<CommentResponse> create(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
@@ -144,7 +144,10 @@ public class CommentController {
     @PutMapping("/comments/{uuid}")
     @RateLimited("comment-write")
     @PreAuthorize("hasAuthority('COMMENT_WRITE')")
-    @Operation(summary = "編輯留言（5 分鐘窗，Admin 不受限）")
+    @Operation(summary = "編輯留言",
+            description = "需 COMMENT_WRITE 權限；作者本人於建立後 5 分鐘內可編輯，管理員不受時限限制。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；C0101 留言不存在；A0201 文章不存在或對呼叫者不可讀；C0104 留言已刪除，無法操作；C0103 編輯時限已過")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "A0006 非留言作者（管理員不受限）")
     public ApiResponse<CommentResponse> edit(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user,
@@ -155,7 +158,10 @@ public class CommentController {
 
     @DeleteMapping("/comments/{uuid}")
     @PreAuthorize("hasAuthority('COMMENT_DELETE')")
-    @Operation(summary = "軟刪除留言")
+    @Operation(summary = "刪除留言",
+            description = "需 COMMENT_DELETE 權限；作者本人或管理員。軟刪除，已刪除的留言再刪為冪等。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "C0101 留言不存在")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "A0006 非留言作者（管理員不受限）")
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user) {
