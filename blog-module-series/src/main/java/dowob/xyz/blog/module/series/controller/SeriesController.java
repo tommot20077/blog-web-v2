@@ -49,13 +49,14 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/series")
 @RequiredArgsConstructor
-@Tag(name = "Series")
+@Tag(name = "系列文章")
 public class SeriesController {
 
     private final SeriesService seriesService;
 
     @GetMapping
-    @Operation(summary = "Series 列表（公開）")
+    @Operation(summary = "Series 列表",
+            description = "公開（匿名可存取）。分頁列出所有 Series。")
     public ApiResponse<PageResult<SeriesSummaryResponse>> list(
             PageQuery pageQuery) {
         return ApiResponse.success(seriesService.listPublic(pageQuery.page(), pageQuery.sizeOrDefault(20)));
@@ -82,7 +83,9 @@ public class SeriesController {
      * @return Series 詳情（含文章列表與我的進度）
      */
     @GetMapping("/{slug}")
-    @Operation(summary = "Series 詳情（匿名可存取，登入時含我的進度）")
+    @Operation(summary = "Series 詳情",
+            description = "公開（匿名可存取）。以 slug 取得 Series 與其文章；登入時一併帶入我的閱讀進度。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "S0101 Series 不存在")
     public ApiResponse<SeriesDetailResponse> get(
             @PathVariable String slug,
             @AuthenticationPrincipal AuthUser user) {
@@ -92,7 +95,9 @@ public class SeriesController {
     @PostMapping
     @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
-    @Operation(summary = "建立 Series")
+    @Operation(summary = "建立 Series",
+            description = "需 ARTICLE_CREATE 權限。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；S0104 Slug 已被使用")
     public ApiResponse<SeriesSummaryResponse> create(
             @AuthenticationPrincipal AuthUser user,
             @Valid @RequestBody CreateSeriesRequest req) {
@@ -102,7 +107,9 @@ public class SeriesController {
     @PutMapping("/{uuid}")
     @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
-    @Operation(summary = "更新 Series")
+    @Operation(summary = "更新 Series",
+            description = "需 ARTICLE_CREATE 權限；Series 擁有者或管理員。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；S0101 Series 不存在；S0102 非 Series 擁有者（管理員不受限）；S0104 Slug 已被使用")
     public ApiResponse<SeriesSummaryResponse> update(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user,
@@ -113,7 +120,9 @@ public class SeriesController {
 
     @DeleteMapping("/{uuid}")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
-    @Operation(summary = "刪除 Series")
+    @Operation(summary = "刪除 Series",
+            description = "需 ARTICLE_CREATE 權限；Series 擁有者或管理員。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "S0101 Series 不存在；S0102 非 Series 擁有者（管理員不受限）")
     public ApiResponse<Void> delete(
             @PathVariable UUID uuid,
             @AuthenticationPrincipal AuthUser user) {
@@ -125,7 +134,9 @@ public class SeriesController {
     @PutMapping("/{uuid}/articles/{articleUuid}")
     @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
-    @Operation(summary = "加文章到 Series / 改 position")
+    @Operation(summary = "加入文章到 Series 或調整順序",
+            description = "需 ARTICLE_CREATE 權限；Series 擁有者或管理員，且文章須為本人（管理員不受限）的 PUBLISHED 文章。文章已在本 Series 時為調整 position。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；S0101 Series 不存在；S0102 非 Series 擁有者（管理員不受限）；非文章作者；S0107 文章不存在；S0103 文章必須為 PUBLISHED；S0106 文章已屬於另一個 Series；A0208 文章在加入過程中被並行修改，請重試")
     public ApiResponse<Void> addArticle(
             @PathVariable UUID uuid,
             @PathVariable UUID articleUuid,
@@ -138,7 +149,9 @@ public class SeriesController {
 
     @DeleteMapping("/{uuid}/articles/{articleUuid}")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
-    @Operation(summary = "從 Series 移除文章")
+    @Operation(summary = "從 Series 移除文章",
+            description = "需 ARTICLE_CREATE 權限；Series 擁有者或管理員。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "S0101 Series 不存在；S0102 非 Series 擁有者（管理員不受限）；S0107 文章不存在；S0105 文章不屬於此 Series")
     public ApiResponse<Void> removeArticle(
             @PathVariable UUID uuid,
             @PathVariable UUID articleUuid,
