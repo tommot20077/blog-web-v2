@@ -3,7 +3,7 @@ package dowob.xyz.blog.module.reading.service;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
-import dowob.xyz.blog.module.reading.exception.ReadingErrorCode;
+import dowob.xyz.blog.common.api.errorcode.ReadingErrorCode;
 import dowob.xyz.blog.module.reading.model.UserHighlight;
 import dowob.xyz.blog.module.reading.model.dto.request.CreateHighlightRequest;
 import dowob.xyz.blog.module.reading.model.dto.request.UpdateHighlightRequest;

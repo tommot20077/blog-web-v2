@@ -9,7 +9,7 @@ import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
-import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
+import dowob.xyz.blog.common.api.errorcode.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.model.CommentRow;

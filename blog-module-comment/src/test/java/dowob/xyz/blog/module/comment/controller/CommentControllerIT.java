@@ -660,6 +660,6 @@ class CommentControllerIT {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value(dowob.xyz.blog.module.comment.exception.CommentErrorCode.PARENT_NOT_IN_ARTICLE.getCode()));
+                .andExpect(jsonPath("$.code").value(dowob.xyz.blog.common.api.errorcode.CommentErrorCode.PARENT_NOT_IN_ARTICLE.getCode()));
     }
 }

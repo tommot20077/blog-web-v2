@@ -1,6 +1,5 @@
-package dowob.xyz.blog.module.version.exception;
+package dowob.xyz.blog.common.api.errorcode;
 
-import dowob.xyz.blog.common.api.errorcode.IErrorCode;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 

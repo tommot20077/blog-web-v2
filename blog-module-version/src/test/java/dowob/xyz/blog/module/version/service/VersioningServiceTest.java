@@ -7,7 +7,7 @@ import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
-import dowob.xyz.blog.module.version.exception.VersionErrorCode;
+import dowob.xyz.blog.common.api.errorcode.VersionErrorCode;
 import dowob.xyz.blog.module.version.mapper.VersionMapper;
 import dowob.xyz.blog.module.version.model.ArticleVersion;
 import dowob.xyz.blog.module.version.model.dto.response.AutoSnapshotConfig;

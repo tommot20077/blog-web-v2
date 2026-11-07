@@ -54,6 +54,25 @@
 *   **Forbidden pattern**: `return ApiResponse.failed(...)` in an `@ExceptionHandler` — this is always HTTP 200.
 *   **Correct pattern**: `return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.failed(...))`
 
+### 錯誤碼放置與碼段（W7-C3，Yuan 2026-11-07 拍板）
+
+*   **錯誤碼一律放 blog-common 的 `dowob.xyz.blog.common.api.errorcode`（`api/errorcode/`），每個模組一個 enum，碼段依模組劃分；字串屬前端契約，不可更改既有值。** 不得在業務模組內另建 `*ErrorCode`；守衛：`ErrorCodeCentralizationTest`（位置 + 全站字串不重複）。
+*   新增錯誤碼：沿用該模組的碼段往下接續編號；**不得借用其他模組的 enum**（例如拿 `UserErrorCode.USER_NOT_FOUND` 表達非 user 語意）。新模組開新碼段與新 enum。
+*   目前碼段（2026-11-07 以 grep 盤點；`A` 系列為「通用／使用者可修正」前綴，依序再分段）：
+
+| Enum | 碼段 | 已用 | 備註 |
+|---|---|---|---|
+| `CommonErrorCode` | `A0001`～`A0009`、`B0001`、`B0100`、`B0200`～`B0201` | 13 | 跨模組通用（`A` 通用錯誤、`B` 系統錯誤） |
+| `UserErrorCode` | `A0101`～`A0114` | 13 | `A0106` 已停用（Q8，2026-11-04），缺號不回填 |
+| `ArticleErrorCode` | `A0201`～`A0210` | 10 | |
+| `TagErrorCode` | `A0301`～`A0305` | 5 | |
+| `FileErrorCode` | `A0401`～`A0407` | 7 | |
+| `SearchErrorCode` | `A05xx` | — | W7-f 新增（尚未合併；合併後 search 不再借用 `UserErrorCode`） |
+| `CommentErrorCode` | `C0101`～`C0106` | 6 | W7-C3 自 comment 模組搬入 |
+| `ReadingErrorCode` | `R0201`～`R0202`、`R0301` | 3 | W7-C3 自 reading 模組搬入 |
+| `SeriesErrorCode` | `S0101`～`S0107` | 7 | W7-C3 自 series 模組搬入 |
+| `VersionErrorCode` | `V0101`～`V0108` | 8 | W7-C3 自 version 模組搬入 |
+
 ## Transaction + MQ 時序 (CRITICAL)
 
 > 來源:BUG-2026-001(FIN-2)。`@Transactional` 內直接發 MQ,DB 尚未 commit;若 commit 失敗但 MQ 已送出,產生資料不一致。

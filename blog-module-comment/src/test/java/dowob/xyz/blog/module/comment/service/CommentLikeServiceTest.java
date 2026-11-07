@@ -3,7 +3,7 @@ package dowob.xyz.blog.module.comment.service;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
-import dowob.xyz.blog.module.comment.exception.CommentErrorCode;
+import dowob.xyz.blog.common.api.errorcode.CommentErrorCode;
 import dowob.xyz.blog.module.comment.mapper.CommentMapper;
 import dowob.xyz.blog.module.comment.model.Comment;
 import dowob.xyz.blog.module.comment.repository.CommentLikeRepository;
