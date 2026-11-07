@@ -37,7 +37,8 @@ public class SearchFacadeImpl implements SearchFacade {
     private final ElasticsearchOperations elasticsearchOperations;
 
     /**
-     * 文章索引名稱，與 {@link dowob.xyz.blog.module.search.document.ArticleDocument} 宣告一致
+     * 文章索引 alias 名稱，與 {@link dowob.xyz.blog.module.search.document.ArticleDocument} 宣告一致
+     * （more_like_this 的 like 文件經 alias 解析到背後唯一的實體索引，不寫死實體索引名稱）
      */
     private static final String ARTICLE_INDEX = "blog_articles";
 

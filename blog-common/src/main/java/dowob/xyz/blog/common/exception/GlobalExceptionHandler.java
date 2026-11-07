@@ -70,7 +70,7 @@ public class GlobalExceptionHandler {
      *
      * <p>
      * 此例外在請求進入 Controller 之前由 multipart 解析拋出，若不處理會落到兜底 handler 變成 500。
-     * 錯誤碼與 HTTP 狀態沿用 service 層 5MB 檢查的 {@link FileErrorCode#FILE_TOO_LARGE}
+     * 錯誤碼與 HTTP 狀態沿用 service 層單檔上限檢查（文章圖片 20MB、頭像 5MB）的 {@link FileErrorCode#FILE_TOO_LARGE}
      * （{@link BusinessException} 的現行對應：HTTP 400），前端不需區分兩道防線。
      * </p>
      *

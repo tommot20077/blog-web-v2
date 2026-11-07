@@ -29,23 +29,23 @@ import java.util.UUID;
  * ES 幽靈文件校正排程（DATA-04）：每日掃描 {@code blog_articles} 索引，刪除「ES 有、DB 已非 PUBLISHED」的文件。
  *
  * <p>下架與刪除靠 best-effort 的 MQ 事件（{@code ArticleSearchListener}）即時移除文件，producer 端事件遺失時，
- * 幽靈文件會一直留著，搜尋結果可以點進已下架或已刪除的文章。原本只有手動 {@code reindexAll} 會清；
+ * 幽靈文件會一直留著，搜尋結果可以點進已下架或已刪除的文章。原本只有手動全量重建（{@code POST /api/v1/admin/search/reindex}）會清；
  * 本排程是第二道保險。掃描、分批、中止門檻、分散式鎖、游標與指標由 {@link OrphanReconciliationJob} 框架負責，
  * 這裡只提供識別與三個鉤子：</p>
  * <ul>
  *   <li>被參照的 UUID 取自文件的頂層 {@code uuid} keyword 欄位，以 {@code search_after} keyset 分頁、
  *       依該欄位升冪，不用 from/size 深分頁。查詢帶 {@code exists: uuid} 過濾：欄位上線前寫入的舊文件
- *       <b>不會被掃描，也就不會被刪</b>，等一次 {@code reindexAll} 補上欄位後才納入</li>
+ *       <b>不會被掃描，也就不會被刪</b>，等一次全量重建補上欄位後才納入</li>
  *   <li><b>與框架預設語意刻意不同</b>：框架 JavaDoc 要求 {@code filterExisting} 回傳「存在（不分狀態）」，
  *       但索引只應存在 PUBLISHED 文章，草稿／待審／已下架的文件在這裡就是幽靈。因此委派
  *       {@link ArticleFacade#filterPublishedUuids}，語意是「仍為 PUBLISHED」；與
- *       {@code SearchServiceImpl#reindexAll} 的幽靈判準一致</li>
+ *       全量重建「新索引只寫入 PUBLISHED」的判準一致（{@code ArticleIndexRebuilder}）</li>
  *   <li>孤兒處理是從 ES 刪除該文件；沒有其他表需要修正</li>
  *   <li>fail-safe 完全沿用框架：facade 拋例外 → 整次 failed、零刪除；facade 異常回空集合 →
  *       「全部都是幽靈」或孤兒過多 → aborted、零刪除。本類別不覆寫中止門檻</li>
  * </ul>
  *
- * <p><b>不在範圍</b>：反方向（DB 是 PUBLISHED 但 ES 缺文件）由 {@code reindexAll} 補，本排程不處理。</p>
+ * <p><b>不在範圍</b>：反方向（DB 是 PUBLISHED 但 ES 缺文件）由全量重建補，本排程不處理。查詢與刪除皆經 alias {@code blog_articles}，重建切換 alias 後自動作用在新索引上。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -70,7 +70,7 @@ public class ArticleIndexOrphanReconciliationJob extends OrphanReconciliationJob
      * {@code Fielddata access on the _id field is disallowed}）。{@code uuid} 唯一，適合作為 search_after 的排序鍵；
      * 排序是字串順序，只需自洽（游標與排序同源），不需要與 PostgreSQL 的 uuid 順序一致。</p>
      *
-     * <p><b>已知限制</b>：本欄位上線前寫入的舊文件沒有此欄位，要等一次 {@code reindexAll}（以 id 覆寫文件）才會補上；
+     * <p><b>已知限制</b>：本欄位上線前寫入的舊文件沒有此欄位，要等一次全量重建（寫入新索引）才會補上；
      * 查詢以 {@code exists} 過濾掉它們，補上前不會被本排程掃到（只是尚未校正，不會誤刪，也不會因
      * 缺值排序而讓 search_after 卡在同一批）。</p>
      *
@@ -79,9 +79,14 @@ public class ArticleIndexOrphanReconciliationJob extends OrphanReconciliationJob
      */
     public static final String SORT_FIELD = "uuid";
 
-    /** 排序欄位型別錯誤時的復原方式（initializer 與本 job 的 ERROR 訊息共用同一句） */
-    static final String RECOVERY_HINT = "復原方式：刪除索引（blog_articles）後由 SearchIndexInitializer 以 annotation mapping 重建"
-            + "（重啟應用程式），再執行 POST /api/v1/admin/search/reindex";
+    /**
+     * 排序欄位型別錯誤時的復原方式（與 {@code SearchIndexInitializer} 的 ERROR 訊息同一句）。
+     *
+     * <p>讀寫改走 alias 後，全量重建會以 annotation mapping 建立新的實體索引並原子切換 alias，
+     * 不再需要（也無法以 alias 名稱）手動刪除索引。</p>
+     */
+    static final String RECOVERY_HINT = "復原方式：執行 POST /api/v1/admin/search/reindex——以 annotation mapping 建立新的實體索引、"
+            + "原子切換 alias 後自動刪除舊索引，不需要手動刪除索引或重啟應用程式";
 
     private final ElasticsearchOperations operations;
     private final ArticleSearchRepository repository;

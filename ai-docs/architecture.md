@@ -148,9 +148,70 @@ A: 存 article_uuid（不加 FK）→ 訂閱 ArticleDeletedEvent 清理 ＋ 新�
 | 事件無 Long 欄位、必有 `eventId` | `EventContractTest` |
 | 資料庫中沒有跨模組 FK；每張表都有登記 owner 模組 | `NoCrossModuleForeignKeyIT` |
 | 模組 pom 不得以 compile scope 依賴其他模組 | `ModulePomDependencyTest` |
+| 模組清單與依賴矩陣（見下節「模組清單與依賴矩陣」）與 pom 一致；矩陣規則即上一列 | `ModulePomDependencyTest`（強制業務模組間 main classpath 零依賴；矩陣本身為文件，改 pom 時須同步） |
+| 錯誤碼 enum 一律位於 blog-common 的 `api/errorcode/`、全站錯誤碼字串不重複 | `ErrorCodeCentralizationTest` |
 | 交易內不得直接發 MQ | `TransactionMqBoundaryTest` |
 
 > **本節規範買到的是概念邊界與可拆分性，不是已經拆好。** 2026-10 的 UUID 重構（V25～V34）移除了
 > 全部跨模組 FK、讓 Long 主鍵不再跨越模組邊界（`findings.md` **ARCH-30** 已解決）。
 > 真正拆服務時剩下的代價：共用同一個資料庫交易的流程要改成事件或 saga、`tags` 的 JOIN 要改走 `TagFacade`、
 > 以及上方「代價」所述的集合述詞全量載入形狀。
+
+---
+
+## 模組清單與依賴矩陣
+
+> 本節**只描述現況**（2026-11-07，對照各模組 `pom.xml` 與 `ModulePomDependencyTest`），不新增規則。
+> 根 pom `<modules>` 實際宣告 **14** 個模組（Q 決策文字寫 13，差異來自 `blog-db-migration`，見下表備註）。
+
+### 模組清單
+
+| 模組 | 職責 |
+|---|---|
+| `blog-common` | shared kernel：`ApiResponse`、例外、`IErrorCode` 與全站錯誤碼 enum（`api/errorcode/`）、共用工具；不依賴任何其他模組 |
+| `blog-db-migration` | 集中式 Flyway SQL migration（`db/migration`）；無 Java 業務碼，由 `blog-start` 打包進應用，其餘模組僅於測試 scope 載入以啟動 Flyway |
+| `blog-infrastructure` | 橫切基礎設施：Web／Security／JWT、RabbitMQ 拓撲與 `DeadLetterTopology`、全域例外處理、跨模組 facade 介面與共用事件契約（`event`）、冪等與 `ConsumerExecutor`、應用層限流、孤兒對帳基底 |
+| `blog-module-user` | 帳號、認證授權（登入／註冊／重設密碼／Token 版本）、使用者資料與 `UserFacade` |
+| `blog-module-article` | 文章（草稿／發布／刪除）、內文渲染、分類與 `ArticleFacade`；`tags`／`article_tags` 的唯一 SQL 例外模組 |
+| `blog-module-file` | 檔案上傳與儲存（S3 相容物件儲存）、文章檔案綁定、孤兒檔清理 |
+| `blog-module-tag` | 標籤 CRUD 與 `TagFacade` |
+| `blog-module-search` | Elasticsearch 全文檢索、搜尋建議與熱門搜尋詞 |
+| `blog-module-recommend` | 熱門／推薦文章（`TrendingRefreshJob`、發布事件消費） |
+| `blog-module-comment` | 留言與留言按讚 |
+| `blog-module-reading` | 文章按讚、書籤、畫線標註、閱讀進度 |
+| `blog-module-series` | 文章系列（Series）管理 |
+| `blog-module-version` | 草稿歷史版本、快照與還原、版本偏好 |
+| `blog-start` | 應用程式進入點：組裝所有模組、設定檔、跨模組架構守衛測試與 E2E |
+
+### 依賴矩陣
+
+列＝宣告依賴的模組，欄＝被依賴的模組。`✓` 為 compile（未寫 scope）依賴；`T` 為僅 test scope 依賴（`blog-db-migration` 於測試啟動 Flyway、相鄰模組供 TestApplication 載入）。空白＝無依賴。
+
+| 依賴方 ＼ 被依賴 | common | db-migration | infrastructure | user | article | file | tag | search | recommend | comment | reading | series | version |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `blog-common` | | | | | | | | | | | | | |
+| `blog-db-migration` | | | | | | | | | | | | | |
+| `blog-infrastructure` | ✓ | T | | | | | | | | | | | |
+| `blog-module-user` | (經 infra) | T | ✓ | | | | | | | | | | |
+| `blog-module-article` | (經 infra) | T | ✓ | | | | | | | | | | |
+| `blog-module-file` | (經 infra) | T | ✓ | | | | | | | | | | |
+| `blog-module-tag` | (經 infra) | T | ✓ | | | | | | | | | | |
+| `blog-module-search` | (經 infra) | | ✓ | | | | | | | | | | |
+| `blog-module-recommend` | (經 infra) | | ✓ | | | | | | | | | | |
+| `blog-module-comment` | (經 infra) | T | ✓ | | T | | | | | | T | T | |
+| `blog-module-reading` | (經 infra) | T | ✓ | | T | | | | | | | T | |
+| `blog-module-series` | (經 infra) | T | ✓ | | T | | | | | | | | |
+| `blog-module-version` | (經 infra) | T | ✓ | | T | | | | | | | | |
+| `blog-start` | (經 infra) | ✓ | (經業務模組) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+> `(經 infra)`／`(經業務模組)` 表示 pom 未直接宣告、由傳遞依賴取得。矩陣只列 pom 直接宣告的依賴。
+
+### 規則摘要（`ModulePomDependencyTest` 目前強制的內容）
+
+*   **業務模組（`blog-module-*`）之間，main classpath 零依賴**：任何 `blog-module-*` 不得以 compile（含未寫 scope）、runtime、provided 依賴其他 `blog-module-*`（含 `profiles` 內的依賴）。上表十個業務模組的列中，模組對模組欄位**只可能出現 `T`**。
+*   業務模組之間只能經 `blog-infrastructure` 內的 facade 介面與共用事件契約溝通；所有業務模組僅 compile 依賴 `blog-infrastructure`（`blog-common` 為其傳遞依賴）。
+*   **test scope 允許**相鄰模組（整合測試的 TestApplication 需載入）；現況有 `comment → article／reading／series`、`reading → article／series`、`series → article`、`version → article`，由 `listTestScopedModuleDependencies()` 輸出到測試 log 供審查。
+*   `blog-start` 是唯一 compile 依賴全部業務模組者（組裝用）；`blog-common`、`blog-infrastructure` 不得反向依賴業務模組（現況成立，但**此條並無測試強制**，僅為現況描述）。
+*   守衛本身防空轉：掃到的模組 pom 數須等於根 pom `<modules>` 的 `blog-module-*` 數與磁碟目錄數，新增模組沒被掃到時會先紅。
+
+> 新增模組時請同步更新本節的清單與矩陣；矩陣與 pom 的一致性目前靠人工維護（比對方式：解析各模組 `pom.xml` 的 `dependencies/dependency` 取出 `blog-*` artifactId 與 scope）。

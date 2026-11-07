@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
@@ -30,7 +31,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1")
 @RequiredArgsConstructor
-@Tag(name = "Bookmark")
+@Tag(name = "收藏")
 public class BookmarkController {
 
     private final BookmarkService bookmarkService;
@@ -38,8 +39,11 @@ public class BookmarkController {
     private final BookmarkQueryService bookmarkQueryService;
 
     @PostMapping("/articles/{articleUuid}/bookmark")
+    @RateLimited("interaction-write")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "收藏文章（idempotent）")
+    @Operation(summary = "收藏文章",
+            description = "登入。重複收藏為冪等；僅能收藏對自己可讀的文章。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在或對呼叫者不可讀")
     public ApiResponse<Void> bookmark(@AuthenticationPrincipal AuthUser user,
                                         @PathVariable UUID articleUuid) {
         requireReadable(articleUuid, user);
@@ -49,7 +53,9 @@ public class BookmarkController {
 
     @DeleteMapping("/articles/{articleUuid}/bookmark")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "取消收藏（idempotent）")
+    @Operation(summary = "取消收藏文章",
+            description = "登入。未收藏時為冪等。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在")
     public ApiResponse<Void> unbookmark(@AuthenticationPrincipal AuthUser user,
                                           @PathVariable UUID articleUuid) {
         requireArticleExists(articleUuid);
@@ -72,7 +78,8 @@ public class BookmarkController {
      */
     @GetMapping("/users/me/bookmarks")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "我的收藏列表")
+    @Operation(summary = "我的收藏列表",
+            description = "登入。分頁列出自己收藏且仍可讀的文章。")
     public ApiResponse<PageResult<ArticleSummaryResponse>> myBookmarks(
             @AuthenticationPrincipal AuthUser user,
             Authentication authentication,

@@ -38,7 +38,7 @@ class ArticleFacadeAuthorStatsTest {
     @BeforeEach
     void setUp() {
         facade = new ArticleFacadeImpl(articleMapper, null, null, null, null, null, null, null,
-                new ArticleDataAssembler(), null, null, null);
+                new ArticleDataAssembler(), null, null, null, null);
     }
 
     @Test

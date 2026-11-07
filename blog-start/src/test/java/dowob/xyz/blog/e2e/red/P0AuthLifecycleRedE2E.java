@@ -5,22 +5,17 @@ import dowob.xyz.blog.e2e.config.AbstractE2ETest;
 import dowob.xyz.blog.e2e.support.DataBuilder;
 import dowob.xyz.blog.e2e.support.DatabaseCleaner;
 import dowob.xyz.blog.e2e.support.E2EAssertions;
-import jakarta.mail.Session;
-import jakarta.mail.internet.MimeMessage;
+import dowob.xyz.blog.e2e.support.MailInterceptor;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.mail.javamail.JavaMailSenderImpl;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MvcResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -36,13 +31,8 @@ class P0AuthLifecycleRedE2E extends AbstractE2ETest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    @MockitoBean
-    private JavaMailSenderImpl mailSender;
-
-    @BeforeEach
-    void setUpMailSender() {
-        when(mailSender.createMimeMessage()).thenAnswer(invocation -> new MimeMessage((Session) null));
-    }
+    @Autowired
+    private MailInterceptor mailInterceptor;
 
     @AfterEach
     void tearDown() {
@@ -62,12 +52,7 @@ class P0AuthLifecycleRedE2E extends AbstractE2ETest {
                 .andExpect(status().isOk())
                 .andExpect(E2EAssertions.apiSuccess());
 
-        String token = jdbcTemplate.queryForObject(
-                "SELECT vt.token FROM verification_tokens vt JOIN users u ON u.id = vt.user_id " +
-                        "WHERE u.email = ? AND vt.type = 'EMAIL_VERIFICATION'",
-                String.class,
-                email
-        );
+        String token = mailInterceptor.interceptVerificationToken(email);
 
         mockMvc.perform(post("/api/v1/auth/verify-email")
                         .contentType(MediaType.APPLICATION_JSON)

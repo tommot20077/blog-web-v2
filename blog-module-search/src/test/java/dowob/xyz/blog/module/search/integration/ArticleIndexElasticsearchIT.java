@@ -67,6 +67,11 @@ class ArticleIndexElasticsearchIT {
     private final ArticleFacade articleFacade = mock(ArticleFacade.class);
     private SearchIndexInitializer initializer;
     private SearchServiceImpl searchService;
+    /** 全量重建（D1 起取代 SearchServiceImpl#reindexAll；測試中同步呼叫） */
+    private dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder rebuilder;
+    private dowob.xyz.blog.module.search.index.ArticleIndexAdmin indexAdmin;
+    private dowob.xyz.blog.module.search.reindex.ReindexJournal journal;
+    private dowob.xyz.blog.module.search.reindex.ReindexJobStore jobStore;
     private dowob.xyz.blog.infrastructure.facade.UserFacade userFacade;
 
     @BeforeAll
@@ -95,16 +100,22 @@ class ArticleIndexElasticsearchIT {
     @SuppressWarnings("unchecked")
     void resetIndex() {
         userFacade = mock(dowob.xyz.blog.infrastructure.facade.UserFacade.class);
-        IndexOperations indexOps = template.indexOps(ArticleDocument.class);
-        if (indexOps.exists()) {
-            indexOps.delete();
-        }
-        initializer = new SearchIndexInitializer(template);
+        /* 讀寫改走 alias 後，對 alias 名稱 delete 會被 ES 拒絕：改為逐一刪除所有 blog_articles* 實體索引 */
+        dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.deleteAllArticleIndices(template);
+        indexAdmin = dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.newAdmin(template);
+        initializer = new SearchIndexInitializer(indexAdmin);
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
         when(redis.opsForZSet()).thenReturn(mock(ZSetOperations.class));
-        searchService = new SearchServiceImpl(template, repository, redis, articleFacade, userFacade);
+        /* 本類別不測重建期間的增量（見 ArticleIndexRebuildIT，真 Redis）：變動紀錄以替身表示「一直屬於本作業、沒有變動」 */
+        journal = mock(dowob.xyz.blog.module.search.reindex.ReindexJournal.class);
+        when(journal.keepAlive(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        when(journal.drainArticles(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
+        when(journal.drainAuthors(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of());
+        jobStore = new dowob.xyz.blog.module.search.reindex.ReindexJobStore(redis);
+        searchService = new SearchServiceImpl(template, repository, redis, articleFacade, indexAdmin, journal, jobStore);
+        rebuilder = new dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder(indexAdmin, journal, articleFacade, userFacade);
     }
 
     @SuppressWarnings("unchecked")
@@ -174,12 +185,12 @@ class ArticleIndexElasticsearchIT {
         assertThat(repository.existsById(articleUuid.toString())).isTrue();
         assertThat(rawAuthorSource(articleUuid)).containsKeys("id", "username");
 
-        when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
+        when(articleFacade.findPublishedForIndexAfter(null, dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder.BATCH_SIZE)).thenReturn(List.of(new ArticleIndexData(
                 articleUuid, "Elasticsearch guide", "es-guide", "about search", "full text content", "愛麗絲",
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));
-        searchService.reindexAll();
+        rebuilder.rebuild(UUID.randomUUID(), processed -> { });
         indexOps.refresh();
 
         Map<String, Object> author = rawAuthorSource(articleUuid);
@@ -193,7 +204,7 @@ class ArticleIndexElasticsearchIT {
         initializer.ensureCorrectMapping();
         UUID articleUuid = UUID.randomUUID();
         UUID authorUuid = UUID.randomUUID();
-        when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
+        when(articleFacade.findPublishedForIndexAfter(null, dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder.BATCH_SIZE)).thenReturn(List.of(new ArticleIndexData(
                 articleUuid, "Elasticsearch guide", "es-guide", "about search", "full text content", "愛麗絲",
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
@@ -202,7 +213,7 @@ class ArticleIndexElasticsearchIT {
         when(userFacade.getDisplayInfoByUuids(org.mockito.ArgumentMatchers.any())).thenReturn(java.util.Map.of(
                 authorUuid, new dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo(authorUuid, "愛麗絲", null)));
 
-        searchService.reindexAll();
+        rebuilder.rebuild(UUID.randomUUID(), processed -> { });
         template.indexOps(ArticleDocument.class).refresh();
 
         Map<String, Object> author = rawAuthorSource(articleUuid);
@@ -235,7 +246,7 @@ class ArticleIndexElasticsearchIT {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.opsForValue()).thenReturn(mock(ValueOperations.class));
         when(redis.opsForZSet()).thenReturn(mock(ZSetOperations.class));
-        SearchServiceImpl service = new SearchServiceImpl(spied, repository, redis, articleFacade, userFacade);
+        SearchServiceImpl service = new SearchServiceImpl(spied, repository, redis, articleFacade, indexAdmin, journal, jobStore);
 
         PageResult<SearchResultResponse> result = service.search("zebrafishuniquetoken", null, "relevance", 1, 10, null);
 
@@ -273,6 +284,122 @@ class ArticleIndexElasticsearchIT {
         assertThat(result.getRecords()).isEmpty();
     }
 
+    @Test
+    @DisplayName("B4：舊索引文件殘留 viewCount／likeCount 欄位仍可搜尋，結果計數取自 ArticleFacade 而非索引內的舊值")
+    void search_legacyDocWithStaleCounters_usesFacadeCounts() throws Exception {
+        initializer.ensureCorrectMapping();
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        client.index(i -> i.index("blog_articles").id(articleUuid.toString()).refresh(Refresh.True).document(Map.of(
+                "id", articleUuid.toString(), "uuid", articleUuid.toString(),
+                "title", "Legacy counters guide", "slug", "legacy-" + articleUuid, "status", "PUBLISHED",
+                "viewCount", 0, "likeCount", 0,
+                "author", Map.of("uuid", authorUuid.toString(), "nickname", "愛麗絲"))));
+        when(articleFacade.getEngagementCounts(org.mockito.ArgumentMatchers.any())).thenReturn(Map.of(articleUuid,
+                new dowob.xyz.blog.infrastructure.facade.dto.ArticleEngagementCounts(105L, 7L)));
+
+        PageResult<SearchResultResponse> result = searchService.search("Legacy", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).singleElement().satisfies(r -> {
+            assertThat(r.getViewCount()).isEqualTo(105L);
+            assertThat(r.getLikeCount()).isEqualTo(7L);
+        });
+    }
+
+    @Test
+    @DisplayName("B4：reindexAll 寫入的 _source 不含 viewCount／likeCount（覆寫掉舊文件的殘留欄位）")
+    @SuppressWarnings("unchecked")
+    void reindexAll_sourceHasNoCounterFields() throws Exception {
+        initializer.ensureCorrectMapping();
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        when(articleFacade.findPublishedForIndexAfter(null, dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder.BATCH_SIZE)).thenReturn(List.of(new ArticleIndexData(
+                articleUuid, "Counter free", "counter-free", "s", "content", "愛麗絲",
+                LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
+        when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Set.of(articleUuid));
+
+        rebuilder.rebuild(UUID.randomUUID(), processed -> { });
+        template.indexOps(ArticleDocument.class).refresh();
+
+        Map<String, Object> source = client.get(g -> g.index("blog_articles").id(articleUuid.toString()), Map.class).source();
+        assertThat(source).doesNotContainKeys("viewCount", "likeCount");
+    }
+
+    /**
+     * 寫入一份只有指定 title／summary／content 的已發布文件並 refresh。
+     *
+     * @return 文章公開 UUID
+     */
+    private UUID saveSearchableDocument(String title, String summary, String content) {
+        UUID articleUuid = UUID.randomUUID();
+        repository.save(ArticleDocument.builder().id(articleUuid.toString()).uuid(articleUuid.toString())
+                .title(title).summary(summary).content(content).slug("slug-" + articleUuid)
+                .status("PUBLISHED").publishedAt(LocalDateTime.of(2026, 10, 24, 12, 0))
+                .author(new ArticleDocument.AuthorInfo(UUID.randomUUID().toString(), "愛麗絲")).build());
+        template.indexOps(ArticleDocument.class).refresh();
+        return articleUuid;
+    }
+
+    @Test
+    @DisplayName("D4：標題打錯一個字仍能命中（title 保留 fuzziness）")
+    void search_titleTypo_stillMatches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("Kubernetes deployment guide", "無關摘要", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("Kubernetez", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：摘要打錯一個字仍能命中（summary 保留 fuzziness）")
+    void search_summaryTypo_stillMatches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("無關標題", "Introduction to observability", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("observabilitt", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：只有內文含近似字（打錯一個字）時不命中（content 不套 fuzziness）")
+    void search_contentOnlyTypo_doesNotMatch() {
+        initializer.ensureCorrectMapping();
+        saveSearchableDocument("無關標題", "無關摘要", "zebrafishuniquetoken 內文專屬字詞");
+
+        PageResult<SearchResultResponse> result =
+                searchService.search("zebrafishuniquetokem", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("D4：內文精確字仍可命中")
+    void search_contentExactWord_matches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("無關標題", "無關摘要", "zebrafishuniquetoken 內文專屬字詞");
+
+        PageResult<SearchResultResponse> result =
+                searchService.search("zebrafishuniquetoken", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：標題命中的權重仍高於僅內文命中（title^3 > content^1）")
+    void search_titleHitRanksAboveContentOnlyHit() {
+        initializer.ensureCorrectMapping();
+        UUID contentOnly = saveSearchableDocument("無關標題甲", "無關摘要", "rankingprobe appears only in content");
+        UUID titleHit = saveSearchableDocument("rankingprobe in the title", "無關摘要", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("rankingprobe", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid)
+                .containsExactly(titleHit, contentOnly);
+    }
+
     /**
      * 直接寫入一份已發布文件（作者暱稱為原值）。
      *
@@ -299,7 +426,7 @@ class ArticleIndexElasticsearchIT {
         UUID othersDoc = saveDocumentOf(otherAuthor, "Elasticsearch three");
         template.indexOps(ArticleDocument.class).refresh();
 
-        long updated = searchService.updateAuthorNickname(deletedAuthor, "已刪除使用者#abcd1234");
+        long updated = searchService.updateAuthorNickname(deletedAuthor, "已刪除使用者#abcd1234", UUID.randomUUID());
 
         assertThat(updated).isEqualTo(2);
         assertThat(rawAuthorSource(doc1).get("nickname")).isEqualTo("已刪除使用者#abcd1234");
@@ -319,9 +446,9 @@ class ArticleIndexElasticsearchIT {
         UUID doc = saveDocumentOf(author, "Elasticsearch one");
         template.indexOps(ArticleDocument.class).refresh();
 
-        assertThat(searchService.updateAuthorNickname(UUID.randomUUID(), "已刪除使用者#00000000")).isZero();
-        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234");
-        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234");
+        assertThat(searchService.updateAuthorNickname(UUID.randomUUID(), "已刪除使用者#00000000", UUID.randomUUID())).isZero();
+        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234", UUID.randomUUID());
+        searchService.updateAuthorNickname(author, "已刪除使用者#abcd1234", UUID.randomUUID());
 
         assertThat(rawAuthorSource(doc).get("nickname")).isEqualTo("已刪除使用者#abcd1234");
     }

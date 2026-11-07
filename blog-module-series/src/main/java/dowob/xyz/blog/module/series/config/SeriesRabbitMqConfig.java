@@ -1,6 +1,5 @@
 package dowob.xyz.blog.module.series.config;
 
-import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
 import dowob.xyz.blog.infrastructure.event.SeriesEventContract;
 import dowob.xyz.blog.infrastructure.event.UserEventContract;
 import org.springframework.amqp.core.Binding;
@@ -14,7 +13,7 @@ import org.springframework.context.annotation.Configuration;
 import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
 
 /**
- * Series 模組 RabbitMQ 設定。訂閱 article.events / article.deleted 與 user.events / user.deleted（作者刪帳連動），並宣告自己的 series.events exchange
+ * Series 模組 RabbitMQ 設定。訂閱 user.events / user.deleted（作者刪帳連動），並宣告自己的 series.events exchange
  * （發送 {@code series.deleted}，目前沒有 consumer）。
  *
  * @author Yuan
@@ -22,8 +21,6 @@ import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
  */
 @Configuration
 public class SeriesRabbitMqConfig {
-
-    public static final String QUEUE_SERIES_ARTICLE_DELETED = "series.article-deleted";
 
     /**
      * 建立 series 事件 Topic Exchange（series 是 producer，exchange 由 producer 宣告）。
@@ -36,21 +33,6 @@ public class SeriesRabbitMqConfig {
     @Bean
     public TopicExchange seriesEventsExchange() {
         return new TopicExchange(SeriesEventContract.EXCHANGE);
-    }
-
-    @Bean
-    public Queue seriesArticleDeletedQueue() {
-        return new Queue(QUEUE_SERIES_ARTICLE_DELETED, true, false, false, dlqArgs());
-    }
-
-    @Bean
-    public Binding bindSeriesArticleDeleted(
-            Queue seriesArticleDeletedQueue,
-            @Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
-        return BindingBuilder
-                .bind(seriesArticleDeletedQueue)
-                .to(articleEventsExchange)
-                .with(ArticleEventContract.ROUTING_KEY_DELETED);
     }
 
     /** 使用者帳號刪除事件的 queue 名稱 */

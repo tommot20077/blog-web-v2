@@ -683,14 +683,15 @@ class ArticleQuerySubServiceTest {
         }
 
         @Test
-        @DisplayName("只走投影查詢 findArchiveRows，絕不呼叫會撈正文欄位的 findAllPublished")
-        void getArchive_usesProjectionQuery_neverFindAllPublished() {
+        @DisplayName("只走投影查詢 findArchiveRows，絕不呼叫會撈正文欄位的 ES 索引查詢")
+        void getArchive_usesProjectionQuery_neverBodyLoadingIndexQuery() {
             when(articleMapper.findArchiveRows()).thenReturn(List.of());
 
             querySubService.getArchive();
 
             verify(articleMapper).findArchiveRows();
-            verify(articleMapper, never()).findAllPublished();
+            verify(articleMapper, never()).findPublishedForIndexAfter(any(), anyInt());
+            verify(articleMapper, never()).findPublishedForIndexByUuids(any());
         }
 
         @Test

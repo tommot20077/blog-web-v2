@@ -265,7 +265,7 @@ class TagE2E extends AbstractE2ETest {
         Map<String, Object> updateRequest = new LinkedHashMap<>();
         updateRequest.put("description", "Should not be allowed");
 
-        // Act & Assert — USER 角色無 SYSTEM_CONFIG 權限
+        // Act & Assert — USER 角色無 ADMIN_TAG 權限
         mockMvc.perform(put("/api/v1/admin/tags/{id}", tagId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(updateRequest))

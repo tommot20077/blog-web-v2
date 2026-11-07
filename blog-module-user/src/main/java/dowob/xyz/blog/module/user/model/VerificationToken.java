@@ -10,7 +10,7 @@ import java.time.LocalDateTime;
 /**
  * 驗證 Token 實體
  *
- * <p>用於儲存電子信箱驗證與密碼重設所需的一次性 Token，
+ * <p>用於儲存電子信箱驗證與密碼重設所需的一次性 Token（只存雜湊），
  * 每個 Token 對應一位用戶，並帶有類型與有效期限欄位。</p>
  *
  * @author Yuan
@@ -33,9 +33,10 @@ public class VerificationToken {
     private Long userId;
 
     /**
-     * Token 字串（UUID）
+     * Token 的 SHA-256 雜湊（64 字元小寫 hex）。<b>資料庫永遠不存明文 token</b>，明文只出現在寄出的信件中。
      */
-    private String token;
+    @Column("token_hash")
+    private String tokenHash;
 
     /**
      * Token 類型，如 "EMAIL_VERIFICATION" 或 "PASSWORD_RESET"

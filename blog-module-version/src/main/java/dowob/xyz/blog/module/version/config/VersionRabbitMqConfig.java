@@ -11,11 +11,14 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Map;
 
 /**
  * Version 模組 RabbitMQ 設定。訂閱 article.events 的 article.content.changed（寫快照）與 article.deleted（清除快照），
  * 以及 user.events 的 user.deleted（使用者刪帳後清除偏好設定，DATA-02）。
+ *
+ * <p>三個 queue 一律只帶 {@link DeadLetterTopology#dlqArgs()}：原有的 10 分鐘 {@code x-message-ttl}
+ * 已依 Yuan 2026-11-07 決定（ARCH-18／C5）移除，與全站一致。既有 broker 若已宣告帶 TTL 的同名 queue，
+ * 重新宣告會 406，須先刪 queue 再重建。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -30,7 +33,7 @@ public class VersionRabbitMqConfig {
 
     @Bean
     public Queue versionSnapshotQueue() {
-        return new Queue(QUEUE_VERSION_SNAPSHOT, true, false, false, dlqArgs());
+        return new Queue(QUEUE_VERSION_SNAPSHOT, true, false, false, DeadLetterTopology.dlqArgs());
     }
 
     @Bean
@@ -50,7 +53,7 @@ public class VersionRabbitMqConfig {
      */
     @Bean
     public Queue versionArticleDeletedQueue() {
-        return new Queue(QUEUE_VERSION_ARTICLE_DELETED, true, false, false, dlqArgs());
+        return new Queue(QUEUE_VERSION_ARTICLE_DELETED, true, false, false, DeadLetterTopology.dlqArgs());
     }
 
     /**
@@ -93,7 +96,7 @@ public class VersionRabbitMqConfig {
      */
     @Bean
     public Queue versionUserDeletedQueue() {
-        return new Queue(QUEUE_VERSION_USER_DELETED, true, false, false, dlqArgs());
+        return new Queue(QUEUE_VERSION_USER_DELETED, true, false, false, DeadLetterTopology.dlqArgs());
     }
 
     /**
@@ -111,20 +114,5 @@ public class VersionRabbitMqConfig {
                 .bind(versionUserDeletedQueue)
                 .to(versionUserEventsExchange)
                 .with(UserEventContract.ROUTING_KEY_DELETED);
-    }
-
-    /**
-     * Version 模組 queue 的 DLQ 參數：全站共用的 {@link DeadLetterTopology#dlqArgs()} 再加上 {@code x-message-ttl=600000}（10 分鐘）。
-     *
-     * <p><b>TTL 是否保留待 Yuan 決策（findings ARCH-18）</b>：全站其他 queue 都沒有 TTL，唯獨 version 的三個 queue
-     * （snapshot、article-deleted、user-deleted）會讓 10 分鐘內未被消費的訊息過期並進 DLQ。ARCH-19 收斂 DLQ 常數時
-     * <b>刻意完整保留此行為</b>（queue 參數不變，否則既有 queue 重新宣告會 406、需先刪再建）；移除 TTL 屬 ARCH-18 的獨立變更。</p>
-     *
-     * @return 含 DLQ 與 TTL 的新 Map
-     */
-    private Map<String, Object> dlqArgs() {
-        Map<String, Object> args = DeadLetterTopology.dlqArgs();
-        args.put("x-message-ttl", 600_000);
-        return args;
     }
 }

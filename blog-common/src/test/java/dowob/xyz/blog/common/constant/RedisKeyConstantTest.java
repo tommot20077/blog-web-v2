@@ -62,6 +62,16 @@ class RedisKeyConstantTest {
     }
 
     @Test
+    @DisplayName("全量重建（D1）：作業狀態、進行中標記、重建期間變動集合與分散式鎖的 key 皆在 search:reindex: 與 lock: 之下")
+    void searchReindexJobKeys_haveExpectedValues() {
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_JOB_KEY).isEqualTo("search:reindex:job");
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY).isEqualTo("search:reindex:active");
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY).isEqualTo("search:reindex:dirty:articles");
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY).isEqualTo("search:reindex:dirty:authors");
+        assertThat(RedisKeyConstant.LOCK_SEARCH_REINDEX).isEqualTo("lock:search-reindex");
+    }
+
+    @Test
     @DisplayName("RECOMMEND_TRENDING_PREFIX 應為 recommend:trending:")
     void recommendTrendingPrefix_hasExpectedValue() {
         assertThat(RedisKeyConstant.RECOMMEND_TRENDING_PREFIX).isEqualTo("recommend:trending:");
@@ -195,6 +205,29 @@ class RedisKeyConstantTest {
     @DisplayName("REGISTER_IP_TTL_MINUTES 應為 60（每小時窗口）")
     void registerIpTtlMinutes_hasExpectedValue() {
         assertThat(RedisKeyConstant.REGISTER_IP_TTL_MINUTES).isEqualTo(60L);
+    }
+
+    @Test
+    @DisplayName("A3：三個 IP 限流 key 各有專屬前綴，彼此與 register／login 不同")
+    void ipRateLimitKeys_haveDistinctPrefixes() {
+        assertThat(RedisKeyConstant.getForgotPasswordIpKey("203.0.113.5")).isEqualTo("auth:forgot-password:ip:203.0.113.5");
+        assertThat(RedisKeyConstant.getResendVerificationIpKey("203.0.113.5")).isEqualTo("auth:resend-verification:ip:203.0.113.5");
+        assertThat(RedisKeyConstant.getVerifyCodeIpKey("203.0.113.5")).isEqualTo("auth:verify-code:ip:203.0.113.5");
+        assertThat(java.util.List.of(
+                RedisKeyConstant.getForgotPasswordIpKey("1.1.1.1"), RedisKeyConstant.getResendVerificationIpKey("1.1.1.1"),
+                RedisKeyConstant.getVerifyCodeIpKey("1.1.1.1"), RedisKeyConstant.getRegisterIpKey("1.1.1.1"),
+                RedisKeyConstant.getLoginIpKey("1.1.1.1"))).doesNotHaveDuplicates();
+    }
+
+    @Test
+    @DisplayName("A3：三個端點的 IP 門檻沿用註冊設定（每 IP 每 60 分鐘 10 次）")
+    void ipRateLimitThresholds_matchRegisterSettings() {
+        assertThat(RedisKeyConstant.FORGOT_PASSWORD_IP_MAX).isEqualTo(RedisKeyConstant.REGISTER_IP_MAX).isEqualTo(10);
+        assertThat(RedisKeyConstant.RESEND_VERIFICATION_IP_MAX).isEqualTo(RedisKeyConstant.REGISTER_IP_MAX);
+        assertThat(RedisKeyConstant.VERIFY_CODE_IP_MAX).isEqualTo(RedisKeyConstant.REGISTER_IP_MAX);
+        assertThat(RedisKeyConstant.FORGOT_PASSWORD_IP_TTL_MINUTES).isEqualTo(RedisKeyConstant.REGISTER_IP_TTL_MINUTES).isEqualTo(60L);
+        assertThat(RedisKeyConstant.RESEND_VERIFICATION_IP_TTL_MINUTES).isEqualTo(RedisKeyConstant.REGISTER_IP_TTL_MINUTES);
+        assertThat(RedisKeyConstant.VERIFY_CODE_IP_TTL_MINUTES).isEqualTo(RedisKeyConstant.REGISTER_IP_TTL_MINUTES);
     }
 
     @Test

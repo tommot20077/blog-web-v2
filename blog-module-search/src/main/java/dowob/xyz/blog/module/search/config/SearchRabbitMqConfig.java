@@ -68,8 +68,8 @@ public class SearchRabbitMqConfig {
      *
      * <p>
      * 與 {@link #ROUTING_KEY_DELETED} 分開訂閱是刻意的：{@code article.deleted}
-     * 另有 series 模組綁定並遞減 {@code series.article_count}，
-     * 下架若共用同一 routing key 會讓該計數被誤扣。對搜尋模組而言兩者處置相同
+     * 另有 comment、reading、tag 等模組綁定並清除各自的衍生資料，
+     * 下架（資料列仍在）若共用同一 routing key 會讓它們誤清。對搜尋模組而言兩者處置相同
      * （移除 document），故指向同一段處理邏輯但各自一條 queue。
      * </p>
      */

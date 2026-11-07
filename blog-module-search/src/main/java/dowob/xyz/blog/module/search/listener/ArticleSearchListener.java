@@ -72,7 +72,7 @@ public class ArticleSearchListener {
         consumerExecutor.execute(CONSUMER_NAME_INDEX, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 () -> {
                     ArticleDocument document = toDocument(message);
-                    searchService.indexArticle(document);
+                    searchService.indexArticle(document, message.getEventId());
                     log.debug("文章索引建立成功：uuid={}", message.getArticleUuid());
                 });
     }
@@ -93,7 +93,7 @@ public class ArticleSearchListener {
         consumerExecutor.execute(CONSUMER_NAME_INDEX_UPDATE, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 () -> {
                     ArticleDocument document = toDocument(message);
-                    searchService.indexArticle(document);
+                    searchService.indexArticle(document, message.getEventId());
                     log.debug("文章索引更新成功：uuid={}", message.getArticleUuid());
                 });
     }
@@ -108,7 +108,7 @@ public class ArticleSearchListener {
         log.info("收到文章刪除事件，移除索引：uuid={}, eventId={}", message.getArticleUuid(), message.getEventId());
         consumerExecutor.execute(CONSUMER_NAME_INDEX_DELETE, () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 () -> {
-                    searchService.deleteIndex(message.getArticleUuid().toString());
+                    searchService.deleteIndex(message.getArticleUuid().toString(), message.getEventId());
                     log.debug("文章索引移除成功：uuid={}", message.getArticleUuid());
                 });
     }
@@ -119,8 +119,8 @@ public class ArticleSearchListener {
      * <p>
      * 下架（PUBLISHED → ARCHIVED）代表文章不再公開，索引若不移除，
      * 搜尋結果仍會曝光已下架文章的標題與內文摘要。處置與刪除相同（移除 document），
-     * 但走獨立的 routing key／queue——{@code article.deleted} 另有 series 模組訂閱並遞減
-     * {@code series.article_count}，共用會使該計數被誤扣（見
+     * 但走獨立的 routing key／queue——{@code article.deleted} 另有 comment、reading、tag 等模組訂閱並清除各自的衍生資料，
+     * 共用會使它們被誤清（見
      * {@code SearchRabbitMqConfig#ROUTING_KEY_ARCHIVED}）。
      * </p>
      *
@@ -142,7 +142,7 @@ public class ArticleSearchListener {
         consumerExecutor.execute(CONSUMER_NAME_INDEX_ARCHIVE,
                 () -> "articleUuid=" + message.getArticleUuid() + ", eventId=" + message.getEventId(),
                 () -> {
-                    searchService.deleteIndex(message.getArticleUuid().toString());
+                    searchService.deleteIndex(message.getArticleUuid().toString(), message.getEventId());
                     log.debug("已下架文章索引移除成功：uuid={}", message.getArticleUuid());
                 });
     }
@@ -171,8 +171,6 @@ public class ArticleSearchListener {
                         resolveCurrentNickname(message)))
                 .tags(tags)
                 .publishedAt(message.getPublishedAt())
-                .viewCount(0L)
-                .likeCount(0L)
                 .status("PUBLISHED")
                 .build();
     }

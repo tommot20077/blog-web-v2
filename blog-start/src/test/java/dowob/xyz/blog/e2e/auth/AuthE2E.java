@@ -4,6 +4,7 @@ import dowob.xyz.blog.e2e.config.AbstractE2ETest;
 import dowob.xyz.blog.e2e.support.DataBuilder;
 import dowob.xyz.blog.e2e.support.DatabaseCleaner;
 import dowob.xyz.blog.e2e.support.E2EAssertions;
+import dowob.xyz.blog.e2e.support.MailInterceptor;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -34,6 +35,9 @@ class AuthE2E extends AbstractE2ETest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private MailInterceptor mailInterceptor;
 
     @AfterEach
     void tearDown() {
@@ -280,6 +284,78 @@ class AuthE2E extends AbstractE2ETest {
     }
 
     @Test
+    @DisplayName("驗證 Token 只存 SHA-256 — 信中明文可驗證，DB 的雜湊值本身不能驗證（A1）")
+    void verifyEmail_dbStoresOnlyHash_plainFromMailWorks_hashDoesNot() throws Exception {
+        String email = "hashonly@test.com";
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                DataBuilder.register(email, "Password123!", "hashonlyuser", "HashOnlyUser"))))
+                .andExpect(status().isOk());
+        String plain = mailInterceptor.interceptVerificationToken(email);
+        String stored = jdbcTemplate.queryForObject(
+                "SELECT vt.token_hash FROM verification_tokens vt JOIN users u ON u.id = vt.user_id " +
+                        "WHERE u.email = ? AND vt.type = 'EMAIL_VERIFICATION'", String.class, email);
+        assertThat(stored).isNotEqualTo(plain).matches("[0-9a-f]{64}");
+
+        mockMvc.perform(post(BASE_URL + "/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.verifyEmail(stored))))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError("A0104"));
+        mockMvc.perform(post(BASE_URL + "/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.verifyEmail(plain))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+    }
+
+    @Test
+    @DisplayName("忘記密碼全鏈路 — 申請 → 攔截重設信 → 用信中 Token 重設 → 舊密碼失效、新密碼可登入、Token 不可重複使用")
+    void forgotPassword_interceptMail_resetPassword_flow() throws Exception {
+        String email = "forgot@test.com";
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                DataBuilder.register(email, "OldPassword123!", "forgotuser", "ForgotUser"))))
+                .andExpect(status().isOk());
+        mockMvc.perform(post(BASE_URL + "/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                DataBuilder.verifyEmail(mailInterceptor.interceptVerificationToken(email)))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post(BASE_URL + "/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.forgotPassword(email))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+        String plain = mailInterceptor.interceptPasswordResetToken(email);
+
+        mockMvc.perform(post(BASE_URL + "/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.resetPassword(plain, "NewPassword456!"))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+
+        mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.login(email, "NewPassword456!"))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+        mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.login(email, "OldPassword123!"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError("A0102"));
+        mockMvc.perform(post(BASE_URL + "/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.resetPassword(plain, "Another789!x"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError("A0104"));
+    }
+
+    @Test
     @DisplayName("使用有效驗證 Token 激活帳號")
     void verifyEmail_withValidToken_activatesAccount() throws Exception {
         // Arrange — 註冊（會在 verification_tokens 建立記錄）
@@ -290,12 +366,8 @@ class AuthE2E extends AbstractE2ETest {
                         .content(registerBody))
                 .andExpect(status().isOk());
 
-        // 從 DB 取得驗證 Token
-        String verificationToken = jdbcTemplate.queryForObject(
-                "SELECT vt.token FROM verification_tokens vt " +
-                        "JOIN users u ON u.id = vt.user_id " +
-                        "WHERE u.email = ? AND vt.type = 'EMAIL_VERIFICATION'",
-                String.class, "verify@test.com");
+        // 攔截驗證信取得信中的明文 Token（DB 只存 SHA-256，A1）
+        String verificationToken = mailInterceptor.interceptVerificationToken("verify@test.com");
         assertThat(verificationToken).isNotNull();
 
         // Act — 呼叫信箱驗證 API（token 屬憑證，走 request body 而非 query string）

@@ -76,6 +76,12 @@ class SearchControllerIT {
     private SearchService searchService;
 
     /**
+     * 背景全量重建服務（Mock；D1 起 reindex 端點只觸發背景作業）
+     */
+    @MockitoBean
+    private dowob.xyz.blog.module.search.reindex.SearchReindexService reindexService;
+
+    /**
      * JWT 服務（JwtAuthenticationFilter 依賴）
      */
     @MockitoBean
@@ -107,6 +113,17 @@ class SearchControllerIT {
         return SecurityMockMvcRequestPostProcessors.authentication(
                 new UsernamePasswordAuthenticationToken(
                         new AuthUser(USER_UUID, Role.USER), null,
+                        List.of(new SimpleGrantedAuthority("ROLE_USER"))));
+    }
+
+    /**
+     * 建立「已認證但 principal 不是 AuthUser」的 Token，使 {@code @AuthenticationPrincipal AuthUser} 解析為 null
+     *
+     * @return RequestPostProcessor，可注入至 MockMvc 請求
+     */
+    private RequestPostProcessor unresolvablePrincipalAuth() {
+        return SecurityMockMvcRequestPostProcessors.authentication(
+                new UsernamePasswordAuthenticationToken("not-an-auth-user", null,
                         List.of(new SimpleGrantedAuthority("ROLE_USER"))));
     }
 
@@ -267,6 +284,17 @@ class SearchControllerIT {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data[0]").value("spring boot"));
         }
+
+        /**
+         * principal 無法解析為 AuthUser 時，應回 400 + A0502（原借用 A0101，已改為 search 自有碼）
+         */
+        @Test
+        @DisplayName("principal 無法解析時取得歷史應回 400 與 A0502")
+        void getHistory_unresolvablePrincipal_returnsA0502() throws Exception {
+            mockMvc.perform(get("/api/v1/search/history").with(unresolvablePrincipalAuth()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0502"));
+        }
     }
 
     /**
@@ -298,6 +326,17 @@ class SearchControllerIT {
 
             verify(searchService).clearHistory(USER_UUID);
         }
+
+        /**
+         * principal 無法解析為 AuthUser 時，應回 400 + A0502（原借用 A0101，已改為 search 自有碼）
+         */
+        @Test
+        @DisplayName("principal 無法解析時清除歷史應回 400 與 A0502")
+        void clearHistory_unresolvablePrincipal_returnsA0502() throws Exception {
+            mockMvc.perform(delete("/api/v1/search/history").with(unresolvablePrincipalAuth()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0502"));
+        }
     }
 
     /**
@@ -328,16 +367,21 @@ class SearchControllerIT {
         }
 
         /**
-         * ADMIN 使用者應可觸發全量重建索引
+         * ADMIN 使用者應可觸發全量重建索引（D1：改為背景執行，立即回 202 Accepted）
          */
         @Test
-        @DisplayName("ADMIN 使用者應可成功觸發重建索引（200 OK）")
-        void reindex_adminUser_returns200() throws Exception {
+        @DisplayName("ADMIN 使用者應可成功觸發重建索引（202 Accepted）")
+        void reindex_adminUser_returns202() throws Exception {
+            when(reindexService.start()).thenReturn(dowob.xyz.blog.module.search.reindex.ReindexStartResult.started(
+                    dowob.xyz.blog.module.search.model.dto.response.SearchReindexJobResponse.builder()
+                            .jobId(UUID.randomUUID())
+                            .state(dowob.xyz.blog.module.search.reindex.ReindexJobState.RUNNING).build()));
+
             mockMvc.perform(post("/api/v1/admin/search/reindex").with(adminAuth(1L)))
-                    .andExpect(status().isOk())
+                    .andExpect(status().isAccepted())
                     .andExpect(jsonPath("$.code").value("00000"));
 
-            verify(searchService).reindexAll();
+            verify(reindexService).start();
         }
     }
 }

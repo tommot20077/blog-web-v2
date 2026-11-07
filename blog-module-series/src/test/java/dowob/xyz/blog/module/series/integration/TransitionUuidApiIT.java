@@ -142,7 +142,6 @@ class TransitionUuidApiIT {
         series.setSlug(slug);
         series.setDescription("d");
         series.setAuthorUuid(userUuid(authorId));
-        series.setArticleCount(0);
         series.setCreatedAt(LocalDateTime.now());
         series.setUpdatedAt(LocalDateTime.now());
         return seriesRepo.save(series);

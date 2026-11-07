@@ -15,3 +15,12 @@ minio:
   access-key: minioadmin
   secret-key: minioadmin
   bucket-name: test-bucket
+
+# 應用層限流（SEC-23）：RateLimitRuleValidator 要求被掃描到的 @RateLimited 規則都有設定；
+# 這裡的 IT 不驗證限流本身，門檻調高到不會觸發。
+app:
+  rate-limit:
+    rules:
+      article-write:
+        limit: 100000
+        window: 1m

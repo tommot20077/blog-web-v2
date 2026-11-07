@@ -1,6 +1,7 @@
 package dowob.xyz.blog.module.article.service;
 
 import dowob.xyz.blog.common.constant.RedisKeyConstant;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -9,6 +10,11 @@ import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -52,6 +58,19 @@ public class ViewCountServiceImpl implements ViewCountService {
         Long dbCount = articleMapper.findViewCountByUuid(articleUuid);
         String redisVal = stringRedisTemplate.opsForValue()
                 .get(RedisKeyConstant.ARTICLE_VIEWS_PREFIX + articleUuid);
+        return combine(articleUuid, dbCount, redisVal);
+    }
+
+    /**
+     * 合併 DB 基礎值與 Redis 暫存增量——單篇（{@link #getViewCount}）與批次（{@link #addRedisDeltas}）
+     * 共用的<b>唯一</b>一份規則：DB 為 null 視為 0；Redis 缺值視為 0；非數字記警告並視為 0。
+     *
+     * @param articleUuid 文章公開 UUID（僅供警告日誌）
+     * @param dbCount     DB 的 {@code view_count}（可為 null）
+     * @param redisVal    Redis 暫存增量的字串值（可為 null）
+     * @return 總瀏覽數
+     */
+    private static long combine(UUID articleUuid, Long dbCount, String redisVal) {
         long base = (dbCount != null) ? dbCount : 0L;
         long delta;
         try {
@@ -61,6 +80,33 @@ public class ViewCountServiceImpl implements ViewCountService {
             delta = 0L;
         }
         return base + delta;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Redis 以 {@code MGET} 批次取回，每 {@link BatchedQuery#BATCH_SIZE} 個 key 一批
+     * （搜尋頁上限 {@code PageQuery.MAX_SIZE} = 100，實務上為單次 MGET；切批是對任意呼叫端的保險）。</p>
+     */
+    @Override
+    public Map<UUID, Long> addRedisDeltas(Map<UUID, Long> dbViewCounts) {
+        if (dbViewCounts == null || dbViewCounts.isEmpty()) {
+            return Map.of();
+        }
+        List<UUID> uuids = new ArrayList<>(dbViewCounts.keySet());
+        List<String> keys = uuids.stream().map(u -> RedisKeyConstant.ARTICLE_VIEWS_PREFIX + u).toList();
+        /* 與 DB 查詢一致依 BATCH_SIZE 切批；MGET 回傳與 key 同序，批次串接後仍與 uuids 對齊 */
+        List<String> redisVals = BatchedQuery.queryInBatches(keys, batch -> {
+            List<String> vals = stringRedisTemplate.opsForValue().multiGet(batch);
+            return vals != null ? vals : Collections.<String>nCopies(batch.size(), null);
+        });
+        Map<UUID, Long> result = new LinkedHashMap<>();
+        for (int i = 0; i < uuids.size(); i++) {
+            UUID uuid = uuids.get(i);
+            String redisVal = i < redisVals.size() ? redisVals.get(i) : null;
+            result.put(uuid, combine(uuid, dbViewCounts.get(uuid), redisVal));
+        }
+        return result;
     }
 
     /**

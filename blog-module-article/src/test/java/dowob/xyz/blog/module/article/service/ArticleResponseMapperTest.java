@@ -176,6 +176,36 @@ class ArticleResponseMapperTest {
     }
 
     @Nested
+    @DisplayName("樂觀鎖 version（RACE-05）")
+    class VersionMapping {
+
+        @Test
+        @DisplayName("toEditorResponse 帶出 article.version")
+        void editorResponse_carriesVersion() {
+            Article article = article(UUID.randomUUID(), UUID.randomUUID());
+            article.setVersion(7L);
+
+            EditorArticleResponse resp = mapper.toEditorResponse(article, List.of(), List.of());
+
+            assertThat(resp.getVersion()).isEqualTo(7L);
+        }
+
+        @Test
+        @DisplayName("toResponse 帶出 article.version（狀態轉換端點回傳它，編輯器據此續存）")
+        void response_carriesVersion() {
+            UUID authorUuid = UUID.randomUUID();
+            Article article = article(UUID.randomUUID(), authorUuid);
+            article.setVersion(3L);
+            when(userFacade.getDisplayInfoByUuids(List.of(authorUuid)))
+                    .thenReturn(Map.of(authorUuid, new UserDisplayInfo(authorUuid, "Yuan", null)));
+
+            ArticleResponse resp = mapper.toResponse(article, List.of(), List.of(), null, null, null, null);
+
+            assertThat(resp.getVersion()).isEqualTo(3L);
+        }
+    }
+
+    @Nested
     @DisplayName("toEditorResponse")
     class ToEditorResponse {
 

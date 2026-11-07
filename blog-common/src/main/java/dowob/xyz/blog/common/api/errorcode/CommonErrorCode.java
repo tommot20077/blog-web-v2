@@ -62,6 +62,14 @@ public enum CommonErrorCode implements IErrorCode {
     OPTIMISTIC_LOCK_CONFLICT("A0008", "資料已被他人修改，請重新整理後再試"),
 
     /**
+     * 通用應用層限流超限（對應 HTTP 429，並帶 {@code Retry-After} header，單位秒）
+     *
+     * <p>與 {@code UserErrorCode.RATE_LIMIT_EXCEEDED}（A0113，auth 流程，HTTP 400）是兩個獨立的碼：
+     * 本碼只由 {@code @RateLimited} 攔截器產生。</p>
+     */
+    TOO_MANY_REQUESTS("A0009", "請求過於頻繁，請稍後再試"),
+
+    /**
      * 系統執行出錯，請稍後再試
      */
     SYSTEM_EXECUTION_ERROR("B0001", "系統執行出錯，請稍後再試"),

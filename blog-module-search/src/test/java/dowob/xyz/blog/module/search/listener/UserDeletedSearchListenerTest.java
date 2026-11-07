@@ -72,7 +72,7 @@ class UserDeletedSearchListenerTest {
 
         InOrder order = inOrder(userFacade, searchService);
         order.verify(userFacade).getDisplayInfoByUuids(List.of(userUuid));
-        order.verify(searchService).updateAuthorNickname(userUuid, "已刪除使用者#abcd1234");
+        order.verify(searchService).updateAuthorNickname(eq(userUuid), eq("已刪除使用者#abcd1234"), any());
         order.verify(searchService).clearHistory(userUuid);
     }
 
@@ -84,7 +84,7 @@ class UserDeletedSearchListenerTest {
 
         listener.onUserDeleted(event(userUuid));
 
-        verify(searchService).updateAuthorNickname(eq(userUuid), eq("已刪除使用者"));
+        verify(searchService).updateAuthorNickname(eq(userUuid), eq("已刪除使用者"), any());
         verify(searchService).clearHistory(userUuid);
     }
 
@@ -94,7 +94,7 @@ class UserDeletedSearchListenerTest {
         UUID userUuid = UUID.randomUUID();
         stubDisplayName(userUuid, "已刪除使用者#abcd1234");
         doThrow(new IllegalStateException("es down")).when(searchService)
-                .updateAuthorNickname(userUuid, "已刪除使用者#abcd1234");
+                .updateAuthorNickname(eq(userUuid), eq("已刪除使用者#abcd1234"), any());
 
         assertThatThrownBy(() -> listener.onUserDeleted(event(userUuid))).isInstanceOf(IllegalStateException.class);
     }

@@ -20,7 +20,7 @@ import java.util.UUID;
  *
  * <p>刪帳時草稿／待審／被駁回的文章會被移除，已發布與已下架的保留，所以可能留下作者已匿名、裡面 0 篇文章的空系列
  * 出現在公開系列列表。仍有保留文章的系列不動，作者顯示為匿名。「是否仍有保留文章」的判斷見
- * {@link SeriesService#deleteSeriesWithoutRetainedArticles}（不依賴 {@code series.article_count}）。</p>
+ * {@link SeriesService#deleteSeriesWithoutRetainedArticles}（直接回問 article facade）。</p>
  *
  * <p>冪等性：由 {@link ConsumerExecutor#executeIdempotent} 對 (event_id, consumer_name) 做 dedup，
  * 標記與刪除在<b>同一個資料庫交易</b>內——重送會被 skip；刪除失敗則標記一起 rollback，DLQ 重投不會被誤判為已處理。

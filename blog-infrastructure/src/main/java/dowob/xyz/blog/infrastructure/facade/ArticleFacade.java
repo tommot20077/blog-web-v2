@@ -2,6 +2,7 @@ package dowob.xyz.blog.infrastructure.facade;
 
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleEngagementCounts;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
@@ -27,7 +28,8 @@ import java.util.UUID;
  * <p>跨模組識別一律是公開 UUID（文章、系列、使用者）；facade 介面不暴露任何資料庫 Long 主鍵。
  * 方法分類：</p>
  * <ul>
- *   <li><b>recommend / search read</b>（findAllPublishedForIndex / getPublishedArticleBasicInfo /
+ *   <li><b>recommend / search read</b>（findPublishedForIndexAfter / findPublishedForIndexByUuids / countPublished /
+ *       getPublishedArticleBasicInfo /
  *       getArticlesByTagIds / getRecentPublishedArticles / getPublishedArticlesByUuids /
  *       getArticlesPublishedAfter）：僅查 PUBLISHED 文章。</li>
  *   <li><b>不限狀態的 read</b>（findByUuid / findBySeriesUuidOrderByPosition / findContentByUuid / existsByUuid）：
@@ -37,7 +39,7 @@ import java.util.UUID;
  *       無業務邏輯觸發。</li>
  *   <li><b>series 用條件式寫入</b>（assignToSeriesIfUnassigned / removeFromSeriesIfAssigned /
  *       updateSeriesPositionIfAssigned）：由 affected rows 回報「這次呼叫是否真的改變了歸屬」，
- *       讓 series 的 article_count 不必先讀再寫（RACE-14）；直接查寫 {@code articles.series_uuid}。</li>
+ *       讓 series 不必先讀再寫（RACE-14）；直接查寫 {@code articles.series_uuid}。</li>
  *   <li><b>version 用 atomic write</b>（applyRestoreContent）：內部接管渲染 / mutate / save /
  *       syncArticleTags / publish events 順序，caller 只交出 Markdown 原文。</li>
  * </ul>
@@ -48,25 +50,56 @@ import java.util.UUID;
 public interface ArticleFacade {
 
     /**
-     * 查詢所有已發布文章的索引資料
+     * 單批索引資料讀取的筆數上限（{@link #findPublishedForIndexAfter} 的 {@code limit} 不得超過此值）。
      *
-     * <p>
-     * 用於搜尋模組全量重建 Elasticsearch 索引（Reindex）。
-     * 僅回傳狀態為 PUBLISHED 的文章，包含完整索引所需欄位。
-     * </p>
-     *
-     * @return 所有已發布文章的索引資料列表
+     * <p>與 {@code BatchedQuery.BATCH_SIZE} 同值：一批文章的標籤以單次 {@code IN} 查詢取得，
+     * 批次大小即該查詢的 bind parameter 數。</p>
      */
-    List<ArticleIndexData> findAllPublishedForIndex();
+    int INDEX_BATCH_MAX_SIZE = 500;
+
+    /**
+     * 以 keyset 分頁讀取一批已發布文章的索引資料（全量重建 Elasticsearch 索引用，PERF-01）。
+     *
+     * <p>依文章公開 UUID <b>升冪</b>（PostgreSQL {@code uuid} 排序）取 {@code afterUuid} 之後的至多 {@code limit} 篇
+     * PUBLISHED 文章；呼叫端以本批最後一筆的 {@link ArticleIndexData#articleUuid()} 當下一批的游標，
+     * 回傳筆數少於 {@code limit} 即代表已讀完。只選索引需要的欄位（不讀 {@code content_html}／{@code toc}）。</p>
+     *
+     * <p>一批之內：標籤以<b>一次</b>批次查詢取得、作者暱稱以<b>一次</b> {@code UserFacade} 批次查詢取得，
+     * 不隨文章逐筆查詢（不 N+1）。</p>
+     *
+     * @param afterUuid 游標（不含）；{@code null} 表示從頭開始
+     * @param limit     本批筆數上限，須介於 1 與 {@link #INDEX_BATCH_MAX_SIZE} 之間
+     * @return 本批文章的索引資料，依 UUID 升冪
+     * @throws IllegalArgumentException {@code limit} 超出範圍
+     */
+    List<ArticleIndexData> findPublishedForIndexAfter(UUID afterUuid, int limit);
+
+    /**
+     * 讀取給定文章中「查詢當下仍為 PUBLISHED」者的索引資料。
+     *
+     * <p>供全量重建期間的增量補齊使用：重建進行中有變動的文章，在切換 alias 前後以本方法回查 DB 現況，
+     * 回傳者寫入新索引、<b>未回傳者（已下架、退回、已刪除）由呼叫端從新索引移除</b>。
+     * 輸入無上界，實作端經 {@code BatchedQuery} 切批；標籤與作者暱稱同樣批次取得。</p>
+     *
+     * @param articleUuids 文章公開 UUID；{@code null} 或空集合回傳空清單（不查 DB），{@code null} 元素忽略
+     * @return 其中目前為 PUBLISHED 者的索引資料（順序不保證）
+     */
+    List<ArticleIndexData> findPublishedForIndexByUuids(Collection<UUID> articleUuids);
+
+    /**
+     * 已發布文章總數（全量重建的進度分母）。
+     *
+     * @return 目前狀態為 PUBLISHED 的文章數
+     */
+    long countPublished();
 
     /**
      * 在給定的文章 UUID 中，篩出「查詢當下確實是 PUBLISHED」的那些
      *
      * <p>
-     * 供搜尋模組清除幽靈 document（ES 有、DB 已非 PUBLISHED）使用。
-     * 與 {@link #findAllPublishedForIndex()} 的差別在於**時點**：後者是全量重建開始時的快照，
-     * 拿快照當清除判準會把「快照撈完之後才發布、由 MQ 寫進索引」的文章誤判為幽靈刪掉；
-     * 本方法是即時查證，因此並發發布的文章會被認出來而保留。
+     * 供搜尋模組的每日幽靈校正清除幽靈 document（ES 有、DB 已非 PUBLISHED）使用。
+     * 判準必須是查詢當下的 DB 狀態而不是某個時點的快照：拿快照當清除判準會把「快照撈完之後才發布、
+     * 由 MQ 寫進索引」的文章誤判為幽靈刪掉；本方法是即時查證，因此並發發布的文章會被認出來而保留。
      * </p>
      *
      * <p>{@code articles} 是業務 Data，跨模組不得直接查表（見 {@code ai-docs/architecture.md}），
@@ -221,9 +254,9 @@ public interface ArticleFacade {
     /**
      * 條件式加入 series：僅當文章<b>目前不屬於任何 series</b> 時才指派，並回報這次寫入是否真的指派了。
      *
-     * <p>為什麼需要：series 模組以 {@code article_count} 記錄成員數，必須知道「這次呼叫是不是新成員」。
-     * 先讀 {@code seriesUuid} 再決定是否 +1 是 check-then-act（RACE-14）——兩個請求同時加入同一篇文章，
-     * 都讀到「無 series」，都 +1，計數多出 1。本方法把判斷放進寫入本身：
+     * <p>為什麼需要：series 模組必須知道「這次呼叫是不是新成員」。
+     * 先讀 {@code seriesUuid} 再決定是 check-then-act（RACE-14）——兩個請求同時加入同一篇文章，
+     * 都讀到「無 series」，都當成新成員。本方法把判斷放進寫入本身：
      * {@code UPDATE articles SET series_uuid = ?, series_position = ? WHERE uuid = ? AND series_uuid IS NULL}，
      * 由 affected rows 決定。同一時間只有一個交易能把 NULL 改成非 NULL，另一個得到 {@code false}。</p>
      *
@@ -233,7 +266,7 @@ public interface ArticleFacade {
      *
      * <p>直接寫入 {@code articles.series_uuid}；article 不檢查系列是否存在
      * （系列存在性由呼叫端 series 模組負責，V32 起沒有 FK 把關）。呼叫端若在寫入後發現系列已被併發刪除
-     * （例如 {@code article_count + 1} 影響 0 列），須回滾交易，避免留下指向已不存在系列的歸屬。</p>
+     * （例如對 series 列加共享鎖查無此列），須回滾交易，避免留下指向已不存在系列的歸屬。</p>
      *
      * @param articleUuid    文章公開 UUID
      * @param seriesUuid     要加入的系列公開 UUID（不得為 null）
@@ -248,7 +281,7 @@ public interface ArticleFacade {
      *
      * <p>與 {@link #assignToSeriesIfUnassigned} 對稱，解 RACE-14 的移出面：
      * {@code UPDATE articles SET series_uuid = NULL, series_position = NULL WHERE uuid = ? AND series_uuid = ?}，
-     * 由 affected rows 決定 series 模組是否 {@code article_count - 1}。兩個請求同時移出同一篇文章，
+     * 由 affected rows 決定這次是否真的移出。兩個請求同時移出同一篇文章，
      * 只有一個得到 {@code true}。寫入時一併遞增 {@code version} 並更新 {@code updated_at}。</p>
      *
      * @param articleUuid 文章公開 UUID
@@ -324,7 +357,7 @@ public interface ArticleFacade {
      * 集合述詞：一次取得多個 series 各自的 PUBLISHED 文章數。
      *
      * <p>供 series 模組同時作為「哪些 series 有公開內容」的過濾條件與
-     * {@code article_count} 的即時投影，取代原本直讀 articles 的
+     * 篇數的即時投影（V36 起 {@code series.article_count} 已移除），取代原本直讀 articles 的
      * EXISTS ＋ COUNT 子查詢（ARCH-13 / PERF-34）。直接以 {@code articles.series_uuid} 分組計數。</p>
      *
      * <p><b>傳輸量界限</b>：與 {@code seriesUuids} 大小成正比。series 為低基數實體
@@ -341,7 +374,7 @@ public interface ArticleFacade {
      * <p>「保留文章」＝作者刪帳（匿名化，DATA-02）時<b>不會被移除</b>的狀態（{@code PUBLISHED}、{@code ARCHIVED}），
      * 判斷委派 {@code ArticleStatus#isRemovedWithAuthorAccount}（去留政策的唯一真相，不在此另寫狀態集合）。
      * 供 series 模組在作者刪帳時決定哪些系列已經「空了」可以刪除。直接查 {@code articles.status}／{@code series_uuid}，
-     * <b>不依賴</b> {@code series.article_count}（文章刪除與 series consumer 的執行順序不確定，計數可能尚未遞減）。</p>
+     * 不依賴任何計數（文章刪除與 series 端處理的執行順序不確定）。</p>
      *
      * <p>與 {@link #countPublishedBySeriesUuids} 的差異：後者是狀態字面量 PUBLISHED（公開可見性），
      * 本方法是「去留政策」，ARCHIVED 也算保留。</p>
@@ -454,4 +487,22 @@ public interface ArticleFacade {
      * @return 作者統計，永不為 null
      */
     AuthorArticleStats getPublishedStatsByAuthor(UUID authorUuid);
+
+    /**
+     * 批次取得文章的互動計數（瀏覽數、按讚數），口徑與文章詳情頁完全一致。
+     *
+     * <p>瀏覽數 = DB {@code view_count} + Redis {@code article:views:{uuid}} 暫存增量（與
+     * {@code ViewCountService#getViewCount} 共用同一段合併邏輯）；按讚數 = DB {@code like_count}。
+     * 搜尋結果等列表用它補上計數，不再使用索引內的快照值（DATA-05，決策 B4）。</p>
+     *
+     * <p>效能保證：不論輸入幾篇，DB 為批次查詢（輸入超過 {@code BatchedQuery#BATCH_SIZE} 才切批），
+     * Redis 為一次 MGET，沒有逐篇往返。</p>
+     *
+     * <p>不分文章狀態（列表層已先限定 PUBLISHED）；DB 查無的文章<b>不會出現在結果中</b>，
+     * 呼叫端自行決定缺漏時的預設值（可用 {@link ArticleEngagementCounts#ZERO}）。</p>
+     *
+     * @param articleUuids 文章公開 UUID 集合；null 或空集合回傳空 Map（不查 DB、不連 Redis）
+     * @return 文章 UUID → 互動計數
+     */
+    Map<UUID, ArticleEngagementCounts> getEngagementCounts(Collection<UUID> articleUuids);
 }

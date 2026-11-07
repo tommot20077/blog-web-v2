@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -21,6 +22,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -61,12 +64,23 @@ public class SecurityConfig {
     /** 公開的文章留言端點：{@code GET /api/v1/articles/{uuid}/comments} */
     private static final String PUBLIC_ARTICLE_COMMENTS = PUBLIC_ARTICLE_DETAIL + "/comments";
 
+    /**
+     * 公開的留言回覆分頁端點：{@code GET /api/v1/comments/{uuid}/replies}（D3，Yuan 2026-11-07 拍板）。
+     *
+     * <p>與 {@link #PUBLIC_ARTICLE_COMMENTS} 同一個公開面：匿名可到達，實際可見性在 service
+     * （文章不可讀回 404）。只比對 UUID 形狀的 {@code /replies}，同前綴的 {@code /api/v1/comments/**}
+     * 其他路徑與非 GET 方法一律落入 {@code anyRequest().authenticated()}。</p>
+     */
+    private static final String PUBLIC_COMMENT_REPLIES = "/api/v1/comments/" + UUID_PATH_VARIABLE + "/replies";
+
     /** 公開的作者頁資料端點：{@code GET /api/v1/users/{uuid}/profile} */
     private static final String PUBLIC_USER_PROFILE = "/api/v1/users/" + UUID_PATH_VARIABLE + "/profile";
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
     private final ObjectMapper objectMapper;
+
+    private final Environment environment;
 
     /**
      * CORS 允許的來源清單，透過環境變數注入。
@@ -85,6 +99,28 @@ public class SecurityConfig {
      */
     @Value("${springdoc.api-docs.enabled:false}")
     private boolean springdocEnabled;
+
+    /**
+     * 比對「從 management port 進來的 {@code /actuator/**} 請求」（C7）。
+     *
+     * <p>以請求的<b>實際連線 port</b>（{@code getLocalPort()}，不是可被偽造的 Host header）與
+     * {@code local.management.port} 比對。{@code local.*.port} 要等 web server 啟動後才有值，而本 bean 建立得更早，
+     * 所以在<b>請求時</b>才讀取。fail-closed 條件：沒有設定獨立的 management port、或其值等於主 port
+     * （共用同一個對外 port）時，一律不匹配，{@code /actuator/**} 退回需要 ADMIN。</p>
+     *
+     * @return 匹配 management port 上 actuator 請求的 matcher
+     */
+    private RequestMatcher managementPortActuatorRequest() {
+        RequestMatcher actuatorPath = new AntPathRequestMatcher("/actuator/**");
+        return request -> {
+            Integer managementPort = environment.getProperty("local.management.port", Integer.class);
+            Integer serverPort = environment.getProperty("local.server.port", Integer.class);
+            return managementPort != null
+                    && !managementPort.equals(serverPort)
+                    && request.getLocalPort() == managementPort
+                    && actuatorPath.matches(request);
+        };
+    }
 
     /**
      * 建立 Spring Security 過濾器鏈
@@ -109,12 +145,22 @@ public class SecurityConfig {
                         auth.requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll();
                     }
                     auth
-                        // Actuator Health（K3s liveness/readiness probe）
-                        .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
+                        // K3s liveness/readiness probe（C7）：actuator 搬到獨立的 management port 後，
+                        // 主 port 以 management.endpoint.health.probes.add-additional-paths 提供 /livez、/readyz。
+                        .requestMatchers("/livez", "/readyz").permitAll()
 
-                        // Actuator 其餘端點（metrics 等運維資訊）限 ADMIN。
-                        // 必須排在上面 permitAll 之後（health/info 仍公開）、anyRequest 之前；
+                        // 從 management port 進來的 /actuator/**（health、info、Prometheus 抓取端都不帶 JWT）：匿名放行。
+                        // 刻意不另設 /actuator/health/**、/actuator/info 的全域 permitAll：那會在 management port
+                        // 被誤設成主 port 時讓 health／info 匿名可讀，與 fail-closed 矛盾。
+                        // 前提是「management port 不對外」（不經 ingress／Service 發布，見 security.md 部署注意事項）；
+                        // 主 port 的同一路徑落入下一條 hasRole("ADMIN")，維持 fail-closed。
+                        .requestMatchers(managementPortActuatorRequest()).permitAll()
+
+                        // 主 port 上所有 /actuator/**（health、info、metrics、prometheus 等）限 ADMIN。
+                        // 必須排在上面 management port 規則之後、anyRequest 之前；
                         // 少了這條，暴露 metrics 等於讓任何已登入使用者讀到端點清單與呼叫量。
+                        // 這是主 port 上的 fail-closed 兜底：Prometheus 端點正常只在 management port，
+                        // 主 port 不存在該路徑（見 ActuatorManagementPortE2E）。
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         // 靜態資源與 Swagger
@@ -146,6 +192,7 @@ public class SecurityConfig {
                          *   GET /api/v1/articles/slug/{slug}      ArticleController#getArticleBySlug（無 @PreAuthorize）
                          *   GET /api/v1/articles/{uuid}           ArticleController#getArticle（無 @PreAuthorize）
                          *   GET /api/v1/articles/{uuid}/comments  CommentController#list（原則 7 豁免，JavaDoc 明載匿名可讀）
+                         *   GET /api/v1/comments/{uuid}/replies   CommentController#listReplies（同上；回覆分頁，D3）
                          *
                          * 護欄：新增任何 articles 子端點時，預設就是「需認證」；要放行必須同步
                          * 更新本清單、ai-docs/security.md 的 Public Endpoints 表與 SecurityConfigTest，
@@ -156,6 +203,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/articles/slug/*").permitAll()
                         .requestMatchers(HttpMethod.GET, PUBLIC_ARTICLE_DETAIL).permitAll()
                         .requestMatchers(HttpMethod.GET, PUBLIC_ARTICLE_COMMENTS).permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_COMMENT_REPLIES).permitAll()
 
                         .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
                         /*
@@ -262,6 +310,8 @@ public class SecurityConfig {
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
+        // 429 的 Retry-After（SEC-23）：跨域（例如本機前端 :3000 打後端 :8080）時瀏覽器預設讀不到此 header
+        configuration.setExposedHeaders(List.of("Retry-After"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);

@@ -35,7 +35,19 @@ If the order is wrong, `anyRequest()` matches first and shadows the admin rule, 
 |------|-------------|-------------|
 | USER | ROLE_USER | COMMENT_WRITE, COMMENT_DELETE |
 | AUTHOR | ROLE_AUTHOR | All USER permissions + ARTICLE_CREATE, ARTICLE_EDIT, ARTICLE_DELETE, ARTICLE_PIN, FILE_UPLOAD |
-| ADMIN | ROLE_ADMIN | All permissions (`EnumSet.allOf`) |
+| ADMIN | ROLE_ADMIN | All permissions (`EnumSet.allOf`), including the `ADMIN_*` family below (only ADMIN has them) |
+
+**Admin permissions (`ADMIN_*`, A9／AUTH-10, Yuan 2026-11-07)** — every admin endpoint is guarded by a permission named for its duty, on top of the URL-layer `/api/v1/admin/** → hasRole('ADMIN')` (two layers). The generic `SYSTEM_CONFIG` (and the unused duplicate `TAG_MANAGE`, renamed `ADMIN_TAG`) no longer exist; the guard `EndpointAuthorizationTest` rejects any `/api/v1/admin/**` handler that is not `hasAuthority('ADMIN_*')` with an existing permission name.
+
+| Permission | Endpoints |
+|------------|-----------|
+| `ADMIN_TAG` | `PUT`／`DELETE /api/v1/admin/tags/{id}` |
+| `ADMIN_CATEGORY` | `POST /api/v1/admin/categories`, `PUT`／`DELETE /api/v1/admin/categories/{uuid}` |
+| `ADMIN_ARTICLE_REVIEW` | `GET /api/v1/admin/articles/pending`, `POST /api/v1/articles/{uuid}/reject` (the only one outside the `/admin` URL layer — method layer is its sole guard) |
+| `ADMIN_ARTICLE_ARCHIVE` | `POST /api/v1/admin/articles/{uuid}/archive`, `POST /api/v1/admin/articles/{uuid}/unarchive` |
+| `ADMIN_SEARCH` | `POST /api/v1/admin/search/reindex`, `GET /api/v1/admin/search/status` |
+
+`USER_MANAGE`, `USER_BAN`, `SYSTEM_ANNOUNCE` are reserved ADMIN-only permissions with no endpoint yet. The two version read endpoints (`GET /api/v1/articles/{uuid}/versions[/{versionUuid}]`) now require `ARTICLE_EDIT` like the four write endpoints; owner/admin checks stay in the service layer.
 
 ### 4. Capability vs Ownership Separation
 
@@ -131,7 +143,7 @@ public void changePassword(...) {
 ### 11. Client IP 只能經 `ClientIpResolver` 取得 (CRITICAL)
 
 > 來源:findings SEC-01、決策紀錄 §6.1「SEC-01 定案 (a)」。`X-Forwarded-For`(XFF)左側節點由 client 任意偽造,
-> 直接取第一節或讓 Spring 無條件用 XFF 覆寫 remoteAddr,會使登入/註冊 IP 限流、瀏覽數去重整層可繞過。
+> 直接取第一節或讓 Spring 無條件用 XFF 覆寫 remoteAddr,會使登入/註冊/忘記密碼/重寄驗證信/驗證碼 IP 限流、瀏覽數去重整層可繞過。
 
 *   正式拓撲:Client → Cloudflare → nginx → k3s Ingress → app。第 1 層(origin 只放行 Cloudflare)、第 2 層(nginx `realip` 並以 `$remote_addr` **覆寫** XFF)在 infrastructure repo;本 repo 負責第 3 層。
 *   **唯一入口**:`dowob.xyz.blog.infrastructure.web.ClientIpResolver#resolve(HttpServletRequest)`。controller 注入它,不得自行讀 `X-Forwarded-For`/`Forwarded`/`X-Real-IP`/`X-Client-IP`/`CF-Connecting-IP`/`True-Client-IP`,也不得呼叫 `getRemoteAddr()`/`getRemoteHost()`/`getRemoteAddress()`(守衛:`ClientIpAccessGuardTest`)。
@@ -146,13 +158,66 @@ public void changePassword(...) {
 
 ---
 
+## 應用層限流 (SEC-23 / A4)
+
+> 來源:findings SEC-23、決策 A4(Yuan 2026-11-07 拍板)。除 auth 流程自有的限流(登入/註冊/忘記密碼等,見原則 11)外,
+> 寫入端點與搜尋原本完全沒有限流。通用元件在 `blog-infrastructure` 的 `dowob.xyz.blog.infrastructure.ratelimit` 套件。
+
+**宣告**:handler 加 `@RateLimited("<規則名稱>")`(方法優先,其次類別)。規則名稱對應 `application.yaml` 的 `app.rate-limit.rules.<規則名稱>`。
+同一規則名稱的 handler **共用同一個計數器**(例如留言新增與編輯共用每分鐘 10 次)。
+
+**規則表**(門檻依 A4,並含 **2026-11-07 Yuan 追加決策**;`application.yaml` 的預設值,守衛 `RateLimitedEndpointGuardTest` 會比對):
+
+| 規則名稱 | 套用的 handler | 門檻 | 窗口 | 計數主體 |
+|---|---|---|---|---|
+| `comment-write` | `CommentController#create`(含回覆)、`#edit` | 10 次 | 1 分鐘 | 使用者 |
+| `interaction-write` | `ArticleLikeController#like`、`CommentLikeController#like`、`BookmarkController#bookmark`、`HighlightController#create`/`#update`、`TagController#followTag` | 60 次 | 1 分鐘 | 使用者 |
+| `reading-progress` | `ReadingProgressController#update`(捲動時高頻回報,自 `interaction-write` 拆出) | 120 次 | 1 分鐘 | 使用者 |
+| `upload` | `FileController#uploadFile` | 30 次 | 1 小時 | 使用者 |
+| `article-write` | `ArticleController#createArticle`/`#updateArticle`/`#submitForReview`/`#withdrawArticle`/`#publishArticle`、`VersionController#createManual`/`#restore`/`#promote`、`SeriesController#create`/`#update`/`#addArticle` | 30 次 | 1 分鐘 | 使用者 |
+| `account-write` | `UserController#updateProfile`/`#updateNotifications`/`#changePassword`、`PreferenceController#update` | 30 次 | 1 分鐘 | 使用者 |
+| `search` | `SearchController#search` | 120 次(原 A4 為 30,前端邊打字邊搜尋且有 CGNAT 共用 IP) | 1 分鐘 | **一律 IP**(登入者也一樣) |
+| `search-suggest` | `SearchController#suggest` | 120 次 | 1 分鐘 | **一律 IP** |
+
+**不套用(守衛 `EXEMPT`,每條附理由)**:DELETE 與讀取類端點不在範圍;auth 流程(`register`、`login`、`verifyEmailCode`、`resendVerification`、`forgotPassword` 已有 A0113／IP 限流;`refresh`、`logout`、`verifyEmail`、`resetPassword` 為 cookie 或一次性高熵 token 把關);admin 端點(`AdminArticleController#archiveArticle`/`#unarchiveArticle`、`AdminCategoryController#createCategory`/`#updateCategory`、`AdminTagController#updateTag`、`AdminSearchController#reindex`)與 `ArticleController#rejectArticle`(受信任角色、量少)。新增的 POST／PUT／PATCH handler 若既無 `@RateLimited` 也不在 `EXEMPT`,守衛會失敗。
+
+
+**行為**:
+*   **計數主體**:`subject=USER` 時已登入者以 `userUuid` 計、匿名者(`permitAll` 端點)退回 client IP,IP 一律經 `ClientIpResolver`(原則 11),所以 prod 必須設 `APP_HTTP_TRUSTED_PROXY_COUNT`,否則全站匿名請求共用 proxy 的 IP 桶;`subject=IP` 一律以 IP 計。
+*   **Redis**:固定窗口,Lua 原子執行 `INCR`,TTL 為 -1 時補 `EXPIRE`(`FixedWindowCounter`,全專案唯一一份;user 模組的 `UserRedisAtomicOps#incrementWithTtl` 也執行同一份腳本)。key 為 `ratelimit:{規則}:{u|ip}:{id}`(`RedisKeyConstant#getRateLimitKey`)。
+*   **超限**:HTTP **429**,body 為統一 `ApiResponse`(`code = A0009`,`CommonErrorCode.TOO_MANY_REQUESTS`),header `Retry-After` = 窗口剩餘秒數(Redis `PTTL` 無條件進位,至少 1)。CORS 已暴露 `Retry-After`,跨域前端也讀得到。與 auth 流程的 `A0113`(`UserErrorCode.RATE_LIMIT_EXCEEDED`,HTTP 400)是兩個獨立的碼,本次未改 A0113。
+*   **順序**:攔截器(`HandlerInterceptor`)屬 Spring MVC 層,在 Spring Security 過濾器鏈**之後**、controller 之前。未認證的寫入請求先得到 401,**不消耗額度**;認證通過但被 `@PreAuthorize` 拒絕的 403、以及 400 驗證失敗,仍會消耗額度。
+*   **Redis 故障**:不吞例外(fail-closed,回 500),與 auth 限流一致。已登入請求本來就依賴 Redis(`AuthStateLoader`),且 fail-open 會讓「先打掛 Redis 再灌寫入」成為繞過手段。**影響範圍包括匿名的 `GET /api/v1/search`、`/search/suggest`:Redis 故障期間也會回 500**(原本匿名搜尋不依賴 Redis 計數)。
+*   **IP 取得與部署必要設定**:匿名請求與 `subject=IP` 規則的計數主體是 `ClientIpResolver` 的結果。**正式環境必須設定 `APP_HTTP_TRUSTED_PROXY_COUNT`**(prod 通常為 1);沒設時所有請求的 IP 都是 proxy 的 `remoteAddr`,`search`／`search-suggest` 會變成**全站共用一個 IP 桶**。
+*   **IPv6 已知限制**:IP 以完整位址計數(不聚合 /64)。持有整段 /64 的使用者可以輪換位址繞過每 IP 限流,這是已知限制,未處理。
+*   **multipart 已知限制**:`DispatcherServlet` 在攔截器之前先解析 multipart,上傳限流擋不住 multipart 解析本身的成本(由大小上限與 nginx／ingress body 上限負責)。
+*   **fail-fast**:`@RateLimited` 的規則名稱不在 yaml → 啟動失敗(`RateLimitRuleValidator`);規則 `limit < 1` 或 `window < 1s` 亦啟動失敗。不會靜默不限流。
+
+**部署覆寫**(環境變數;`window` 接受 `30s`、`1m`、`1h`、ISO-8601 等 Spring `Duration` 格式):
+
+| 規則 | 門檻 | 窗口 |
+|---|---|---|
+| `comment-write` | `APP_RATE_LIMIT_COMMENT_WRITE_LIMIT` | `APP_RATE_LIMIT_COMMENT_WRITE_WINDOW` |
+| `interaction-write` | `APP_RATE_LIMIT_INTERACTION_WRITE_LIMIT` | `APP_RATE_LIMIT_INTERACTION_WRITE_WINDOW` |
+| `reading-progress` | `APP_RATE_LIMIT_READING_PROGRESS_LIMIT` | `APP_RATE_LIMIT_READING_PROGRESS_WINDOW` |
+| `upload` | `APP_RATE_LIMIT_UPLOAD_LIMIT` | `APP_RATE_LIMIT_UPLOAD_WINDOW` |
+| `article-write` | `APP_RATE_LIMIT_ARTICLE_WRITE_LIMIT` | `APP_RATE_LIMIT_ARTICLE_WRITE_WINDOW` |
+| `account-write` | `APP_RATE_LIMIT_ACCOUNT_WRITE_LIMIT` | `APP_RATE_LIMIT_ACCOUNT_WRITE_WINDOW` |
+| `search` | `APP_RATE_LIMIT_SEARCH_LIMIT` | `APP_RATE_LIMIT_SEARCH_WINDOW` |
+| `search-suggest` | `APP_RATE_LIMIT_SEARCH_SUGGEST_LIMIT` | `APP_RATE_LIMIT_SEARCH_SUGGEST_WINDOW` |
+
+**新增限流端點**:(1)確認門檻(決策項,見 `judgment.md` §5);(2)handler 加 `@RateLimited`;(3)規則缺就在 `application.yaml` 補並更新上表;(4)同步 `RateLimitedEndpointGuardTest.EXPECTED`(守衛雙向檢查:清單內端點必須帶規則、清單外不得出現 `@RateLimited`);(5)測試用 profile(E2E、各模組 `application-test.yaml`)補同名規則。
+
+---
+
 ## Public Endpoints (No Authentication Required)
 
 > 下表**依 `SecurityConfig` 中的宣告順序排列**,每一列對應一條 `permitAll()`。
 
 | Method | Path | Description |
 |--------|------|-------------|
-| ANY | `/actuator/health/**`, `/actuator/info` | K3s liveness/readiness probe 與服務資訊 |
+| ANY | `/livez`, `/readyz` | K3s liveness/readiness probe（主 port）。actuator 搬到獨立 management port 後，由 `management.endpoint.health.probes.add-additional-paths=true` 在主 port 提供 |
+| ANY（限 management port） | `/actuator/**`（含 health、info、prometheus） | **僅「從 management port 進來」的請求**匿名放行（抓取端不帶 JWT），前提是該 port 不對外，見下方說明；主 port 的同一路徑（包括 `/actuator/health/**`、`/actuator/info`）不放行，一律 ADMIN |
 | ANY | `/swagger-ui/**`, `/v3/api-docs/**`, `/swagger-ui.html` | API documentation。僅在 springdoc 啟用時（dev／demo／`SPRINGDOC_ENABLED=true`）存在；正式環境關閉（SEC-21，Yuan 2026-11-04）：關閉時這些路徑**不在 permitAll**，匿名請求落入 `anyRequest().authenticated()` 回 401；已登入者打到則由 `GlobalExceptionHandler` 回 404 |
 | ANY | `/favicon.ico`, `/error` | favicon 與 Servlet 容器的錯誤轉發路徑 |
 | ANY | `/api/v1/auth/**` | Login, registration, refresh 等。**例外**:`POST /api/v1/auth/logout` 已在上一條規則設為 `authenticated()` |
@@ -161,6 +226,7 @@ public void changePassword(...) {
 | GET | `/api/v1/articles/slug/{slug}` | 依 slug 取已發布文章 |
 | GET | `/api/v1/articles/{uuid}` | 依 uuid 取文章(`{uuid}` 以 UUID 形狀比對,非 UUID 的字面量子路徑不落在此規則內) |
 | GET | `/api/v1/articles/{uuid}/comments` | 文章留言列表(原則 7 豁免的匿名可讀端點) |
+| GET | `/api/v1/comments/{uuid}/replies` | 頂層留言的回覆分頁(「載入更多」;原則 7 豁免的匿名可讀端點,與留言列表同一公開面;`{uuid}` 以 UUID 形狀比對,僅開放 GET;文章對檢視者不可讀、留言不存在、傳入回覆的 uuid 三者一律回 200 空頁,回應完全相同,與列表一致,不形成存在性探測) |
 | GET | `/api/v1/tags/**` | Tag queries |
 | GET | `/api/v1/files/**` | **不代表檔案公開**——permitAll 只代表「請求可到達 Controller」,實際授權在 `FileService#canRead()`(AVATAR 與已發布文章圖片對匿名開放;草稿圖片與未綁定檔案僅上傳者與 ADMIN 可讀) |
 | GET | `/api/v1/categories/**` | Category queries |
@@ -173,18 +239,37 @@ public void changePassword(...) {
 
 > (2026-11 公開作者功能,Yuan 已同意(設計 §3.4,`docs/plans/2026-10-23-public-author-profile-design.md`)新增 `GET /api/v1/users/{uuid}/profile` 與 `GET /api/v1/authors` 兩條 permitAll。兩者皆不取用 `@AuthenticationPrincipal`、回應不隨登入者而變,故不在原則 7 的豁免清單內,也不需要 `@PreAuthorize`。守衛:`SecurityConfigTest` 的 `unauthenticatedGetPublicProfile_shouldReturn200` / `unauthenticatedGetAuthors_shouldReturn200` 與反向 `unauthenticatedGetMeProfile_shouldReturn401` / `unauthenticatedPatchProfile_shouldReturn401` / `unauthenticatedPostAuthors_shouldReturn401`;`PublicAuthorControllerTest` 以 JSON 欄位白名單防止日後在 DTO 加 `email`／`username`／`role`。)
 
-> **Actuator 只有上表兩條是公開的，其餘限 ADMIN**（2026-09-06）：
-> `management.endpoints.web.exposure.include` 自 `health,info` 增為 `health,info,metrics`
-> （用於觀察 `BatchedQuery` 的輸入分佈，是 `findings.md` **ARCH-16** 的第一步）。
-> `SecurityConfig` 於 actuator 的 permitAll 之後緊接
-> `.requestMatchers("/actuator/**").hasRole("ADMIN")`，故 `/actuator/metrics`
-> 未認證回 401、一般登入使用者回 403。**少了這條，暴露 metrics 等於讓任何已登入使用者
-> 讀到端點清單與呼叫量**——這正是 BUG-2026-001 FIN-3+4「新端點沒順手確認授權面」的形態。
-> 守衛：`SecurityConfigTest` 的 `unauthenticatedGetActuatorMetrics_shouldReturn401`、
-> `authenticatedNonAdminGetActuatorMetrics_shouldReturn403`、
-> `adminGetActuatorMetrics_shouldPassAuthorization`，
-> 以及 `unauthenticatedGetActuatorHealth_shouldNotBeUnauthorized`
-> （最後一條防止日後收緊時誤傷 K3s probe，那會讓 pod 反覆重啟）。
+> **Actuator 的暴露面（ARCH-16／決策 C7，Yuan 2026-11-07 拍板；2026-11-07 實作）**：
+> actuator 搬到獨立的 **management port**（`management.server.port`，預設 `9091`，可用環境變數
+> `MANAGEMENT_SERVER_PORT` 覆寫），`exposure.include` 為 `health,info,metrics,prometheus`。
+> `/actuator/prometheus` 是 Prometheus 文字格式匯出，內含 `mq.consumer.*`、`mq.publisher.failed`、`mq.dlq.depth` 等運維指標。
+>
+> - **主 port（`server.port`，對外）**：只有 `/livez`、`/readyz`（K3s probe）；沒有 `/actuator/**`。
+>   `SecurityConfig` 對主 port 的 `/actuator/**` 維持 `hasRole("ADMIN")`（fail-closed 兜底）。
+> - **management port（不對外）**：同一條 `SecurityFilterChain` 也套用在這個 port（E2E 實測）。
+>   `SecurityConfig` 以請求的實際連線 port（`getLocalPort()`，非 Host header）等於 `local.management.port`
+>   且路徑為 `/actuator/**` 時匿名放行，讓抓取端不需 JWT。若 management port 未設或**等於主 port**
+>   （共用對外 port），此規則不匹配，退回 `ADMIN`——誤設不會把指標匿名公開到公網。
+> - **「此 port 不對外」是安全前提，不是程式能保證的事**：部署時 management port **不得**被 ingress、Service
+>   （LoadBalancer／NodePort）或 `docker -p` 對外發布；只允許叢集內部（Prometheus 抓取端）連線。
+>   K3s probe 也可改打 management port 的 `/actuator/health/liveness`、`/actuator/health/readiness`，
+>   但預設走主 port 的 `/livez`、`/readyz`（不依賴 management port 的網路規則）。
+> - 守衛：`SecurityConfigManagementPortTest`（management port 放行、主 port 401、不順帶放行 API）、
+>   `SecurityConfigManagementPortSamePortTest`（兩 port 相同時 fail-closed）、
+>   `SecurityConfigTest` 的 `unauthenticatedGetActuatorMetrics_shouldReturn401`、
+>   `unauthenticatedGetActuatorPrometheus_shouldReturn401`、`authenticatedNonAdminGetActuatorMetrics_shouldReturn403`、
+>   `adminGetActuatorMetrics_shouldPassAuthorization`，以及
+>   `unauthenticatedGetProbePaths_shouldNotBeUnauthorized`（防止日後收緊時誤傷 `/livez`、`/readyz`，那會讓 pod 反覆重啟）；
+>   端到端見 `ActuatorManagementPortE2E`（management port 取得 Prometheus 輸出、主 port 取不到）。
+> - **部署注意事項**：
+>   1. management port 預設綁在**所有網卡**（未設 `management.server.address`），不得經由 Service（含 ClusterIP 以外的型別）、
+>      ingress 或 host network 發布；Pod 若用 `hostNetwork: true`，9091 會直接暴露在節點上。
+>   2. K3s probe **必須**改打主 port 的 `/livez`、`/readyz`（或 management port 的 `/actuator/health/liveness|readiness`）；
+>      主 port 已沒有 `/actuator/health`，仍打舊路徑會得到 404（探針失敗），pod 會反覆重啟。
+>   3. `spring.rabbitmq.connection-timeout`（預設 5s）與 `channel-rpc-timeout`（預設 10s）為全站 MQ 連線層逾時，
+>      可用 `RABBITMQ_CONNECTION_TIMEOUT`、`RABBITMQ_CHANNEL_RPC_TIMEOUT` 覆寫。
+> - 歷史：2026-09-06 曾將 `exposure.include` 自 `health,info` 增為 `health,info,metrics`（BatchedQuery 輸入分佈，ARCH-16 第一步），
+>   並加上 `.requestMatchers("/actuator/**").hasRole("ADMIN")`，避免「新端點沒順手確認授權面」（BUG-2026-001 FIN-3+4）；該規則保留。
 
 **`/api/v1/articles/**` 底下明確「不公開」的端點**(SEC-09 收窄後由 URL 層 + 方法層雙重把關):
 
@@ -192,11 +277,13 @@ public void changePassword(...) {
 |--------|------|-----------|
 | GET | `/api/v1/articles/me` | `@PreAuthorize("isAuthenticated()")` |
 | GET | `/api/v1/articles/{uuid}/edit` | `@PreAuthorize("hasAuthority('ARTICLE_EDIT')")` |
-| GET | `/api/v1/articles/{uuid}/versions`、`/versions/{versionUuid}` | `@PreAuthorize("isAuthenticated()")` |
+| GET | `/api/v1/articles/{uuid}/versions`、`/versions/{versionUuid}` | `@PreAuthorize("hasAuthority('ARTICLE_EDIT')")`(A9;擁有者／ADMIN 檢查在 service 層) |
 | GET | `/api/v1/articles/{uuid}/highlights` | `@PreAuthorize("isAuthenticated()")` |
 | GET | `/api/v1/articles/{uuid}/progress` | `@PreAuthorize("isAuthenticated()")` |
 
 > 此表必須與 `blog-infrastructure/.../config/SecurityConfig.java` 的 `permitAll()` 規則**一對一對得上**;改任一邊都要同步另一邊與前端 `ai-docs/api-contract.md`。
+> (2026-11-07 D3,Yuan 拍板「回覆改為分頁(載入更多)」:新增 `GET /api/v1/comments/{uuid}/replies` 一條 permitAll。理由:列表 API 每則頂層留言只內嵌前 3 則回覆,其餘由此端點載入,而列表本身匿名可讀,若回覆分頁需登入,匿名讀者就看不到完整討論串。可見性與列表一致(文章可讀才可讀,SEC-16 的讀取面;不可讀時回 200 空頁而非 404,避免存在性探測)。守衛:`SecurityConfigTest` 的 `unauthenticatedListCommentReplies_shouldReturn200` 與反向 `unauthenticatedGetCommentByUuid_shouldReturn401` / `unauthenticatedListCommentRepliesWithNonUuid_shouldReturn401` / `unauthenticatedPostCommentReplies_shouldReturn401`;`EndpointAuthorizationTest.EXEMPT` 的 `CommentController#listReplies`;`CommentRepliesPagingIT` 驗證匿名可讀、不可讀／不存在／回覆 uuid 三者回應相同。)
+
 > (2026-07-07 依 `SecurityConfig.java:75-102` 校正:移除 `GET /api/v1/users/**`——已收窄,見 `SecurityConfigTest.java:235`「已收窄 permitAll」;補上 categories、recommend。)
 > (2026-07-16 依 Yuan 裁定新增 `GET /api/v1/series/**`:此前 SecurityConfig 無 series 規則,該路徑落入 `anyRequest().authenticated()`,與 `SeriesController` JavaDoc 自稱「公開」矛盾(backlog H5 / 07-07 #3),且使公開的前端 `/tags` 頁對匿名訪客靜默隱藏系列區塊。**僅開放 GET**,寫入維持認證;守衛見 `SecurityConfigTest` 的 `unauthenticatedListSeries_shouldReturn200` / `unauthenticatedGetSeriesDetail_shouldReturn200` / `unauthenticatedPostSeries_shouldReturn401`。)
 > (2026-07-18 commit `147e4cf`:series 對匿名開放後的讀取端點強化。permitAll 面**不變**,僅收斂匿名可見內容——(1) 公開列表 `findPublic`/`countPublic` 改以 `EXISTS(status='PUBLISHED')` 判可見性,只含草稿的系列不再曝光給匿名;(2) `getSeriesDetail` 一律只回 PUBLISHED 文章、`articleCount` 為實際公開數,零篇已發布仍回 200 空清單(series 視為存在,列表另行策展);(3) `listPublic` 的 `size` 夾 [1,100] 防匿名放大查詢。此三項是「原則 7 選填認證公開端點」豁免下、匿名可見面的縱深控制。守衛 `SeriesControllerIT.list_seriesWithOnlyDraft_excludedFromPublicList` / `getSlug_anonymous_neverExposesDraftArticle` / `getSlug_anonymous_seriesWithoutPublished_returnsEmpty` / `list_oversizedPageSize_clampedTo100`。)

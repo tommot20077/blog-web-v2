@@ -59,9 +59,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  *
  * <ul>
  *   <li><b>RACE-14</b>：{@code addArticleToSeries} 以「讀到的 seriesUuid 是否為 null」判斷是否為新成員
- *       （check-then-act）。兩個請求同時加入同一篇文章，都讀到 null，都 {@code article_count + 1}，
- *       結果 +2。新實作由寫入本身（{@code UPDATE ... WHERE series_uuid IS NULL} 的 affected rows）決定。
- *       移出同理：兩個請求都讀到「在此 series」，都 -1。</li>
+ *       （check-then-act）。兩個請求同時加入同一篇文章，都讀到 null，都當成新成員
+ *       （DATA-10 之前會讓 {@code article_count} 變 +2；該欄位已移除，現改驗證成員資料列恰為 1）。新實作由寫入本身（{@code UPDATE ... WHERE series_uuid IS NULL} 的 affected rows）決定。
+ *       移出同理：兩個請求都讀到「在此 series」，都當成移出成功。</li>
  *   <li><b>RACE-15</b>：slug 唯一性以 {@code existsBySlug} 先查再 save，併發撞到 UNIQUE 會變成 500
  *       而非 {@code S0104}（建立與更新兩處）。新實作建立用 {@code INSERT ... ON CONFLICT DO NOTHING}，
  *       更新捕捉 {@code DuplicateKeyException}。</li>
@@ -175,10 +175,6 @@ class SeriesRaceConditionIT {
                 .andReturn().getResponse().getStatus();
     }
 
-    private int articleCountOf(UUID seriesUuid) {
-        return jdbc.queryForObject("SELECT article_count FROM series WHERE uuid = ?", Integer.class, seriesUuid);
-    }
-
     private int memberRowsOf(UUID seriesUuid) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM articles WHERE series_uuid = ?", Integer.class, seriesUuid);
     }
@@ -219,22 +215,22 @@ class SeriesRaceConditionIT {
     // ─── RACE-14：加入 ─────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("RACE-14：同一篇文章依序加入同一 series 兩次（第二次走更新位置）→ 兩次都 200、article_count 只 +1")
-    void addSameArticleTwiceSequentially_countIncrementedOnce() throws Exception {
+    @DisplayName("RACE-14：同一篇文章依序加入同一 series 兩次（第二次走更新位置）→ 兩次都 200、成員只有 1 篇")
+    void addSameArticleTwiceSequentially_singleMember() throws Exception {
         UUID series = createSeriesViaApi("race-seq-add");
         Article article = createPublishedArticle();
 
         assertThat(addArticle(series, article.getUuid(), 1)).isEqualTo(200);
         assertThat(addArticle(series, article.getUuid(), 2)).isEqualTo(200);
 
-        assertThat(articleCountOf(series)).isEqualTo(1);
+        assertThat(memberRowsOf(series)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT series_position FROM articles WHERE uuid = ?",
                 Integer.class, article.getUuid())).as("第二次只更新位置").isEqualTo(2);
     }
 
     @Test
-    @DisplayName("RACE-14：兩條執行緒同時把同一篇文章加入同一 series（重複多輪）→ 全部 200、article_count 只 +1")
-    void addSameArticleConcurrently_countIncrementedOnce() throws Exception {
+    @DisplayName("RACE-14：兩條執行緒同時把同一篇文章加入同一 series（重複多輪）→ 全部 200、成員只有 1 篇")
+    void addSameArticleConcurrently_singleMember() throws Exception {
         for (int round = 0; round < ROUNDS; round++) {
             UUID series = createSeriesViaApi("race-add-" + round);
             Article article = createPublishedArticle();
@@ -243,7 +239,6 @@ class SeriesRaceConditionIT {
                     () -> addArticle(series, article.getUuid(), i + 1));
 
             assertThat(statuses).as("第 %d 輪的 HTTP 狀態", round).containsExactly(200, 200);
-            assertThat(articleCountOf(series)).as("第 %d 輪的 article_count", round).isEqualTo(1);
             assertThat(memberRowsOf(series)).as("第 %d 輪的成員數", round).isEqualTo(1);
         }
     }
@@ -251,8 +246,8 @@ class SeriesRaceConditionIT {
     // ─── RACE-14：「已在同一 series，只更新位置」路徑 ────────────────────────
 
     @Test
-    @DisplayName("RACE-14：兩條執行緒同時更新同一篇已在 series 內文章的位置（重複多輪）→ 全部 200（不得 500）、article_count 與成員數不變")
-    void updatePositionConcurrently_bothOk_noServerError_countUnchanged() throws Exception {
+    @DisplayName("RACE-14：兩條執行緒同時更新同一篇已在 series 內文章的位置（重複多輪）→ 全部 200（不得 500）、成員數不變")
+    void updatePositionConcurrently_bothOk_noServerError_membershipUnchanged() throws Exception {
         for (int round = 0; round < ROUNDS; round++) {
             UUID series = createSeriesViaApi("race-pos-" + round);
             Article article = createPublishedArticle();
@@ -263,7 +258,6 @@ class SeriesRaceConditionIT {
 
             assertThat(statuses).as("第 %d 輪的 HTTP 狀態（讀改寫的位置更新會因樂觀鎖衝突回 500）", round)
                     .containsExactly(200, 200);
-            assertThat(articleCountOf(series)).as("第 %d 輪的 article_count", round).isEqualTo(1);
             assertThat(memberRowsOf(series)).as("第 %d 輪的成員數", round).isEqualTo(1);
             assertThat(jdbc.queryForObject("SELECT series_position FROM articles WHERE uuid = ?",
                     Integer.class, article.getUuid())).as("第 %d 輪的位置為其中一個請求的值", round).isIn(2, 3);
@@ -271,8 +265,8 @@ class SeriesRaceConditionIT {
     }
 
     @Test
-    @DisplayName("RACE-14：一條執行緒移出、另一條同時更新位置（重複多輪）→ 不得 500，且 article_count 恆等於成員數")
-    void removeAndUpdatePositionConcurrently_countAlwaysMatchesMembership() throws Exception {
+    @DisplayName("RACE-14：一條執行緒移出、另一條同時更新位置（重複多輪）→ 不得 500，且歸屬與位置恆一致（不會留下有位置卻不在任何 series 的文章）")
+    void removeAndUpdatePositionConcurrently_membershipAndPositionStayConsistent() throws Exception {
         for (int round = 0; round < ROUNDS; round++) {
             UUID series = createSeriesViaApi("race-rm-pos-" + round);
             Article article = createPublishedArticle();
@@ -284,31 +278,32 @@ class SeriesRaceConditionIT {
 
             assertThat(statuses).as("第 %d 輪的 HTTP 狀態：只能是成功或業務錯誤，不得 500", round)
                     .allSatisfy(status -> assertThat(status).isIn(200, 400));
-            assertThat(articleCountOf(series))
-                    .as("第 %d 輪：文章被重新寫回 series 卻沒有 +1，會出現 article_count=0 但成員數=1", round)
-                    .isEqualTo(memberRowsOf(series));
+            assertThat(jdbc.queryForObject(
+                    "SELECT (series_uuid IS NULL) = (series_position IS NULL) FROM articles WHERE uuid = ?",
+                    Boolean.class, article.getUuid()))
+                    .as("第 %d 輪：series_uuid 與 series_position 必須同時為 null 或同時非 null", round)
+                    .isTrue();
         }
     }
 
     // ─── RACE-14：移出 ─────────────────────────────────────────────────────
 
     @Test
-    @DisplayName("RACE-14：兩條執行緒同時把同一篇文章移出 series（重複多輪）→ 不得 500、article_count 只 -1、成員數一致")
-    void removeSameArticleConcurrently_countDecrementedOnce() throws Exception {
+    @DisplayName("RACE-14：兩條執行緒同時把同一篇文章移出 series（重複多輪）→ 不得 500、成員數一致")
+    void removeSameArticleConcurrently_removedOnce() throws Exception {
         for (int round = 0; round < ROUNDS; round++) {
             UUID series = createSeriesViaApi("race-remove-" + round);
             Article staying = createPublishedArticle();
             Article leaving = createPublishedArticle();
             assertThat(addArticle(series, staying.getUuid(), 1)).isEqualTo(200);
             assertThat(addArticle(series, leaving.getUuid(), 2)).isEqualTo(200);
-            assertThat(articleCountOf(series)).isEqualTo(2);
+            assertThat(memberRowsOf(series)).isEqualTo(2);
 
             List<Integer> statuses = runConcurrently(i ->
                     () -> removeArticle(series, leaving.getUuid()));
 
             assertThat(statuses).as("第 %d 輪的 HTTP 狀態：一個成功，另一個與依序第二次移出相同（S0105，400）", round)
                     .containsExactlyInAnyOrder(200, 400);
-            assertThat(articleCountOf(series)).as("第 %d 輪的 article_count", round).isEqualTo(1);
             assertThat(memberRowsOf(series)).as("第 %d 輪的成員數", round).isEqualTo(1);
         }
     }

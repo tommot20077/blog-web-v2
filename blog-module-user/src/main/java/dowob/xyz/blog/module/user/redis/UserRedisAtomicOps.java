@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.user.redis;
 
+import dowob.xyz.blog.infrastructure.ratelimit.FixedWindowCounter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -12,10 +13,10 @@ import java.util.List;
 /**
  * user 模組的 Redis 原子操作（以 Lua 腳本讓多個指令在 Redis 內一次完成）。
  *
- * <p>放在 user 模組而非 blog-infrastructure：目前只有認證流程（登入失敗鎖定、驗證碼、忘記密碼、
- * 重寄驗證、IP 限流、登入裝置數）使用，沿用專案「腳本跟著使用它的模組」的慣例
- * （reading、recommend、tag 模組亦各自持有自己的腳本）；若其他模組日後需要同樣的計數語意，
- * 再抽到 blog-infrastructure。</p>
+ * <p>放在 user 模組：認證流程（登入失敗鎖定、驗證碼、忘記密碼、重寄驗證、IP 限流、登入裝置數）使用，
+ * 沿用專案「腳本跟著使用它的模組」的慣例。<b>固定窗口計數的 Lua 例外</b>：W7-b 的通用應用層限流需要同樣語意，
+ * 該腳本已收斂到 blog-infrastructure 的 {@link FixedWindowCounter#INCREMENT_WITH_TTL}，本類別直接執行它，
+ * 不再重複持有（呼叫端與 {@code AuthService} 的 mock 邊界不變，不擴大搬移範圍）。</p>
  *
  * <ul>
  *   <li>RACE-11：{@code INCR} 與 {@code EXPIRE} 分兩次呼叫時，若 EXPIRE 失敗（連線中斷、逾時）
@@ -31,18 +32,6 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class UserRedisAtomicOps {
-
-    /**
-     * 計數加一；若 key 沒有 TTL（新建，或先前的 EXPIRE 失敗）就補上 TTL。已有 TTL 時不重設，
-     * 維持固定窗口語意。KEYS[1] = 計數 key，ARGV[1] = TTL 秒數。回傳加一後的計數。
-     */
-    private static final RedisScript<Long> INCREMENT_WITH_TTL = new DefaultRedisScript<>("""
-            local count = redis.call('INCR', KEYS[1])
-            if redis.call('TTL', KEYS[1]) == -1 then
-                redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
-            end
-            return count
-            """, Long.class);
 
     /**
      * 登記 refresh token 並修剪裝置數：ZADD → 只保留分數最高（最新）的 N 個 → EXPIRE。
@@ -68,8 +57,10 @@ public class UserRedisAtomicOps {
      * @return 加一後的計數
      */
     public long incrementWithTtl(String key, Duration ttl) {
-        Long count = redisTemplate.execute(INCREMENT_WITH_TTL, List.of(key), String.valueOf(seconds(ttl)));
-        return count == null ? 0L : count;
+        // 固定窗口計數的 Lua 全專案只有一份，定義在 FixedWindowCounter（SEC-23 通用限流也用它）
+        List<?> result = redisTemplate.execute(FixedWindowCounter.INCREMENT_WITH_TTL, List.of(key),
+                String.valueOf(seconds(ttl)));
+        return result == null || result.isEmpty() ? 0L : ((Number) result.get(0)).longValue();
     }
 
     /**

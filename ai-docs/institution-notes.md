@@ -11,7 +11,7 @@
 
 1. **飛輪只有在餵料時才轉**:全 repo 只有 1 份 bug report,`/review-bugs` 從未跑過。制度已修好管道,但如果修完 bug 不跑 `/post-bug`,這套系統三個月後就是死文件。最低要求:每個 `fix:` commit 之後跑一次。
 2. **ArchUnit 守衛還沒寫**(`ai-docs/backlog/2026-07-07-archunit-guards.md`):BUG-2026-001 的兩條程式類防線只存在於文件層。文件擋不住不讀文件的人,測試才擋得住。這是 backlog 裡價值最高的一項。
-3. **前後端契約沒有單一真相**:本 repo 有 `docs/api-contract/`,前端 repo 有 `ai-docs/api-contract.md` + `api-reference/openapi.json`,兩邊各自維護、無同步規則。跨 repo 契約變更目前靠人記得。這次只在兩邊 CLAUDE.md 互加了指標;真正的解法(單一契約源 + 生成)需要 Yuan 決策。
+3. **前後端契約的單一真相已確立（C2，Yuan 2026-11-07 拍板）**:真相是後端 springdoc 產生的 `openapi.json`；後端 `docs/api-contract/` 已刪除，標註慣例見 `code-standards.md`「OpenAPI 標註慣例」，守衛為 `OpenApiAnnotationGuardTest` 與 `OpenApiDocsE2E`。前端快照（`api-reference/openapi.json`）依前端 repo `runbook-integration.md` §8 抓取；契約變更時兩邊仍要人工對照前端 `ai-docs/api-contract.md` 的慣例。
 
 ## 這套制度最可能的退化方式(與預防)
 

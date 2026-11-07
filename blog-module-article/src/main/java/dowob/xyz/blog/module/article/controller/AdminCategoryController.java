@@ -17,9 +17,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 /**
- * 分類 Admin Controller（需 SYSTEM_CONFIG 或 ADMIN 權限）
+ * 分類 Admin Controller（需 ADMIN_CATEGORY 權限，且 URL 層限 ADMIN 角色）
  *
  * <p>
  * 提供分類 CRUD 的管理端點，僅 Admin 可存取。
@@ -28,6 +30,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
+@Tag(name = "分類管理")
 @RestController
 @RequestMapping("/api/v1/admin/categories")
 @RequiredArgsConstructor
@@ -42,7 +45,10 @@ public class AdminCategoryController {
      * @param request 建立請求
      * @return 建立後的分類回應
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @Operation(summary = "建立分類",
+            description = "需 ADMIN_CATEGORY 權限。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0207 分類 slug 已被使用")
+    @PreAuthorize("hasAuthority('ADMIN_CATEGORY')")
     @PostMapping
     public ApiResponse<CategoryResponse> createCategory(@Valid @RequestBody CreateCategoryRequest request) {
         return ApiResponse.success(categoryService.createCategory(request));
@@ -55,7 +61,10 @@ public class AdminCategoryController {
      * @param request 更新請求
      * @return 更新後的分類回應
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @Operation(summary = "更新分類",
+            description = "需 ADMIN_CATEGORY 權限。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0205 分類不存在；A0207 分類 slug 已被使用")
+    @PreAuthorize("hasAuthority('ADMIN_CATEGORY')")
     @PutMapping("/{uuid}")
     public ApiResponse<CategoryResponse> updateCategory(
             @PathVariable UUID uuid,
@@ -69,7 +78,10 @@ public class AdminCategoryController {
      * @param uuid 分類公開 UUID
      * @return 成功回應
      */
-    @PreAuthorize("hasAuthority('SYSTEM_CONFIG')")
+    @Operation(summary = "刪除分類",
+            description = "需 ADMIN_CATEGORY 權限。分類下仍有文章時不可刪除。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0205 分類不存在；A0206 分類下仍有文章")
+    @PreAuthorize("hasAuthority('ADMIN_CATEGORY')")
     @DeleteMapping("/{uuid}")
     public ApiResponse<Void> deleteCategory(@PathVariable UUID uuid) {
         categoryService.deleteCategory(uuid);

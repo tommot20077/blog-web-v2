@@ -10,8 +10,8 @@ import java.util.UUID;
  * 與 {@link ArticleDeletedEvent} 的差別在於資料列仍在，consumer 需要更多欄位時可回查，
  * 故 payload 維持精簡（不採 rich payload）。</p>
  *
- * <p><b>刻意不共用 {@code article.deleted} routing key</b>：該 key 另有 series 模組訂閱並遞減
- * {@code series.article_count}，下架若走同一條路會讓該計數多扣一次（見
+ * <p><b>刻意不共用 {@code article.deleted} routing key</b>：該 key 代表資料列已刪除，訂閱者會清除自己持有的衍生資料，
+ * 下架（資料列仍在）若走同一條路會讓它們誤清（見
  * {@link ArticleEventContract#ROUTING_KEY_ARCHIVED} 的說明）。</p>
  *
  * @param eventId     事件 dedup key（producer 每次 publish 時 random gen，供 consumer 冪等使用）

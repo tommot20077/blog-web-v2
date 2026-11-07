@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -31,15 +32,18 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/articles/{articleUuid}/progress")
 @RequiredArgsConstructor
-@Tag(name = "Reading Progress")
+@Tag(name = "閱讀進度")
 public class ReadingProgressController {
 
     private final ReadingProgressService progressService;
     private final ArticleFacade articleFacade;
 
     @PutMapping
+    @RateLimited("reading-progress")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "更新閱讀進度（HSET Redis）")
+    @Operation(summary = "更新閱讀進度",
+            description = "登入。進度值需介於 0 到 1。文章不存在或不可讀時靜默回 200 且不寫入，避免形成草稿存在性探測。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗（progress 需介於 0.000 到 1.000）")
     public ApiResponse<Void> update(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
@@ -55,7 +59,8 @@ public class ReadingProgressController {
 
     @GetMapping
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "查詢進度（Redis 優先）")
+    @Operation(summary = "查詢閱讀進度",
+            description = "登入。優先讀 Redis；尚無進度時 data 為 null。")
     public ApiResponse<ProgressResponse> get(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user) {

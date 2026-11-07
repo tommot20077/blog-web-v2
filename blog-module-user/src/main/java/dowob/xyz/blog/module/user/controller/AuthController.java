@@ -46,7 +46,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 2.1
  */
-@Tag(name = "Auth", description = "認證相關 API")
+@Tag(name = "認證", description = "認證相關 API")
 @RestController
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
@@ -58,7 +58,7 @@ public class AuthController {
     /** JWT 服務，用於 Refresh Token 驗證 */
     private final JwtService jwtService;
 
-    /** Client IP 解析器（登入／註冊 IP 限流用；信任鏈由 app.http.trusted-proxy-count 控制） */
+    /** Client IP 解析器（登入／註冊／忘記密碼／重寄驗證信／驗證碼 IP 限流用；信任鏈由 app.http.trusted-proxy-count 控制） */
     private final ClientIpResolver clientIpResolver;
 
     /** Redis 操作模板，用於 Refresh Token 比對 */
@@ -77,7 +77,9 @@ public class AuthController {
      * @param request 包含信箱、密碼、用戶名與暱稱的註冊請求
      * @return 成功回應
      */
-    @Operation(summary = "用戶註冊", description = "使用信箱註冊新帳號，完成後需驗證電子信箱才可登入")
+    @Operation(summary = "用戶註冊",
+            description = "公開。使用信箱註冊新帳號，完成後需驗證電子信箱才可登入；信箱已被註冊時同樣回成功（不洩漏帳號是否存在），並通知原信箱擁有者。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗（含保留暱稱）；A0112 用戶名已被使用；A0107 暱稱已被使用；A0113 同 IP 註冊過於頻繁")
     @PostMapping("/register")
     public ApiResponse<Void> register(@Valid @RequestBody RegisterRequest request, HttpServletRequest httpRequest) {
         authService.register(request.getEmail(), request.getPassword(), request.getUsername(), request.getNickname(),
@@ -95,7 +97,9 @@ public class AuthController {
      * @param response HTTP 回應，用於寫入 Cookie
      * @return 含 Access Token 的認證回應
      */
-    @Operation(summary = "用戶登入", description = "使用信箱或暱稱登入，取得 Access Token（Refresh Token 在 Cookie）")
+    @Operation(summary = "用戶登入",
+            description = "公開。使用信箱或用戶名登入，回傳 Access Token（Refresh Token 以 HttpOnly Cookie 下發）；連續失敗達上限會暫時鎖定帳號。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0102 帳號或密碼錯誤；A0114 帳號因多次失敗被暫時鎖定；A0111 電子信箱尚未驗證；A0108 帳號已停權或刪除；A0113 同 IP 登入過於頻繁")
     @PostMapping("/login")
     public ApiResponse<AuthResponse> login(@Valid @RequestBody LoginRequest request,
                                            HttpServletRequest httpRequest,
@@ -124,7 +128,10 @@ public class AuthController {
      * @param refreshToken Cookie 中的 Refresh Token
      * @return 含新 Access Token 的認證回應
      */
-    @Operation(summary = "刷新 Access Token", description = "使用 Cookie 中的 Refresh Token 換取新的 Access Token")
+    @Operation(summary = "刷新 Access Token",
+            description = "公開（需帶 Refresh Token Cookie）。以 Cookie 中的 Refresh Token 換取新的 Access Token。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0108 帳號已停權或刪除")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "A0005 缺少、無效或已撤銷的 Refresh Token Cookie")
     @PostMapping("/refresh")
     public ApiResponse<AuthResponse> refresh(
             @CookieValue(name = "refreshToken", required = false) String refreshToken) {
@@ -175,7 +182,8 @@ public class AuthController {
      * @param response     HTTP 回應，用於清除 Cookie
      * @return 成功回應
      */
-    @Operation(summary = "用戶登出", description = "清除 Refresh Token，使 Cookie 失效")
+    @Operation(summary = "用戶登出",
+            description = "登入。撤銷 Refresh Token 並清除 Cookie。")
     @PreAuthorize("isAuthenticated()")
     @PostMapping("/logout")
     public ApiResponse<Void> logout(@AuthenticationPrincipal AuthUser user,
@@ -207,7 +215,9 @@ public class AuthController {
      * @param request 包含驗證 Token（來自驗證信連結）
      * @return 成功回應
      */
-    @Operation(summary = "驗證電子信箱", description = "透過驗證信中的 Token 啟用帳號")
+    @Operation(summary = "驗證電子信箱",
+            description = "公開。透過驗證信中的 Token 啟用帳號。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0104 Token 無效或已過期；A0101 用戶不存在")
     @PostMapping("/verify-email")
     public ApiResponse<Void> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
         authService.verifyEmail(request.getToken());
@@ -217,39 +227,51 @@ public class AuthController {
     /**
      * 使用驗證碼驗證電子信箱
      *
-     * @param request 包含電子信箱與 6 位數驗證碼
+     * @param request     包含電子信箱與 6 位數驗證碼
+     * @param httpRequest HTTP 請求（解析 client IP 供 IP 層級限流，A3）
      * @return 成功回應
      */
-    @Operation(summary = "使用驗證碼驗證電子信箱", description = "透過驗證信中的 6 位數驗證碼啟用帳號")
+    @Operation(summary = "使用驗證碼驗證電子信箱",
+            description = "公開。透過驗證信中的 6 位數驗證碼啟用帳號；失敗次數過多會被限流。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0104 驗證碼錯誤或已過期；A0113 驗證嘗試次數過多")
     @PostMapping("/verify-email-code")
-    public ApiResponse<Void> verifyEmailCode(@Valid @RequestBody VerifyEmailCodeRequest request) {
-        authService.verifyEmailCode(request.getEmail(), request.getCode());
+    public ApiResponse<Void> verifyEmailCode(@Valid @RequestBody VerifyEmailCodeRequest request,
+                                             HttpServletRequest httpRequest) {
+        authService.verifyEmailCode(request.getEmail(), request.getCode(), clientIpResolver.resolve(httpRequest));
         return ApiResponse.success();
     }
 
     /**
      * 重發驗證信
      *
-     * @param request 包含電子信箱的請求
+     * @param request     包含電子信箱的請求
+     * @param httpRequest HTTP 請求（解析 client IP 供 IP 層級限流，A3）
      * @return 成功回應（無論信箱是否存在或帳號狀態，一律回傳成功以防資訊洩漏）
      */
-    @Operation(summary = "重發驗證信", description = "重新發送電子信箱驗證信，每分鐘限 1 次，每日限 5 次")
+    @Operation(summary = "重發驗證信",
+            description = "公開。重新發送電子信箱驗證信；頻率限制見錯誤回應。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0113 超過重發頻率限制（每信箱每分鐘 1 次、每日 5 次、每 IP 每小時 10 次）")
     @PostMapping("/resend-verification")
-    public ApiResponse<Void> resendVerification(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.resendVerification(request.getEmail());
+    public ApiResponse<Void> resendVerification(@Valid @RequestBody ForgotPasswordRequest request,
+                                                HttpServletRequest httpRequest) {
+        authService.resendVerification(request.getEmail(), clientIpResolver.resolve(httpRequest));
         return ApiResponse.success();
     }
 
     /**
      * 申請忘記密碼
      *
-     * @param request 包含電子信箱的忘記密碼請求
+     * @param request     包含電子信箱的忘記密碼請求
+     * @param httpRequest HTTP 請求（解析 client IP 供 IP 層級限流，A3）
      * @return 成功回應（無論信箱是否存在，一律回傳成功以防資訊洩漏）
      */
-    @Operation(summary = "忘記密碼", description = "發送密碼重設信至指定信箱")
+    @Operation(summary = "忘記密碼",
+            description = "公開。發送密碼重設信至指定信箱；無論信箱是否存在皆回成功（不洩漏帳號是否存在）。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0113 超過請求頻率限制")
     @PostMapping("/forgot-password")
-    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.forgotPassword(request.getEmail());
+    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request,
+                                            HttpServletRequest httpRequest) {
+        authService.forgotPassword(request.getEmail(), clientIpResolver.resolve(httpRequest));
         return ApiResponse.success();
     }
 
@@ -259,7 +281,9 @@ public class AuthController {
      * @param request 包含重設 Token 與新密碼的請求
      * @return 成功回應
      */
-    @Operation(summary = "重設密碼", description = "透過密碼重設信中的 Token 設定新密碼")
+    @Operation(summary = "重設密碼",
+            description = "公開。透過密碼重設信中的 Token 設定新密碼。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0104 Token 無效或已過期；A0101 用戶不存在")
     @PostMapping("/reset-password")
     public ApiResponse<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
         authService.resetPassword(request.getToken(), request.getNewPassword());
