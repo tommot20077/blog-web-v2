@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 /**
  * 搜尋模組管理員 Controller
@@ -26,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
  * @author Yuan
  * @version 1.0
  */
+@Tag(name = "搜尋管理")
 @RestController
 @RequestMapping("/api/v1/admin/search")
 @RequiredArgsConstructor
@@ -55,6 +58,10 @@ public class AdminSearchController {
      *
      * @return 202 與新作業；或 409 與進行中的作業
      */
+    @Operation(summary = "觸發搜尋索引全量重建",
+            description = "需 ADMIN_SEARCH 權限。於背景重建 Elasticsearch 索引並在完成後原子切換 alias；立即回 202 與作業資訊，進度以 /status 查詢。同一時間只允許一個重建作業。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "202", description = "已開始於背景重建，body 為剛建立的作業")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "A0501 已有搜尋索引重建作業執行中，body 為進行中的作業")
     @PostMapping("/reindex")
     @PreAuthorize("hasAuthority('ADMIN_SEARCH')")
     public ResponseEntity<ApiResponse<SearchReindexJobResponse>> reindex() {
@@ -79,6 +86,8 @@ public class AdminSearchController {
      *
      * @return 搜尋索引狀態
      */
+    @Operation(summary = "查詢搜尋索引狀態",
+            description = "需 ADMIN_SEARCH 權限。回傳索引健康狀態與最近一次重建作業。")
     @GetMapping("/status")
     @PreAuthorize("hasAuthority('ADMIN_SEARCH')")
     public ApiResponse<SearchIndexStatusResponse> status() {

@@ -25,7 +25,7 @@ import java.util.UUID;
  * @author Yuan
  * @version 1.0
  */
-@Tag(name = "PublicAuthor", description = "公開作者 API（匿名可存取）")
+@Tag(name = "公開作者", description = "公開作者 API（匿名可存取）")
 @RestController
 @RequiredArgsConstructor
 public class PublicAuthorController {
@@ -40,7 +40,8 @@ public class PublicAuthorController {
      * @return 公開資料；不存在或非 ACTIVE 一律 404 {@code A0101}
      */
     @Operation(summary = "取得公開作者頁資料",
-            description = "匿名可存取。僅 ACTIVE 使用者；不存在、已刪除、未驗證、停權一律回 404（A0101），彼此不可區分")
+            description = "公開（匿名可存取）。僅 ACTIVE 使用者可見。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "A0101 作者不存在（不存在、已刪除、未驗證、停權一律回 404，彼此不可區分）")
     @GetMapping("/api/v1/users/{uuid}/profile")
     public ApiResponse<PublicProfileResponse> getPublicProfile(@PathVariable UUID uuid) {
         return ApiResponse.success(publicAuthorService.getPublicProfile(uuid));
@@ -53,7 +54,8 @@ public class PublicAuthorController {
      * @return 至少有 1 篇已發布文章的 ACTIVE 作者，最多 20 筆
      */
     @Operation(summary = "搜尋作者",
-            description = "匿名可存取。只列 ACTIVE 且至少 1 篇已發布文章的作者；依已發布篇數 DESC、暱稱 ASC、uuid ASC 排序，固定最多 20 筆")
+            description = "公開（匿名可存取）。只列 ACTIVE 且至少 1 篇已發布文章的作者；依已發布篇數 DESC、暱稱 ASC、uuid ASC 排序，固定最多 20 筆。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗（keyword 不合法）")
     @GetMapping("/api/v1/authors")
     public ApiResponse<List<AuthorSummaryResponse>> searchAuthors(
             @RequestParam(required = false) String keyword) {

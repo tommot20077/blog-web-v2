@@ -60,3 +60,8 @@ app:
         limit: 100000
       search-suggest:
         limit: 100000
+
+# W7-C2：OpenApiDocsE2E 驗證 /v3/api-docs 實際產出（與 SPRINGDOC_ENABLED=true 同效，僅限 e2e profile）
+springdoc:
+  api-docs:
+    enabled: true

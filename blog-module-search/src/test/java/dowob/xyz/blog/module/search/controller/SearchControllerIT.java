@@ -117,6 +117,17 @@ class SearchControllerIT {
     }
 
     /**
+     * 建立「已認證但 principal 不是 AuthUser」的 Token，使 {@code @AuthenticationPrincipal AuthUser} 解析為 null
+     *
+     * @return RequestPostProcessor，可注入至 MockMvc 請求
+     */
+    private RequestPostProcessor unresolvablePrincipalAuth() {
+        return SecurityMockMvcRequestPostProcessors.authentication(
+                new UsernamePasswordAuthenticationToken("not-an-auth-user", null,
+                        List.of(new SimpleGrantedAuthority("ROLE_USER"))));
+    }
+
+    /**
      * 建立管理員認證 Token
      *
      * @param userId 管理員用戶 ID
@@ -273,6 +284,17 @@ class SearchControllerIT {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data[0]").value("spring boot"));
         }
+
+        /**
+         * principal 無法解析為 AuthUser 時，應回 400 + A0502（原借用 A0101，已改為 search 自有碼）
+         */
+        @Test
+        @DisplayName("principal 無法解析時取得歷史應回 400 與 A0502")
+        void getHistory_unresolvablePrincipal_returnsA0502() throws Exception {
+            mockMvc.perform(get("/api/v1/search/history").with(unresolvablePrincipalAuth()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0502"));
+        }
     }
 
     /**
@@ -303,6 +325,17 @@ class SearchControllerIT {
                     .andExpect(jsonPath("$.code").value("00000"));
 
             verify(searchService).clearHistory(USER_UUID);
+        }
+
+        /**
+         * principal 無法解析為 AuthUser 時，應回 400 + A0502（原借用 A0101，已改為 search 自有碼）
+         */
+        @Test
+        @DisplayName("principal 無法解析時清除歷史應回 400 與 A0502")
+        void clearHistory_unresolvablePrincipal_returnsA0502() throws Exception {
+            mockMvc.perform(delete("/api/v1/search/history").with(unresolvablePrincipalAuth()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("A0502"));
         }
     }
 

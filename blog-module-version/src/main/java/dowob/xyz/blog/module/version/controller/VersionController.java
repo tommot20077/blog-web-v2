@@ -58,7 +58,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/articles/{articleUuid}/versions")
 @RequiredArgsConstructor
-@Tag(name = "Version")
+@Tag(name = "文章版本")
 public class VersionController {
 
     private final VersioningService versioningService;
@@ -69,7 +69,9 @@ public class VersionController {
      */
     @GetMapping
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
-    @Operation(summary = "版本列表（分頁）")
+    @Operation(summary = "版本列表",
+            description = "需 ARTICLE_EDIT 權限；文章作者或管理員。分頁列出文章的歷史快照，可用 type 篩選 AUTO／MANUAL／PUBLISHED。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "V0106 文章不存在；V0102 非文章作者（管理員不受限）")
     public ApiResponse<PageResult<VersionSummaryResponse>> list(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
@@ -86,7 +88,9 @@ public class VersionController {
      */
     @GetMapping("/{versionUuid}")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
-    @Operation(summary = "版本詳情")
+    @Operation(summary = "版本詳情",
+            description = "需 ARTICLE_EDIT 權限；文章作者或管理員。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "V0101 Version 不存在；V0106 文章不存在；V0108 Version 不屬於指定的 Article；V0102 非文章作者（管理員不受限）")
     public ApiResponse<VersionDetailResponse> getDetail(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
@@ -107,7 +111,9 @@ public class VersionController {
     @PostMapping("/manual")
     @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
-    @Operation(summary = "建立手動快照")
+    @Operation(summary = "建立手動快照",
+            description = "需 ARTICLE_EDIT 權限；文章作者或管理員。以目前文章內容建立 MANUAL 快照，body 可省略。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；V0106 文章不存在；V0102 非文章作者（管理員不受限）")
     public ApiResponse<VersionDetailResponse> createManual(
             @PathVariable UUID articleUuid,
             @AuthenticationPrincipal AuthUser user,
@@ -133,7 +139,9 @@ public class VersionController {
     @PostMapping("/{versionUuid}/restore")
     @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
-    @Operation(summary = "還原快照")
+    @Operation(summary = "還原快照",
+            description = "需 ARTICLE_EDIT 權限；文章作者或管理員。只還原內容（標題、slug、內文、摘要、封面、標籤），不改文章狀態；還原前會先把目前內容存為 AUTO 快照。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "V0101 Version 不存在；V0106 文章不存在；V0108 Version 不屬於指定的 Article；V0102 非文章作者（管理員不受限）；A0209 文章目前狀態不允許編輯內容")
     public ApiResponse<Void> restore(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
@@ -154,7 +162,9 @@ public class VersionController {
     @PostMapping("/{versionUuid}/promote")
     @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
-    @Operation(summary = "AUTO 升級為 MANUAL")
+    @Operation(summary = "升級快照為手動",
+            description = "需 ARTICLE_EDIT 權限；文章作者或管理員。僅 AUTO 快照可升級為 MANUAL。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "V0101 Version 不存在；V0106 文章不存在；V0108 Version 不屬於指定的 Article；V0102 非文章作者（管理員不受限）；V0104 只有 AUTO 類型可升級為 MANUAL")
     public ApiResponse<VersionDetailResponse> promote(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
@@ -175,7 +185,9 @@ public class VersionController {
      */
     @DeleteMapping("/{versionUuid}")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
-    @Operation(summary = "刪除快照")
+    @Operation(summary = "刪除快照",
+            description = "需 ARTICLE_EDIT 權限；文章作者或管理員。PUBLISHED 凍結快照不可刪除。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "V0101 Version 不存在；V0106 文章不存在；V0108 Version 不屬於指定的 Article；V0102 非文章作者（管理員不受限）；V0103 PUBLISHED 凍結快照不可刪除")
     public ApiResponse<Void> delete(
             @PathVariable UUID articleUuid,
             @PathVariable UUID versionUuid,
