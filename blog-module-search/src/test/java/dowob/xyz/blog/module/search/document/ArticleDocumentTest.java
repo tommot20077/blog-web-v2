@@ -56,4 +56,11 @@ class ArticleDocumentTest {
     void authorInfo_uuid_shouldBeString() throws NoSuchFieldException {
         assertThat(ArticleDocument.AuthorInfo.class.getDeclaredField("uuid").getType()).isEqualTo(String.class);
     }
+
+    @Test
+    @DisplayName("B4：ES 文件不再有 viewCount／likeCount（計數與詳情頁同源，由 ArticleFacade 提供，不進索引）")
+    void articleDocument_hasNoEngagementCounters() {
+        assertThat(java.util.Arrays.stream(ArticleDocument.class.getDeclaredFields()).map(java.lang.reflect.Field::getName))
+                .doesNotContain("viewCount", "likeCount");
+    }
 }

@@ -47,6 +47,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -265,8 +266,6 @@ class SearchServiceTest {
                 .author(new ArticleDocument.AuthorInfo(USER_UUID.toString(), "Yuan"))
                 .tags(List.of(new ArticleDocument.TagInfo(UUID.randomUUID(), "Java", "java")))
                 .publishedAt(LocalDateTime.now())
-                .viewCount(100L)
-                .likeCount(50L)
                 .status("PUBLISHED")
                 .build();
     }
@@ -461,15 +460,103 @@ class SearchServiceTest {
         }
 
         @Test
-        @DisplayName("sort=hot 時，應以 viewCount 和 likeCount 降序排序")
-        void search_withHotSort_sortsByViewAndLikeCount() {
+        @DisplayName("B4：sort=hot 已移除，回 400 PARAM_VALID_ERROR 且不查詢 ES")
+        void search_withHotSort_rejectedWith400() {
+            assertThatThrownBy(() -> searchService.search(null, null, "hot", 1, 10, null))
+                    .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.BusinessException.class, e ->
+                            assertThat(e.getErrorCode())
+                                    .isEqualTo(dowob.xyz.blog.common.api.errorcode.CommonErrorCode.PARAM_VALID_ERROR));
+            verifyNoInteractions(elasticsearchOperations);
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"date", "popularity", "foo", "", "relevance2"})
+        @DisplayName("sort 白名單：只接受 relevance／latest，其他值（含 date、popularity、foo、空字串）回 400 且不查詢 ES")
+        void search_sortOutsideWhitelist_rejectedWith400(String sort) {
+            assertThatThrownBy(() -> searchService.search("java", null, sort, 1, 10, null))
+                    .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.BusinessException.class, e ->
+                            assertThat(e.getErrorCode())
+                                    .isEqualTo(dowob.xyz.blog.common.api.errorcode.CommonErrorCode.PARAM_VALID_ERROR));
+            verifyNoInteractions(elasticsearchOperations);
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"relevance", "RELEVANCE", "latest", "LATEST", "Latest"})
+        @DisplayName("sort 白名單：relevance／latest（不分大小寫）通過")
+        void search_sortInWhitelist_passes(String sort) {
             SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
             when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
 
-            PageResult<SearchResultResponse> result = searchService.search(null, null, "hot", 1, 10, null);
+            PageResult<SearchResultResponse> result = searchService.search(null, null, sort, 1, 10, null);
 
             assertThat(result).isNotNull();
-            verify(elasticsearchOperations).search(any(Query.class), eq(ArticleDocument.class));
+        }
+
+        @Test
+        @DisplayName("B4：sort=HOT（大小寫不同）同樣回 400")
+        void search_withHotSortUpperCase_rejectedWith400() {
+            assertThatThrownBy(() -> searchService.search("java", null, "HOT", 1, 10, null))
+                    .isInstanceOf(dowob.xyz.blog.common.exception.BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("B4：結果的 viewCount／likeCount 取自 ArticleFacade（與詳情頁同源），不用 ES 文件的快照值")
+        void search_countsComeFromArticleFacade_notFromDocument() {
+            ArticleDocument doc = buildTestDocument();
+            UUID uuid = UUID.fromString(doc.getId());
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(doc));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+            when(articleFacade.getEngagementCounts(any()))
+                    .thenReturn(Map.of(uuid, new dowob.xyz.blog.infrastructure.facade.dto.ArticleEngagementCounts(105L, 7L)));
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
+
+            assertThat(result.getRecords().get(0).getViewCount()).isEqualTo(105L);
+            assertThat(result.getRecords().get(0).getLikeCount()).isEqualTo(7L);
+        }
+
+        @Test
+        @DisplayName("B4：一頁 N 篇只呼叫 ArticleFacade.getEngagementCounts 一次（批次，無 N+1）")
+        void search_nResults_singleBatchedFacadeCall() {
+            List<ArticleDocument> docs = new ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                docs.add(buildTestDocument());
+            }
+            SearchHits<ArticleDocument> hits = mockSearchHits(docs);
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+            when(articleFacade.getEngagementCounts(any())).thenReturn(Map.of());
+
+            searchService.search(null, null, "relevance", 1, 10, null);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<java.util.Collection<UUID>> captor = ArgumentCaptor.forClass(java.util.Collection.class);
+            verify(articleFacade, org.mockito.Mockito.times(1)).getEngagementCounts(captor.capture());
+            assertThat(captor.getValue()).hasSize(5);
+        }
+
+        @Test
+        @DisplayName("B4：facade 查無該篇計數時回 0，不拋例外")
+        void search_whenFacadeHasNoCounts_defaultsToZero() {
+            ArticleDocument doc = buildTestDocument();
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of(doc));
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+            when(articleFacade.getEngagementCounts(any())).thenReturn(Map.of());
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, "relevance", 1, 10, null);
+
+            assertThat(result.getRecords().get(0).getViewCount()).isZero();
+            assertThat(result.getRecords().get(0).getLikeCount()).isZero();
+        }
+
+        @Test
+        @DisplayName("B4：沒有命中時不呼叫 ArticleFacade")
+        void search_noHits_doesNotCallFacade() {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            searchService.search(null, null, "relevance", 1, 10, null);
+
+            verify(articleFacade, never()).getEngagementCounts(any());
         }
 
         @Test
@@ -483,8 +570,6 @@ class SearchServiceTest {
                     .author(new ArticleDocument.AuthorInfo(USER_UUID.toString(), "Yuan"))
                     .tags(null)
                     .publishedAt(LocalDateTime.now())
-                    .viewCount(0L)
-                    .likeCount(0L)
                     .status("PUBLISHED")
                     .build();
             SearchHits<ArticleDocument> hits = mockSearchHits(List.of(doc));
@@ -506,8 +591,6 @@ class SearchServiceTest {
                     .author(null)
                     .tags(List.of())
                     .publishedAt(LocalDateTime.now())
-                    .viewCount(0L)
-                    .likeCount(0L)
                     .status("PUBLISHED")
                     .build();
             SearchHits<ArticleDocument> hits = mockSearchHits(List.of(doc));

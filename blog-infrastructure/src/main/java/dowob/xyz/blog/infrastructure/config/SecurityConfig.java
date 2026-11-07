@@ -61,6 +61,15 @@ public class SecurityConfig {
     /** 公開的文章留言端點：{@code GET /api/v1/articles/{uuid}/comments} */
     private static final String PUBLIC_ARTICLE_COMMENTS = PUBLIC_ARTICLE_DETAIL + "/comments";
 
+    /**
+     * 公開的留言回覆分頁端點：{@code GET /api/v1/comments/{uuid}/replies}（D3，Yuan 2026-11-07 拍板）。
+     *
+     * <p>與 {@link #PUBLIC_ARTICLE_COMMENTS} 同一個公開面：匿名可到達，實際可見性在 service
+     * （文章不可讀回 404）。只比對 UUID 形狀的 {@code /replies}，同前綴的 {@code /api/v1/comments/**}
+     * 其他路徑與非 GET 方法一律落入 {@code anyRequest().authenticated()}。</p>
+     */
+    private static final String PUBLIC_COMMENT_REPLIES = "/api/v1/comments/" + UUID_PATH_VARIABLE + "/replies";
+
     /** 公開的作者頁資料端點：{@code GET /api/v1/users/{uuid}/profile} */
     private static final String PUBLIC_USER_PROFILE = "/api/v1/users/" + UUID_PATH_VARIABLE + "/profile";
 
@@ -146,6 +155,7 @@ public class SecurityConfig {
                          *   GET /api/v1/articles/slug/{slug}      ArticleController#getArticleBySlug（無 @PreAuthorize）
                          *   GET /api/v1/articles/{uuid}           ArticleController#getArticle（無 @PreAuthorize）
                          *   GET /api/v1/articles/{uuid}/comments  CommentController#list（原則 7 豁免，JavaDoc 明載匿名可讀）
+                         *   GET /api/v1/comments/{uuid}/replies   CommentController#listReplies（同上；回覆分頁，D3）
                          *
                          * 護欄：新增任何 articles 子端點時，預設就是「需認證」；要放行必須同步
                          * 更新本清單、ai-docs/security.md 的 Public Endpoints 表與 SecurityConfigTest，
@@ -156,6 +166,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/articles/slug/*").permitAll()
                         .requestMatchers(HttpMethod.GET, PUBLIC_ARTICLE_DETAIL).permitAll()
                         .requestMatchers(HttpMethod.GET, PUBLIC_ARTICLE_COMMENTS).permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_COMMENT_REPLIES).permitAll()
 
                         .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
                         /*

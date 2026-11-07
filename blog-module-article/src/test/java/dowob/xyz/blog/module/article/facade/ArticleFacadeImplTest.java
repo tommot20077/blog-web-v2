@@ -114,7 +114,7 @@ class ArticleFacadeImplTest {
             articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
             new ArticleDataAssembler(),
             null, renderer, tocCodec
-        );
+        , null);
 
         /** 推薦與索引查詢的作者暱稱一律經 UserFacade UUID 版批次解析（M6-a 起不再 JOIN users） */
         when(userFacade.getDisplayInfoByUuids(any())).thenReturn(
@@ -804,7 +804,7 @@ class ArticleFacadeImplTest {
                 articleRepository, tagFacade, articleEventPublisher, transactionTemplate,
                 new ArticleDataAssembler(),
                 null, renderer, nullCodec
-            );
+            , null);
             existing.setToc("[{\"id\":\"heading-舊章節\",\"text\":\"舊章節\",\"level\":2}]");
             ArticleRestoreSource data = new ArticleRestoreSource("T", "s", "## 新章節", "sum", null, List.of());
 

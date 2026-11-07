@@ -52,6 +52,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class CommentService {
 
+    /** 列表 API 每則頂層留言預設帶的回覆數（D3）；其餘以回覆分頁端點「載入更多」 */
+    public static final int REPLY_PREVIEW_SIZE = 3;
+
     private static final Duration EDIT_WINDOW = Duration.ofMinutes(5);
 
     private final CommentRepository commentRepo;
@@ -281,9 +284,13 @@ public class CommentService {
                 articleUuid, sortKey, size, offset);
         List<Long> topLevelIds = topLevels.stream().map(CommentRow::getId).toList();
 
-        // 2. replies 一次撈完（已過濾 deleted leaf at SQL level）
-        List<CommentRow> replies =
-                BatchedQuery.queryInBatches(topLevelIds, commentMapper::findRepliesByParentIds);
+        // 2. 每個頂層只帶前 REPLY_PREVIEW_SIZE 則未刪除回覆（資料庫端 LATERAL ... LIMIT，不撈全部再截斷，D3）；
+        //    其餘由回覆分頁端點「載入更多」。replyCount 為未刪除回覆總數，前端以它判斷是否顯示「載入更多」
+        List<CommentRow> replies = BatchedQuery.queryInBatches(topLevelIds,
+                ids -> commentMapper.findFirstRepliesByParentIds(ids, REPLY_PREVIEW_SIZE));
+        Map<Long, Integer> replyCounts = BatchedQuery.queryInBatches(topLevelIds, commentMapper::countRepliesByParentIds)
+                .stream()
+                .collect(Collectors.toMap(CommentMapper.ReplyCountRow::parentId, r -> r.replyCount().intValue()));
 
         // 3. 當前使用者的 liked 集合（一次 batch；未登入跳過）
         List<Long> allCommentIds = java.util.stream.Stream.concat(
@@ -311,6 +318,7 @@ public class CommentService {
                 .map(t -> {
                     CommentResponse dto = toResponse(t, likedIds, authors);
                     dto.setReplies(repliesByParent.getOrDefault(t.getId(), List.of()));
+                    dto.setReplyCount(replyCounts.getOrDefault(t.getId(), 0));
                     return dto;
                 })
                 .toList();
@@ -371,5 +379,57 @@ public class CommentService {
         dto.setEditedAt(c.getEditedAt());
         dto.setReplies(List.of());     // top-level 在外面 set 真正 replies；reply 永遠空陣列（2 層）
         return dto;
+    }
+
+    /**
+     * 頂層留言的回覆分頁（「載入更多」，D3）。
+     *
+     * <p><b>可見性</b>：沿用留言列表的政策——所屬文章必須對檢視者可讀
+     * （{@link ArticleVisibility#isReadableBy(String, UUID, UUID, boolean)}，PUBLISHED，或作者本人，或 ADMIN），
+     * 這是 SEC-16「可讀才可互動」的讀取面。</p>
+     *
+     * <p><b>一律 200 加空頁，不形成存在性探測</b>：父留言不存在、傳入的是回覆（非頂層）的 uuid、
+     * 文章對檢視者不可讀，三種情況回應<b>完全相同</b>（200 ＋ total 為 0 的空 {@link PageResult}），
+     * 與 {@link #listComments} 維持「匿名可讀、恆 200」的契約一致；若錯誤碼或狀態碼不同，
+     * 呼叫端就能藉此探測某個 uuid 是否存在、是否為頂層、其文章是否公開。
+     * 頂層已軟刪除（墓碑）時，其存活的回覆仍可分頁取得，與列表一致。</p>
+     *
+     * <p>排序與列表內嵌的前 {@link #REPLY_PREVIEW_SIZE} 則相同（created_at 升冪），故列表內嵌的就是
+     * {@code page=1,size=3} 的結果，前端可從 {@code page=2,size=3} 繼續。回傳的回覆不再帶 {@code replies}，
+     * {@code replyCount} 為 0。</p>
+     *
+     * @param commentUuid     頂層留言 UUID
+     * @param currentUserUuid 當前使用者 UUID；null 代表未登入
+     * @param isAdmin         當前使用者是否為 ADMIN
+     * @param page            頁碼（1-based）
+     * @param size            每頁筆數
+     * @return 回覆分頁結果，{@code total} 為未刪除回覆總數；不存在、非頂層或不可讀時為空頁
+     */
+    public PageResult<CommentResponse> listReplies(UUID commentUuid, UUID currentUserUuid, boolean isAdmin,
+                                                   int page, int size) {
+        PageResult<CommentResponse> empty = PageResult.of(page, size, 0L, Collections.emptyList());
+        Comment parent = commentRepo.findByUuid(commentUuid).orElse(null);
+        if (parent == null) {
+            return empty;
+        }
+        ArticleData article = articleFacade.findByUuid(parent.getArticleUuid()).orElse(null);
+        if (article == null
+                || !ArticleVisibility.isReadableBy(article.status(), article.authorUuid(), currentUserUuid, isAdmin)
+                || parent.getParentId() != null) {
+            return empty;
+        }
+
+        int offset = Math.max(0, (page - 1) * size);
+        List<CommentRow> rows = commentMapper.findReplyPage(parent.getId(), size, offset);
+        int total = commentMapper.countRepliesByParentId(parent.getId());
+
+        Set<Long> likedIds = currentUserUuid == null || rows.isEmpty()
+                ? Collections.emptySet()
+                : new HashSet<>(commentMapper.findLikedCommentIdsByUser(currentUserUuid,
+                        rows.stream().map(CommentRow::getId).toList()));
+        Map<UUID, UserDisplayInfo> authors = resolveAuthors(List.of(), rows);
+
+        List<CommentResponse> records = rows.stream().map(r -> toResponse(r, likedIds, authors)).toList();
+        return PageResult.of(page, size, (long) total, records);
     }
 }

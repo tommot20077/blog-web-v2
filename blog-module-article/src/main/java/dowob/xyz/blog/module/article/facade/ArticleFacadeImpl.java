@@ -11,6 +11,7 @@ import dowob.xyz.blog.infrastructure.facade.TagFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleEngagementCounts;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
@@ -35,6 +36,7 @@ import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
 import dowob.xyz.blog.module.article.service.ArticleQueryService;
 import dowob.xyz.blog.module.article.service.ArticleService;
 import dowob.xyz.blog.module.article.service.ArticleTocCodec;
+import dowob.xyz.blog.module.article.service.ViewCountService;
 import dowob.xyz.blog.module.article.service.RenderResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
@@ -136,6 +138,11 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * TOC JSON 編解碼器（M3-a 新增：把渲染出的章節導覽序列化後與 HTML 一併回填）
      */
     private final ArticleTocCodec tocCodec;
+
+    /**
+     * 瀏覽計數服務（供 {@link #getEngagementCounts} 與詳情頁共用「DB 值 + Redis 增量」的合併邏輯）
+     */
+    private final ViewCountService viewCountService;
 
     /**
      * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
@@ -823,5 +830,32 @@ public class ArticleFacadeImpl implements ArticleFacade {
             return AuthorArticleStats.EMPTY;
         }
         return new AuthorArticleStats(row.publishedCount(), row.viewCount(), row.likeCount());
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>DB 一條批次 SQL（取代逐篇 {@code findViewCountByUuid}），Redis 增量委派
+     * {@link ViewCountService#addRedisDeltas}（單次 MGET）。輸入先去重、濾 null。</p>
+     */
+    @Override
+    public Map<UUID, ArticleEngagementCounts> getEngagementCounts(Collection<UUID> articleUuids) {
+        if (articleUuids == null || articleUuids.isEmpty()) {
+            return Map.of();
+        }
+        List<UUID> distinct = articleUuids.stream().filter(Objects::nonNull).distinct().toList();
+        /* DB：瀏覽數與按讚數同一條批次 SQL（Map 合併屬跨批可合併形狀，可安全切批） */
+        List<ArticleMapper.EngagementRow> rows =
+                BatchedQuery.queryInBatches(distinct, articleMapper::findEngagementRowsIn);
+        Map<UUID, Long> dbViews = new HashMap<>();
+        rows.forEach(row -> dbViews.put(row.uuid(), row.viewCount()));
+        /* Redis 增量：與詳情頁 getViewCount 共用同一段合併規則，一次 MGET */
+        Map<UUID, Long> totalViews = viewCountService.addRedisDeltas(dbViews);
+        Map<UUID, ArticleEngagementCounts> result = new HashMap<>();
+        for (ArticleMapper.EngagementRow row : rows) {
+            long likeCount = row.likeCount() != null ? row.likeCount() : 0L;
+            result.put(row.uuid(), new ArticleEngagementCounts(totalViews.getOrDefault(row.uuid(), 0L), likeCount));
+        }
+        return result;
     }
 }

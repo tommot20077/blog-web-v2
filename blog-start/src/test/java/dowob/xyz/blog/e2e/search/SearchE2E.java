@@ -11,7 +11,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.Map;
@@ -47,6 +49,12 @@ class SearchE2E extends AbstractE2ETest {
 
     @Autowired
     private ElasticsearchOperations esOps;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     @AfterEach
     void tearDown() {
@@ -177,5 +185,35 @@ class SearchE2E extends AbstractE2ETest {
                         .with(bearerToken(adminToken)))
                 .andExpect(status().isOk())
                 .andExpect(apiSuccess());
+    }
+
+    @Test
+    @DisplayName("B4：搜尋結果的 viewCount／likeCount 與詳情頁一致（DB 值 + Redis 暫存增量／DB 按讚數），不是 ES 的 0")
+    void search_counts_matchArticleDetail() throws Exception {
+        String token = authHelper.createUserWithRole(
+                "search-counts@test.com", "Password1!", "searchcounts", "SearchCounts", Role.AUTHOR);
+        String uuid = createAndPublishArticle(token, "CountsChainUnique 計數同源", "計數同源驗證用文章內容 countschainunique");
+        await().atMost(15, TimeUnit.SECONDS).pollInterval(1, TimeUnit.SECONDS).untilAsserted(() ->
+                mockMvc.perform(get("/api/v1/search").param("q", "CountsChainUnique"))
+                        .andExpect(jsonPath("$.data.total").value(1)));
+        jdbcTemplate.update("UPDATE articles SET view_count = 100, like_count = 7 WHERE uuid = ?::uuid", uuid);
+        stringRedisTemplate.opsForValue().set("article:views:" + uuid, "5");
+
+        mockMvc.perform(get("/api/v1/search").param("q", "CountsChainUnique"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records[0].viewCount").value(105))
+                .andExpect(jsonPath("$.data.records[0].likeCount").value(7));
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.viewCount").value(105))
+                .andExpect(jsonPath("$.data.likeCount").value(7));
+    }
+
+    @Test
+    @DisplayName("B4：sort=hot 已移除，回 400 PARAM_VALID_ERROR（A0001）")
+    void search_sortHot_returns400() throws Exception {
+        mockMvc.perform(get("/api/v1/search").param("q", "anything").param("sort", "hot"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0001"));
     }
 }

@@ -65,6 +65,7 @@ class EndpointAuthorizationTest {
             "ArticleController#getArticle", "GET /api/v1/articles/{uuid}",
             "ArticleController#getArticleBySlug", "GET /api/v1/articles/slug/{slug}",
             "CommentController#list", "GET /api/v1/articles/{uuid}/comments",
+            "CommentController#listReplies", "GET /api/v1/comments/{uuid}/replies",
             "FileController#getFileContent", "GET /api/v1/files/**（實際授權在 FileService#canRead()）",
             "FileController#getFileMetadata", "GET /api/v1/files/**（實際授權在 FileService#canRead()）",
             "SearchController#search", "GET /api/v1/search",

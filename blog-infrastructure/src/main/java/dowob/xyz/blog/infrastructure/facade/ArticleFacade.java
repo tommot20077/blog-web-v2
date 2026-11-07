@@ -2,6 +2,7 @@ package dowob.xyz.blog.infrastructure.facade;
 
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleBasicInfo;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleEngagementCounts;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleNavRef;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
@@ -454,4 +455,22 @@ public interface ArticleFacade {
      * @return 作者統計，永不為 null
      */
     AuthorArticleStats getPublishedStatsByAuthor(UUID authorUuid);
+
+    /**
+     * 批次取得文章的互動計數（瀏覽數、按讚數），口徑與文章詳情頁完全一致。
+     *
+     * <p>瀏覽數 = DB {@code view_count} + Redis {@code article:views:{uuid}} 暫存增量（與
+     * {@code ViewCountService#getViewCount} 共用同一段合併邏輯）；按讚數 = DB {@code like_count}。
+     * 搜尋結果等列表用它補上計數，不再使用索引內的快照值（DATA-05，決策 B4）。</p>
+     *
+     * <p>效能保證：不論輸入幾篇，DB 為批次查詢（輸入超過 {@code BatchedQuery#BATCH_SIZE} 才切批），
+     * Redis 為一次 MGET，沒有逐篇往返。</p>
+     *
+     * <p>不分文章狀態（列表層已先限定 PUBLISHED）；DB 查無的文章<b>不會出現在結果中</b>，
+     * 呼叫端自行決定缺漏時的預設值（可用 {@link ArticleEngagementCounts#ZERO}）。</p>
+     *
+     * @param articleUuids 文章公開 UUID 集合；null 或空集合回傳空 Map（不查 DB、不連 Redis）
+     * @return 文章 UUID → 互動計數
+     */
+    Map<UUID, ArticleEngagementCounts> getEngagementCounts(Collection<UUID> articleUuids);
 }

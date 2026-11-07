@@ -273,6 +273,122 @@ class ArticleIndexElasticsearchIT {
         assertThat(result.getRecords()).isEmpty();
     }
 
+    @Test
+    @DisplayName("B4：舊索引文件殘留 viewCount／likeCount 欄位仍可搜尋，結果計數取自 ArticleFacade 而非索引內的舊值")
+    void search_legacyDocWithStaleCounters_usesFacadeCounts() throws Exception {
+        initializer.ensureCorrectMapping();
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        client.index(i -> i.index("blog_articles").id(articleUuid.toString()).refresh(Refresh.True).document(Map.of(
+                "id", articleUuid.toString(), "uuid", articleUuid.toString(),
+                "title", "Legacy counters guide", "slug", "legacy-" + articleUuid, "status", "PUBLISHED",
+                "viewCount", 0, "likeCount", 0,
+                "author", Map.of("uuid", authorUuid.toString(), "nickname", "愛麗絲"))));
+        when(articleFacade.getEngagementCounts(org.mockito.ArgumentMatchers.any())).thenReturn(Map.of(articleUuid,
+                new dowob.xyz.blog.infrastructure.facade.dto.ArticleEngagementCounts(105L, 7L)));
+
+        PageResult<SearchResultResponse> result = searchService.search("Legacy", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).singleElement().satisfies(r -> {
+            assertThat(r.getViewCount()).isEqualTo(105L);
+            assertThat(r.getLikeCount()).isEqualTo(7L);
+        });
+    }
+
+    @Test
+    @DisplayName("B4：reindexAll 寫入的 _source 不含 viewCount／likeCount（覆寫掉舊文件的殘留欄位）")
+    @SuppressWarnings("unchecked")
+    void reindexAll_sourceHasNoCounterFields() throws Exception {
+        initializer.ensureCorrectMapping();
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
+                articleUuid, "Counter free", "counter-free", "s", "content", "愛麗絲",
+                LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
+        when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Set.of(articleUuid));
+
+        searchService.reindexAll();
+        template.indexOps(ArticleDocument.class).refresh();
+
+        Map<String, Object> source = client.get(g -> g.index("blog_articles").id(articleUuid.toString()), Map.class).source();
+        assertThat(source).doesNotContainKeys("viewCount", "likeCount");
+    }
+
+    /**
+     * 寫入一份只有指定 title／summary／content 的已發布文件並 refresh。
+     *
+     * @return 文章公開 UUID
+     */
+    private UUID saveSearchableDocument(String title, String summary, String content) {
+        UUID articleUuid = UUID.randomUUID();
+        repository.save(ArticleDocument.builder().id(articleUuid.toString()).uuid(articleUuid.toString())
+                .title(title).summary(summary).content(content).slug("slug-" + articleUuid)
+                .status("PUBLISHED").publishedAt(LocalDateTime.of(2026, 10, 24, 12, 0))
+                .author(new ArticleDocument.AuthorInfo(UUID.randomUUID().toString(), "愛麗絲")).build());
+        template.indexOps(ArticleDocument.class).refresh();
+        return articleUuid;
+    }
+
+    @Test
+    @DisplayName("D4：標題打錯一個字仍能命中（title 保留 fuzziness）")
+    void search_titleTypo_stillMatches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("Kubernetes deployment guide", "無關摘要", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("Kubernetez", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：摘要打錯一個字仍能命中（summary 保留 fuzziness）")
+    void search_summaryTypo_stillMatches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("無關標題", "Introduction to observability", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("observabilitt", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：只有內文含近似字（打錯一個字）時不命中（content 不套 fuzziness）")
+    void search_contentOnlyTypo_doesNotMatch() {
+        initializer.ensureCorrectMapping();
+        saveSearchableDocument("無關標題", "無關摘要", "zebrafishuniquetoken 內文專屬字詞");
+
+        PageResult<SearchResultResponse> result =
+                searchService.search("zebrafishuniquetokem", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("D4：內文精確字仍可命中")
+    void search_contentExactWord_matches() {
+        initializer.ensureCorrectMapping();
+        UUID uuid = saveSearchableDocument("無關標題", "無關摘要", "zebrafishuniquetoken 內文專屬字詞");
+
+        PageResult<SearchResultResponse> result =
+                searchService.search("zebrafishuniquetoken", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid).containsExactly(uuid);
+    }
+
+    @Test
+    @DisplayName("D4：標題命中的權重仍高於僅內文命中（title^3 > content^1）")
+    void search_titleHitRanksAboveContentOnlyHit() {
+        initializer.ensureCorrectMapping();
+        UUID contentOnly = saveSearchableDocument("無關標題甲", "無關摘要", "rankingprobe appears only in content");
+        UUID titleHit = saveSearchableDocument("rankingprobe in the title", "無關摘要", "無關內文");
+
+        PageResult<SearchResultResponse> result = searchService.search("rankingprobe", null, "relevance", 1, 10, null);
+
+        assertThat(result.getRecords()).extracting(SearchResultResponse::getArticleUuid)
+                .containsExactly(titleHit, contentOnly);
+    }
+
     /**
      * 直接寫入一份已發布文件（作者暱稱為原值）。
      *
