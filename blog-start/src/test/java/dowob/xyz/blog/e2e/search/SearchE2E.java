@@ -5,7 +5,9 @@ import dowob.xyz.blog.e2e.config.AbstractE2ETest;
 import dowob.xyz.blog.e2e.support.AuthHelper;
 import dowob.xyz.blog.e2e.support.DataBuilder;
 import dowob.xyz.blog.e2e.support.DatabaseCleaner;
+import dowob.xyz.blog.e2e.support.SearchIndexCleaner;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.index.ArticleIndexAdmin;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -48,7 +50,13 @@ class SearchE2E extends AbstractE2ETest {
     private DatabaseCleaner databaseCleaner;
 
     @Autowired
+    private SearchIndexCleaner searchIndexCleaner;
+
+    @Autowired
     private ElasticsearchOperations esOps;
+
+    @Autowired
+    private ArticleIndexAdmin indexAdmin;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -59,12 +67,8 @@ class SearchE2E extends AbstractE2ETest {
     @AfterEach
     void tearDown() {
         databaseCleaner.cleanAll();
-        // 清理 ES 索引，確保測試之間不互相干擾
-        var indexOps = esOps.indexOps(ArticleDocument.class);
-        if (indexOps.exists()) {
-            indexOps.delete();
-            indexOps.createWithMapping();
-        }
+        /* 讀寫改走 alias 後不可再 delete＋createWithMapping（會拆掉 alias），改為經 alias 清空文件 */
+        searchIndexCleaner.clearArticles();
     }
 
     // ========== Helper Methods ==========
@@ -175,16 +179,54 @@ class SearchE2E extends AbstractE2ETest {
                 .andExpect(jsonPath("$.data.length()").value(0));
     }
 
+    /**
+     * D1／PERF-01：重建改在背景執行。觸發立即回 202 ＋ jobId，輪詢 status 的 reindex 直到 COMPLETED，
+     * 之後經 alias 仍搜得到已發布文章；alias 已指向新的實體索引、舊索引已刪除、殘留在舊索引的幽靈文件不會跟過去。
+     */
     @Test
-    @DisplayName("管理員觸發 ES 全量重建索引成功")
-    void adminReindex_success() throws Exception {
+    @DisplayName("管理員觸發全量重建：立即 202 帶 jobId，輪詢 status 到 COMPLETED，alias 切到新索引後仍搜得到、幽靈文件消失")
+    void adminReindex_runsInBackgroundUntilCompleted() throws Exception {
         String adminToken = authHelper.createUserWithRole(
                 "search-admin@test.com", "Password1!", "searchadmin", "SearchAdmin", Role.ADMIN);
+        String authorToken = authHelper.createUserWithRole(
+                "search-reindex-author@test.com", "Password1!", "searchreindexauthor", "ReindexAuthor", Role.AUTHOR);
+        String articleUuid = createAndPublishArticle(authorToken, "ReindexChainUnique 背景重建", "背景重建驗證用內文 reindexchainunique");
+        await().atMost(15, TimeUnit.SECONDS).pollInterval(1, TimeUnit.SECONDS).untilAsserted(() ->
+                mockMvc.perform(get("/api/v1/search").param("q", "ReindexChainUnique"))
+                        .andExpect(jsonPath("$.data.total").value(1)));
+        String ghostUuid = java.util.UUID.randomUUID().toString();
+        esOps.save(ArticleDocument.builder().id(ghostUuid).uuid(ghostUuid).title("ReindexChainUnique ghost")
+                .slug("ghost-" + ghostUuid).status("PUBLISHED").build());
+        esOps.indexOps(ArticleDocument.class).refresh();
+        String physicalBefore = indexAdmin.inspect().aliasTargets().get(0);
 
-        mockMvc.perform(post("/api/v1/admin/search/reindex")
+        MvcResult accepted = mockMvc.perform(post("/api/v1/admin/search/reindex")
                         .with(bearerToken(adminToken)))
+                .andExpect(status().isAccepted())
+                .andExpect(apiSuccess())
+                .andExpect(jsonPath("$.data.state").value("RUNNING"))
+                .andReturn();
+        String jobId = objectMapper.readTree(accepted.getResponse().getContentAsString())
+                .get("data").get("jobId").asText();
+
+        await().atMost(60, TimeUnit.SECONDS).pollInterval(500, TimeUnit.MILLISECONDS).untilAsserted(() ->
+                mockMvc.perform(get("/api/v1/admin/search/status").with(bearerToken(adminToken)))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.reindex.jobId").value(jobId))
+                        .andExpect(jsonPath("$.data.reindex.state").value("COMPLETED")));
+        mockMvc.perform(get("/api/v1/admin/search/status").with(bearerToken(adminToken)))
+                .andExpect(jsonPath("$.data.reindex.processed").value(1))
+                .andExpect(jsonPath("$.data.reindex.total").value(1))
+                .andExpect(jsonPath("$.data.reindex.finishedAt").isNotEmpty())
+                .andExpect(jsonPath("$.data.lastReindexAt").isNotEmpty());
+
+        mockMvc.perform(get("/api/v1/search").param("q", "ReindexChainUnique"))
                 .andExpect(status().isOk())
-                .andExpect(apiSuccess());
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.records[0].articleUuid").value(articleUuid));
+        String physicalAfter = indexAdmin.inspect().aliasTargets().get(0);
+        org.assertj.core.api.Assertions.assertThat(physicalAfter).isNotEqualTo(physicalBefore);
+        org.assertj.core.api.Assertions.assertThat(indexAdmin.indexExists(physicalBefore)).isFalse();
     }
 
     @Test

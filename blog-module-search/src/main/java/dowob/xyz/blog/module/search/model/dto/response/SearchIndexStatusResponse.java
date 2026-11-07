@@ -32,4 +32,9 @@ public class SearchIndexStatusResponse {
      * Elasticsearch 是否可達；查詢成功為 {@code true}，查詢拋出例外時為 {@code false}
      */
     private boolean healthy;
+
+    /**
+     * 最近一次全量重建作業（狀態、進度、開始與結束時間、錯誤摘要）；從未重建過或讀取失敗時為 {@code null}
+     */
+    private SearchReindexJobResponse reindex;
 }

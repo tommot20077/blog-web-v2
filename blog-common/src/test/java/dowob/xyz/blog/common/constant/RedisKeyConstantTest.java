@@ -62,6 +62,16 @@ class RedisKeyConstantTest {
     }
 
     @Test
+    @DisplayName("全量重建（D1）：作業狀態、進行中標記、重建期間變動集合與分散式鎖的 key 皆在 search:reindex: 與 lock: 之下")
+    void searchReindexJobKeys_haveExpectedValues() {
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_JOB_KEY).isEqualTo("search:reindex:job");
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_ACTIVE_KEY).isEqualTo("search:reindex:active");
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_DIRTY_ARTICLES_KEY).isEqualTo("search:reindex:dirty:articles");
+        assertThat(RedisKeyConstant.SEARCH_REINDEX_DIRTY_AUTHORS_KEY).isEqualTo("search:reindex:dirty:authors");
+        assertThat(RedisKeyConstant.LOCK_SEARCH_REINDEX).isEqualTo("lock:search-reindex");
+    }
+
+    @Test
     @DisplayName("RECOMMEND_TRENDING_PREFIX 應為 recommend:trending:")
     void recommendTrendingPrefix_hasExpectedValue() {
         assertThat(RedisKeyConstant.RECOMMEND_TRENDING_PREFIX).isEqualTo("recommend:trending:");

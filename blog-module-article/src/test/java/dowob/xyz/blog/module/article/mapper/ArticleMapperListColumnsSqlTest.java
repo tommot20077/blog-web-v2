@@ -27,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>列表只組 {@code ArticleSummaryResponse}／{@code ArticleData}，用不到 {@code content_md}、
  * {@code content_html}、{@code toc} 三個 TEXT 欄位；{@code SELECT *} 會讓 PostgreSQL 把整頁文章的正文也讀出並傳輸。
  * 本測試鎖定：列表類查詢不得 {@code *}、不得選到三個正文欄位，且必須涵蓋 {@link Article} 其餘所有欄位
- * （避免日後新增欄位時列表悄悄讀到 null）。詳情／ES 索引路徑（{@code findAllPublished}）不在此限。</p>
+ * （避免日後新增欄位時列表悄悄讀到 null）。詳情／ES 索引路徑（{@code findPublishedForIndexAfter}／{@code findPublishedForIndexByUuids}）不在此限。</p>
  *
  * @author Yuan
  * @version 1.0
@@ -63,6 +63,9 @@ class ArticleMapperListColumnsSqlTest {
         params.put("seriesUuid", UUID.randomUUID());
         params.put("offset", 0L);
         params.put("size", 10);
+        params.put("afterUuid", UUID.randomUUID());
+        params.put("limit", 200);
+        params.put("list", List.of(UUID.randomUUID()));
         return configuration.getMappedStatement(ArticleMapper.class.getName() + "." + method)
                 .getBoundSql(params).getSql().replaceAll("\\s+", " ");
     }
@@ -115,10 +118,12 @@ class ArticleMapperListColumnsSqlTest {
     }
 
     @Test
-    @DisplayName("ES 索引用的 findAllPublished 需要正文：明寫 content_md AS content，且不撈 content_html／toc")
-    void findAllPublished_selectsBodyAsContent() {
-        String sql = render("findAllPublished");
-        assertThat(sql).contains("content_md AS content");
-        assertThat(sql).doesNotContainPattern("\\bcontent_html\\b").doesNotContainPattern("\\btoc\\b");
+    @DisplayName("ES 索引用的兩條查詢需要正文：明寫 content_md AS content，且不撈 content_html／toc")
+    void indexQueries_selectBodyAsContent() {
+        for (String method : List.of("findPublishedForIndexAfter", "findPublishedForIndexByUuids")) {
+            String sql = render(method);
+            assertThat(sql).as(method).contains("content_md AS content");
+            assertThat(sql).as(method).doesNotContainPattern("\\bcontent_html\\b").doesNotContainPattern("\\btoc\\b");
+        }
     }
 }

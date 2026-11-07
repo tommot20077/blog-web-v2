@@ -93,7 +93,7 @@ public class ArticleEventPublisher {
                     article.getPublishedAt(),
                     article.getSlug(),
                     article.getSummary(),
-                    stripMarkdown(article.getContent()),
+                    MarkdownPlainText.strip(article.getContent()),
                     resolveAuthorNickname(article),
                     tags);
             rabbitTemplate.convertAndSend(
@@ -141,7 +141,7 @@ public class ArticleEventPublisher {
                     article.getPublishedAt(),
                     article.getSlug(),
                     article.getSummary(),
-                    stripMarkdown(article.getContent()),
+                    MarkdownPlainText.strip(article.getContent()),
                     resolveAuthorNickname(article),
                     tags);
             rabbitTemplate.convertAndSend(
@@ -295,27 +295,5 @@ public class ArticleEventPublisher {
         }
         UserDisplayInfo author = userFacade.getDisplayInfoByUuids(List.of(authorUuid)).get(authorUuid);
         return author == null ? null : author.nickname();
-    }
-
-    /**
-     * 去除 Markdown 格式，回傳純文字（供 Elasticsearch 索引）。
-     *
-     * @param markdown Markdown 原文
-     * @return 純文字內容
-     */
-    private String stripMarkdown(String markdown) {
-        if (markdown == null)
-            return "";
-        return markdown
-                .replaceAll("```[\\s\\S]*?```", "")
-                .replaceAll("`[^`]*`", "")
-                .replaceAll("(?m)^#{1,6}\\s*", "")
-                .replaceAll("\\*{1,2}([^*]+)\\*{1,2}", "$1")
-                .replaceAll("_{1,2}([^_]+)_{1,2}", "$1")
-                .replaceAll("!\\[[^]]*]\\([^)]*\\)", "")
-                .replaceAll("\\[([^]]+)]\\([^)]*\\)", "$1")
-                .replaceAll("(?m)^[-*_]{3,}$", "")
-                .replaceAll("\\s{2,}", " ")
-                .trim();
     }
 }

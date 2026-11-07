@@ -41,6 +41,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -117,7 +118,7 @@ class ArticleSearchListenerTest {
 
             listener.onArticlePublished(message);
 
-            verify(searchService).indexArticle(any(ArticleDocument.class));
+            verify(searchService).indexArticle(any(ArticleDocument.class), any());
         }
 
         @Test
@@ -129,7 +130,7 @@ class ArticleSearchListenerTest {
             listener.onArticlePublished(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
-            verify(searchService).indexArticle(captor.capture());
+            verify(searchService).indexArticle(captor.capture(), any());
             ArticleDocument.AuthorInfo author = captor.getValue().getAuthor();
             assertThat(author.getUuid()).isEqualTo(AUTHOR_UUID.toString());
             assertThat(author.getNickname()).isEqualTo("Yuan");
@@ -146,7 +147,7 @@ class ArticleSearchListenerTest {
             listener.onArticlePublished(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
-            verify(searchService).indexArticle(captor.capture());
+            verify(searchService).indexArticle(captor.capture(), any());
             assertThat(captor.getValue().getUuid()).isEqualTo(message.getArticleUuid().toString());
             assertThat(captor.getValue().getUuid()).isEqualTo(captor.getValue().getId());
         }
@@ -159,7 +160,7 @@ class ArticleSearchListenerTest {
 
             listener.onArticlePublished(message);
 
-            verify(searchService).indexArticle(any(ArticleDocument.class));
+            verify(searchService).indexArticle(any(ArticleDocument.class), any());
         }
 
         @Test
@@ -167,7 +168,7 @@ class ArticleSearchListenerTest {
         void onArticlePublished_onEsException_shouldNack() throws IOException {
             ArticlePublishedMessage message = buildPublishedMessage();
 
-            doThrow(new RuntimeException("ES cluster unavailable")).when(searchService).indexArticle(any());
+            doThrow(new RuntimeException("ES cluster unavailable")).when(searchService).indexArticle(any(), any());
 
             assertThatThrownBy(() -> listener.onArticlePublished(message)).isInstanceOf(RuntimeException.class);
         }
@@ -197,7 +198,7 @@ class ArticleSearchListenerTest {
 
             listener.onArticleUpdated(message);
 
-            verify(searchService).indexArticle(any(ArticleDocument.class));
+            verify(searchService).indexArticle(any(ArticleDocument.class), any());
         }
 
         @Test
@@ -209,7 +210,7 @@ class ArticleSearchListenerTest {
             listener.onArticleUpdated(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
-            verify(searchService).indexArticle(captor.capture());
+            verify(searchService).indexArticle(captor.capture(), any());
             ArticleDocument.AuthorInfo author = captor.getValue().getAuthor();
             assertThat(author.getUuid()).isEqualTo(AUTHOR_UUID.toString());
             assertThat(author.getNickname()).isEqualTo("Yuan");
@@ -227,7 +228,7 @@ class ArticleSearchListenerTest {
             listener.onArticlePublished(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
-            verify(searchService).indexArticle(captor.capture());
+            verify(searchService).indexArticle(captor.capture(), any());
             assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo("已刪除使用者#aaaaaaaa");
         }
 
@@ -241,7 +242,7 @@ class ArticleSearchListenerTest {
             listener.onArticleUpdated(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
-            verify(searchService).indexArticle(captor.capture());
+            verify(searchService).indexArticle(captor.capture(), any());
             assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo("已刪除使用者#aaaaaaaa");
         }
 
@@ -255,7 +256,7 @@ class ArticleSearchListenerTest {
             listener.onArticlePublished(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
-            verify(searchService).indexArticle(captor.capture());
+            verify(searchService).indexArticle(captor.capture(), any());
             assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo(ArticleDocument.ANONYMOUS_NICKNAME);
         }
 
@@ -268,7 +269,7 @@ class ArticleSearchListenerTest {
             listener.onArticlePublished(message);
 
             ArgumentCaptor<ArticleDocument> captor = ArgumentCaptor.forClass(ArticleDocument.class);
-            verify(searchService).indexArticle(captor.capture());
+            verify(searchService).indexArticle(captor.capture(), any());
             assertThat(captor.getValue().getAuthor().getUuid()).isNull();
             assertThat(captor.getValue().getAuthor().getNickname()).isEqualTo("Yuan");
         }
@@ -282,7 +283,7 @@ class ArticleSearchListenerTest {
             message.setTitle("會失敗的標題");
             message.setTags(List.of());
 
-            doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any());
+            doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any(), any());
 
             assertThatThrownBy(() -> listener.onArticleUpdated(message)).isInstanceOf(RuntimeException.class);
         }
@@ -309,7 +310,7 @@ class ArticleSearchListenerTest {
 
             listener.onArticleArchived(message);
 
-            verify(searchService).deleteIndex(uuid.toString());
+            verify(searchService).deleteIndex(eq(uuid.toString()), any());
         }
 
         @Test
@@ -321,7 +322,7 @@ class ArticleSearchListenerTest {
             message.setArticleUuid(uuid);
             message.setOccurredAt(Instant.now());
 
-            doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
+            doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any(), any());
 
             assertThatThrownBy(() -> listener.onArticleArchived(message)).isInstanceOf(RuntimeException.class);
         }
@@ -341,7 +342,7 @@ class ArticleSearchListenerTest {
             message.setArticleUuid(uuid);
             message.setOccurredAt(Instant.now());
 
-            doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
+            doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any(), any());
 
             CapturingAppender appender = attachAppender();
             try {
@@ -417,7 +418,7 @@ class ArticleSearchListenerTest {
 
             listener.onArticleDeleted(message);
 
-            verify(searchService).deleteIndex(uuid.toString());
+            verify(searchService).deleteIndex(eq(uuid.toString()), any());
         }
 
         @Test
@@ -428,7 +429,7 @@ class ArticleSearchListenerTest {
             message.setArticleUuid(uuid);
             message.setOccurredAt(Instant.now());
 
-            doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
+            doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any(), any());
 
             assertThatThrownBy(() -> listener.onArticleDeleted(message)).isInstanceOf(RuntimeException.class);
         }
@@ -465,7 +466,7 @@ class ArticleSearchListenerTest {
     @DisplayName("onArticlePublished：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void onArticlePublished_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ArticlePublishedMessage message = buildPublishedMessage();
-        doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any());
+        doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any(), any());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -516,7 +517,7 @@ class ArticleSearchListenerTest {
     @DisplayName("onArticleUpdated：失敗時計入 failed 指標，ERROR 日誌保留業務上下文")
     void onArticleUpdated_onFailure_recordsMetricsAndLogsContext() throws Exception {
         ArticlePublishedMessage message = buildPublishedMessage();
-        doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any());
+        doThrow(new RuntimeException("ES down")).when(searchService).indexArticle(any(), any());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -572,7 +573,7 @@ class ArticleSearchListenerTest {
         message.setArticleUuid(UUID.randomUUID());
         message.setEventId(EVENT_ID);
         message.setOccurredAt(Instant.now());
-        doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
+        doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any(), any());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {
@@ -629,7 +630,7 @@ class ArticleSearchListenerTest {
         message.setEventId(UUID.randomUUID());
         message.setArticleUuid(UUID.randomUUID());
         message.setOccurredAt(Instant.now());
-        doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any());
+        doThrow(new RuntimeException("ES down")).when(searchService).deleteIndex(any(), any());
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         Metrics.addRegistry(registry);
         try {

@@ -18,10 +18,12 @@ import java.util.UUID;
  * 文章 Elasticsearch Document
  *
  * <p>
- * 對應 Elasticsearch 索引 {@code blog_articles}，
+ * 對應 Elasticsearch alias {@code blog_articles}（背後是版本化的實體索引 {@code blog_articles_v*}，
+ * 由 {@code ArticleIndexAdmin} 管理；Repository 與查詢一律經 alias 讀寫，不得寫死實體索引名稱），
  * 包含全文檢索所需欄位。
  * 分詞器由 Elasticsearch 索引 Settings 配置（IK Analyzer），
- * 此 Java 映射採預設，部署時請透過索引範本（Index Template）套用 IK。
+ * 此 Java 映射採預設，部署時請透過索引範本（Index Template）套用 IK；範本的 {@code index_patterns}
+ * 須涵蓋實體索引名稱 {@code blog_articles_v*}（alias 名稱不會被範本比對）。
  * </p>
  *
  * @author Yuan

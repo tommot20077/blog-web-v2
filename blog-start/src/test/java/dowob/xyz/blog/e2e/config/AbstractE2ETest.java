@@ -3,7 +3,7 @@ package dowob.xyz.blog.e2e.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.redis.testcontainers.RedisContainer;
 import dowob.xyz.blog.BlogWebV2Application;
-import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.init.SearchIndexInitializer;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
@@ -13,7 +13,6 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -113,13 +112,11 @@ public abstract class AbstractE2ETest {
 
     @BeforeAll
     static void initContainerResources(
-            @Autowired ElasticsearchOperations esOps,
+            @Autowired SearchIndexInitializer searchIndexInitializer,
             @Autowired MinioClient minioClient) throws Exception {
-        // Elasticsearch 索引初始化
-        var indexOps = esOps.indexOps(ArticleDocument.class);
-        if (!indexOps.exists()) {
-            indexOps.createWithMapping();
-        }
+        /* Elasticsearch 索引初始化：與正式啟動同一套流程（alias ＋ 版本化實體索引，冪等）；
+           不可再用 createWithMapping()，它會建出同名的實體索引而拆掉 alias */
+        searchIndexInitializer.ensureCorrectMapping();
 
         // MinIO bucket 初始化
         String bucket = "blog-e2e-test";

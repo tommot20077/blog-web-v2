@@ -28,7 +28,8 @@ import java.util.UUID;
  * <p>跨模組識別一律是公開 UUID（文章、系列、使用者）；facade 介面不暴露任何資料庫 Long 主鍵。
  * 方法分類：</p>
  * <ul>
- *   <li><b>recommend / search read</b>（findAllPublishedForIndex / getPublishedArticleBasicInfo /
+ *   <li><b>recommend / search read</b>（findPublishedForIndexAfter / findPublishedForIndexByUuids / countPublished /
+ *       getPublishedArticleBasicInfo /
  *       getArticlesByTagIds / getRecentPublishedArticles / getPublishedArticlesByUuids /
  *       getArticlesPublishedAfter）：僅查 PUBLISHED 文章。</li>
  *   <li><b>不限狀態的 read</b>（findByUuid / findBySeriesUuidOrderByPosition / findContentByUuid / existsByUuid）：
@@ -49,25 +50,56 @@ import java.util.UUID;
 public interface ArticleFacade {
 
     /**
-     * 查詢所有已發布文章的索引資料
+     * 單批索引資料讀取的筆數上限（{@link #findPublishedForIndexAfter} 的 {@code limit} 不得超過此值）。
      *
-     * <p>
-     * 用於搜尋模組全量重建 Elasticsearch 索引（Reindex）。
-     * 僅回傳狀態為 PUBLISHED 的文章，包含完整索引所需欄位。
-     * </p>
-     *
-     * @return 所有已發布文章的索引資料列表
+     * <p>與 {@code BatchedQuery.BATCH_SIZE} 同值：一批文章的標籤以單次 {@code IN} 查詢取得，
+     * 批次大小即該查詢的 bind parameter 數。</p>
      */
-    List<ArticleIndexData> findAllPublishedForIndex();
+    int INDEX_BATCH_MAX_SIZE = 500;
+
+    /**
+     * 以 keyset 分頁讀取一批已發布文章的索引資料（全量重建 Elasticsearch 索引用，PERF-01）。
+     *
+     * <p>依文章公開 UUID <b>升冪</b>（PostgreSQL {@code uuid} 排序）取 {@code afterUuid} 之後的至多 {@code limit} 篇
+     * PUBLISHED 文章；呼叫端以本批最後一筆的 {@link ArticleIndexData#articleUuid()} 當下一批的游標，
+     * 回傳筆數少於 {@code limit} 即代表已讀完。只選索引需要的欄位（不讀 {@code content_html}／{@code toc}）。</p>
+     *
+     * <p>一批之內：標籤以<b>一次</b>批次查詢取得、作者暱稱以<b>一次</b> {@code UserFacade} 批次查詢取得，
+     * 不隨文章逐筆查詢（不 N+1）。</p>
+     *
+     * @param afterUuid 游標（不含）；{@code null} 表示從頭開始
+     * @param limit     本批筆數上限，須介於 1 與 {@link #INDEX_BATCH_MAX_SIZE} 之間
+     * @return 本批文章的索引資料，依 UUID 升冪
+     * @throws IllegalArgumentException {@code limit} 超出範圍
+     */
+    List<ArticleIndexData> findPublishedForIndexAfter(UUID afterUuid, int limit);
+
+    /**
+     * 讀取給定文章中「查詢當下仍為 PUBLISHED」者的索引資料。
+     *
+     * <p>供全量重建期間的增量補齊使用：重建進行中有變動的文章，在切換 alias 前後以本方法回查 DB 現況，
+     * 回傳者寫入新索引、<b>未回傳者（已下架、退回、已刪除）由呼叫端從新索引移除</b>。
+     * 輸入無上界，實作端經 {@code BatchedQuery} 切批；標籤與作者暱稱同樣批次取得。</p>
+     *
+     * @param articleUuids 文章公開 UUID；{@code null} 或空集合回傳空清單（不查 DB），{@code null} 元素忽略
+     * @return 其中目前為 PUBLISHED 者的索引資料（順序不保證）
+     */
+    List<ArticleIndexData> findPublishedForIndexByUuids(Collection<UUID> articleUuids);
+
+    /**
+     * 已發布文章總數（全量重建的進度分母）。
+     *
+     * @return 目前狀態為 PUBLISHED 的文章數
+     */
+    long countPublished();
 
     /**
      * 在給定的文章 UUID 中，篩出「查詢當下確實是 PUBLISHED」的那些
      *
      * <p>
-     * 供搜尋模組清除幽靈 document（ES 有、DB 已非 PUBLISHED）使用。
-     * 與 {@link #findAllPublishedForIndex()} 的差別在於**時點**：後者是全量重建開始時的快照，
-     * 拿快照當清除判準會把「快照撈完之後才發布、由 MQ 寫進索引」的文章誤判為幽靈刪掉；
-     * 本方法是即時查證，因此並發發布的文章會被認出來而保留。
+     * 供搜尋模組的每日幽靈校正清除幽靈 document（ES 有、DB 已非 PUBLISHED）使用。
+     * 判準必須是查詢當下的 DB 狀態而不是某個時點的快照：拿快照當清除判準會把「快照撈完之後才發布、
+     * 由 MQ 寫進索引」的文章誤判為幽靈刪掉；本方法是即時查證，因此並發發布的文章會被認出來而保留。
      * </p>
      *
      * <p>{@code articles} 是業務 Data，跨模組不得直接查表（見 {@code ai-docs/architecture.md}），

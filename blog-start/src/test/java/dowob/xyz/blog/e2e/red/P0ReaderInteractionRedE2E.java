@@ -6,13 +6,12 @@ import dowob.xyz.blog.e2e.config.AbstractE2ETest;
 import dowob.xyz.blog.e2e.support.AuthHelper;
 import dowob.xyz.blog.e2e.support.DataBuilder;
 import dowob.xyz.blog.e2e.support.DatabaseCleaner;
+import dowob.xyz.blog.e2e.support.SearchIndexCleaner;
 import dowob.xyz.blog.e2e.support.E2EAssertions;
-import dowob.xyz.blog.module.search.document.ArticleDocument;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -41,16 +40,13 @@ class P0ReaderInteractionRedE2E extends AbstractE2ETest {
     private DatabaseCleaner databaseCleaner;
 
     @Autowired
-    private ElasticsearchOperations esOps;
+    private SearchIndexCleaner searchIndexCleaner;
 
     @AfterEach
     void tearDown() {
         databaseCleaner.cleanAll();
-        var indexOps = esOps.indexOps(ArticleDocument.class);
-        if (indexOps.exists()) {
-            indexOps.delete();
-            indexOps.createWithMapping();
-        }
+        /* 讀寫改走 alias 後不可再 delete＋createWithMapping（會拆掉 alias），改為經 alias 清空文件 */
+        searchIndexCleaner.clearArticles();
     }
 
     @Test

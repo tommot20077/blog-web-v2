@@ -413,10 +413,34 @@ public class RedisKeyConstant {
     /**
      * 搜尋索引全量重建時間戳 Key (String，值為 ISO-8601 時間字串)
      * Key: search:reindex:at
-     * <p>由 {@code SearchServiceImpl.reindexAll()} 於重建完成後寫入，
+     * <p>由 {@code SearchReindexService} 於背景全量重建完成（alias 已切換）後寫入，
      * 供 Admin 後台查詢索引狀態時讀取「最後重建時間」；從未重建過時該 Key 不存在。</p>
      */
     public static final String SEARCH_REINDEX_AT_KEY = "search:reindex:at";
+
+    /**
+     * 搜尋索引全量重建作業狀態 Key (Hash：jobId／state／processed／total／startedAt／finishedAt／error)
+     * Key: search:reindex:job
+     */
+    public static final String SEARCH_REINDEX_JOB_KEY = "search:reindex:job";
+
+    /**
+     * 搜尋索引全量重建進行中標記 Key (String，值為重建中的新實體索引名稱；附 TTL，重建期間續期)
+     * Key: search:reindex:active
+     */
+    public static final String SEARCH_REINDEX_ACTIVE_KEY = "search:reindex:active";
+
+    /**
+     * 全量重建期間有變動的文章 Set Key（文章 UUID 字串；切換 alias 前後回查 DB 補進新索引）
+     * Key: search:reindex:dirty:articles
+     */
+    public static final String SEARCH_REINDEX_DIRTY_ARTICLES_KEY = "search:reindex:dirty:articles";
+
+    /**
+     * 全量重建期間暱稱被改寫（刪帳匿名化）的作者 Set Key（作者 UUID 字串）
+     * Key: search:reindex:dirty:authors
+     */
+    public static final String SEARCH_REINDEX_DIRTY_AUTHORS_KEY = "search:reindex:dirty:authors";
 
     /** ===================== Recommend ===================== */
 
@@ -457,6 +481,12 @@ public class RedisKeyConstant {
      * Key: lock:trending-refresh
      */
     public static final String LOCK_TRENDING_REFRESH = "lock:trending-refresh";
+
+    /**
+     * 搜尋索引全量重建分散式鎖 Key（值為持有中的 jobId）
+     * Key: lock:search-reindex
+     */
+    public static final String LOCK_SEARCH_REINDEX = "lock:search-reindex";
 
     /**
      * 孤兒校正分散式鎖 Key 前綴
