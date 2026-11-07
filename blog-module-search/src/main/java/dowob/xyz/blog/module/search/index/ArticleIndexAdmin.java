@@ -3,7 +3,9 @@ package dowob.xyz.blog.module.search.index;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
+import org.springframework.data.elasticsearch.core.RefreshPolicy;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.document.Document;
 import org.springframework.data.elasticsearch.core.index.AliasAction;
@@ -12,7 +14,10 @@ import org.springframework.data.elasticsearch.core.index.AliasActions;
 import org.springframework.data.elasticsearch.core.index.AliasData;
 import org.springframework.data.elasticsearch.core.index.Settings;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+import org.springframework.data.elasticsearch.core.query.ByQueryResponse;
 import org.springframework.data.elasticsearch.core.query.Query;
+import org.springframework.data.elasticsearch.core.query.ScriptType;
+import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.data.elasticsearch.core.reindex.ReindexRequest;
 import org.springframework.data.elasticsearch.core.reindex.ReindexResponse;
 import org.springframework.stereotype.Component;
@@ -23,6 +28,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 文章索引的實體索引與 alias 管理（D1／PERF-01）。
@@ -258,6 +264,33 @@ public class ArticleIndexAdmin {
      */
     public void deleteDocument(String id, String index) {
         operations.delete(id, IndexCoordinates.of(index));
+    }
+
+    /**
+     * 把某位作者在指定索引內所有文件的 {@code author.nickname} 改寫為指定暱稱（DATA-02）。
+     *
+     * <p>以 {@code update_by_query}（條件為 {@code author.uuid}）只改寫該欄位；版本衝突不中止、立即 refresh。
+     * 平常經 alias 呼叫；全量重建補齊時對新實體索引呼叫。</p>
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param nickname   新暱稱
+     * @param index      alias 或實體索引名稱
+     * @return 被更新的文件數
+     */
+    public long updateAuthorNickname(UUID authorUuid, String nickname, String index) {
+        Query matchAuthor = NativeQuery.builder()
+                .withQuery(q -> q.term(t -> t.field("author.uuid").value(authorUuid.toString())))
+                .build();
+        UpdateQuery updateQuery = UpdateQuery.builder(matchAuthor)
+                .withScriptType(ScriptType.INLINE)
+                .withLang("painless")
+                .withScript("ctx._source.author.nickname = params.nickname")
+                .withParams(Map.of("nickname", nickname))
+                .withAbortOnVersionConflict(false)
+                .withRefreshPolicy(RefreshPolicy.IMMEDIATE)
+                .build();
+        ByQueryResponse response = operations.updateByQuery(updateQuery, IndexCoordinates.of(index));
+        return response.getUpdated();
     }
 
     /**

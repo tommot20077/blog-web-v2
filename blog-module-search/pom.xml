@@ -45,6 +45,12 @@
             <artifactId>elasticsearch</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- 全量重建 IT（ArticleIndexRebuildIT）：重建期間的變動紀錄與作業狀態用真 Redis 驗證 Lua 語意 -->
+        <dependency>
+            <groupId>com.redis</groupId>
+            <artifactId>testcontainers-redis</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 

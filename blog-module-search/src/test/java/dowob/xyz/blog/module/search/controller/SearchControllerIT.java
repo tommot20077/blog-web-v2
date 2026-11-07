@@ -76,6 +76,12 @@ class SearchControllerIT {
     private SearchService searchService;
 
     /**
+     * 背景全量重建服務（Mock；D1 起 reindex 端點只觸發背景作業）
+     */
+    @MockitoBean
+    private dowob.xyz.blog.module.search.reindex.SearchReindexService reindexService;
+
+    /**
      * JWT 服務（JwtAuthenticationFilter 依賴）
      */
     @MockitoBean
@@ -328,16 +334,21 @@ class SearchControllerIT {
         }
 
         /**
-         * ADMIN 使用者應可觸發全量重建索引
+         * ADMIN 使用者應可觸發全量重建索引（D1：改為背景執行，立即回 202 Accepted）
          */
         @Test
-        @DisplayName("ADMIN 使用者應可成功觸發重建索引（200 OK）")
-        void reindex_adminUser_returns200() throws Exception {
+        @DisplayName("ADMIN 使用者應可成功觸發重建索引（202 Accepted）")
+        void reindex_adminUser_returns202() throws Exception {
+            when(reindexService.start()).thenReturn(dowob.xyz.blog.module.search.reindex.ReindexStartResult.started(
+                    dowob.xyz.blog.module.search.model.dto.response.SearchReindexJobResponse.builder()
+                            .jobId(UUID.randomUUID())
+                            .state(dowob.xyz.blog.module.search.reindex.ReindexJobState.RUNNING).build()));
+
             mockMvc.perform(post("/api/v1/admin/search/reindex").with(adminAuth(1L)))
-                    .andExpect(status().isOk())
+                    .andExpect(status().isAccepted())
                     .andExpect(jsonPath("$.code").value("00000"));
 
-            verify(searchService).reindexAll();
+            verify(reindexService).start();
         }
     }
 }

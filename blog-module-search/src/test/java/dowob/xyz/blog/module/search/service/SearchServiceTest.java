@@ -3,20 +3,15 @@ package dowob.xyz.blog.module.search.service;
 import dowob.xyz.blog.common.api.response.PageResult;
 import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
 import dowob.xyz.blog.infrastructure.facade.UserFacade;
-import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
-import dowob.xyz.blog.infrastructure.facade.ArticleIndexData;
 import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.index.ArticleIndexAdmin;
+import dowob.xyz.blog.module.search.model.dto.response.SearchReindexJobResponse;
+import dowob.xyz.blog.module.search.reindex.ReindexJobState;
+import dowob.xyz.blog.module.search.reindex.ReindexJobStore;
+import dowob.xyz.blog.module.search.reindex.ReindexJournal;
 import dowob.xyz.blog.module.search.model.dto.response.SearchIndexStatusResponse;
 import dowob.xyz.blog.module.search.model.dto.response.SearchResultResponse;
 import dowob.xyz.blog.module.search.repository.ArticleSearchRepository;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.logging.log4j.Level;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.LogEvent;
-import org.apache.logging.log4j.core.Logger;
-import org.apache.logging.log4j.core.appender.AbstractAppender;
-import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -110,6 +105,24 @@ class SearchServiceTest {
     private UserFacade userFacade;
 
     /**
+     * 文章索引管理（Mock，作者暱稱改寫經 alias）
+     */
+    @Mock
+    private ArticleIndexAdmin indexAdmin;
+
+    /**
+     * 全量重建期間的變動紀錄（Mock）
+     */
+    @Mock
+    private ReindexJournal reindexJournal;
+
+    /**
+     * 全量重建作業狀態（Mock）
+     */
+    @Mock
+    private ReindexJobStore reindexJobStore;
+
+    /**
      * 待測服務（自動注入上述 Mock）
      */
     @InjectMocks
@@ -162,93 +175,6 @@ class SearchServiceTest {
         when(hits.getSearchHits()).thenReturn(searchHitList);
         when(hits.getTotalHits()).thenReturn((long) documents.size());
         return hits;
-    }
-
-    /**
-     * 建立「塞滿一頁」的 Mock SearchHits（同一份 document 重複 size 次）
-     *
-     * <p>幽靈掃描以 {@code pageHits.size() < PAGE_SIZE} 判斷是否掃完，
-     * 故只需筆數達標，不需要 size 個相異 mock。</p>
-     *
-     * @param document 每一筆命中的內容
-     * @param size     本頁筆數
-     * @return Mock SearchHits
-     */
-    @SuppressWarnings("unchecked")
-    private SearchHits<ArticleDocument> mockFullPage(ArticleDocument document, int size) {
-        SearchHit<ArticleDocument> hit = mock(SearchHit.class);
-        when(hit.getContent()).thenReturn(document);
-        SearchHits<ArticleDocument> hits = mock(SearchHits.class);
-        when(hits.getSearchHits()).thenReturn(Collections.nCopies(size, hit));
-        when(hits.getTotalHits()).thenReturn((long) size);
-        return hits;
-    }
-
-    /**
-     * 建立測試用 ArticleIndexData（全量重建的 DB 快照元素）
-     *
-     * @param uuid 文章公開 UUID
-     * @return 索引資料
-     */
-    private ArticleIndexData indexData(UUID uuid) {
-        return new ArticleIndexData(uuid, "仍公開的文章", "still-public",
-                "summary", "content", "Yuan",
-                LocalDateTime.now(), 0L, 0L, List.of(), null);
-    }
-
-    /** 掛 appender 前的 logger level，detach 時還原 */
-    private Level previousLoggerLevel;
-
-    /**
-     * 掛上捕捉用 appender 以取得 {@link SearchServiceImpl} 的日誌事件。
-     *
-     * <p>單元測試 JVM 沒有專案的 log4j2 設定檔，root level 為預設的 ERROR；
-     * 要斷言「某訊息不是 ERROR 而是 warn／info」就必須先把該 logger 調到 INFO，
-     * 否則事件根本不會產生，會誤判成「沒有這行日誌」。</p>
-     *
-     * @return 已啟動並掛載的 appender
-     */
-    private CapturingAppender attachAppender() {
-        CapturingAppender appender = new CapturingAppender();
-        appender.start();
-        Logger logger = (Logger) LogManager.getLogger(SearchServiceImpl.class);
-        /* 順序不可顛倒：addAppender 會為此 logger 建立新的 LoggerConfig（level 沿用 root）
-           並 updateLoggers()，先設的 level 會被蓋掉 */
-        logger.addAppender(appender);
-        previousLoggerLevel = logger.getLevel();
-        logger.setLevel(Level.INFO);
-        return appender;
-    }
-
-    /**
-     * 卸載測試用 appender 並還原 logger level，避免污染其他測試。
-     *
-     * @param appender 先前掛上的 appender
-     */
-    private void detachAppender(CapturingAppender appender) {
-        Logger logger = (Logger) LogManager.getLogger(SearchServiceImpl.class);
-        logger.removeAppender(appender);
-        logger.setLevel(previousLoggerLevel);
-        appender.stop();
-    }
-
-    /**
-     * 捕捉日誌事件的測試用 appender（log4j2 為本專案的日誌實作，見 root pom 排除
-     * spring-boot-starter-logging 並改用 log4j-slf4j2-impl）。
-     */
-    private static final class CapturingAppender extends AbstractAppender {
-
-        /** 捕捉到的日誌事件 */
-        private final List<LogEvent> events = new ArrayList<>();
-
-        private CapturingAppender() {
-            super("search-test-capture", null, null, true, Property.EMPTY_ARRAY);
-        }
-
-        @Override
-        public void append(LogEvent event) {
-            events.add(event.toImmutable());
-        }
     }
 
     /**
@@ -815,6 +741,33 @@ class SearchServiceTest {
 
             verify(articleSearchRepository).save(doc);
         }
+
+        /**
+         * D1：全量重建進行中，listener 的寫入只會進到舊索引（alias 仍指向它）；先記下這篇有變動，
+         * 重建在切換 alias 前後回查 DB 補進新索引。必須「先記錄、再寫入」：反過來的話，寫入落在舊索引、
+         * 記錄卻晚於切換後的補齊，這次變動就會隨切換消失。
+         */
+        @Test
+        @DisplayName("D1：先把文章記進重建變動紀錄，再寫入 alias（順序不可顛倒）")
+        void indexArticle_recordsJournalBeforeWriting() {
+            ArticleDocument doc = buildTestDocument();
+
+            searchService.indexArticle(doc);
+
+            org.mockito.InOrder order = org.mockito.Mockito.inOrder(reindexJournal, articleSearchRepository);
+            order.verify(reindexJournal).recordArticle(doc.getId());
+            order.verify(articleSearchRepository).save(doc);
+        }
+
+        @Test
+        @DisplayName("D1：記錄變動失敗（Redis 故障）時不寫入、例外往外拋，由 MQ 容器重試")
+        void indexArticle_journalFailure_propagatesWithoutWriting() {
+            ArticleDocument doc = buildTestDocument();
+            doThrow(new IllegalStateException("redis down")).when(reindexJournal).recordArticle(doc.getId());
+
+            assertThatThrownBy(() -> searchService.indexArticle(doc)).hasMessage("redis down");
+            verify(articleSearchRepository, never()).save(any());
+        }
     }
 
     /**
@@ -836,392 +789,39 @@ class SearchServiceTest {
 
             verify(articleSearchRepository).deleteById(uuid);
         }
+
+        @Test
+        @DisplayName("D1：下架／刪除同樣先記進重建變動紀錄，再從 alias 移除（重建補齊時會從新索引移除）")
+        void deleteIndex_recordsJournalBeforeDeleting() {
+            String uuid = UUID.randomUUID().toString();
+
+            searchService.deleteIndex(uuid);
+
+            org.mockito.InOrder order = org.mockito.Mockito.inOrder(reindexJournal, articleSearchRepository);
+            order.verify(reindexJournal).recordArticle(uuid);
+            order.verify(articleSearchRepository).deleteById(uuid);
+        }
     }
 
     /**
-     * reindexAll() 方法測試群組
+     * updateAuthorNickname() 方法測試群組
      */
     @Nested
-    @DisplayName("reindexAll() 全量重建索引")
-    class ReindexAllTests {
-
-        /**
-         * 重建流程會掃描索引現況以找出幽靈 document；預設 stub 成「索引為空」，
-         * 個別測試需要幽靈情境時再自行覆寫。
-         */
-        @BeforeEach
-        void stubEmptyIndexScan() {
-            SearchHits<ArticleDocument> emptyHits = mockSearchHits(List.of());
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenReturn(emptyHits);
-        }
-
-        /**
-         * 幽靈 document ＝ ES 裡有、但 DB 已經不是 PUBLISHED（被刪除或下架）的文件。
-         *
-         * <p>原本 reindexAll 只做 saveAll，從不刪任何 document，所以
-         * 「MQ 失手也會被下次 reindexAll 清掉」這個安全網事實上不存在——
-         * 管理員點「重建索引」也修不好已下架文章仍搜尋得到的問題
-         * （見 ai-docs/backlog/2026-07-29-index-cache-rebuild-completeness.md）。</p>
-         */
-        @Test
-        @DisplayName("M3：重建時作者暱稱以一次批次 UserFacade 查詢取當下值，不用 DB 快照內的舊暱稱")
-        void reindexAll_usesCurrentNicknamesFromUserFacadeInOneBatchCall() {
-            UUID authorA = UUID.randomUUID();
-            UUID authorB = UUID.randomUUID();
-            ArticleIndexData a1 = new ArticleIndexData(UUID.randomUUID(), "t1", "s1", "sum", "c", "舊暱稱A",
-                    LocalDateTime.now(), 0L, 0L, List.of(), authorA);
-            ArticleIndexData a2 = new ArticleIndexData(UUID.randomUUID(), "t2", "s2", "sum", "c", "舊暱稱A",
-                    LocalDateTime.now(), 0L, 0L, List.of(), authorA);
-            ArticleIndexData b1 = new ArticleIndexData(UUID.randomUUID(), "t3", "s3", "sum", "c", "舊暱稱B",
-                    LocalDateTime.now(), 0L, 0L, List.of(), authorB);
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(a1, a2, b1));
-            when(userFacade.getDisplayInfoByUuids(any())).thenReturn(Map.of(
-                    authorA, new UserDisplayInfo(authorA, "已刪除使用者#aaaa", null)));
-            SearchHits<ArticleDocument> emptyHits = mockSearchHits(List.of());
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenReturn(emptyHits);
-
-            searchService.reindexAll();
-
-            verify(userFacade, org.mockito.Mockito.times(1)).getDisplayInfoByUuids(any());
-            org.mockito.ArgumentCaptor<Iterable<ArticleDocument>> saved = org.mockito.ArgumentCaptor.forClass(Iterable.class);
-            verify(articleSearchRepository).saveAll(saved.capture());
-            List<String> nicknames = new ArrayList<>();
-            saved.getValue().forEach(d -> nicknames.add(d.getAuthor().getNickname()));
-            assertThat(nicknames).containsExactly("已刪除使用者#aaaa", "已刪除使用者#aaaa", ArticleDocument.ANONYMOUS_NICKNAME);
-        }
+    @DisplayName("updateAuthorNickname() 作者暱稱改寫")
+    class UpdateAuthorNicknameTests {
 
         @Test
-        @DisplayName("重建寫入的 document 應帶頂層 uuid（舊文件藉此補上幽靈校正所需的排序欄位）")
-        void reindexAll_documentsCarryTopLevelUuid() {
-            UUID uuid = UUID.randomUUID();
-            ArticleIndexData data = new ArticleIndexData(uuid, "t", "s", "summary", "content", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, List.of(), null);
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
-            SearchHits<ArticleDocument> emptyHits = mockSearchHits(List.of());
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(emptyHits);
+        @DisplayName("D1：先把作者記進重建變動紀錄，再經 alias 改寫；回傳被更新的文件數")
+        void updateAuthorNickname_recordsJournalThenRewritesViaAlias() {
+            UUID author = UUID.randomUUID();
+            when(indexAdmin.updateAuthorNickname(author, "已刪除使用者#ab12", ArticleIndexAdmin.ALIAS)).thenReturn(2L);
 
-            searchService.reindexAll();
+            long updated = searchService.updateAuthorNickname(author, "已刪除使用者#ab12");
 
-            org.mockito.ArgumentCaptor<Iterable<ArticleDocument>> saved = org.mockito.ArgumentCaptor.forClass(Iterable.class);
-            verify(articleSearchRepository).saveAll(saved.capture());
-            assertThat(saved.getValue()).extracting(ArticleDocument::getUuid).containsExactly(uuid.toString());
-        }
-
-        @Test
-        @DisplayName("重建後應刪除「ES 有但 DB 已非 PUBLISHED」的幽靈 document")
-        void reindexAll_removesGhostDocumentsMissingFromDatabase() {
-            UUID liveUuid = UUID.randomUUID();
-            String ghostId = UUID.randomUUID().toString();
-            ArticleIndexData live = new ArticleIndexData(liveUuid, "仍公開的文章", "still-public",
-                    "summary", "content", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, List.of(), null);
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(live));
-            SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
-                    ArticleDocument.builder().id(liveUuid.toString()).build(),
-                    ArticleDocument.builder().id(ghostId).build()));
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenReturn(indexedHits);
-            /* 即時回查 DB：只有 liveUuid 還是 PUBLISHED，ghostId 不是 */
-            when(articleFacade.filterPublishedUuids(any())).thenReturn(Set.of(liveUuid));
-
-            searchService.reindexAll();
-
-            verify(articleSearchRepository).saveAll(any());
-            verify(articleSearchRepository).deleteAllById(List.of(ghostId));
-        }
-
-        @Test
-        @DisplayName("索引與 DB 一致時，不應刪除任何 document")
-        void reindexAll_whenIndexMatchesDatabase_deletesNothing() {
-            UUID liveUuid = UUID.randomUUID();
-            ArticleIndexData live = new ArticleIndexData(liveUuid, "仍公開的文章", "still-public",
-                    "summary", "content", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, List.of(), null);
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(live));
-            SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
-                    ArticleDocument.builder().id(liveUuid.toString()).build()));
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenReturn(indexedHits);
-            when(articleFacade.filterPublishedUuids(any())).thenReturn(Set.of(liveUuid));
-
-            searchService.reindexAll();
-
-            verify(articleSearchRepository, never()).deleteAllById(any());
-        }
-
-        /**
-         * N1（本輪引入的缺陷）：清除的判準若是「重建開始時的快照」，
-         * 在 saveAll 與掃描之間被發布、由 MQ consumer 寫進 ES 的文章就不在快照裡，
-         * 會被當成幽靈刪掉——文章是 PUBLISHED 卻搜尋不到，而日誌只會說「已清除 1 筆幽靈」。
-         *
-         * <p>判準必須改成即時查證：拿掃到的 id 回 DB 問「現在還是 PUBLISHED 嗎」，
-         * 不在回查結果裡的才是真幽靈。</p>
-         */
-        @Test
-        @DisplayName("快照撈完之後才發布的文章，不得被當成幽靈刪除")
-        void reindexAll_whenArticlePublishedAfterSnapshot_doesNotDeleteIt() {
-            UUID snapshotUuid = UUID.randomUUID();
-            /* 快照撈完之後才發布；MQ consumer 已把它寫進 ES，但它不在本次快照裡 */
-            UUID racingUuid = UUID.randomUUID();
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(indexData(snapshotUuid)));
-            SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
-                    ArticleDocument.builder().id(snapshotUuid.toString()).build(),
-                    ArticleDocument.builder().id(racingUuid.toString()).build()));
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenReturn(indexedHits);
-            /* 即時回查 DB：兩篇現在都確實是 PUBLISHED */
-            when(articleFacade.filterPublishedUuids(any()))
-                    .thenReturn(Set.of(snapshotUuid, racingUuid));
-
-            searchService.reindexAll();
-
-            verify(articleSearchRepository, never()).deleteAllById(any());
-        }
-
-        /**
-         * N2：{@code findAllPublishedForIndex()} 因上游故障回空時，
-         * 「索引裡每一筆都對不上 DB」在語意上成立，於是整個索引會被清空——
-         * 把一次讀取失敗放大成破壞性動作。
-         *
-         * <p>守衛判準：DB 回報 0 篇 PUBLISHED、而索引仍有 document ＝ 不可信的輸入，
-         * 中止清除並記 ERROR（寧可留下幽靈，也不要清空索引）。</p>
-         */
-        @Test
-        @DisplayName("DB 回報 0 篇 PUBLISHED 但索引非空時，應中止清除並記 ERROR，而非清空索引")
-        void reindexAll_whenDatabaseReportsNoPublishedButIndexNotEmpty_abortsCleanup() {
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
-            SearchHits<ArticleDocument> indexedHits = mockSearchHits(List.of(
-                    ArticleDocument.builder().id(UUID.randomUUID().toString()).build(),
-                    ArticleDocument.builder().id(UUID.randomUUID().toString()).build()));
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenReturn(indexedHits);
-
-            CapturingAppender appender = attachAppender();
-            try {
-                searchService.reindexAll();
-            } finally {
-                detachAppender(appender);
-            }
-
-            verify(articleSearchRepository, never()).deleteAllById(any());
-            assertThat(appender.events)
-                    .as("中止清除必須是需要人介入的狀態，warn 不足以告警")
-                    .anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
-        }
-
-        /**
-         * N3：掃描超過上限代表「索引沒被完全清理，幽靈在重建之後仍存活」——
-         * 這是需要人介入（擴大掃描範圍或改用 alias 重建）的狀態。
-         * 本輪自己在 H1a 的論證就是「合規路徑的 warn 不足以告警」，這裡必須一致用 ERROR。
-         */
-        @Test
-        @DisplayName("掃描超過上限時應記 ERROR（幽靈在重建後仍存活，需人介入）")
-        void reindexAll_whenScanLimitExceeded_logsError() {
-            UUID liveUuid = UUID.randomUUID();
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(indexData(liveUuid)));
-            /* 每頁都塞滿 → 掃到上限仍未掃完 */
-            SearchHits<ArticleDocument> fullPage = mockFullPage(
-                    ArticleDocument.builder().id(liveUuid.toString()).build(), 1000);
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenReturn(fullPage);
-            when(articleFacade.filterPublishedUuids(any())).thenReturn(Set.of(liveUuid));
-
-            CapturingAppender appender = attachAppender();
-            try {
-                searchService.reindexAll();
-            } finally {
-                detachAppender(appender);
-            }
-
-            assertThat(appender.events)
-                    .as("索引未完全清理是需要人介入的狀態，warn 不足以告警")
-                    .anySatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.ERROR));
-        }
-
-        /**
-         * N4：把整份 ghostIds 塞進單行日誌，長期漂移後會是數千個 UUID 擠成一行。
-         * 只記數量與前幾筆樣本即可定位問題。
-         */
-        @Test
-        @DisplayName("幽靈數量大時，日誌只記數量與樣本，不整份輸出")
-        void reindexAll_whenManyGhosts_logsCountAndSampleOnly() {
-            UUID liveUuid = UUID.randomUUID();
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(indexData(liveUuid)));
-            List<ArticleDocument> documents = new ArrayList<>();
-            List<String> ghostIds = new ArrayList<>();
-            for (int i = 0; i < 30; i++) {
-                String ghostId = UUID.randomUUID().toString();
-                ghostIds.add(ghostId);
-                documents.add(ArticleDocument.builder().id(ghostId).build());
-            }
-            SearchHits<ArticleDocument> indexedHits = mockSearchHits(documents);
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenReturn(indexedHits);
-            when(articleFacade.filterPublishedUuids(any())).thenReturn(Set.of(liveUuid));
-
-            CapturingAppender appender = attachAppender();
-            try {
-                searchService.reindexAll();
-            } finally {
-                detachAppender(appender);
-            }
-
-            assertThat(appender.events)
-                    .as("應記錄清除筆數")
-                    .anySatisfy(event -> assertThat(event.getMessage().getFormattedMessage()).contains("30"));
-            assertThat(appender.events)
-                    .as("不應把整份 ghostIds 塞進單行日誌")
-                    .noneSatisfy(event -> assertThat(event.getMessage().getFormattedMessage())
-                            .contains(ghostIds.get(ghostIds.size() - 1)));
-        }
-
-        /**
-         * 幽靈清除是重建的附加保險，掃描失敗不該讓「索引其實已重建成功」對外報錯
-         * （與時間戳寫入同一套 best-effort 判準）。
-         */
-        @Test
-        @DisplayName("掃描索引失敗時，不應讓已完成的重建對外拋錯")
-        void reindexAll_whenGhostScanFails_doesNotThrow() {
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
-            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class)))
-                    .thenThrow(new RuntimeException("ES down"));
-
-            assertThatCode(() -> searchService.reindexAll()).doesNotThrowAnyException();
-
-            verify(articleSearchRepository).saveAll(any());
-        }
-
-        /**
-         * 應透過 ArticleFacade 取得所有文章並批次儲存至 ES
-         */
-        @Test
-        @DisplayName("應從 ArticleFacade 取得文章並批次儲存")
-        void reindexAll_fetchesFromFacadeAndSavesAll() {
-            ArticleIndexData data = new ArticleIndexData(UUID.randomUUID(), "Spring Boot 教學", "spring-boot-tutorial",
-                    "本文介紹 Spring Boot", "Spring Boot 是一個框架", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, List.of(), null);
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
-
-            searchService.reindexAll();
-
-            verify(articleFacade).findAllPublishedForIndex();
-            verify(articleSearchRepository).saveAll(any());
-        }
-
-        /**
-         * 無已發布文章時，應儲存空列表
-         */
-        @Test
-        @DisplayName("無已發布文章時，應呼叫 saveAll 儲存空列表")
-        void reindexAll_whenNoArticles_savesEmptyList() {
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
-
-            searchService.reindexAll();
-
-            verify(articleSearchRepository).saveAll(List.of());
-        }
-
-        @Test
-        @DisplayName("ArticleIndexData tags 為 null 時，轉換後 tags 為空列表")
-        void reindexAll_whenTagsNull_convertsToEmptyTagList() {
-            ArticleIndexData data = new ArticleIndexData(UUID.randomUUID(), "No Tags Article", "no-tags",
-                    "summary", "content", "Yuan",
-                    LocalDateTime.now(), 0L, 0L, null, null);
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
-
-            searchService.reindexAll();
-
-            verify(articleSearchRepository).saveAll(any());
-        }
-
-        @Test
-        @DisplayName("ArticleIndexData 含標籤時，轉換後 tags 正確映射")
-        void reindexAll_withTags_convertsTagsCorrectly() {
-            ArticleIndexData.TagData tagData = new ArticleIndexData.TagData(UUID.randomUUID(), "Java", "java");
-            ArticleIndexData data = new ArticleIndexData(UUID.randomUUID(), "Tagged Article", "tagged",
-                    "summary", "content", "Yuan",
-                    LocalDateTime.now(), 10L, 5L, List.of(tagData), null);
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
-
-            searchService.reindexAll();
-
-            verify(articleSearchRepository).saveAll(any());
-        }
-
-        /**
-         * 重建時 author 只可由 {@code authorUuid} 與 {@code authorNickname} 組成，
-         * 不得帶入 Long 主鍵與 username（登入識別符不應寫進 ES）。
-         * 這裡刻意讓 authorId／authorUsername 帶可辨識的哨兵值，若被複製進文件就會現形。
-         */
-        @Test
-        @DisplayName("重建時 author 應取 authorUuid 與暱稱，且不含 id／username")
-        @SuppressWarnings("unchecked")
-        void reindexAll_buildsAuthorFromUuidAndNicknameOnly() {
-            UUID authorUuid = UUID.fromString("bbbbbbbb-1111-2222-3333-444444444444");
-            ArticleIndexData data = new ArticleIndexData(
-                    UUID.randomUUID(), "標題", "slug", "summary", "content", "暱稱",
-                    LocalDateTime.now(), 0L, 0L, List.of(), authorUuid);
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
-            /* M3：暱稱改取自 UserFacade 當下值（不再用快照內冗餘的暱稱） */
-            when(userFacade.getDisplayInfoByUuids(any()))
-                    .thenReturn(Map.of(authorUuid, new UserDisplayInfo(authorUuid, "暱稱", null)));
-
-            searchService.reindexAll();
-
-            ArgumentCaptor<Iterable<ArticleDocument>> captor = ArgumentCaptor.forClass(Iterable.class);
-            verify(articleSearchRepository).saveAll(captor.capture());
-            ArticleDocument saved = captor.getValue().iterator().next();
-            assertThat(saved.getAuthor().getUuid()).isEqualTo(authorUuid.toString());
-            assertThat(saved.getAuthor().getNickname()).isEqualTo("暱稱");
-            JsonNode authorJson = new ObjectMapper().valueToTree(saved.getAuthor());
-            assertThat(authorJson.fieldNames()).toIterable().containsExactlyInAnyOrder("uuid", "nickname");
-            assertThat(authorJson.toString()).doesNotContain("login-name-sentinel").doesNotContain("987654");
-        }
-
-        @Test
-        @DisplayName("ArticleIndexData 的 authorUuid 為 null（資料異常）時，author.uuid 為 null 且不拋例外")
-        @SuppressWarnings("unchecked")
-        void reindexAll_whenAuthorUuidNull_keepsNullUuid() {
-            ArticleIndexData data = indexData(UUID.randomUUID());
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(data));
-
-            assertThatCode(() -> searchService.reindexAll()).doesNotThrowAnyException();
-
-            ArgumentCaptor<Iterable<ArticleDocument>> captor = ArgumentCaptor.forClass(Iterable.class);
-            verify(articleSearchRepository).saveAll(captor.capture());
-            assertThat(captor.getValue().iterator().next().getAuthor().getUuid()).isNull();
-        }
-
-        /**
-         * 全量重建完成後，應將當下時間以 ISO-8601 字串寫入 Redis 時間戳 Key
-         */
-        @Test
-        @DisplayName("重建完成後，應寫入 search:reindex:at 時間戳")
-        void reindexAll_afterCompletion_writesTimestampToRedis() {
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
-
-            searchService.reindexAll();
-
-            verify(valueOperations).set(eq("search:reindex:at"), anyString());
-        }
-
-        /**
-         * 時間戳只是給後台顯示用的附帶資訊，Redis 掛掉不應讓「索引其實已經重建成功」
-         * 的動作對外回報失敗——否則管理員會重複點擊重建，而每次都真的重建了一遍。
-         * 專案內 MQ 發送皆為 best-effort，此處保持一致。
-         */
-        @Test
-        @DisplayName("Redis 時間戳寫入失敗時，不應讓已完成的重建對外拋錯")
-        void reindexAll_whenTimestampWriteFails_doesNotThrow() {
-            when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of());
-            doThrow(new RuntimeException("Redis down"))
-                    .when(valueOperations).set(eq("search:reindex:at"), anyString());
-
-            assertThatCode(() -> searchService.reindexAll()).doesNotThrowAnyException();
-
-            verify(articleSearchRepository).saveAll(any());
+            assertThat(updated).isEqualTo(2L);
+            org.mockito.InOrder order = org.mockito.Mockito.inOrder(reindexJournal, indexAdmin);
+            order.verify(reindexJournal).recordAuthor(author);
+            order.verify(indexAdmin).updateAuthorNickname(author, "已刪除使用者#ab12", ArticleIndexAdmin.ALIAS);
         }
     }
 
@@ -1295,6 +895,40 @@ class SearchServiceTest {
             assertThat(status.isHealthy())
                     .as("healthy 描述的是 Elasticsearch 可達性，不應被 Redis 故障影響")
                     .isTrue();
+        }
+
+        @Test
+        @DisplayName("D1：狀態帶最近一次全量重建作業（狀態、進度、時間）")
+        void getIndexStatus_includesLatestReindexJob() {
+            SearchReindexJobResponse job = SearchReindexJobResponse.builder()
+                    .jobId(UUID.randomUUID()).state(ReindexJobState.RUNNING).processed(200).total(450L).build();
+            when(articleSearchRepository.count()).thenReturn(3L);
+            when(reindexJobStore.current()).thenReturn(java.util.Optional.of(job));
+
+            SearchIndexStatusResponse status = searchService.getIndexStatus();
+
+            assertThat(status.getReindex()).isEqualTo(job);
+        }
+
+        @Test
+        @DisplayName("D1：從未重建過時 reindex 為 null")
+        void getIndexStatus_noReindexJob_isNull() {
+            when(reindexJobStore.current()).thenReturn(java.util.Optional.empty());
+
+            assertThat(searchService.getIndexStatus().getReindex()).isNull();
+        }
+
+        @Test
+        @DisplayName("D1：讀取重建作業失敗（Redis 故障）不拋出，reindex 為 null，其餘欄位照常")
+        void getIndexStatus_jobStoreFails_reindexNull() {
+            when(articleSearchRepository.count()).thenReturn(7L);
+            when(reindexJobStore.current()).thenThrow(new RuntimeException("Redis down"));
+
+            SearchIndexStatusResponse status = searchService.getIndexStatus();
+
+            assertThat(status.getReindex()).isNull();
+            assertThat(status.getDocumentCount()).isEqualTo(7L);
+            assertThat(status.isHealthy()).isTrue();
         }
 
         /** Redis 與 ES 同時故障時仍須回傳可顯示的結果，不可拋出 */

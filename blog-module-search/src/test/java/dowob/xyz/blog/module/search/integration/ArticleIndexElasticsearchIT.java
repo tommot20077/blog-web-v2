@@ -67,6 +67,11 @@ class ArticleIndexElasticsearchIT {
     private final ArticleFacade articleFacade = mock(ArticleFacade.class);
     private SearchIndexInitializer initializer;
     private SearchServiceImpl searchService;
+    /** 全量重建（D1 起取代 SearchServiceImpl#reindexAll；測試中同步呼叫） */
+    private dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder rebuilder;
+    private dowob.xyz.blog.module.search.index.ArticleIndexAdmin indexAdmin;
+    private dowob.xyz.blog.module.search.reindex.ReindexJournal journal;
+    private dowob.xyz.blog.module.search.reindex.ReindexJobStore jobStore;
     private dowob.xyz.blog.infrastructure.facade.UserFacade userFacade;
 
     @BeforeAll
@@ -97,12 +102,18 @@ class ArticleIndexElasticsearchIT {
         userFacade = mock(dowob.xyz.blog.infrastructure.facade.UserFacade.class);
         /* 讀寫改走 alias 後，對 alias 名稱 delete 會被 ES 拒絕：改為逐一刪除所有 blog_articles* 實體索引 */
         dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.deleteAllArticleIndices(template);
-        initializer = new SearchIndexInitializer(new dowob.xyz.blog.module.search.index.ArticleIndexAdmin(template));
+        indexAdmin = new dowob.xyz.blog.module.search.index.ArticleIndexAdmin(template);
+        initializer = new SearchIndexInitializer(indexAdmin);
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
         when(redis.opsForZSet()).thenReturn(mock(ZSetOperations.class));
-        searchService = new SearchServiceImpl(template, repository, redis, articleFacade, userFacade);
+        /* 變動紀錄的 SPOP 回 null 視為沒有變動（本類別不測重建期間的增量，見 ArticleIndexRebuildIT） */
+        when(redis.opsForSet()).thenReturn(mock(org.springframework.data.redis.core.SetOperations.class));
+        journal = new dowob.xyz.blog.module.search.reindex.ReindexJournal(redis);
+        jobStore = new dowob.xyz.blog.module.search.reindex.ReindexJobStore(redis);
+        searchService = new SearchServiceImpl(template, repository, redis, articleFacade, indexAdmin, journal, jobStore);
+        rebuilder = new dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder(indexAdmin, journal, articleFacade, userFacade);
     }
 
     @SuppressWarnings("unchecked")
@@ -172,12 +183,12 @@ class ArticleIndexElasticsearchIT {
         assertThat(repository.existsById(articleUuid.toString())).isTrue();
         assertThat(rawAuthorSource(articleUuid)).containsKeys("id", "username");
 
-        when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
+        when(articleFacade.findPublishedForIndexAfter(null, dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder.BATCH_SIZE)).thenReturn(List.of(new ArticleIndexData(
                 articleUuid, "Elasticsearch guide", "es-guide", "about search", "full text content", "愛麗絲",
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));
-        searchService.reindexAll();
+        rebuilder.rebuild(processed -> { });
         indexOps.refresh();
 
         Map<String, Object> author = rawAuthorSource(articleUuid);
@@ -191,7 +202,7 @@ class ArticleIndexElasticsearchIT {
         initializer.ensureCorrectMapping();
         UUID articleUuid = UUID.randomUUID();
         UUID authorUuid = UUID.randomUUID();
-        when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
+        when(articleFacade.findPublishedForIndexAfter(null, dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder.BATCH_SIZE)).thenReturn(List.of(new ArticleIndexData(
                 articleUuid, "Elasticsearch guide", "es-guide", "about search", "full text content", "愛麗絲",
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
@@ -200,7 +211,7 @@ class ArticleIndexElasticsearchIT {
         when(userFacade.getDisplayInfoByUuids(org.mockito.ArgumentMatchers.any())).thenReturn(java.util.Map.of(
                 authorUuid, new dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo(authorUuid, "愛麗絲", null)));
 
-        searchService.reindexAll();
+        rebuilder.rebuild(processed -> { });
         template.indexOps(ArticleDocument.class).refresh();
 
         Map<String, Object> author = rawAuthorSource(articleUuid);
@@ -233,7 +244,7 @@ class ArticleIndexElasticsearchIT {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.opsForValue()).thenReturn(mock(ValueOperations.class));
         when(redis.opsForZSet()).thenReturn(mock(ZSetOperations.class));
-        SearchServiceImpl service = new SearchServiceImpl(spied, repository, redis, articleFacade, userFacade);
+        SearchServiceImpl service = new SearchServiceImpl(spied, repository, redis, articleFacade, indexAdmin, journal, jobStore);
 
         PageResult<SearchResultResponse> result = service.search("zebrafishuniquetoken", null, "relevance", 1, 10, null);
 
@@ -300,13 +311,13 @@ class ArticleIndexElasticsearchIT {
         initializer.ensureCorrectMapping();
         UUID articleUuid = UUID.randomUUID();
         UUID authorUuid = UUID.randomUUID();
-        when(articleFacade.findAllPublishedForIndex()).thenReturn(List.of(new ArticleIndexData(
+        when(articleFacade.findPublishedForIndexAfter(null, dowob.xyz.blog.module.search.reindex.ArticleIndexRebuilder.BATCH_SIZE)).thenReturn(List.of(new ArticleIndexData(
                 articleUuid, "Counter free", "counter-free", "s", "content", "愛麗絲",
                 LocalDateTime.of(2026, 10, 24, 12, 0), 3L, 2L, List.of(), authorUuid)));
         when(articleFacade.filterPublishedUuids(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Set.of(articleUuid));
 
-        searchService.reindexAll();
+        rebuilder.rebuild(processed -> { });
         template.indexOps(ArticleDocument.class).refresh();
 
         Map<String, Object> source = client.get(g -> g.index("blog_articles").id(articleUuid.toString()), Map.class).source();

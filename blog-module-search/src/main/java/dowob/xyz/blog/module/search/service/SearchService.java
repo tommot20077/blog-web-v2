@@ -79,8 +79,9 @@ public interface SearchService {
      * 索引單篇文章
      *
      * <p>
-     * 將 ArticleDocument 儲存至 Elasticsearch。
-     * 供 MQ 消費者在文章發布時呼叫。
+     * 將 ArticleDocument 經 alias 儲存至 Elasticsearch。
+     * 供 MQ 消費者在文章發布時呼叫。全量重建進行中時，寫入前先記進重建變動紀錄（供切換前後補進新索引）；
+     * 記錄失敗時例外往外拋、不寫入（由 MQ 容器重試）。
      * </p>
      *
      * @param document 文章 ES document
@@ -91,7 +92,7 @@ public interface SearchService {
      * 從索引中移除文章
      *
      * <p>
-     * 供文章狀態變更（下架/封存）或刪除時呼叫。
+     * 供文章狀態變更（下架/封存）或刪除時呼叫。全量重建進行中時，刪除前先記進重建變動紀錄。
      * </p>
      *
      * @param articleUuid 文章 UUID 字串
@@ -99,21 +100,11 @@ public interface SearchService {
     void deleteIndex(String articleUuid);
 
     /**
-     * 全量重建 Elasticsearch 索引
-     *
-     * <p>
-     * 透過 ArticleFacade 取得所有已發布文章後，批次儲存至 ES。
-     * 由 Admin API 手動觸發。
-     * </p>
-     */
-    void reindexAll();
-
-    /**
      * 查詢搜尋索引狀態
      *
      * <p>
      * 提供 Admin 後台查看 Elasticsearch 索引運維概況：文件數、最後一次全量重建時間、
-     * ES 是否可達。查詢 ES 失敗時捕捉例外，回傳 {@code healthy=false} 且
+     * ES 是否可達，以及最近一次全量重建作業（讀取失敗時為 {@code null}）。查詢 ES 失敗時捕捉例外，回傳 {@code healthy=false} 且
      * {@code documentCount=null}，本方法本身不拋出例外，避免拖垮儀表板整格顯示。
      * </p>
      *
