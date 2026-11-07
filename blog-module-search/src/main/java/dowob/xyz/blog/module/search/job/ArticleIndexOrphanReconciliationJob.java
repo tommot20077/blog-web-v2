@@ -79,9 +79,14 @@ public class ArticleIndexOrphanReconciliationJob extends OrphanReconciliationJob
      */
     public static final String SORT_FIELD = "uuid";
 
-    /** 排序欄位型別錯誤時的復原方式（initializer 與本 job 的 ERROR 訊息共用同一句） */
-    static final String RECOVERY_HINT = "復原方式：刪除索引（blog_articles）後由 SearchIndexInitializer 以 annotation mapping 重建"
-            + "（重啟應用程式），再執行 POST /api/v1/admin/search/reindex";
+    /**
+     * 排序欄位型別錯誤時的復原方式（與 {@code SearchIndexInitializer} 的 ERROR 訊息同一句）。
+     *
+     * <p>讀寫改走 alias 後，全量重建會以 annotation mapping 建立新的實體索引並原子切換 alias，
+     * 不再需要（也無法以 alias 名稱）手動刪除索引。</p>
+     */
+    static final String RECOVERY_HINT = "復原方式：執行 POST /api/v1/admin/search/reindex——以 annotation mapping 建立新的實體索引、"
+            + "原子切換 alias 後自動刪除舊索引，不需要手動刪除索引或重啟應用程式";
 
     private final ElasticsearchOperations operations;
     private final ArticleSearchRepository repository;

@@ -1,14 +1,13 @@
 package dowob.xyz.blog.module.search.init;
 
-import dowob.xyz.blog.module.search.document.ArticleDocument;
+import dowob.xyz.blog.module.search.index.ArticleIndexAdmin;
+import dowob.xyz.blog.module.search.index.IndexState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
-import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
-import org.springframework.data.elasticsearch.core.IndexOperations;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,20 +32,21 @@ import static org.mockito.Mockito.when;
 @DisplayName("SearchIndexInitializer 啟動時序")
 class SearchIndexInitializerLifecycleTest {
 
-    private ElasticsearchOperations operationsRecording(List<String> order) {
-        ElasticsearchOperations operations = mock(ElasticsearchOperations.class);
-        IndexOperations indexOps = mock(IndexOperations.class);
-        when(operations.indexOps(ArticleDocument.class)).thenReturn(indexOps);
-        when(indexOps.exists()).thenAnswer(inv -> {
+    /**
+     * 第一個 ES 動作（判斷 {@code blog_articles} 型態）發生時記錄 "initializer"；alias 與 mapping 皆正常，不做任何修改。
+     */
+    private ArticleIndexAdmin adminRecording(List<String> order) {
+        ArticleIndexAdmin admin = mock(ArticleIndexAdmin.class);
+        when(admin.inspect()).thenAnswer(inv -> {
             order.add("initializer");
-            return true;
+            return IndexState.alias(List.of("blog_articles_v1"));
         });
-        when(indexOps.getMapping()).thenReturn(Map.of("properties", Map.of(
+        when(admin.getMapping("blog_articles_v1")).thenReturn(Map.of("properties", Map.of(
                 "status", Map.of("type", "keyword"),
                 "tags", Map.of("type", "nested"),
                 "uuid", Map.of("type", "keyword"),
                 "author", Map.of("properties", Map.of("uuid", Map.of("type", "keyword"))))));
-        return operations;
+        return admin;
     }
 
     /** 模擬 Rabbit 容器：phase 與 {@link RabbitListenerEndpointRegistry} 相同，start 時記錄「開始消費」。 */
@@ -83,7 +83,7 @@ class SearchIndexInitializerLifecycleTest {
     @Test
     @DisplayName("initializer 是 SmartLifecycle，且 phase 低於 RabbitListenerEndpointRegistry（先 start）")
     void initializer_isSmartLifecycleWithPhaseBelowRabbitRegistry() {
-        Object initializer = new SearchIndexInitializer(mock(ElasticsearchOperations.class));
+        Object initializer = new SearchIndexInitializer(mock(ArticleIndexAdmin.class));
 
         assertThat(initializer).isInstanceOf(SmartLifecycle.class);
         assertThat(((SmartLifecycle) initializer).getPhase())
@@ -94,7 +94,7 @@ class SearchIndexInitializerLifecycleTest {
     @Test
     @DisplayName("不再是 ApplicationRunner（否則 refresh 後會再初始化一次）")
     void initializer_isNoLongerApplicationRunner() {
-        assertThat((Object) new SearchIndexInitializer(mock(ElasticsearchOperations.class)))
+        assertThat((Object) new SearchIndexInitializer(mock(ArticleIndexAdmin.class)))
                 .isNotInstanceOf(ApplicationRunner.class);
     }
 
@@ -104,7 +104,7 @@ class SearchIndexInitializerLifecycleTest {
         List<String> order = new ArrayList<>();
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
             context.registerBean("searchIndexInitializer", SearchIndexInitializer.class,
-                    () -> new SearchIndexInitializer(operationsRecording(order)));
+                    () -> new SearchIndexInitializer(adminRecording(order)));
             context.registerBean("listenerProbe", ListenerContainerProbe.class, () -> new ListenerContainerProbe(order));
             context.refresh();
         }
@@ -116,13 +116,11 @@ class SearchIndexInitializerLifecycleTest {
     @DisplayName("ES 不可用：啟動照舊失敗（與原 ApplicationRunner 一致），listener 不會開始消費")
     void contextStartup_elasticsearchDown_failsStartupBeforeListenersStart() {
         List<String> order = new ArrayList<>();
-        ElasticsearchOperations operations = mock(ElasticsearchOperations.class);
-        IndexOperations indexOps = mock(IndexOperations.class);
-        when(operations.indexOps(ArticleDocument.class)).thenReturn(indexOps);
-        when(indexOps.exists()).thenThrow(new IllegalStateException("es down"));
+        ArticleIndexAdmin admin = mock(ArticleIndexAdmin.class);
+        when(admin.inspect()).thenThrow(new IllegalStateException("es down"));
         AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
         context.registerBean("searchIndexInitializer", SearchIndexInitializer.class,
-                () -> new SearchIndexInitializer(operations));
+                () -> new SearchIndexInitializer(admin));
         context.registerBean("listenerProbe", ListenerContainerProbe.class, () -> new ListenerContainerProbe(order));
 
         assertThatThrownBy(context::refresh).hasRootCauseMessage("es down");

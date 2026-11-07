@@ -95,11 +95,9 @@ class ArticleIndexElasticsearchIT {
     @SuppressWarnings("unchecked")
     void resetIndex() {
         userFacade = mock(dowob.xyz.blog.infrastructure.facade.UserFacade.class);
-        IndexOperations indexOps = template.indexOps(ArticleDocument.class);
-        if (indexOps.exists()) {
-            indexOps.delete();
-        }
-        initializer = new SearchIndexInitializer(template);
+        /* 讀寫改走 alias 後，對 alias 名稱 delete 會被 ES 拒絕：改為逐一刪除所有 blog_articles* 實體索引 */
+        dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.deleteAllArticleIndices(template);
+        initializer = new SearchIndexInitializer(new dowob.xyz.blog.module.search.index.ArticleIndexAdmin(template));
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         ValueOperations<String, String> valueOps = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);

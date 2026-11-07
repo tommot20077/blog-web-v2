@@ -98,12 +98,10 @@ class ArticleIndexOrphanReconciliationJobIT {
     @BeforeEach
     @SuppressWarnings("unchecked")
     void resetIndexAndRedis() {
-        IndexOperations indexOps = template.indexOps(ArticleDocument.class);
-        if (indexOps.exists()) {
-            indexOps.delete();
-        }
-        /* 與正式環境一致：以 annotation 建 mapping（SearchIndexInitializer 的做法） */
-        indexOps.createWithMapping();
+        /* 讀寫改走 alias 後，對 alias 名稱 delete 會被 ES 拒絕：改為逐一刪除所有 blog_articles* 實體索引 */
+        dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.deleteAllArticleIndices(template);
+        /* 與正式環境一致：由 SearchIndexInitializer 建立 alias 與 annotation mapping 的實體索引 */
+        newInitializer().ensureCorrectMapping();
         registry = new SimpleMeterRegistry();
         /* Redis 記憶體替身：鎖永遠取得成功；游標存在 AtomicReference，讓多頁續跑可以真的走 */
         redis = mock(StringRedisTemplate.class);
@@ -120,6 +118,30 @@ class ArticleIndexOrphanReconciliationJobIT {
             cursor.set(null);
             return true;
         });
+    }
+
+    /** 以真實 ES 建立 initializer（索引管理經 {@link dowob.xyz.blog.module.search.index.ArticleIndexAdmin}） */
+    private dowob.xyz.blog.module.search.init.SearchIndexInitializer newInitializer() {
+        return new dowob.xyz.blog.module.search.init.SearchIndexInitializer(
+                new dowob.xyz.blog.module.search.index.ArticleIndexAdmin(template));
+    }
+
+    /**
+     * 模擬「頂層 uuid 欄位上線前」建立的實體索引：mapping 沒有 uuid，且以 alias {@code blog_articles} 指向它。
+     *
+     * <p>改走 alias 後，舊實體索引一定在 alias 背後（改版前的實體 {@code blog_articles} 會被 initializer
+     * 以正確 mapping 的新索引取代），所以「缺 uuid mapping」的情境要建在 alias 背後的實體索引上，
+     * initializer 才會走 putMapping 增補這條路。</p>
+     */
+    private void useLegacyIndexWithoutUuidMappingBehindAlias() {
+        dowob.xyz.blog.module.search.support.ArticleIndexTestSupport.deleteAllArticleIndices(template);
+        String legacy = "blog_articles_v20260101000000000";
+        template.indexOps(org.springframework.data.elasticsearch.core.mapping.IndexCoordinates.of(legacy)).create(
+                java.util.Map.of(), org.springframework.data.elasticsearch.core.document.Document.parse(
+                        "{\"properties\":{\"status\":{\"type\":\"keyword\"},\"tags\":{\"type\":\"nested\"},"
+                                + "\"author\":{\"properties\":{\"uuid\":{\"type\":\"keyword\"}}}}}"));
+        new dowob.xyz.blog.module.search.index.ArticleIndexAdmin(template)
+                .switchAlias(legacy, dowob.xyz.blog.module.search.index.IndexState.absent());
     }
 
     /** 捕捉日誌事件的測試用 appender */
@@ -209,13 +231,8 @@ class ArticleIndexOrphanReconciliationJobIT {
     @Test
     @DisplayName("上線前建立的舊索引（無頂層 uuid mapping）：initializer 增補 mapping 後，新文件可被 keyset 掃到")
     void run_legacyIndexWithoutUuidMapping_worksAfterInitializerPutsMapping() {
-        IndexOperations indexOps = template.indexOps(ArticleDocument.class);
-        indexOps.delete();
-        indexOps.create();
-        indexOps.putMapping(org.springframework.data.elasticsearch.core.document.Document.parse(
-                "{\"properties\":{\"status\":{\"type\":\"keyword\"},\"tags\":{\"type\":\"nested\"},"
-                        + "\"author\":{\"properties\":{\"uuid\":{\"type\":\"keyword\"}}}}}"));
-        new dowob.xyz.blog.module.search.init.SearchIndexInitializer(template).ensureCorrectMapping();
+        useLegacyIndexWithoutUuidMappingBehindAlias();
+        newInitializer().ensureCorrectMapping();
         UUID a = indexArticle();
         UUID b = indexArticle();
         dbPublishedOnly(Set.of(a));
@@ -268,19 +285,14 @@ class ArticleIndexOrphanReconciliationJobIT {
     @Test
     @DisplayName("舊索引的 uuid 已被動態建成 text：initializer 的 putMapping 衝突記 ERROR（不拋例外）；校正 FAILED 並記可行動 ERROR，ES 零刪除")
     void run_uuidDynamicallyMappedAsText_logsActionableErrorsAndDeletesNothing() {
-        IndexOperations indexOps = template.indexOps(ArticleDocument.class);
-        indexOps.delete();
-        indexOps.create();
-        indexOps.putMapping(org.springframework.data.elasticsearch.core.document.Document.parse(
-                "{\"properties\":{\"status\":{\"type\":\"keyword\"},\"tags\":{\"type\":\"nested\"},"
-                        + "\"author\":{\"properties\":{\"uuid\":{\"type\":\"keyword\"}}}}}"));
+        useLegacyIndexWithoutUuidMappingBehindAlias();
         /* 新版程式在 initializer 補 mapping 之前就寫入帶 uuid 的文件 → ES 動態建成 text */
         UUID a = indexArticle();
         UUID b = indexArticle();
         dbPublishedOnly(Set.of());
 
         List<String> initializerErrors = runCapturing(dowob.xyz.blog.module.search.init.SearchIndexInitializer.class,
-                () -> new dowob.xyz.blog.module.search.init.SearchIndexInitializer(template).ensureCorrectMapping(),
+                () -> newInitializer().ensureCorrectMapping(),
                 Level.ERROR);
         Result[] result = new Result[1];
         List<String> jobErrors = runCapturing(ArticleIndexOrphanReconciliationJob.class,
