@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.version.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
 import dowob.xyz.blog.common.security.AuthUser;
@@ -59,6 +60,7 @@ public class PreferenceController {
      * 更新 user override（partial update，只更新非 null 欄位）。
      */
     @PutMapping
+    @RateLimited("account-write")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "更新 user override（partial）")
     public ApiResponse<EffectiveConfigResponse> update(

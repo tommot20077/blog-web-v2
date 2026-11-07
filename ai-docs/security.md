@@ -158,6 +158,58 @@ public void changePassword(...) {
 
 ---
 
+## 應用層限流 (SEC-23 / A4)
+
+> 來源:findings SEC-23、決策 A4(Yuan 2026-11-07 拍板)。除 auth 流程自有的限流(登入/註冊/忘記密碼等,見原則 11)外,
+> 寫入端點與搜尋原本完全沒有限流。通用元件在 `blog-infrastructure` 的 `dowob.xyz.blog.infrastructure.ratelimit` 套件。
+
+**宣告**:handler 加 `@RateLimited("<規則名稱>")`(方法優先,其次類別)。規則名稱對應 `application.yaml` 的 `app.rate-limit.rules.<規則名稱>`。
+同一規則名稱的 handler **共用同一個計數器**(例如留言新增與編輯共用每分鐘 10 次)。
+
+**規則表**(門檻依 A4,並含 **2026-11-07 Yuan 追加決策**;`application.yaml` 的預設值,守衛 `RateLimitedEndpointGuardTest` 會比對):
+
+| 規則名稱 | 套用的 handler | 門檻 | 窗口 | 計數主體 |
+|---|---|---|---|---|
+| `comment-write` | `CommentController#create`(含回覆)、`#edit` | 10 次 | 1 分鐘 | 使用者 |
+| `interaction-write` | `ArticleLikeController#like`、`CommentLikeController#like`、`BookmarkController#bookmark`、`HighlightController#create`/`#update`、`TagController#followTag` | 60 次 | 1 分鐘 | 使用者 |
+| `reading-progress` | `ReadingProgressController#update`(捲動時高頻回報,自 `interaction-write` 拆出) | 120 次 | 1 分鐘 | 使用者 |
+| `upload` | `FileController#uploadFile` | 30 次 | 1 小時 | 使用者 |
+| `article-write` | `ArticleController#createArticle`/`#updateArticle`/`#submitForReview`/`#withdrawArticle`/`#publishArticle`、`VersionController#createManual`/`#restore`/`#promote`、`SeriesController#create`/`#update`/`#addArticle` | 30 次 | 1 分鐘 | 使用者 |
+| `account-write` | `UserController#updateProfile`/`#updateNotifications`/`#changePassword`、`PreferenceController#update` | 30 次 | 1 分鐘 | 使用者 |
+| `search` | `SearchController#search` | 120 次(原 A4 為 30,前端邊打字邊搜尋且有 CGNAT 共用 IP) | 1 分鐘 | **一律 IP**(登入者也一樣) |
+| `search-suggest` | `SearchController#suggest` | 120 次 | 1 分鐘 | **一律 IP** |
+
+**不套用(守衛 `EXEMPT`,每條附理由)**:DELETE 與讀取類端點不在範圍;auth 流程(`register`、`login`、`verifyEmailCode`、`resendVerification`、`forgotPassword` 已有 A0113／IP 限流;`refresh`、`logout`、`verifyEmail`、`resetPassword` 為 cookie 或一次性高熵 token 把關);admin 端點(`AdminArticleController#archiveArticle`/`#unarchiveArticle`、`AdminCategoryController#createCategory`/`#updateCategory`、`AdminTagController#updateTag`、`AdminSearchController#reindex`)與 `ArticleController#rejectArticle`(受信任角色、量少)。新增的 POST／PUT／PATCH handler 若既無 `@RateLimited` 也不在 `EXEMPT`,守衛會失敗。
+
+
+**行為**:
+*   **計數主體**:`subject=USER` 時已登入者以 `userUuid` 計、匿名者(`permitAll` 端點)退回 client IP,IP 一律經 `ClientIpResolver`(原則 11),所以 prod 必須設 `APP_HTTP_TRUSTED_PROXY_COUNT`,否則全站匿名請求共用 proxy 的 IP 桶;`subject=IP` 一律以 IP 計。
+*   **Redis**:固定窗口,Lua 原子執行 `INCR`,TTL 為 -1 時補 `EXPIRE`(`FixedWindowCounter`,全專案唯一一份;user 模組的 `UserRedisAtomicOps#incrementWithTtl` 也執行同一份腳本)。key 為 `ratelimit:{規則}:{u|ip}:{id}`(`RedisKeyConstant#getRateLimitKey`)。
+*   **超限**:HTTP **429**,body 為統一 `ApiResponse`(`code = A0009`,`CommonErrorCode.TOO_MANY_REQUESTS`),header `Retry-After` = 窗口剩餘秒數(Redis `PTTL` 無條件進位,至少 1)。CORS 已暴露 `Retry-After`,跨域前端也讀得到。與 auth 流程的 `A0113`(`UserErrorCode.RATE_LIMIT_EXCEEDED`,HTTP 400)是兩個獨立的碼,本次未改 A0113。
+*   **順序**:攔截器(`HandlerInterceptor`)屬 Spring MVC 層,在 Spring Security 過濾器鏈**之後**、controller 之前。未認證的寫入請求先得到 401,**不消耗額度**;認證通過但被 `@PreAuthorize` 拒絕的 403、以及 400 驗證失敗,仍會消耗額度。
+*   **Redis 故障**:不吞例外(fail-closed,回 500),與 auth 限流一致。已登入請求本來就依賴 Redis(`AuthStateLoader`),且 fail-open 會讓「先打掛 Redis 再灌寫入」成為繞過手段。**影響範圍包括匿名的 `GET /api/v1/search`、`/search/suggest`:Redis 故障期間也會回 500**(原本匿名搜尋不依賴 Redis 計數)。
+*   **IP 取得與部署必要設定**:匿名請求與 `subject=IP` 規則的計數主體是 `ClientIpResolver` 的結果。**正式環境必須設定 `APP_HTTP_TRUSTED_PROXY_COUNT`**(prod 通常為 1);沒設時所有請求的 IP 都是 proxy 的 `remoteAddr`,`search`／`search-suggest` 會變成**全站共用一個 IP 桶**。
+*   **IPv6 已知限制**:IP 以完整位址計數(不聚合 /64)。持有整段 /64 的使用者可以輪換位址繞過每 IP 限流,這是已知限制,未處理。
+*   **multipart 已知限制**:`DispatcherServlet` 在攔截器之前先解析 multipart,上傳限流擋不住 multipart 解析本身的成本(由大小上限與 nginx／ingress body 上限負責)。
+*   **fail-fast**:`@RateLimited` 的規則名稱不在 yaml → 啟動失敗(`RateLimitRuleValidator`);規則 `limit < 1` 或 `window < 1s` 亦啟動失敗。不會靜默不限流。
+
+**部署覆寫**(環境變數;`window` 接受 `30s`、`1m`、`1h`、ISO-8601 等 Spring `Duration` 格式):
+
+| 規則 | 門檻 | 窗口 |
+|---|---|---|
+| `comment-write` | `APP_RATE_LIMIT_COMMENT_WRITE_LIMIT` | `APP_RATE_LIMIT_COMMENT_WRITE_WINDOW` |
+| `interaction-write` | `APP_RATE_LIMIT_INTERACTION_WRITE_LIMIT` | `APP_RATE_LIMIT_INTERACTION_WRITE_WINDOW` |
+| `reading-progress` | `APP_RATE_LIMIT_READING_PROGRESS_LIMIT` | `APP_RATE_LIMIT_READING_PROGRESS_WINDOW` |
+| `upload` | `APP_RATE_LIMIT_UPLOAD_LIMIT` | `APP_RATE_LIMIT_UPLOAD_WINDOW` |
+| `article-write` | `APP_RATE_LIMIT_ARTICLE_WRITE_LIMIT` | `APP_RATE_LIMIT_ARTICLE_WRITE_WINDOW` |
+| `account-write` | `APP_RATE_LIMIT_ACCOUNT_WRITE_LIMIT` | `APP_RATE_LIMIT_ACCOUNT_WRITE_WINDOW` |
+| `search` | `APP_RATE_LIMIT_SEARCH_LIMIT` | `APP_RATE_LIMIT_SEARCH_WINDOW` |
+| `search-suggest` | `APP_RATE_LIMIT_SEARCH_SUGGEST_LIMIT` | `APP_RATE_LIMIT_SEARCH_SUGGEST_WINDOW` |
+
+**新增限流端點**:(1)確認門檻(決策項,見 `judgment.md` §5);(2)handler 加 `@RateLimited`;(3)規則缺就在 `application.yaml` 補並更新上表;(4)同步 `RateLimitedEndpointGuardTest.EXPECTED`(守衛雙向檢查:清單內端點必須帶規則、清單外不得出現 `@RateLimited`);(5)測試用 profile(E2E、各模組 `application-test.yaml`)補同名規則。
+
+---
+
 ## Public Endpoints (No Authentication Required)
 
 > 下表**依 `SecurityConfig` 中的宣告順序排列**,每一列對應一條 `permitAll()`。

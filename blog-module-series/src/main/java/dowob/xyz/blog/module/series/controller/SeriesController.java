@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.series.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.api.response.PageResult;
@@ -89,6 +90,7 @@ public class SeriesController {
     }
 
     @PostMapping
+    @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "建立 Series")
     public ApiResponse<SeriesSummaryResponse> create(
@@ -98,6 +100,7 @@ public class SeriesController {
     }
 
     @PutMapping("/{uuid}")
+    @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "更新 Series")
     public ApiResponse<SeriesSummaryResponse> update(
@@ -120,6 +123,7 @@ public class SeriesController {
     }
 
     @PutMapping("/{uuid}/articles/{articleUuid}")
+    @RateLimited("article-write")
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @Operation(summary = "加文章到 Series / 改 position")
     public ApiResponse<Void> addArticle(

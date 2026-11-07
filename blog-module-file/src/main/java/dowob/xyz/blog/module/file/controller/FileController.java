@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.file.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.enums.Role;
 import dowob.xyz.blog.common.api.errorcode.FileErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
@@ -80,6 +81,7 @@ public class FileController {
      * @return 上傳成功的檔案資訊（{@code url} 為相對路徑 {@code /api/v1/files/{id}/content}）
      */
     @PostMapping("/api/v1/files/upload")
+    @RateLimited("upload")
     @PreAuthorize("hasAuthority('FILE_UPLOAD')")
     @RequestBody(
             required = true,

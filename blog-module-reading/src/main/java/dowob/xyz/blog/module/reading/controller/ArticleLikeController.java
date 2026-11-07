@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.exception.BusinessException;
@@ -41,6 +42,7 @@ public class ArticleLikeController {
     private final ArticleFacade articleFacade;
 
     @PostMapping
+    @RateLimited("interaction-write")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "按讚文章（idempotent）")
     public ApiResponse<Void> like(@AuthenticationPrincipal AuthUser user,

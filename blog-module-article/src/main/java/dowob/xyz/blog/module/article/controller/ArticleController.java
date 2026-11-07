@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.article.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import io.swagger.v3.oas.annotations.Operation;
 import dowob.xyz.blog.common.api.enums.ArticleStatus;
 import dowob.xyz.blog.common.api.enums.Role;
@@ -174,6 +175,7 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
     @PostMapping
+    @RateLimited("article-write")
     public ApiResponse<EditorArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request,
                                                              @AuthenticationPrincipal AuthUser user) {
         return ApiResponse.success(articleService.createArticle(user.uuid(), request));
@@ -193,6 +195,7 @@ public class ArticleController {
                     + "省略 version 則不做版本比對。成功回應帶遞增後的新 version。")
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PutMapping("/{uuid}")
+    @RateLimited("article-write")
     public ApiResponse<EditorArticleResponse> updateArticle(
             @PathVariable UUID uuid,
             @Valid @RequestBody UpdateArticleRequest request,
@@ -263,6 +266,7 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/submit")
+    @RateLimited("article-write")
     public ApiResponse<ArticleResponse> submitForReview(@PathVariable UUID uuid,
                                                          @AuthenticationPrincipal AuthUser user,
                                                          Authentication authentication) {
@@ -290,6 +294,7 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/withdraw")
+    @RateLimited("article-write")
     public ApiResponse<ArticleResponse> withdrawArticle(@PathVariable UUID uuid,
                                                         @AuthenticationPrincipal AuthUser user,
                                                         Authentication authentication) {
@@ -307,6 +312,7 @@ public class ArticleController {
      */
     @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
     @PostMapping("/{uuid}/publish")
+    @RateLimited("article-write")
     public ApiResponse<ArticleResponse> publishArticle(@PathVariable UUID uuid,
                                                        @AuthenticationPrincipal AuthUser user,
                                                        Authentication authentication) {

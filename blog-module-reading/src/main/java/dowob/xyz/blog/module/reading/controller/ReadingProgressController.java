@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.common.util.SecurityUtils;
@@ -38,6 +39,7 @@ public class ReadingProgressController {
     private final ArticleFacade articleFacade;
 
     @PutMapping
+    @RateLimited("reading-progress")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "更新閱讀進度（HSET Redis）")
     public ApiResponse<Void> update(

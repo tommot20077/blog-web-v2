@@ -522,4 +522,30 @@ public class RedisKeyConstant {
 
     /** 視為已讀完的進度門檻（>= 0.95 觸發單調 UPSERT DB，並把快取設成完讀值但不標 dirty、不 DEL hash）*/
     public static final java.math.BigDecimal READING_PROGRESS_COMPLETED_THRESHOLD = new java.math.BigDecimal("0.95");
+
+    /** ===================== 應用層限流（SEC-23 / A4）===================== */
+
+    /**
+     * 通用應用層限流計數 Key 前綴 (String，固定窗口)
+     * Key: ratelimit:{rule}:u:{userUuid} 或 ratelimit:{rule}:ip:{clientIp}
+     */
+    public static final String RATE_LIMIT_PREFIX = "ratelimit:";
+
+    /** 限流計數主體標記：已登入使用者 */
+    public static final String RATE_LIMIT_SUBJECT_USER = "u";
+
+    /** 限流計數主體標記：client IP */
+    public static final String RATE_LIMIT_SUBJECT_IP = "ip";
+
+    /**
+     * 生成通用應用層限流計數 Redis Key。
+     *
+     * @param rule        規則名稱（對應 {@code app.rate-limit.rules.<rule>}）
+     * @param subjectType 計數主體標記，{@link #RATE_LIMIT_SUBJECT_USER} 或 {@link #RATE_LIMIT_SUBJECT_IP}
+     * @param subjectId   主體識別（userUuid 或 client IP）
+     * @return Redis Key
+     */
+    public static String getRateLimitKey(String rule, String subjectType, String subjectId) {
+        return RATE_LIMIT_PREFIX + rule + ":" + subjectType + ":" + subjectId;
+    }
 }

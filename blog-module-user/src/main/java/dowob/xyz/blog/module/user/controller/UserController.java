@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.user.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.common.security.AuthUser;
 import dowob.xyz.blog.module.user.model.dto.request.ChangePasswordRequest;
@@ -57,6 +58,7 @@ public class UserController {
     @Operation(summary = "更新個人資料", description = "更新當前登入用戶的暱稱、個人簡介、網站、社群連結、頭貼與所在地")
     @PreAuthorize("isAuthenticated()")
     @PatchMapping("/me/profile")
+    @RateLimited("account-write")
     public ApiResponse<Void> updateProfile(@AuthenticationPrincipal AuthUser user,
                                             @Valid @RequestBody UpdateProfileRequest request) {
         userService.updateProfile(user.uuid(), request.getNickname(), request.getBio(), request.getWebsite(),
@@ -74,6 +76,7 @@ public class UserController {
     @Operation(summary = "更新通知偏好", description = "更新當前登入用戶的留言、按讚、審核、追蹤與電子報通知偏好")
     @PreAuthorize("isAuthenticated()")
     @PatchMapping("/me/notifications")
+    @RateLimited("account-write")
     public ApiResponse<Void> updateNotifications(@AuthenticationPrincipal AuthUser user,
                                                  @Valid @RequestBody NotificationPreferencesRequest request) {
         userService.updateNotificationPreferences(user.uuid(),
@@ -92,6 +95,7 @@ public class UserController {
     @Operation(summary = "修改密碼", description = "驗證舊密碼後更新密碼，所有現有 Token 將立即失效")
     @PreAuthorize("isAuthenticated()")
     @PostMapping("/me/change-password")
+    @RateLimited("account-write")
     public ApiResponse<Void> changePassword(@AuthenticationPrincipal AuthUser user,
                                              @Valid @RequestBody ChangePasswordRequest request) {
         userService.changePassword(user.uuid(), request.getOldPassword(), request.getNewPassword());

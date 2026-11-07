@@ -820,6 +820,15 @@ class SecurityConfigTest {
                     .andExpect(status().isOk())
                     .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
         }
+
+        @Test
+        @DisplayName("跨域回應暴露 Retry-After（SEC-23：前端跨域時才讀得到 429 的重試秒數）")
+        void corsResponse_shouldExposeRetryAfterHeader() throws Exception {
+            mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID)
+                            .header("Origin", "http://localhost:5500"))
+                    .andExpect(header().string("Access-Control-Expose-Headers",
+                            org.hamcrest.Matchers.containsString("Retry-After")));
+        }
     }
 
     // ── 工具方法 ──

@@ -1,5 +1,6 @@
 package dowob.xyz.blog.module.reading.controller;
 
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
 import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
 import dowob.xyz.blog.common.api.request.PageQuery;
 import dowob.xyz.blog.common.api.response.ApiResponse;
@@ -38,6 +39,7 @@ public class BookmarkController {
     private final BookmarkQueryService bookmarkQueryService;
 
     @PostMapping("/articles/{articleUuid}/bookmark")
+    @RateLimited("interaction-write")
     @PreAuthorize("isAuthenticated()")
     @Operation(summary = "收藏文章（idempotent）")
     public ApiResponse<Void> bookmark(@AuthenticationPrincipal AuthUser user,
