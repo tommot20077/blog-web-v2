@@ -469,6 +469,29 @@ class SearchServiceTest {
             verifyNoInteractions(elasticsearchOperations);
         }
 
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"date", "popularity", "foo", "", "relevance2"})
+        @DisplayName("sort 白名單：只接受 relevance／latest，其他值（含 date、popularity、foo、空字串）回 400 且不查詢 ES")
+        void search_sortOutsideWhitelist_rejectedWith400(String sort) {
+            assertThatThrownBy(() -> searchService.search("java", null, sort, 1, 10, null))
+                    .isInstanceOfSatisfying(dowob.xyz.blog.common.exception.BusinessException.class, e ->
+                            assertThat(e.getErrorCode())
+                                    .isEqualTo(dowob.xyz.blog.common.api.errorcode.CommonErrorCode.PARAM_VALID_ERROR));
+            verifyNoInteractions(elasticsearchOperations);
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.ValueSource(strings = {"relevance", "RELEVANCE", "latest", "LATEST", "Latest"})
+        @DisplayName("sort 白名單：relevance／latest（不分大小寫）通過")
+        void search_sortInWhitelist_passes(String sort) {
+            SearchHits<ArticleDocument> hits = mockSearchHits(List.of());
+            when(elasticsearchOperations.search(any(Query.class), eq(ArticleDocument.class))).thenReturn(hits);
+
+            PageResult<SearchResultResponse> result = searchService.search(null, null, sort, 1, 10, null);
+
+            assertThat(result).isNotNull();
+        }
+
         @Test
         @DisplayName("B4：sort=HOT（大小寫不同）同樣回 400")
         void search_withHotSortUpperCase_rejectedWith400() {

@@ -25,13 +25,13 @@ public interface SearchService {
      *
      * <p>
      * 使用 Elasticsearch BoolQuery，MultiMatch 搜尋 title/summary/content，
-     * 可選 tag 過濾，支援 relevance/latest/hot 排序。
+     * 可選 tag 過濾，支援 relevance/latest 排序。
      * 同時記錄搜尋關鍵字至 Redis 熱門搜尋榜與使用者搜尋歷史。
      * </p>
      *
      * @param q       搜尋關鍵字
      * @param tag     標籤 slug 過濾（null 表示不過濾）
-     * @param sort    排序方式：{@code relevance}（預設）/ {@code latest}；{@code hot} 已移除，傳入拋 400（{@code PARAM_VALID_ERROR}）
+     * @param sort    排序方式：{@code relevance}（預設）/ {@code latest}（不分大小寫）；其他值（含已移除的 {@code hot}）拋 400（{@code PARAM_VALID_ERROR}）
      * @param page    頁碼（從 1 開始）
      * @param size    每頁筆數
      * @param userUuid 當前用戶 UUID（匿名為 null，用於記錄搜尋歷史）

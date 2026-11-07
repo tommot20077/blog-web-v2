@@ -137,14 +137,16 @@ public class SearchServiceImpl implements SearchService {
         }
 
         /*
-         * B4（DATA-05）：sort=hot 已移除。它依賴索引內的 viewCount／likeCount，而那兩個值在增量索引時
-         * 硬編 0、之後也沒有任何路徑更新，排序等於沒排。要讓它有意義得靠高頻更新 ES（每次瀏覽／按讚都要寫索引），
-         * 代價遠大於效益，且熱門排序在前端已無使用者。靜默退回相關度排序會讓呼叫端以為拿到了熱門榜，
-         * 故明確回 400，讓仍傳 hot 的舊客戶端能被看見並修正。
+         * sort 白名單：只接受 relevance 與 latest（不分大小寫），其餘一律 400。
+         * 放在 service 而非 controller，是因為排序策略（含哪些值有效）本來就由 service 的查詢組裝決定，
+         * 白名單與 ES 排序分支放在同一處才不會漂移。
+         * 不靜默退回相關度排序：呼叫端傳 hot（B4 已移除，索引內沒有可靠的計數可排）、popularity、date 等
+         * 都代表它預期另一種排序；靜默退回會讓它以為拿到了熱門榜／日期序，錯誤要在第一次呼叫就浮現。
+         * null 只可能來自內部呼叫（HTTP 端有預設值 relevance），視同 relevance。
          */
-        if ("hot".equalsIgnoreCase(sort)) {
+        if (sort != null && !"relevance".equalsIgnoreCase(sort) && !"latest".equalsIgnoreCase(sort)) {
             throw new BusinessException(CommonErrorCode.PARAM_VALID_ERROR,
-                    "sort=hot 已移除，請改用 relevance 或 latest");
+                    "sort 僅支援 relevance 或 latest");
         }
 
         BoolQuery.Builder boolQuery = new BoolQuery.Builder();
