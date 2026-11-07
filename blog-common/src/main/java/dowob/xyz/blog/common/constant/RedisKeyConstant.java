@@ -265,6 +265,73 @@ public class RedisKeyConstant {
     }
 
     /**
+     * 忘記密碼 IP 層級限流 Key 前綴 (String)
+     * Key: auth:forgot-password:ip:{ip}
+     * <p>SEC-22／A3：與 per-email 限流並存；三個端點各自計數，互不影響。</p>
+     */
+    public static final String FORGOT_PASSWORD_IP_PREFIX = "auth:forgot-password:ip:";
+
+    /**
+     * 重寄驗證信 IP 層級限流 Key 前綴 (String)
+     * Key: auth:resend-verification:ip:{ip}
+     */
+    public static final String RESEND_VERIFICATION_IP_PREFIX = "auth:resend-verification:ip:";
+
+    /**
+     * 驗證碼校驗 IP 層級限流 Key 前綴 (String)
+     * Key: auth:verify-code:ip:{ip}
+     */
+    public static final String VERIFY_CODE_IP_PREFIX = "auth:verify-code:ip:";
+
+    /** 忘記密碼：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3；獨立常數方便日後分開調整） */
+    public static final int FORGOT_PASSWORD_IP_MAX = 10;
+
+    /** 忘記密碼 IP 限流窗口（分鐘），等同每小時 */
+    public static final long FORGOT_PASSWORD_IP_TTL_MINUTES = 60L;
+
+    /** 重寄驗證信：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3） */
+    public static final int RESEND_VERIFICATION_IP_MAX = 10;
+
+    /** 重寄驗證信 IP 限流窗口（分鐘），等同每小時 */
+    public static final long RESEND_VERIFICATION_IP_TTL_MINUTES = 60L;
+
+    /** 驗證碼校驗：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3） */
+    public static final int VERIFY_CODE_IP_MAX = 10;
+
+    /** 驗證碼校驗 IP 限流窗口（分鐘），等同每小時 */
+    public static final long VERIFY_CODE_IP_TTL_MINUTES = 60L;
+
+    /**
+     * 生成忘記密碼 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getForgotPasswordIpKey(String ip) {
+        return FORGOT_PASSWORD_IP_PREFIX + ip;
+    }
+
+    /**
+     * 生成重寄驗證信 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getResendVerificationIpKey(String ip) {
+        return RESEND_VERIFICATION_IP_PREFIX + ip;
+    }
+
+    /**
+     * 生成驗證碼校驗 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getVerifyCodeIpKey(String ip) {
+        return VERIFY_CODE_IP_PREFIX + ip;
+    }
+
+    /**
      * 重複信箱註冊通知限流 Key 前綴 (String)
      * Key: rate:register-dup-notice:{email}
      * <p>SEC-14／Q8：註冊時 email 已存在會寄通知信給原信箱主人；以此 key 限制同一信箱在

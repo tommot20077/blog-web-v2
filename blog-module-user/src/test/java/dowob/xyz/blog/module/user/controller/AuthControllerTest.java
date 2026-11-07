@@ -1136,4 +1136,56 @@ class AuthControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
     }
+
+    /**
+     * 驗證（A3）：預設不信任 proxy 下，忘記密碼／重寄／驗證碼三個端點都以 remoteAddr 傳入 service，忽略偽造的 XFF。
+     */
+    @Test
+    @DisplayName("POST /forgot-password、/resend-verification、/verify-email-code → 偽造 XFF 被忽略，remoteAddr 傳入 service（A3）")
+    void ipSensitiveEndpoints_withForgedXff_shouldPassRemoteAddrToService() throws Exception {
+        String emailBody = "{\"email\": \"%s\"}".formatted(TEST_EMAIL);
+        String codeBody = "{\"email\": \"%s\", \"code\": \"123456\"}".formatted(TEST_EMAIL);
+
+        mockMvc.perform(post("/api/v1/auth/forgot-password")
+                        .header("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+                        .with(req -> { req.setRemoteAddr("198.51.100.24"); return req; })
+                        .contentType(MediaType.APPLICATION_JSON).content(emailBody))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
+                        .header("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+                        .with(req -> { req.setRemoteAddr("198.51.100.24"); return req; })
+                        .contentType(MediaType.APPLICATION_JSON).content(emailBody))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/auth/verify-email-code")
+                        .header("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
+                        .with(req -> { req.setRemoteAddr("198.51.100.24"); return req; })
+                        .contentType(MediaType.APPLICATION_JSON).content(codeBody))
+                .andExpect(status().isOk());
+
+        verify(authService).forgotPassword(eq(TEST_EMAIL), eq("198.51.100.24"));
+        verify(authService).resendVerification(eq(TEST_EMAIL), eq("198.51.100.24"));
+        verify(authService).verifyEmailCode(eq(TEST_EMAIL), eq("123456"), eq("198.51.100.24"));
+    }
+
+    /**
+     * 驗證（A3）：三個端點的 IP 限流超標時，service 拋出的 RATE_LIMIT_EXCEEDED 映射為同一個錯誤碼。
+     */
+    @Test
+    @DisplayName("POST /forgot-password、/resend-verification、/verify-email-code → IP 限流超標 → RATE_LIMIT_EXCEEDED（A3）")
+    void ipSensitiveEndpoints_ipRateLimitExceeded_shouldReturnRateLimitError() throws Exception {
+        doThrow(new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED)).when(authService).forgotPassword(anyString(), anyString());
+        doThrow(new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED)).when(authService).resendVerification(anyString(), anyString());
+        doThrow(new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED)).when(authService).verifyEmailCode(anyString(), anyString(), anyString());
+        String emailBody = "{\"email\": \"%s\"}".formatted(TEST_EMAIL);
+        String codeBody = "{\"email\": \"%s\", \"code\": \"123456\"}".formatted(TEST_EMAIL);
+
+        for (String[] call : new String[][]{
+                {"/api/v1/auth/forgot-password", emailBody},
+                {"/api/v1/auth/resend-verification", emailBody},
+                {"/api/v1/auth/verify-email-code", codeBody}}) {
+            mockMvc.perform(post(call[0]).contentType(MediaType.APPLICATION_JSON).content(call[1]))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+        }
+    }
 }

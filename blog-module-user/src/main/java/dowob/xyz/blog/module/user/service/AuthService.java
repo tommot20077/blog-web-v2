@@ -455,16 +455,38 @@ public class AuthService {
     }
 
     /**
-     * 使用 6 位數驗證碼驗證電子信箱
+     * 使用 6 位數驗證碼驗證電子信箱（不帶 IP，不做 IP 層級限流）
+     *
+     * @param email 電子信箱
+     * @param code  6 位數驗證碼
+     * @see #verifyEmailCode(String, String, String)
+     */
+    public void verifyEmailCode(String email, String code) {
+        verifyEmailCode(email, code, null);
+    }
+
+    /**
+     * 使用 6 位數驗證碼驗證電子信箱（含 client IP 層級限流）
      *
      * <p>內建防暴力破解機制：失敗次數達 {@link RedisKeyConstant#EMAIL_VERIFY_CODE_MAX_ATTEMPTS}
      * 後拒絕後續請求，直至驗證碼過期或重新發送。
      * DB 在 {@link TransactionTemplate} 內提交後才清除 Redis 資料，避免 DB rollback 導致驗證碼遺失。</p>
      *
-     * @param email 電子信箱
-     * @param code  6 位數驗證碼
+     * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
+     * （{@link RedisKeyConstant#VERIFY_CODE_IP_MAX} 次 / {@link RedisKeyConstant#VERIFY_CODE_IP_TTL_MINUTES} 分鐘，
+     * 與忘記密碼、重寄各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}；發生在任何 email／驗證碼邏輯之前。
+     * {@code clientIp} 為 null 時跳過。</p>
+     *
+     * @param email    電子信箱
+     * @param code     6 位數驗證碼
+     * @param clientIp client IP（可為 null，表示無法解析，跳過 IP 限流）
      */
-    public void verifyEmailCode(String email, String code) {
+    public void verifyEmailCode(String email, String code, String clientIp) {
+        checkIpRateLimit(
+                clientIp == null ? null : RedisKeyConstant.getVerifyCodeIpKey(clientIp),
+                RedisKeyConstant.VERIFY_CODE_IP_MAX,
+                RedisKeyConstant.VERIFY_CODE_IP_TTL_MINUTES);
+
         String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(email);
         String failCountStr = redisTemplate.opsForValue().get(failKey);
         if (failCountStr != null && Integer.parseInt(failCountStr) >= RedisKeyConstant.EMAIL_VERIFY_CODE_MAX_ATTEMPTS) {
@@ -504,16 +526,37 @@ public class AuthService {
     }
 
     /**
-     * 申請忘記密碼
+     * 申請忘記密碼（不帶 IP，不做 IP 層級限流）
      *
-     * <p>若信箱存在，建立密碼重設 Token（15 分鐘有效），並發布
-     * {@link UserPasswordResetRequestedEvent} 至 RabbitMQ。
+     * @param email 用戶電子信箱
+     * @see #forgotPassword(String, String)
+     */
+    public void forgotPassword(String email) {
+        forgotPassword(email, null);
+    }
+
+    /**
+     * 申請忘記密碼（含 client IP 層級限流）
+     *
+     * <p>若信箱存在，發布 {@link UserPasswordResetRequestedEvent} 至 RabbitMQ，由寄信 consumer 於寄信當下產生
+     * 15 分鐘有效的重設 token（只存 SHA-256，A1）。
      * 若信箱不存在，靜默忽略（安全考量，不洩漏信箱是否已註冊）。
      * 每封信箱每分鐘限呼叫 1 次、每日限 5 次，超過拋出 RATE_LIMIT_EXCEEDED。</p>
      *
-     * @param email 用戶電子信箱
+     * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
+     * （{@link RedisKeyConstant#FORGOT_PASSWORD_IP_MAX} 次 / {@link RedisKeyConstant#FORGOT_PASSWORD_IP_TTL_MINUTES} 分鐘，
+     * 與重寄、驗證碼各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。
+     * <b>必須先於「信箱是否存在」的判斷</b>，因此超限回應與信箱是否存在無關，不會洩漏帳號。{@code clientIp} 為 null 時跳過。</p>
+     *
+     * @param email    用戶電子信箱
+     * @param clientIp client IP（可為 null，表示無法解析，跳過 IP 限流）
      */
-    public void forgotPassword(String email) {
+    public void forgotPassword(String email, String clientIp) {
+        checkIpRateLimit(
+                clientIp == null ? null : RedisKeyConstant.getForgotPasswordIpKey(clientIp),
+                RedisKeyConstant.FORGOT_PASSWORD_IP_MAX,
+                RedisKeyConstant.FORGOT_PASSWORD_IP_TTL_MINUTES);
+
         /** 速率限制檢查（Redis 操作，不需要在 DB transaction 內） */
         String minKey = RedisKeyConstant.getForgotPwdMinKey(email);
         String dayKey = RedisKeyConstant.getForgotPwdDayKey(email);
@@ -542,16 +585,37 @@ public class AuthService {
     }
 
     /**
-     * 重發驗證信
+     * 重發驗證信（不帶 IP，不做 IP 層級限流）
      *
-     * <p>若信箱存在且帳號處於 PENDING_VERIFICATION 狀態，刪除舊有驗證 Token 並建立新的
-     * （24 小時有效），接著發布 {@link UserRegisteredEvent} 至 RabbitMQ。
+     * @param email 用戶電子信箱
+     * @see #resendVerification(String, String)
+     */
+    public void resendVerification(String email) {
+        resendVerification(email, null);
+    }
+
+    /**
+     * 重發驗證信（含 client IP 層級限流）
+     *
+     * <p>若信箱存在且帳號處於 PENDING_VERIFICATION 狀態，重設 Redis 驗證碼並發布 {@link UserRegisteredEvent}
+     * 至 RabbitMQ；舊驗證連結 token 的取代與新 token 的產生由寄信 consumer 在寄信當下完成（A1）。
      * 若信箱不存在或帳號已啟用，靜默忽略（安全考量）。
      * 每封信箱每分鐘限呼叫 1 次、每日限 5 次，超過拋出 RATE_LIMIT_EXCEEDED。</p>
      *
-     * @param email 用戶電子信箱
+     * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
+     * （{@link RedisKeyConstant#RESEND_VERIFICATION_IP_MAX} 次 / {@link RedisKeyConstant#RESEND_VERIFICATION_IP_TTL_MINUTES} 分鐘，
+     * 與忘記密碼、驗證碼各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}，發生在信箱查詢之前。
+     * {@code clientIp} 為 null 時跳過。</p>
+     *
+     * @param email    用戶電子信箱
+     * @param clientIp client IP（可為 null，表示無法解析，跳過 IP 限流）
      */
-    public void resendVerification(String email) {
+    public void resendVerification(String email, String clientIp) {
+        checkIpRateLimit(
+                clientIp == null ? null : RedisKeyConstant.getResendVerificationIpKey(clientIp),
+                RedisKeyConstant.RESEND_VERIFICATION_IP_MAX,
+                RedisKeyConstant.RESEND_VERIFICATION_IP_TTL_MINUTES);
+
         /** 速率限制檢查（Redis 操作，不需要在 DB transaction 內） */
         String minKey = RedisKeyConstant.getResendVerifyMinKey(email);
         String dayKey = RedisKeyConstant.getResendVerifyDayKey(email);

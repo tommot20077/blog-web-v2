@@ -2114,4 +2114,174 @@ class AuthServiceTest {
         token.setExpiresAt(expiresAt);
         return token;
     }
+
+    /* =========================================================================
+       A3（SEC-22）：forgot／resend／verify-code 的 per-IP 限流
+       ========================================================================= */
+
+    private static final String IP_LIMIT_EMAIL = "ip-limit@example.com";
+
+    private static BusinessException rateLimited(Runnable action) {
+        try {
+            action.run();
+        } catch (BusinessException e) {
+            return e;
+        }
+        throw new AssertionError("預期拋出 RATE_LIMIT_EXCEEDED，但沒有拋出");
+    }
+
+    /**
+     * 驗證：忘記密碼 IP 計數超過門檻（第 11 次）→ RATE_LIMIT_EXCEEDED；限流在任何 email 邏輯之前生效，
+     * 不查使用者、不動 per-email 計數、不發事件。
+     */
+    @Test
+    @DisplayName("forgotPassword(ip) → IP 第 11 次 → RATE_LIMIT_EXCEEDED，且在 email 查詢與 per-email 計數之前（不洩漏 email 是否存在）")
+    void forgotPassword_ipOverLimit_throwsBeforeAnyEmailLogic() {
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getForgotPasswordIpKey(TEST_IP)), any(Duration.class)))
+                .thenReturn((long) RedisKeyConstant.FORGOT_PASSWORD_IP_MAX + 1);
+
+        assertThatThrownBy(() -> authService.forgotPassword(IP_LIMIT_EMAIL, TEST_IP))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+
+        verify(userRepository, never()).findByEmail(anyString());
+        verify(userRedisAtomicOps, never()).incrementWithTtl(eq(RedisKeyConstant.getForgotPwdMinKey(IP_LIMIT_EMAIL)), any(Duration.class));
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    /**
+     * 驗證：超限時，存在的 email 與不存在的 email 得到完全相同的錯誤（碼與訊息），無法用回應差異列舉帳號。
+     */
+    @Test
+    @DisplayName("forgotPassword(ip) → 超限時存在與不存在的 email 回應完全相同")
+    void forgotPassword_ipOverLimit_sameResponseForKnownAndUnknownEmail() {
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getForgotPasswordIpKey(TEST_IP)), any(Duration.class)))
+                .thenReturn((long) RedisKeyConstant.FORGOT_PASSWORD_IP_MAX + 1);
+        when(userRepository.findByEmail("known@example.com")).thenReturn(Optional.of(buildActiveUser()));
+        when(userRepository.findByEmail("unknown@example.com")).thenReturn(Optional.empty());
+
+        BusinessException known = rateLimited(() -> authService.forgotPassword("known@example.com", TEST_IP));
+        BusinessException unknown = rateLimited(() -> authService.forgotPassword("unknown@example.com", TEST_IP));
+
+        assertThat(known.getCode()).isEqualTo(unknown.getCode()).isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode());
+        assertThat(known.getMessage()).isEqualTo(unknown.getMessage());
+    }
+
+    /**
+     * 驗證：IP 計數剛好等於門檻（第 10 次）仍放行，並使用自己的 key 與 60 分鐘窗口（不與註冊共用）。
+     */
+    @Test
+    @DisplayName("forgotPassword(ip) → IP 第 10 次仍放行；使用 forgot 專屬 key 與 60 分鐘窗口，不碰 register／resend key")
+    void forgotPassword_ipAtLimit_proceedsWithOwnKeyAndWindow() {
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getForgotPasswordIpKey(TEST_IP)), any(Duration.class)))
+                .thenReturn((long) RedisKeyConstant.FORGOT_PASSWORD_IP_MAX);
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getForgotPwdMinKey(TEST_EMAIL)), any(Duration.class)))
+                .thenReturn(1L);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(buildActiveUser()));
+
+        authService.forgotPassword(TEST_EMAIL, TEST_IP);
+
+        verify(userRedisAtomicOps).incrementWithTtl(RedisKeyConstant.getForgotPasswordIpKey(TEST_IP),
+                Duration.ofMinutes(RedisKeyConstant.FORGOT_PASSWORD_IP_TTL_MINUTES));
+        verify(userRedisAtomicOps, never()).incrementWithTtl(eq(RedisKeyConstant.getRegisterIpKey(TEST_IP)), any(Duration.class));
+        verify(userRedisAtomicOps, never()).incrementWithTtl(eq(RedisKeyConstant.getResendVerificationIpKey(TEST_IP)), any(Duration.class));
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
+    }
+
+    @Test
+    @DisplayName("forgotPassword(null ip) → 無法解析 client IP → 跳過 IP 限流（沿用 register／login 行為）")
+    void forgotPassword_nullIp_skipsIpLimit() {
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        authService.forgotPassword(TEST_EMAIL, null);
+
+        verify(userRedisAtomicOps, never()).incrementWithTtl(startsWith(RedisKeyConstant.FORGOT_PASSWORD_IP_PREFIX), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("resendVerification(ip) → IP 第 11 次 → RATE_LIMIT_EXCEEDED，且在 email 查詢與 per-email 計數之前")
+    void resendVerification_ipOverLimit_throwsBeforeAnyEmailLogic() {
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getResendVerificationIpKey(TEST_IP)), any(Duration.class)))
+                .thenReturn((long) RedisKeyConstant.RESEND_VERIFICATION_IP_MAX + 1);
+
+        assertThatThrownBy(() -> authService.resendVerification(IP_LIMIT_EMAIL, TEST_IP))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+
+        verify(userRepository, never()).findByEmail(anyString());
+        verify(userRedisAtomicOps, never()).incrementWithTtl(eq(RedisKeyConstant.getResendVerifyMinKey(IP_LIMIT_EMAIL)), any(Duration.class));
+        verifyNoInteractions(rabbitTemplate);
+    }
+
+    @Test
+    @DisplayName("resendVerification(ip) → IP 第 10 次仍放行；使用 resend 專屬 key 與 60 分鐘窗口")
+    void resendVerification_ipAtLimit_proceedsWithOwnKeyAndWindow() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getResendVerificationIpKey(TEST_IP)), any(Duration.class)))
+                .thenReturn((long) RedisKeyConstant.RESEND_VERIFICATION_IP_MAX);
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getResendVerifyMinKey(TEST_EMAIL)), any(Duration.class)))
+                .thenReturn(1L);
+        User pending = buildActiveUser();
+        pending.setStatus(UserStatus.PENDING_VERIFICATION);
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(pending));
+
+        authService.resendVerification(TEST_EMAIL, TEST_IP);
+
+        verify(userRedisAtomicOps).incrementWithTtl(RedisKeyConstant.getResendVerificationIpKey(TEST_IP),
+                Duration.ofMinutes(RedisKeyConstant.RESEND_VERIFICATION_IP_TTL_MINUTES));
+        verify(userRedisAtomicOps, never()).incrementWithTtl(eq(RedisKeyConstant.getForgotPasswordIpKey(TEST_IP)), any(Duration.class));
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), (Object) any());
+    }
+
+    @Test
+    @DisplayName("resendVerification(null ip) → 跳過 IP 限流")
+    void resendVerification_nullIp_skipsIpLimit() {
+        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
+
+        authService.resendVerification(TEST_EMAIL, null);
+
+        verify(userRedisAtomicOps, never()).incrementWithTtl(startsWith(RedisKeyConstant.RESEND_VERIFICATION_IP_PREFIX), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("verifyEmailCode(ip) → IP 第 11 次 → RATE_LIMIT_EXCEEDED，且在讀取驗證碼與失敗計數之前")
+    void verifyEmailCode_ipOverLimit_throwsBeforeTouchingCode() {
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getVerifyCodeIpKey(TEST_IP)), any(Duration.class)))
+                .thenReturn((long) RedisKeyConstant.VERIFY_CODE_IP_MAX + 1);
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(IP_LIMIT_EMAIL, "123456", TEST_IP))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
+
+        verifyNoInteractions(valueOperations);
+        verify(userRepository, never()).findByEmail(anyString());
+    }
+
+    @Test
+    @DisplayName("verifyEmailCode(ip) → IP 第 10 次仍放行；使用 verify-code 專屬 key 與 60 分鐘窗口")
+    void verifyEmailCode_ipAtLimit_proceedsWithOwnKeyAndWindow() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getVerifyCodeIpKey(TEST_IP)), any(Duration.class)))
+                .thenReturn((long) RedisKeyConstant.VERIFY_CODE_IP_MAX);
+        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
+
+        verify(userRedisAtomicOps).incrementWithTtl(RedisKeyConstant.getVerifyCodeIpKey(TEST_IP),
+                Duration.ofMinutes(RedisKeyConstant.VERIFY_CODE_IP_TTL_MINUTES));
+    }
+
+    @Test
+    @DisplayName("verifyEmailCode(null ip) → 跳過 IP 限流")
+    void verifyEmailCode_nullIp_skipsIpLimit() {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
+
+        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", null))
+                .isInstanceOf(BusinessException.class);
+
+        verify(userRedisAtomicOps, never()).incrementWithTtl(startsWith(RedisKeyConstant.VERIFY_CODE_IP_PREFIX), any(Duration.class));
+    }
 }
