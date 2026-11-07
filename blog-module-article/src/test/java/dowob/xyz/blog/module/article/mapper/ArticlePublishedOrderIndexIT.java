@@ -17,7 +17,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 「依 published_at 由新到舊」的兩條查詢必須能使用 V22 的 partial index（PERF-08）。
+ * 「依 published_at 由新到舊」的查詢必須能使用 V22 的 partial index（PERF-08）。
+ *
+ * <p>原本的兩條之一 {@code findAllPublished}（ES 全量索引）已由 keyset 分批的 {@code findPublishedForIndexAfter}
+ * 取代（PERF-01，依 uuid 排序、走 {@code articles_uuid_key}），其計畫守衛移至 {@code ArticleIndexBatchReadIT}。</p>
  *
  * <p>{@code idx_articles_published_latest} 為 {@code (published_at DESC NULLS LAST, id DESC) WHERE status = 'PUBLISHED'}。
  * {@code ORDER BY published_at DESC} 預設 NULLS FIRST，與索引順序不符，planner 只能全掃再 Sort；
@@ -49,17 +52,6 @@ class ArticlePublishedOrderIndexIT extends ArticleSeriesITSupport {
     }
 
     @Test
-    @DisplayName("findAllPublished（ES 全量索引）：計畫使用 idx_articles_published_latest 且無 Sort")
-    void findAllPublished_usesPublishedLatestIndex() {
-        insertPublished("A", LocalDateTime.of(2026, 1, 1, 0, 0));
-
-        String plan = String.join("\n", explain(sqlOf(ArticleMapper.class, "findAllPublished")));
-
-        assertThat(plan).contains("idx_articles_published_latest");
-        assertThat(plan).doesNotContain("Sort");
-    }
-
-    @Test
     @DisplayName("findRecentPublished（推薦補位）：計畫使用 idx_articles_published_latest 且無 Sort")
     void findRecentPublished_usesPublishedLatestIndex() {
         insertPublished("A", LocalDateTime.of(2026, 1, 1, 0, 0));
@@ -74,9 +66,8 @@ class ArticlePublishedOrderIndexIT extends ArticleSeriesITSupport {
     }
 
     @Test
-    @DisplayName("SQL 文字：兩條查詢的排序都明寫 published_at DESC NULLS LAST")
+    @DisplayName("SQL 文字：查詢的排序明寫 published_at DESC NULLS LAST")
     void bothQueries_declareNullsLast() {
-        assertThat(sqlOf(ArticleMapper.class, "findAllPublished")).contains("ORDER BY published_at DESC NULLS LAST");
         assertThat(sqlOf(ArticleRecommendMapper.class, "findRecentPublished"))
                 .contains("ORDER BY a.published_at DESC NULLS LAST");
     }

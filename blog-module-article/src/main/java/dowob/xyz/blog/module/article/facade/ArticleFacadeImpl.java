@@ -20,7 +20,6 @@ import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
 import dowob.xyz.blog.infrastructure.facade.dto.ArticleTrendingData;
 import dowob.xyz.blog.infrastructure.facade.dto.AuthorArticleStats;
 import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
-import dowob.xyz.blog.infrastructure.event.TagInfo;
 import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
 import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
 import dowob.xyz.blog.module.article.mapper.ArticleMapper;
@@ -145,25 +144,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
      * 瀏覽計數服務（供 {@link #getEngagementCounts} 與詳情頁共用「DB 值 + Redis 增量」的合併邏輯）
      */
     private final ViewCountService viewCountService;
-
-    /**
-     * 查詢所有已發布文章的索引資料，供搜尋模組重建 Elasticsearch 索引使用
-     *
-     * @return 已發布文章的索引資料列表
-     */
-    @Override
-    public List<ArticleIndexData> findAllPublishedForIndex() {
-        List<Article> articles = articleMapper.findAllPublished();
-        if (articles.isEmpty()) {
-            return List.of();
-        }
-        /** 作者暱稱整批一次取得（去重與切批由 UserFacade 實作負責），不隨文章逐筆查詢 */
-        Map<UUID, UserDisplayInfo> authors = userFacade.getDisplayInfoByUuids(
-                articles.stream().map(Article::getAuthorUuid).filter(Objects::nonNull).distinct().toList());
-        return articles.stream()
-                .map(article -> toIndexData(article, authors))
-                .toList();
-    }
 
     /**
      * {@inheritDoc}
@@ -307,21 +287,6 @@ public class ArticleFacadeImpl implements ArticleFacade {
     @Override
     public List<ArticleTrendingData> getArticlesPublishedAfter(LocalDateTime since) {
         return recommendMapper.findPublishedAfter(since);
-    }
-
-    /**
-     * 將文章實體轉換為索引資料 DTO（供搜尋模組使用）
-     *
-     * @param article 文章實體
-     * @param authors 作者公開 UUID → 顯示資訊（整批一次取得；查無的作者暱稱為 null）
-     * @return ArticleIndexData
-     */
-    private ArticleIndexData toIndexData(Article article, Map<UUID, UserDisplayInfo> authors) {
-        List<TagInfo> tags = articleMapper.findTagsByArticleUuid(article.getUuid());
-        List<ArticleIndexData.TagData> tagData = tags.stream()
-                .map(t -> new ArticleIndexData.TagData(t.id(), t.name(), t.slug()))
-                .toList();
-        return toIndexData(article, authors, tagData);
     }
 
     /**

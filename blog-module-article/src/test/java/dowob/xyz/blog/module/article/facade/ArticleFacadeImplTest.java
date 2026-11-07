@@ -325,90 +325,6 @@ class ArticleFacadeImplTest {
         }
     }
 
-    @Nested
-    class FindAllPublishedForIndex {
-
-        @Test
-        @DisplayName("正確呼叫 Mapper 並組裝索引資料")
-        void callsMapperAndAssemblesIndexData() {
-            Article article = new Article();
-            article.setId(ARTICLE_ID);
-            article.setUuid(ARTICLE_UUID);
-            article.setTitle("Test Article");
-            article.setSlug("test-article");
-            article.setSummary("summary");
-            article.setContent("content");
-            article.setAuthorUuid(AUTHOR_UUID);
-
-            TagInfo tagInfo = new TagInfo(UUID.randomUUID(), "Java", "java");
-
-            when(articleMapper.findAllPublished()).thenReturn(List.of(article));
-            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of(tagInfo));
-
-            List<ArticleIndexData> result = facade.findAllPublishedForIndex();
-
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).articleUuid()).isEqualTo(ARTICLE_UUID);
-            assertThat(result.get(0).tags()).hasSize(1);
-            assertThat(result.get(0).tags().get(0).name()).isEqualTo("Java");
-        }
-
-        @Test
-        @DisplayName("無已發布文章時回傳空列表")
-        void whenNoPublishedArticles_returnsEmptyList() {
-            when(articleMapper.findAllPublished()).thenReturn(List.of());
-
-            assertThat(facade.findAllPublishedForIndex()).isEmpty();
-            verifyNoInteractions(userFacade);
-            verify(articleMapper, never()).findTagsByArticleUuid(any());
-        }
-
-        @Test
-        @DisplayName("文章 content 為 null 時 stripMarkdown 回傳空字串")
-        void whenContentIsNull_stripMarkdownReturnsEmpty() {
-            Article article = new Article();
-            article.setId(ARTICLE_ID);
-            article.setUuid(ARTICLE_UUID);
-            article.setTitle("Null Content");
-            article.setSlug("null-content");
-            article.setSummary("summary");
-            article.setContent(null);
-            article.setAuthorUuid(AUTHOR_UUID);
-
-            when(articleMapper.findAllPublished()).thenReturn(List.of(article));
-            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
-
-            List<ArticleIndexData> result = facade.findAllPublishedForIndex();
-
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).contentText()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("UserFacade 回傳 empty 時 author 欄位為 null")
-        void whenUserNotFound_authorFieldsAreNull() {
-            Article article = new Article();
-            article.setId(ARTICLE_ID);
-            article.setUuid(ARTICLE_UUID);
-            article.setTitle("Unknown Author");
-            article.setSlug("unknown-author");
-            article.setSummary("summary");
-            article.setContent("content");
-            UUID unknownAuthor = UUID.randomUUID();
-            article.setAuthorUuid(unknownAuthor);
-
-            when(articleMapper.findAllPublished()).thenReturn(List.of(article));
-            when(articleMapper.findTagsByArticleUuid(ARTICLE_UUID)).thenReturn(List.of());
-            when(userFacade.getDisplayInfoByUuids(any())).thenReturn(java.util.Map.of());
-
-            List<ArticleIndexData> result = facade.findAllPublishedForIndex();
-
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).authorNickname()).isNull();
-            assertThat(result.get(0).authorUuid()).isEqualTo(unknownAuthor);
-        }
-    }
-
     /** 建立索引用的已發布文章（只填索引欄位） */
     private static Article indexArticle(UUID uuid, UUID authorUuid, String content) {
         Article article = new Article();
@@ -433,7 +349,8 @@ class ArticleFacadeImplTest {
     }
 
     /**
-     * keyset 分批讀取索引資料（PERF-01）：取代一次撈全站的 findAllPublishedForIndex，
+     * keyset 分批讀取索引資料（PERF-01）：取代原本一次撈全站的 findAllPublishedForIndex（已移除；
+     * 其「正確組裝／無文章回空／content 為 null 回空字串／查無作者暱稱為 null」四個案例併入本群組），
      * 並把「每篇各發一次 findTagsByArticleUuid」的 N+1 改成每批一次批次查詢。
      */
     @Nested

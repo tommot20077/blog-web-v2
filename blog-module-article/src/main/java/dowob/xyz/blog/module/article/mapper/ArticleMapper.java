@@ -41,7 +41,7 @@ public interface ArticleMapper {
      *
      * <p>刻意<b>排除</b> {@code content_md}、{@code content_html}、{@code toc}：列表只組摘要／{@code ArticleData}，
      * 用不到這三個 TEXT 欄位，{@code SELECT *} 卻會讓 PostgreSQL 讀出並傳輸整頁文章的正文。
-     * 詳情頁（{@code ArticleRepository}）、ES 全量索引（{@link #findAllPublished()}）、版本快照與檔案綁定需要正文，
+     * 詳情頁（{@code ArticleRepository}）、ES 全量索引（{@link #INDEX_COLUMNS}）、版本快照與檔案綁定需要正文，
      * 不使用本常數。{@link Article} 新增欄位時須同步補進這裡（{@code ArticleMapperListColumnsSqlTest} 守衛）。</p>
      */
     String LIST_COLUMNS = "id, uuid, author_uuid, title, slug, summary, cover_image_url, status, reject_reason, "
@@ -226,19 +226,6 @@ public interface ArticleMapper {
     List<TagInfo> findTagsByArticleUuid(@Param("articleUuid") UUID articleUuid);
 
     /**
-     * 查詢所有已發布文章（供全量重建 Elasticsearch 索引使用）
-     *
-     * <p>需要正文（{@code content}），但不需要 {@code content_html}／{@code toc}。MyBatis 以欄名自動映射，
-     * 而實體欄位叫 {@code content}、資料庫欄位叫 {@code content_md}，必須明寫 {@code content_md AS content}，
-     * 否則 content 恆為 null，全量重建會把內文索引成空字串。</p>
-     *
-     * @return 所有已發布文章列表
-     */
-    @Select("SELECT " + LIST_COLUMNS + ", content_md AS content FROM articles WHERE status = 'PUBLISHED' "
-            + "ORDER BY published_at DESC NULLS LAST")
-    List<Article> findAllPublished();
-
-    /**
      * ES 索引用途的明確選欄（PERF-01）：只有組 {@code ArticleIndexData} 需要的欄位。
      *
      * <p>需要正文，但只要 Markdown 原文：MyBatis 以欄名自動映射，實體欄位叫 {@code content}、資料庫欄位叫
@@ -288,9 +275,8 @@ public interface ArticleMapper {
     /**
      * 歸檔頁用的輕量投影：全部已發布文章的 uuid／title／slug／published_at。
      *
-     * <p>與 {@link #findAllPublished()} 刻意分開：後者 {@code SELECT *} 會把 {@code content_md}／{@code content_html}／
-     * {@code toc} 一併撈出（供 ES 全量重建索引使用，需要正文）；歸檔頁只要四個欄位，沿用它等於每次請求把全站語料
-     * 搬進 JVM 堆（PERF-04）。</p>
+     * <p>刻意只選四個欄位：原本與 ES 全量重建共用的查詢會把 {@code content_md}／{@code content_html}／{@code toc}
+     * 一併撈出；歸檔頁沿用它等於每次請求把全站語料搬進 JVM 堆（PERF-04）。</p>
      *
      * <p>排序 {@code published_at DESC NULLS LAST, id DESC} 與 V22 的 partial index
      * {@code idx_articles_published_latest} <b>逐字一致</b>（欄位、方向、NULLS 位置、{@code WHERE status = 'PUBLISHED'}），

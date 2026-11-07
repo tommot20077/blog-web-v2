@@ -28,7 +28,8 @@ import java.util.UUID;
  * <p>跨模組識別一律是公開 UUID（文章、系列、使用者）；facade 介面不暴露任何資料庫 Long 主鍵。
  * 方法分類：</p>
  * <ul>
- *   <li><b>recommend / search read</b>（findAllPublishedForIndex / getPublishedArticleBasicInfo /
+ *   <li><b>recommend / search read</b>（findPublishedForIndexAfter / findPublishedForIndexByUuids / countPublished /
+ *       getPublishedArticleBasicInfo /
  *       getArticlesByTagIds / getRecentPublishedArticles / getPublishedArticlesByUuids /
  *       getArticlesPublishedAfter）：僅查 PUBLISHED 文章。</li>
  *   <li><b>不限狀態的 read</b>（findByUuid / findBySeriesUuidOrderByPosition / findContentByUuid / existsByUuid）：
@@ -47,18 +48,6 @@ import java.util.UUID;
  * @version 2.0（移除所有 Long 主鍵版方法）
  */
 public interface ArticleFacade {
-
-    /**
-     * 查詢所有已發布文章的索引資料
-     *
-     * <p>
-     * 用於搜尋模組全量重建 Elasticsearch 索引（Reindex）。
-     * 僅回傳狀態為 PUBLISHED 的文章，包含完整索引所需欄位。
-     * </p>
-     *
-     * @return 所有已發布文章的索引資料列表
-     */
-    List<ArticleIndexData> findAllPublishedForIndex();
 
     /**
      * 單批索引資料讀取的筆數上限（{@link #findPublishedForIndexAfter} 的 {@code limit} 不得超過此值）。
@@ -108,10 +97,9 @@ public interface ArticleFacade {
      * 在給定的文章 UUID 中，篩出「查詢當下確實是 PUBLISHED」的那些
      *
      * <p>
-     * 供搜尋模組清除幽靈 document（ES 有、DB 已非 PUBLISHED）使用。
-     * 與 {@link #findAllPublishedForIndex()} 的差別在於**時點**：後者是全量重建開始時的快照，
-     * 拿快照當清除判準會把「快照撈完之後才發布、由 MQ 寫進索引」的文章誤判為幽靈刪掉；
-     * 本方法是即時查證，因此並發發布的文章會被認出來而保留。
+     * 供搜尋模組的每日幽靈校正清除幽靈 document（ES 有、DB 已非 PUBLISHED）使用。
+     * 判準必須是查詢當下的 DB 狀態而不是某個時點的快照：拿快照當清除判準會把「快照撈完之後才發布、
+     * 由 MQ 寫進索引」的文章誤判為幽靈刪掉；本方法是即時查證，因此並發發布的文章會被認出來而保留。
      * </p>
      *
      * <p>{@code articles} 是業務 Data，跨模組不得直接查表（見 {@code ai-docs/architecture.md}），
