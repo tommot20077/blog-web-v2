@@ -9,6 +9,7 @@ import org.springframework.data.elasticsearch.core.IndexInformation;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
 import org.springframework.data.elasticsearch.core.query.DeleteQuery;
 import org.springframework.data.elasticsearch.core.query.Query;
+import org.springframework.data.elasticsearch.core.query.types.ConflictsType;
 import org.springframework.stereotype.Component;
 
 /**
@@ -30,9 +31,13 @@ public class SearchIndexCleaner {
 
     /**
      * 清空經 alias 可見的全部文章文件並 refresh（alias 與實體索引不變）。
+     *
+     * <p>以 {@code conflicts=proceed} 執行：測試結束時 MQ consumer 可能仍在刪除同一份文件（例如文章刪除事件），
+     * delete_by_query 預設遇到版本衝突會整個回 409；對「清空」而言別人先刪掉了正是想要的結果，略過即可。</p>
      */
     public void clearArticles() {
-        esOps.delete(DeleteQuery.builder(Query.findAll()).build(), ArticleDocument.class);
+        esOps.delete(DeleteQuery.builder(Query.findAll()).withConflicts(ConflictsType.Proceed).withRefresh(true).build(),
+                ArticleDocument.class);
         esOps.indexOps(ArticleDocument.class).refresh();
     }
 
