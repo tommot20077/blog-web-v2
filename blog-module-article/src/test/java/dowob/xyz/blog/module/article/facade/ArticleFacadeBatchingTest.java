@@ -119,4 +119,41 @@ class ArticleFacadeBatchingTest {
 
         assertThat(result).hasSize(1);
     }
+
+    /** findPublishedForIndexByUuids 每次收到的批次大小 */
+    private final List<Integer> indexBatchSizes = new ArrayList<>();
+
+    /** 索引補齊路徑的標籤查詢每次收到的批次大小 */
+    private final List<Integer> indexTagBatchSizes = new ArrayList<>();
+
+    @Test
+    @DisplayName("findPublishedForIndexByUuids（重建期間補齊，輸入無上界）：文章與標籤兩個 IN 查詢都切批，作者暱稱整批只查一次")
+    void indexCatchUp_bothInQueriesSplitIntoBatches() {
+        int total = BatchedQuery.BATCH_SIZE + 100;
+        List<UUID> uuids = IntStream.rangeClosed(1, total).mapToObj(i -> UUID.randomUUID()).toList();
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenReturn(
+                java.util.Map.of(AUTHOR_UUID, new UserDisplayInfo(AUTHOR_UUID, "作者", null)));
+        when(articleMapper.findPublishedForIndexByUuids(anyList())).thenAnswer(invocation -> {
+            List<UUID> batch = invocation.getArgument(0);
+            indexBatchSizes.add(batch.size());
+            return batch.stream().map(u -> {
+                Article article = new Article();
+                article.setUuid(u);
+                article.setAuthorUuid(AUTHOR_UUID);
+                return article;
+            }).toList();
+        });
+        when(articleMapper.findTagsByArticleUuids(anyList())).thenAnswer(invocation -> {
+            List<UUID> batch = invocation.getArgument(0);
+            indexTagBatchSizes.add(batch.size());
+            return List.of();
+        });
+
+        List<dowob.xyz.blog.infrastructure.facade.ArticleIndexData> result = facade.findPublishedForIndexByUuids(uuids);
+
+        assertThat(indexBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
+        assertThat(indexTagBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
+        assertThat(result).hasSize(total);
+        verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
+    }
 }

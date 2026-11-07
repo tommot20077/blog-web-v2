@@ -409,6 +409,203 @@ class ArticleFacadeImplTest {
         }
     }
 
+    /** 建立索引用的已發布文章（只填索引欄位） */
+    private static Article indexArticle(UUID uuid, UUID authorUuid, String content) {
+        Article article = new Article();
+        article.setUuid(uuid);
+        article.setAuthorUuid(authorUuid);
+        article.setTitle("t-" + uuid);
+        article.setSlug("s-" + uuid);
+        article.setSummary("summary");
+        article.setContent(content);
+        article.setStatus(ArticleStatus.PUBLISHED);
+        return article;
+    }
+
+    /** 建立批次標籤查詢的結果列 */
+    private static dowob.xyz.blog.module.article.model.TagWithArticleUuid tagRow(UUID articleUuid, String name) {
+        dowob.xyz.blog.module.article.model.TagWithArticleUuid row = new dowob.xyz.blog.module.article.model.TagWithArticleUuid();
+        row.setId(UUID.nameUUIDFromBytes(name.getBytes()));
+        row.setName(name);
+        row.setSlug(name.toLowerCase());
+        row.setArticleUuid(articleUuid);
+        return row;
+    }
+
+    /**
+     * keyset 分批讀取索引資料（PERF-01）：取代一次撈全站的 findAllPublishedForIndex，
+     * 並把「每篇各發一次 findTagsByArticleUuid」的 N+1 改成每批一次批次查詢。
+     */
+    @Nested
+    @DisplayName("findPublishedForIndexAfter（keyset 分批讀取）")
+    class FindPublishedForIndexAfter {
+
+        @Test
+        @DisplayName("以游標與上限呼叫 mapper，標籤依文章分組、作者暱稱與 authorUuid 正確組裝，順序維持 mapper 的 uuid 升冪")
+        void assemblesIndexDataFromBatchQueries() {
+            UUID cursor = UUID.randomUUID();
+            UUID first = UUID.fromString("00000000-0000-0000-0000-000000000001");
+            UUID second = UUID.fromString("00000000-0000-0000-0000-000000000002");
+            when(articleMapper.findPublishedForIndexAfter(cursor, 2)).thenReturn(List.of(
+                    indexArticle(first, AUTHOR_UUID, "**正文一**"), indexArticle(second, AUTHOR_UUID, "正文二")));
+            when(articleMapper.findTagsByArticleUuids(List.of(first, second))).thenReturn(List.of(
+                    tagRow(first, "Java"), tagRow(first, "Spring"), tagRow(second, "Go")));
+
+            List<ArticleIndexData> result = facade.findPublishedForIndexAfter(cursor, 2);
+
+            assertThat(result).extracting(ArticleIndexData::articleUuid).containsExactly(first, second);
+            assertThat(result.get(0).tags()).extracting(ArticleIndexData.TagData::name).containsExactly("Java", "Spring");
+            assertThat(result.get(1).tags()).extracting(ArticleIndexData.TagData::name).containsExactly("Go");
+            assertThat(result.get(0).contentText()).isEqualTo("正文一");
+            assertThat(result).extracting(ArticleIndexData::authorUuid).containsOnly(AUTHOR_UUID);
+            assertThat(result).extracting(ArticleIndexData::authorNickname).containsOnly("Author");
+        }
+
+        @Test
+        @DisplayName("一批只發一次標籤批次查詢、一次 UserFacade 查詢；不再逐篇呼叫 findTagsByArticleUuid（不 N+1）")
+        void oneTagQueryAndOneUserQueryPerBatch() {
+            List<Article> batch = java.util.stream.IntStream.range(0, 5)
+                    .mapToObj(i -> indexArticle(UUID.randomUUID(), AUTHOR_UUID, "c")).toList();
+            when(articleMapper.findPublishedForIndexAfter(null, 200)).thenReturn(batch);
+            when(articleMapper.findTagsByArticleUuids(anyList())).thenReturn(List.of());
+
+            facade.findPublishedForIndexAfter(null, 200);
+
+            verify(articleMapper, times(1)).findTagsByArticleUuids(anyList());
+            verify(articleMapper, never()).findTagsByArticleUuid(any());
+            verify(userFacade, times(1)).getDisplayInfoByUuids(any());
+        }
+
+        @Test
+        @DisplayName("連續讀三批：標籤查詢次數等於批數（3），與文章數無關")
+        void tagQueriesEqualBatchCount() {
+            UUID last1 = UUID.randomUUID();
+            UUID last2 = UUID.randomUUID();
+            when(articleMapper.findPublishedForIndexAfter(null, 2)).thenReturn(List.of(
+                    indexArticle(UUID.randomUUID(), AUTHOR_UUID, "c"), indexArticle(last1, AUTHOR_UUID, "c")));
+            when(articleMapper.findPublishedForIndexAfter(last1, 2)).thenReturn(List.of(
+                    indexArticle(UUID.randomUUID(), AUTHOR_UUID, "c"), indexArticle(last2, AUTHOR_UUID, "c")));
+            when(articleMapper.findPublishedForIndexAfter(last2, 2)).thenReturn(List.of(
+                    indexArticle(UUID.randomUUID(), AUTHOR_UUID, "c")));
+            when(articleMapper.findTagsByArticleUuids(anyList())).thenReturn(List.of());
+
+            UUID cursor = null;
+            int batches = 0;
+            while (true) {
+                List<ArticleIndexData> page = facade.findPublishedForIndexAfter(cursor, 2);
+                batches++;
+                if (page.size() < 2) {
+                    break;
+                }
+                cursor = page.get(page.size() - 1).articleUuid();
+            }
+
+            assertThat(batches).isEqualTo(3);
+            verify(articleMapper, times(3)).findTagsByArticleUuids(anyList());
+            verify(articleMapper, never()).findTagsByArticleUuid(any());
+        }
+
+        @Test
+        @DisplayName("沒有文章時不查標籤、不查使用者")
+        void emptyBatch_skipsTagAndUserQueries() {
+            when(articleMapper.findPublishedForIndexAfter(null, 200)).thenReturn(List.of());
+
+            assertThat(facade.findPublishedForIndexAfter(null, 200)).isEmpty();
+            verify(articleMapper, never()).findTagsByArticleUuids(anyList());
+            verifyNoInteractions(userFacade);
+        }
+
+        @Test
+        @DisplayName("limit 超出 1..INDEX_BATCH_MAX_SIZE 時拋 IllegalArgumentException，且不查 DB（界限寫進程式）")
+        void limitOutOfRange_throwsWithoutQuerying() {
+            assertThatThrownBy(() -> facade.findPublishedForIndexAfter(null, 0))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> facade.findPublishedForIndexAfter(null,
+                    dowob.xyz.blog.infrastructure.facade.ArticleFacade.INDEX_BATCH_MAX_SIZE + 1))
+                    .isInstanceOf(IllegalArgumentException.class);
+            verifyNoInteractions(articleMapper);
+        }
+
+        @Test
+        @DisplayName("content 為 null 時 contentText 為空字串；沒有標籤的文章 tags 為空清單")
+        void nullContentAndNoTags() {
+            UUID uuid = UUID.randomUUID();
+            when(articleMapper.findPublishedForIndexAfter(null, 10)).thenReturn(List.of(indexArticle(uuid, AUTHOR_UUID, null)));
+            when(articleMapper.findTagsByArticleUuids(anyList())).thenReturn(List.of());
+
+            ArticleIndexData data = facade.findPublishedForIndexAfter(null, 10).get(0);
+
+            assertThat(data.contentText()).isEmpty();
+            assertThat(data.tags()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("UserFacade 查無作者時 authorNickname 為 null，authorUuid 仍取自文章")
+        void unknownAuthor_nicknameNull() {
+            UUID unknownAuthor = UUID.randomUUID();
+            when(articleMapper.findPublishedForIndexAfter(null, 10))
+                    .thenReturn(List.of(indexArticle(UUID.randomUUID(), unknownAuthor, "c")));
+            when(articleMapper.findTagsByArticleUuids(anyList())).thenReturn(List.of());
+            when(userFacade.getDisplayInfoByUuids(any())).thenReturn(java.util.Map.of());
+
+            ArticleIndexData data = facade.findPublishedForIndexAfter(null, 10).get(0);
+
+            assertThat(data.authorNickname()).isNull();
+            assertThat(data.authorUuid()).isEqualTo(unknownAuthor);
+        }
+    }
+
+    @Nested
+    @DisplayName("findPublishedForIndexByUuids（重建期間的增量補齊）")
+    class FindPublishedForIndexByUuids {
+
+        @Test
+        @DisplayName("null 或空集合回傳空清單，不查 DB")
+        void nullOrEmpty_returnsEmptyWithoutQuery() {
+            assertThat(facade.findPublishedForIndexByUuids(null)).isEmpty();
+            assertThat(facade.findPublishedForIndexByUuids(List.of())).isEmpty();
+            verifyNoInteractions(articleMapper);
+        }
+
+        @Test
+        @DisplayName("去除 null 與重複後查詢；只回傳 mapper 認定仍為 PUBLISHED 者，並帶標籤與作者暱稱")
+        void returnsOnlyPublishedWithTagsAndAuthor() {
+            UUID published = UUID.randomUUID();
+            UUID archived = UUID.randomUUID();
+            List<UUID> input = new ArrayList<>(List.of(published, archived, published));
+            input.add(null);
+            when(articleMapper.findPublishedForIndexByUuids(List.of(published, archived)))
+                    .thenReturn(List.of(indexArticle(published, AUTHOR_UUID, "c")));
+            when(articleMapper.findTagsByArticleUuids(List.of(published))).thenReturn(List.of(tagRow(published, "Java")));
+
+            List<ArticleIndexData> result = facade.findPublishedForIndexByUuids(input);
+
+            assertThat(result).singleElement().satisfies(d -> {
+                assertThat(d.articleUuid()).isEqualTo(published);
+                assertThat(d.tags()).extracting(ArticleIndexData.TagData::name).containsExactly("Java");
+                assertThat(d.authorNickname()).isEqualTo("Author");
+            });
+        }
+
+        @Test
+        @DisplayName("全部都已不是 PUBLISHED：回傳空清單，不查標籤與使用者")
+        void noneStillPublished_returnsEmpty() {
+            when(articleMapper.findPublishedForIndexByUuids(anyList())).thenReturn(List.of());
+
+            assertThat(facade.findPublishedForIndexByUuids(List.of(UUID.randomUUID()))).isEmpty();
+            verify(articleMapper, never()).findTagsByArticleUuids(anyList());
+            verifyNoInteractions(userFacade);
+        }
+    }
+
+    @Test
+    @DisplayName("countPublished 委派 mapper")
+    void countPublished_delegatesToMapper() {
+        when(articleMapper.countPublished()).thenReturn(42L);
+
+        assertThat(facade.countPublished()).isEqualTo(42L);
+    }
+
     /**
      * 幽靈 document 清除的「即時查證」查詢。
      *

@@ -29,6 +29,7 @@ import dowob.xyz.blog.module.article.model.Article;
 import dowob.xyz.blog.module.article.model.ArticleContentLimits;
 import dowob.xyz.blog.module.article.model.ArticleSummaryRow;
 import dowob.xyz.blog.module.article.model.ArticleTagRow;
+import dowob.xyz.blog.module.article.model.TagWithArticleUuid;
 import dowob.xyz.blog.module.article.repository.ArticleRepository;
 import dowob.xyz.blog.module.article.service.ArticleContentFreezePolicy;
 import dowob.xyz.blog.module.article.service.ArticleEventPublisher;
@@ -167,6 +168,67 @@ public class ArticleFacadeImpl implements ArticleFacade {
     /**
      * {@inheritDoc}
      *
+     * <p>上限在這裡強制（不是只寫在 JavaDoc）：一批的標籤以單次 {@code IN} 查詢取得，
+     * {@code limit} 即該查詢的 bind parameter 數。</p>
+     */
+    @Override
+    public List<ArticleIndexData> findPublishedForIndexAfter(UUID afterUuid, int limit) {
+        if (limit < 1 || limit > INDEX_BATCH_MAX_SIZE) {
+            throw new IllegalArgumentException(
+                    "limit 須介於 1 與 " + INDEX_BATCH_MAX_SIZE + " 之間，實際為 " + limit);
+        }
+        return toIndexDataBatch(articleMapper.findPublishedForIndexAfter(afterUuid, limit));
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>輸入無上界（重建期間的變動篇數），文章查詢與標籤查詢都經 {@link BatchedQuery} 切批；
+     * 兩者皆為 {@code WHERE ... IN} 投影，屬跨批可合併形狀。</p>
+     */
+    @Override
+    public List<ArticleIndexData> findPublishedForIndexByUuids(Collection<UUID> articleUuids) {
+        if (articleUuids == null) {
+            return List.of();
+        }
+        List<UUID> distinct = articleUuids.stream().filter(Objects::nonNull).distinct().toList();
+        return toIndexDataBatch(BatchedQuery.queryInBatches(distinct, articleMapper::findPublishedForIndexByUuids));
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public long countPublished() {
+        return articleMapper.countPublished();
+    }
+
+    /**
+     * 把一批文章組成索引資料：標籤一次批次查詢後依文章分組、作者暱稱一次 {@link UserFacade} 批次查詢。
+     *
+     * @param articles 一批已發布文章（只含索引欄位）
+     * @return 索引資料，順序與輸入相同；輸入為空時不發任何查詢
+     */
+    private List<ArticleIndexData> toIndexDataBatch(List<Article> articles) {
+        if (articles.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> articleUuids = articles.stream().map(Article::getUuid).toList();
+        Map<UUID, List<ArticleIndexData.TagData>> tagsByArticle =
+                BatchedQuery.queryInBatches(articleUuids, articleMapper::findTagsByArticleUuids).stream()
+                        .collect(Collectors.groupingBy(TagWithArticleUuid::getArticleUuid,
+                                Collectors.mapping(t -> new ArticleIndexData.TagData(t.getId(), t.getName(), t.getSlug()),
+                                        Collectors.toList())));
+        Map<UUID, UserDisplayInfo> authors = userFacade.getDisplayInfoByUuids(
+                articles.stream().map(Article::getAuthorUuid).filter(Objects::nonNull).distinct().toList());
+        return articles.stream()
+                .map(article -> toIndexData(article, authors, tagsByArticle.getOrDefault(article.getUuid(), List.of())))
+                .toList();
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * <p>caller（搜尋模組的幽靈掃描）以每頁 1000 筆的節奏送進來，輸入無上界，
      * 故經 {@link BatchedQuery} 切批；空輸入不發查詢，避免產生 {@code IN ()}。
      * 結果為集合聯集，屬跨批可合併形狀。</p>
@@ -259,7 +321,19 @@ public class ArticleFacadeImpl implements ArticleFacade {
         List<ArticleIndexData.TagData> tagData = tags.stream()
                 .map(t -> new ArticleIndexData.TagData(t.id(), t.name(), t.slug()))
                 .toList();
+        return toIndexData(article, authors, tagData);
+    }
 
+    /**
+     * 將文章實體與已取得的標籤組成索引資料 DTO（不發任何查詢）。
+     *
+     * @param article 文章實體
+     * @param authors 作者公開 UUID → 顯示資訊（整批一次取得；查無的作者暱稱為 null）
+     * @param tagData 該文章的標籤
+     * @return ArticleIndexData
+     */
+    private ArticleIndexData toIndexData(Article article, Map<UUID, UserDisplayInfo> authors,
+                                         List<ArticleIndexData.TagData> tagData) {
         UserDisplayInfo author = authors.get(article.getAuthorUuid());
         return new ArticleIndexData(
                 article.getUuid(),

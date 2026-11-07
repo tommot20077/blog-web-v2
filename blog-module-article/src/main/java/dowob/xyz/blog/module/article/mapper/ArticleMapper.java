@@ -239,6 +239,53 @@ public interface ArticleMapper {
     List<Article> findAllPublished();
 
     /**
+     * ES 索引用途的明確選欄（PERF-01）：只有組 {@code ArticleIndexData} 需要的欄位。
+     *
+     * <p>需要正文，但只要 Markdown 原文：MyBatis 以欄名自動映射，實體欄位叫 {@code content}、資料庫欄位叫
+     * {@code content_md}，必須明寫 {@code content_md AS content}（否則 content 恆為 null，見 {@code ArticleIndexContentIT}）；
+     * {@code content_html}／{@code toc} 用不到，不讀。</p>
+     */
+    String INDEX_COLUMNS = "uuid, author_uuid, title, slug, summary, content_md AS content, "
+            + "view_count, like_count, published_at ";
+
+    /**
+     * 以 keyset 分頁讀取一批已發布文章（ES 全量重建用，PERF-01）。
+     *
+     * <p>依 {@code uuid} 升冪、取游標之後的至多 {@code limit} 篇；游標為 {@code null} 時從頭開始。
+     * keyset 而非 OFFSET：OFFSET 越翻越慢（每批都要先掃過前面所有列），且重建期間有文章發布或下架時會重複或漏讀。
+     * 排序鍵 {@code uuid} 有唯一索引 {@code articles_uuid_key}，可依索引順序讀取、在 LIMIT 處停止，不需 Sort。</p>
+     *
+     * @param afterUuid 游標（不含）；{@code null} 表示從頭
+     * @param limit     本批筆數上限（呼叫端負責夾界）
+     * @return 已發布文章（僅 {@link #INDEX_COLUMNS} 欄位），依 uuid 升冪
+     */
+    @Select("<script>SELECT " + INDEX_COLUMNS + "FROM articles WHERE status = 'PUBLISHED' "
+            + "<if test='afterUuid != null'>AND uuid > #{afterUuid}::uuid </if>"
+            + "ORDER BY uuid LIMIT #{limit}</script>")
+    List<Article> findPublishedForIndexAfter(@Param("afterUuid") UUID afterUuid, @Param("limit") int limit);
+
+    /**
+     * 讀取給定 UUID 中目前為 PUBLISHED 的文章（ES 全量重建期間的增量補齊用）。
+     *
+     * <p>呼叫端須保證 {@code uuids} 非空，並經 {@code BatchedQuery} 切批。</p>
+     *
+     * @param uuids 文章公開 UUID（不得為空）
+     * @return 其中目前為 PUBLISHED 者（僅 {@link #INDEX_COLUMNS} 欄位）
+     */
+    @Select("<script>SELECT " + INDEX_COLUMNS + "FROM articles WHERE status = 'PUBLISHED' AND uuid IN "
+            + "<foreach collection='list' item='uuid' open='(' separator=',' close=')'>#{uuid}::uuid</foreach>"
+            + "</script>")
+    List<Article> findPublishedForIndexByUuids(@Param("list") List<UUID> uuids);
+
+    /**
+     * 已發布文章總數（ES 全量重建的進度分母）。
+     *
+     * @return PUBLISHED 文章數
+     */
+    @Select("SELECT COUNT(*) FROM articles WHERE status = 'PUBLISHED'")
+    long countPublished();
+
+    /**
      * 歸檔頁用的輕量投影：全部已發布文章的 uuid／title／slug／published_at。
      *
      * <p>與 {@link #findAllPublished()} 刻意分開：後者 {@code SELECT *} 會把 {@code content_md}／{@code content_html}／

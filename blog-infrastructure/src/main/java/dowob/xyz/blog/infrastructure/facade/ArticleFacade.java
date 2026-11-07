@@ -61,6 +61,50 @@ public interface ArticleFacade {
     List<ArticleIndexData> findAllPublishedForIndex();
 
     /**
+     * 單批索引資料讀取的筆數上限（{@link #findPublishedForIndexAfter} 的 {@code limit} 不得超過此值）。
+     *
+     * <p>與 {@code BatchedQuery.BATCH_SIZE} 同值：一批文章的標籤以單次 {@code IN} 查詢取得，
+     * 批次大小即該查詢的 bind parameter 數。</p>
+     */
+    int INDEX_BATCH_MAX_SIZE = 500;
+
+    /**
+     * 以 keyset 分頁讀取一批已發布文章的索引資料（全量重建 Elasticsearch 索引用，PERF-01）。
+     *
+     * <p>依文章公開 UUID <b>升冪</b>（PostgreSQL {@code uuid} 排序）取 {@code afterUuid} 之後的至多 {@code limit} 篇
+     * PUBLISHED 文章；呼叫端以本批最後一筆的 {@link ArticleIndexData#articleUuid()} 當下一批的游標，
+     * 回傳筆數少於 {@code limit} 即代表已讀完。只選索引需要的欄位（不讀 {@code content_html}／{@code toc}）。</p>
+     *
+     * <p>一批之內：標籤以<b>一次</b>批次查詢取得、作者暱稱以<b>一次</b> {@code UserFacade} 批次查詢取得，
+     * 不隨文章逐筆查詢（不 N+1）。</p>
+     *
+     * @param afterUuid 游標（不含）；{@code null} 表示從頭開始
+     * @param limit     本批筆數上限，須介於 1 與 {@link #INDEX_BATCH_MAX_SIZE} 之間
+     * @return 本批文章的索引資料，依 UUID 升冪
+     * @throws IllegalArgumentException {@code limit} 超出範圍
+     */
+    List<ArticleIndexData> findPublishedForIndexAfter(UUID afterUuid, int limit);
+
+    /**
+     * 讀取給定文章中「查詢當下仍為 PUBLISHED」者的索引資料。
+     *
+     * <p>供全量重建期間的增量補齊使用：重建進行中有變動的文章，在切換 alias 前後以本方法回查 DB 現況，
+     * 回傳者寫入新索引、<b>未回傳者（已下架、退回、已刪除）由呼叫端從新索引移除</b>。
+     * 輸入無上界，實作端經 {@code BatchedQuery} 切批；標籤與作者暱稱同樣批次取得。</p>
+     *
+     * @param articleUuids 文章公開 UUID；{@code null} 或空集合回傳空清單（不查 DB），{@code null} 元素忽略
+     * @return 其中目前為 PUBLISHED 者的索引資料（順序不保證）
+     */
+    List<ArticleIndexData> findPublishedForIndexByUuids(Collection<UUID> articleUuids);
+
+    /**
+     * 已發布文章總數（全量重建的進度分母）。
+     *
+     * @return 目前狀態為 PUBLISHED 的文章數
+     */
+    long countPublished();
+
+    /**
      * 在給定的文章 UUID 中，篩出「查詢當下確實是 PUBLISHED」的那些
      *
      * <p>
