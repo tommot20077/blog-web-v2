@@ -104,7 +104,7 @@ class DeleteCascadeQueueBindingIT {
     /** 等待訊息到達的上限（毫秒） */
     private static final long RECEIVE_TIMEOUT_MS = 10_000L;
 
-    private static final RabbitMQContainer RABBIT = new RabbitMQContainer("rabbitmq:3-management-alpine");
+    private static final RabbitMQContainer RABBIT = new RabbitMQContainer("rabbitmq:4.2.2-management-alpine");
 
     /** 每個「文章刪除」queue 與其 consumer 類別 */
     private static final Map<String, Class<?>> ARTICLE_DELETED_QUEUES = Map.of(

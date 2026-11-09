@@ -35,14 +35,14 @@ import java.util.UUID;
 public abstract class TagCleanupITSupport {
 
     /** 單例 Postgres 容器 */
-    protected static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine")
+    protected static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18-alpine")
             .withDatabaseName("blog_test")
             .withUsername("test")
             .withPassword("test");
 
     /** 單例 Redis 容器 */
     protected static final com.redis.testcontainers.RedisContainer REDIS =
-            new com.redis.testcontainers.RedisContainer("redis:7-alpine");
+            new com.redis.testcontainers.RedisContainer("redis:8.8.0-alpine");
 
     static {
         POSTGRES.start();

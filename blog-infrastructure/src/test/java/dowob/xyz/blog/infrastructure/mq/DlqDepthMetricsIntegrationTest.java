@@ -38,7 +38,7 @@ import static org.awaitility.Awaitility.await;
 @DisplayName("DlqDepthMetrics 整合測試（真 RabbitMQ）")
 class DlqDepthMetricsIntegrationTest {
 
-    private static final RabbitMQContainer RABBIT = new RabbitMQContainer("rabbitmq:3-management-alpine");
+    private static final RabbitMQContainer RABBIT = new RabbitMQContainer("rabbitmq:4.2.2-management-alpine");
 
     private static CachingConnectionFactory connectionFactory;
 

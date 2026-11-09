@@ -60,7 +60,7 @@ class RecommendControllerIT {
      */
     @Container
     static com.redis.testcontainers.RedisContainer redis =
-            new com.redis.testcontainers.RedisContainer("redis:7-alpine");
+            new com.redis.testcontainers.RedisContainer("redis:8.8.0-alpine");
 
     /**
      * 動態注入容器連線設定

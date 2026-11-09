@@ -40,20 +40,19 @@ public abstract class AbstractE2ETest {
     // ========== Singleton Containers（只啟動一次，所有測試類共用）==========
 
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine");
+            new PostgreSQLContainer<>("postgres:18-alpine");
 
     static final RedisContainer REDIS =
-            new RedisContainer(DockerImageName.parse("redis:7-alpine"));
+            new RedisContainer(DockerImageName.parse("redis:8.8.0-alpine"));
 
     static final RabbitMQContainer RABBITMQ =
-            new RabbitMQContainer("rabbitmq:3-management-alpine")
-                    .withVhost("blog");
+            new RabbitMQContainer("rabbitmq:4.2.2-management-alpine");
 
     /** S3 相容儲存（SeaweedFS；應用程式仍以 MinIO Java SDK 連線，見 {@link SeaweedFsContainer}） */
     static final SeaweedFsContainer S3_STORAGE = new SeaweedFsContainer();
 
     static final ElasticsearchContainer ELASTICSEARCH =
-            new ElasticsearchContainer("docker.elastic.co/elasticsearch/elasticsearch:8.11.0")
+            new ElasticsearchContainer("docker.elastic.co/elasticsearch/elasticsearch:9.2.4")
                     .withEnv("xpack.security.enabled", "false")
                     .withEnv("discovery.type", "single-node");
 
@@ -62,8 +61,30 @@ public abstract class AbstractE2ETest {
         POSTGRES.start();
         REDIS.start();
         RABBITMQ.start();
+        createRabbitVhost("blog");
         S3_STORAGE.start();
         ELASTICSEARCH.start();
+    }
+
+    /**
+     * 建立 RabbitMQ vhost 並授權給預設的 guest 使用者。
+     *
+     * <p>不使用 Testcontainers 的 {@code withVhost}：它內部呼叫 rabbitmqadmin v1 語法
+     * （{@code declare vhost name=blog}），RabbitMQ 4.x image 內附的是 rabbitmqadmin v2
+     * （參數改為 {@code --name}），會回 "unexpected argument 'name=blog'" 導致 vhost 沒建起來。
+     * 改用 rabbitmqctl，跨 3.x／4.x 皆可用。
+     */
+    private static void createRabbitVhost(String vhost) {
+        try {
+            var added = RABBITMQ.execInContainer("rabbitmqctl", "add_vhost", vhost);
+            var permitted = RABBITMQ.execInContainer(
+                    "rabbitmqctl", "set_permissions", "-p", vhost, "guest", ".*", ".*", ".*");
+            if (added.getExitCode() != 0 || permitted.getExitCode() != 0) {
+                throw new IllegalStateException("建立 RabbitMQ vhost 失敗: " + added.getStderr() + permitted.getStderr());
+            }
+        } catch (java.io.IOException | InterruptedException e) {
+            throw new IllegalStateException("建立 RabbitMQ vhost 失敗", e);
+        }
     }
 
     // ========== 動態屬性注入（在 Spring Context 啟動前執行）==========

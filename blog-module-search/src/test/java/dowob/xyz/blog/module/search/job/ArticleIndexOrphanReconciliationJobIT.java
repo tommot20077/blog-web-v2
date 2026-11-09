@@ -61,7 +61,7 @@ import static org.mockito.Mockito.when;
 class ArticleIndexOrphanReconciliationJobIT {
 
     private static final ElasticsearchContainer ELASTICSEARCH =
-            new ElasticsearchContainer("docker.elastic.co/elasticsearch/elasticsearch:8.11.0")
+            new ElasticsearchContainer("docker.elastic.co/elasticsearch/elasticsearch:9.2.4")
                     .withEnv("xpack.security.enabled", "false")
                     .withEnv("discovery.type", "single-node")
                     .withEnv("ES_JAVA_OPTS", "-Xms512m -Xmx512m");

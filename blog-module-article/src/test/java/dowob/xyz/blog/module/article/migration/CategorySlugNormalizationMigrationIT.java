@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CategorySlugNormalizationMigrationIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     /** 集中式 migration 位置（blog-db-migration 模組，test scope 依賴） */
     private static final String MIGRATION_LOCATION = "classpath:db/migration";

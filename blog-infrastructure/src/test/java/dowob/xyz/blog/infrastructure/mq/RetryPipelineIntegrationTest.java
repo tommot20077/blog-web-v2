@@ -83,9 +83,9 @@ class RetryPipelineIntegrationTest {
     /** 輪詢等待上限 */
     private static final Duration WAIT_LIMIT = Duration.ofSeconds(60);
 
-    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18-alpine");
 
-    private static final RabbitMQContainer RABBIT = new RabbitMQContainer("rabbitmq:3-management-alpine");
+    private static final RabbitMQContainer RABBIT = new RabbitMQContainer("rabbitmq:4.2.2-management-alpine");
 
     static {
         POSTGRES.start();

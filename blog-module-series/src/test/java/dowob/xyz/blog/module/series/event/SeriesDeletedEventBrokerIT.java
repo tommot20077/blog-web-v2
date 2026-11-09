@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 class SeriesDeletedEventBrokerIT {
 
     @Container
-    static RabbitMQContainer rabbit = new RabbitMQContainer("rabbitmq:3-management-alpine");
+    static RabbitMQContainer rabbit = new RabbitMQContainer("rabbitmq:4.2.2-management-alpine");
 
     private static CachingConnectionFactory connectionFactory;
     private static RabbitAdmin admin;

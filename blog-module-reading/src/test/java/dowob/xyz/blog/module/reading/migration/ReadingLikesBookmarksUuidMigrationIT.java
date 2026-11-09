@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ReadingLikesBookmarksUuidMigrationIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     private static final String MIGRATION_LOCATION = "classpath:db/migration";
 
@@ -52,7 +52,7 @@ class ReadingLikesBookmarksUuidMigrationIT {
 
     private static final String CONSTRAINTS_SQL =
             "SELECT conrelid::regclass || ' | ' || conname || ' | ' || pg_get_constraintdef(oid) FROM pg_constraint "
-                    + "WHERE conrelid IN ('user_article_likes'::regclass, 'user_bookmarks'::regclass) "
+                    + "WHERE (conrelid IN ('user_article_likes'::regclass, 'user_bookmarks'::regclass)) AND contype <> 'n' "
                     + "ORDER BY conrelid::regclass::text, conname";
 
     private static Connection connection;

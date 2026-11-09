@@ -115,13 +115,13 @@ public abstract class AbstractIntegrationTest {
      * （Testcontainers 官方的 singleton container 模式）。</p>
      */
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>("postgres:16-alpine");
+            new PostgreSQLContainer<>("postgres:18-alpine");
 
     /**
      * Redis 測試容器（singleton，理由同 {@link #POSTGRES}）
      */
     static final RedisContainer REDIS =
-            new RedisContainer(DockerImageName.parse("redis:7-alpine"));
+            new RedisContainer(DockerImageName.parse("redis:8.8.0-alpine"));
 
     static {
         POSTGRES.start();

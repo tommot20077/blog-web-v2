@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ArticleTagsCrossModuleFkMigrationIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     private static final String MIGRATION_LOCATION = "classpath:db/migration";
 
@@ -49,7 +49,7 @@ class ArticleTagsCrossModuleFkMigrationIT {
 
     private static final String CONSTRAINTS_SQL =
             "SELECT conrelid::regclass || ' | ' || conname || ' | ' || pg_get_constraintdef(oid) FROM pg_constraint "
-                    + "WHERE conrelid IN ('article_tags'::regclass, 'user_tag_follows'::regclass) "
+                    + "WHERE (conrelid IN ('article_tags'::regclass, 'user_tag_follows'::regclass)) AND contype <> 'n' "
                     + "ORDER BY conrelid::regclass::text, conname";
 
     private static final String ARTICLE_FK_V32 =

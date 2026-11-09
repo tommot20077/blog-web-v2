@@ -57,7 +57,7 @@ class ConsumerExecutorIdempotencyIntegrationTest {
 
     @BeforeAll
     static void startPostgres() {
-        postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+        postgres = new PostgreSQLContainer<>("postgres:18-alpine")
                 .withDatabaseName("blog_test").withUsername("test").withPassword("test");
         postgres.start();
         Flyway.configure()
