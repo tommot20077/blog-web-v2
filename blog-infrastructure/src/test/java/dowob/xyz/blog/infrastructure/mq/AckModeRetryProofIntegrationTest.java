@@ -73,7 +73,7 @@ class AckModeRetryProofIntegrationTest {
     private static final Duration WAIT_LIMIT = Duration.ofSeconds(40);
 
     @Container
-    static RabbitMQContainer rabbit = new RabbitMQContainer("rabbitmq:3-management-alpine");
+    static RabbitMQContainer rabbit = new RabbitMQContainer("rabbitmq:4.2.2-management-alpine");
 
     private static CachingConnectionFactory connectionFactory;
     private static RabbitAdmin admin;

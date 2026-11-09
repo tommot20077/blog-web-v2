@@ -55,7 +55,7 @@ class ArticleIndexElasticsearchIT {
 
     /** 與正式環境一致的 ES 版本（見 E2E 基底） */
     private static final ElasticsearchContainer ELASTICSEARCH =
-            new ElasticsearchContainer("docker.elastic.co/elasticsearch/elasticsearch:8.11.0")
+            new ElasticsearchContainer("docker.elastic.co/elasticsearch/elasticsearch:9.2.4")
                     .withEnv("xpack.security.enabled", "false")
                     .withEnv("discovery.type", "single-node")
                     .withEnv("ES_JAVA_OPTS", "-Xms512m -Xmx512m");

@@ -41,7 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LegacyMinioUrlMigrationIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     private static final String MIGRATION_LOCATION = "classpath:db/migration";
 

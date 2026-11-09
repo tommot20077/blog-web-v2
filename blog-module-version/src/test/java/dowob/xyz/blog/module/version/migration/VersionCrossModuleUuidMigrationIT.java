@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class VersionCrossModuleUuidMigrationIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     private static final String MIGRATION_LOCATION = "classpath:db/migration";
 
@@ -49,7 +49,7 @@ class VersionCrossModuleUuidMigrationIT {
 
     private static final String CONSTRAINTS_SQL =
             "SELECT conrelid::regclass || ' | ' || conname || ' | ' || pg_get_constraintdef(oid) FROM pg_constraint "
-                    + "WHERE conrelid IN ('article_versions'::regclass, 'user_preferences'::regclass) "
+                    + "WHERE (conrelid IN ('article_versions'::regclass, 'user_preferences'::regclass)) AND contype <> 'n' "
                     + "ORDER BY conrelid::regclass::text, conname";
 
     private static Connection connection;

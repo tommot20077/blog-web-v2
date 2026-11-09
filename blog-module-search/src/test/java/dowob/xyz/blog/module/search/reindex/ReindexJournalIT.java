@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("ReindexJournal 整合測試（真 Redis）")
 class ReindexJournalIT {
 
-    private static final RedisContainer REDIS = new RedisContainer("redis:7-alpine");
+    private static final RedisContainer REDIS = new RedisContainer("redis:8.8.0-alpine");
     private static LettuceConnectionFactory connectionFactory;
     private static StringRedisTemplate redis;
 

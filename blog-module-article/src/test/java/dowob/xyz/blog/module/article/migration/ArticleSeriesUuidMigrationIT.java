@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ArticleSeriesUuidMigrationIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     private static final String MIGRATION_LOCATION = "classpath:db/migration";
 
@@ -53,7 +53,7 @@ class ArticleSeriesUuidMigrationIT {
 
     private static final String CONSTRAINTS_SQL =
             "SELECT conrelid::regclass || ' | ' || conname || ' | ' || pg_get_constraintdef(oid) FROM pg_constraint "
-                    + "WHERE conrelid = 'articles'::regclass OR confrelid = 'articles'::regclass "
+                    + "WHERE (conrelid = 'articles'::regclass OR confrelid = 'articles'::regclass) AND contype <> 'n' "
                     + "ORDER BY conrelid::regclass::text, conname";
 
     private static final String ROW_DIGEST_SQL =

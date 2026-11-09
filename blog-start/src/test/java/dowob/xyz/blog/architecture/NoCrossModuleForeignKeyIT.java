@@ -53,7 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class NoCrossModuleForeignKeyIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     /** Flyway migration 位置（blog-db-migration 的 resources） */
     private static final String MIGRATION_LOCATION = "classpath:db/migration";

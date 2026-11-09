@@ -68,7 +68,7 @@ import static org.mockito.Mockito.when;
 class ArticleIndexRebuildIT {
 
     private static final ElasticsearchContainer ELASTICSEARCH = ArticleIndexTestSupport.newContainer();
-    private static final RedisContainer REDIS = new RedisContainer("redis:7-alpine");
+    private static final RedisContainer REDIS = new RedisContainer("redis:8.8.0-alpine");
     private static final Duration WAIT = Duration.ofSeconds(60);
 
     private static ElasticsearchTemplate template;

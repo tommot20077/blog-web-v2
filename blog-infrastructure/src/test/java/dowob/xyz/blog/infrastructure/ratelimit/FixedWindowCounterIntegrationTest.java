@@ -37,7 +37,7 @@ class FixedWindowCounterIntegrationTest {
 
     @BeforeAll
     static void startRedis() {
-        redisContainer = new GenericContainer<>(DockerImageName.parse("redis:7-alpine")).withExposedPorts(6379);
+        redisContainer = new GenericContainer<>(DockerImageName.parse("redis:8.8.0-alpine")).withExposedPorts(6379);
         redisContainer.start();
         connectionFactory = new LettuceConnectionFactory(
                 new RedisStandaloneConfiguration(redisContainer.getHost(), redisContainer.getMappedPort(6379)));

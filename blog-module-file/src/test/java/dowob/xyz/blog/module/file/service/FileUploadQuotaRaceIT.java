@@ -72,11 +72,11 @@ class FileUploadQuotaRaceIT {
     private static final String BUCKET = "blog-files";
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     @Container
     static com.redis.testcontainers.RedisContainer redis =
-            new com.redis.testcontainers.RedisContainer("redis:7-alpine");
+            new com.redis.testcontainers.RedisContainer("redis:8.8.0-alpine");
 
     @Container
     static SeaweedFsContainer s3Storage = new SeaweedFsContainer();

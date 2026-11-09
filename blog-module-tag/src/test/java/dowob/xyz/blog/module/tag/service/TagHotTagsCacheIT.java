@@ -37,7 +37,7 @@ import static org.mockito.Mockito.when;
 @DisplayName("熱門標籤快取回填 真 Redis 整合測試")
 class TagHotTagsCacheIT {
 
-    private static final RedisContainer REDIS = new RedisContainer("redis:7-alpine");
+    private static final RedisContainer REDIS = new RedisContainer("redis:8.8.0-alpine");
 
     private static LettuceConnectionFactory factory;
     private static StringRedisTemplate redis;

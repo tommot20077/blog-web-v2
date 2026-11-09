@@ -77,14 +77,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 class CommentRepliesPagingIT {
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine")
             .withDatabaseName("blog_test")
             .withUsername("test")
             .withPassword("test");
 
     @Container
     static com.redis.testcontainers.RedisContainer redis =
-            new com.redis.testcontainers.RedisContainer("redis:7-alpine");
+            new com.redis.testcontainers.RedisContainer("redis:8.8.0-alpine");
 
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
