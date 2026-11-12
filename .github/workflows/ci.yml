@@ -11,6 +11,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# image 發布（見 ai-docs/git-convention.md 的「發版與 image」）
+env:
+  IMAGE_NAME: ghcr.io/tommot20077/blog-web-v2
+  # main 每次 push（＝發版）後，自動開 PR 到 person-infra 更新正式環境的 image tag
+  INFRA_REPO: tommot20077/person-infra
+  INFRA_BASE: master
+  INFRA_APP_ENV: projects/blog/app.prod.env
+  INFRA_TAG_KEY: BACKEND_TAG
+
 jobs:
   test:
     name: 單元測試 + 整合測試
@@ -132,3 +141,133 @@ jobs:
             exit 1
           fi
           echo "所有必要 job 均已通過"
+
+  # image：PR 只建置不推（驗證 Dockerfile 與多架構建置）；main 的 push（發版）才推到 GHCR。
+  # jar 與 CPU 架構無關，Dockerfile 只有 COPY，arm64 不需要 QEMU 模擬。
+  image:
+    name: 建置 image
+    runs-on: ubuntu-latest
+    needs: all-checks
+    if: >-
+      needs.all-checks.result == 'success' &&
+      (github.event_name == 'pull_request' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - name: 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 安裝 Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: 打包 jar（測試已在前面的 job 跑過）
+        run: ./mvnw -B package -DskipTests -Djacoco.skip=true -pl blog-start -am --no-transfer-progress
+
+      - name: 決定 image tag
+        id: vars
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: 設定 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登入 GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 建置（main 才推送）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:main
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: 摘要
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "已推送 \`${IMAGE_NAME}:${{ steps.vars.outputs.tag }}\`（以及 \`:main\`），平台 amd64＋arm64" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "PR：image 建置成功（amd64＋arm64），未推送" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # 發版後自動在 person-infra 開（或更新）PR，把正式環境的 image tag 換成這次的版本。
+  # 需要 repo secret INFRA_REPO_TOKEN：fine-grained PAT，只授權 person-infra 的 Contents 與 Pull requests 寫入。
+  # 沒有設定時只留下提示、不讓 CI 失敗；deploy 仍要人工執行（合併 PR 後 ./scripts/deploy.sh prod）。
+  infra-pr:
+    name: 更新 person-infra 的 image tag
+    runs-on: ubuntu-latest
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.image.outputs.tag }}
+      GH_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
+    steps:
+      - name: 檢查 INFRA_REPO_TOKEN
+        id: token
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::沒有設定 INFRA_REPO_TOKEN，略過自動開 PR；請手動把 ${INFRA_APP_ENV} 的 ${INFRA_TAG_KEY} 改成 ${TAG}"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 取得 person-infra
+        if: steps.token.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.INFRA_REPO }}
+          ref: ${{ env.INFRA_BASE }}
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          path: person-infra
+
+      - name: 更新 tag 並開 PR
+        if: steps.token.outputs.skip != 'true'
+        working-directory: person-infra
+        run: |
+          branch="deploy/blog-${INFRA_TAG_KEY%_TAG}"
+          branch="${branch,,}"
+          if ! grep -q "^${INFRA_TAG_KEY}=" "$INFRA_APP_ENV"; then
+            echo "::error::${INFRA_REPO} 的 ${INFRA_APP_ENV} 沒有 ${INFRA_TAG_KEY}"
+            exit 1
+          fi
+          sed -i "s/^${INFRA_TAG_KEY}=.*/${INFRA_TAG_KEY}=${TAG}/" "$INFRA_APP_ENV"
+          if git diff --quiet; then
+            echo "${INFRA_TAG_KEY} 已經是 ${TAG}，不需要更新"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git commit -am "deploy(blog): ${INFRA_TAG_KEY} 更新為 ${TAG}" \
+            -m "來源：${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+          git push --force origin "$branch"
+          body="來源 commit：${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          CI：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          image：\`${IMAGE_NAME}:${TAG}\`（amd64＋arm64）
+
+          合併後執行 \`./scripts/deploy.sh prod\` 部署。"
+          if gh pr view "$branch" --repo "$INFRA_REPO" --json state -q .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$branch" --repo "$INFRA_REPO" --title "deploy(blog): ${INFRA_TAG_KEY} 更新為 ${TAG}" --body "$body"
+          else
+            gh pr create --repo "$INFRA_REPO" --base "$INFRA_BASE" --head "$branch" \
+              --title "deploy(blog): ${INFRA_TAG_KEY} 更新為 ${TAG}" --body "$body"
+          fi
+
