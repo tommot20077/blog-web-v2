@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  守衛 #5 XML 掃描的反向驗證 fixture —— 故意違規，不得被當成範例。
+
+  namespace 宣告 owner 為 comment 模組，<sql> 片段讀 tag 模組的 tags。
+  tag 參照資料的放行只給 article 模組，comment 讀取仍然違規。
+-->
+<mapper namespace="dowob.xyz.blog.module.comment.mapper.ViolatingCommentSqlFragmentMapper">
+
+    <sql id="tagJoin">
+        FROM comments c
+        JOIN tags t ON t.id = c.id
+    </sql>
+
+</mapper>

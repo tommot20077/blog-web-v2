@@ -1,0 +1,108 @@
+package dowob.xyz.blog.module.version.controller;
+
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
+import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.api.errorcode.VersionErrorCode;
+import dowob.xyz.blog.module.version.model.dto.request.UpdatePreferenceRequest;
+import dowob.xyz.blog.module.version.model.dto.response.EffectiveConfigResponse;
+import dowob.xyz.blog.module.version.service.PreferenceResolver;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * Preference Controller — 3 端點。
+ *
+ * <ul>
+ *   <li>GET    /api/v1/me/preferences/version — 取得 effective version config</li>
+ *   <li>PUT    /api/v1/me/preferences/version — 更新 user override（partial）</li>
+ *   <li>DELETE /api/v1/me/preferences/version/{key} — 重置某 key 為系統預設</li>
+ * </ul>
+ *
+ * <p>所有端點皆需已認證（isAuthenticated）。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@RestController
+@RequestMapping("/api/v1/me/preferences/version")
+@RequiredArgsConstructor
+@Tag(name = "版本偏好")
+public class PreferenceController {
+
+    private final PreferenceResolver preferenceResolver;
+
+    /**
+     * GET /api/v1/me/preferences/version
+     * 取得 user 的 effective version config（含 source 標示）。
+     */
+    @GetMapping
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "取得生效中的版本設定",
+            description = "登入。回傳套用個人覆寫後的自動快照設定（enabled、retain、intervalSeconds、diffChars）。")
+    public ApiResponse<EffectiveConfigResponse> get(@AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(preferenceResolver.getEffectiveResponse(user.uuid()));
+    }
+
+    /**
+     * PUT /api/v1/me/preferences/version
+     * 更新 user override（partial update，只更新非 null 欄位）。
+     */
+    @PutMapping
+    @RateLimited("account-write")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "更新版本偏好",
+            description = "登入。部分更新個人覆寫值，未帶的欄位不變。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；V0105 配置值超出合理範圍")
+    public ApiResponse<EffectiveConfigResponse> update(
+            @AuthenticationPrincipal AuthUser user,
+            @Valid @RequestBody UpdatePreferenceRequest req) {
+        return ApiResponse.success(preferenceResolver.updatePreferences(user.uuid(), req));
+    }
+
+    /**
+     * DELETE /api/v1/me/preferences/version/{key}
+     * 重置某 key 為系統預設（刪除 user override）。
+     */
+    @DeleteMapping("/{key}")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "重置偏好為系統預設",
+            description = "登入。將指定 key（enabled、retain、intervalSeconds、diffChars）重置為系統預設。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "V0107 未知的 preference key")
+    public ApiResponse<EffectiveConfigResponse> reset(
+            @AuthenticationPrincipal AuthUser user,
+            @PathVariable String key) {
+        String fullKey = mapKey(key);
+        return ApiResponse.success(preferenceResolver.resetKey(user.uuid(), fullKey));
+    }
+
+    /**
+     * 將 short key 映射到完整的 pref_key。
+     * 支援 camelCase 與 kebab-case 兩種格式。
+     *
+     * @param shortKey 客戶端傳入的 key（如 "retain" / "diff-chars"）
+     * @return 對應的內部 pref_key
+     * @throws BusinessException 當 key 不在白名單中（V0107）
+     */
+    private String mapKey(String shortKey) {
+        return switch (shortKey) {
+            case "enabled" -> PreferenceResolver.KEY_ENABLED;
+            case "retain" -> PreferenceResolver.KEY_RETAIN;
+            case "intervalSeconds", "interval-seconds" -> PreferenceResolver.KEY_INTERVAL_SECONDS;
+            case "diffChars", "diff-chars" -> PreferenceResolver.KEY_DIFF_CHARS;
+            default -> throw new BusinessException(VersionErrorCode.INVALID_PREFERENCE_KEY);
+        };
+    }
+}

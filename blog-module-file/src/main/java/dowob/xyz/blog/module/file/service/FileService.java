@@ -1,0 +1,205 @@
+package dowob.xyz.blog.module.file.service;
+
+import dowob.xyz.blog.module.file.model.FileMetadata;
+import dowob.xyz.blog.module.file.model.UsageType;
+import dowob.xyz.blog.module.file.model.dto.FileUploadResponse;
+import dowob.xyz.blog.module.file.model.dto.QuotaResponse;
+import org.springframework.data.domain.Pageable;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.InputStream;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * 檔案服務介面
+ *
+ * <p>
+ * 定義檔案上傳、刪除、配額查詢等業務操作。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+public interface FileService {
+
+    /**
+     * 上傳檔案（不綁定文章）
+     *
+     * @param file         上傳的 MultipartFile
+     * @param usageType    檔案用途類型
+     * @param uploaderId   上傳者 UUID
+     * @param uploaderRole 上傳者角色字串（USER / AUTHOR / ADMIN）
+     * @return 上傳成功的檔案回應資訊
+     */
+    default FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole) {
+        return uploadFile(file, usageType, uploaderId, uploaderRole, null);
+    }
+
+    /**
+     * 上傳檔案，並可選擇性地一併綁定至文章（B4）
+     *
+     * <p>
+     * 上傳當下文章可能尚未存在（新文章未儲存），因此 {@code articleUuid} 為可選：
+     * 有值即在建立此檔案的 metadata 時直接設定 {@code articleUuid}。
+     * </p>
+     *
+     * <p>
+     * <b>刻意不透過 {@link #bindToArticle} 實作此綁定</b>：{@code bindToArticle} 是「完整替換」語意
+     * （會解除該文章目前已綁定、但不在新清單內的其他檔案）。若對單一新檔案呼叫
+     * {@code bindToArticle(articleUuid, List.of(fileId))}，會把該文章既有的其他綁定檔案全部誤解除。
+     * 因此此處對新建立的 {@code FileMetadata} 直接設定 {@code articleUuid} 欄位，不影響同文章其他檔案。
+     * </p>
+     *
+     * @param file         上傳的 MultipartFile
+     * @param usageType    檔案用途類型
+     * @param uploaderId   上傳者 UUID
+     * @param uploaderRole 上傳者角色字串（USER / AUTHOR / ADMIN）
+     * @param articleUuid  要一併綁定的文章 UUID；可為 null（代表暫不綁定）
+     * @return 上傳成功的檔案回應資訊
+     */
+    FileUploadResponse uploadFile(MultipartFile file, UsageType usageType, UUID uploaderId, String uploaderRole, UUID articleUuid);
+
+    /**
+     * 刪除檔案
+     *
+     * @param fileId      要刪除的檔案 UUID
+     * @param requesterId 請求刪除的使用者 UUID
+     * @param isAdmin     是否為管理員（管理員可刪除任何檔案）
+     */
+    void deleteFile(UUID fileId, UUID requesterId, boolean isAdmin);
+
+    /**
+     * 未綁定檔清理專用的刪除（D6）：<b>鎖列、重驗、刪 MinIO、刪 DB 列</b>於同一個交易內完成。
+     *
+     * <p>與 {@link #deleteFile} 的差異：清理 job 先掃描、之後才刪除，兩者之間作者可能把圖貼進新文章並存檔
+     * （綁定回填或文章內文引用都會讓檔案「變成有人用」）。若沿用 {@code deleteFile}（交易外刪 MinIO、不重驗），
+     * 圖會被誤刪、文章破圖。本方法在交易內依序：</p>
+     * <ol>
+     *   <li>{@code SELECT ... FOR UPDATE} 鎖住該檔案列（此後綁定 consumer 對該列的 UPDATE 會等待）</li>
+     *   <li>重新確認：仍未綁定、仍非頭像、建立早於 {@code createdBefore}、仍未被上傳者任何文章（不分狀態）引用
+     *       （就地重呼叫 facade）；任一不成立即放棄，不動 MinIO 與 DB</li>
+     *   <li>刪除 MinIO 原檔與縮圖（先 MinIO 後 DB；失敗即拋例外、交易回滾、列保留，留到下次）</li>
+     *   <li>刪除 DB 列</li>
+     * </ol>
+     * <p>持鎖時間只有一次 facade 查詢加兩次 MinIO 呼叫；清理是低並行度的批次作業，可接受。</p>
+     *
+     * @param fileId        要刪除的檔案 UUID
+     * @param createdBefore 建立時間上界（不含）；通常為「現在 − 保留天數」
+     * @return 實際刪除了則 true；檔案已不存在或重驗不通過（保留）則 false
+     * @throws RuntimeException facade 查詢或 MinIO 刪除失敗（交易回滾，檔案與列都保留）
+     */
+    boolean deleteUnboundFileIfUnreferenced(UUID fileId, java.time.LocalDateTime createdBefore);
+
+    /**
+     * 查詢使用者的儲存配額資訊
+     *
+     * @param uploaderId   使用者 UUID
+     * @param uploaderRole 使用者角色字串
+     * @return 配額回應資訊
+     */
+    QuotaResponse getQuota(UUID uploaderId, String uploaderRole);
+
+    /**
+     * 依 ID 取得單一檔案元資料（公開）
+     *
+     * @param fileId 檔案 UUID
+     * @return 檔案元資料
+     */
+    FileMetadata getFileMetadata(UUID fileId);
+
+    /**
+     * 分頁取得使用者上傳的檔案（最新在前）
+     *
+     * @param uploaderId 使用者 UUID
+     * @param pageable   分頁參數（size 上限 100，超過拒絕；unpaged 時取第一頁預設筆數）
+     * @return 該頁的檔案元資料列表
+     */
+    List<FileMetadata> getUserFiles(UUID uploaderId, Pageable pageable);
+
+    /**
+     * 將指定檔案綁定至文章（設定該文章的完整檔案清單）
+     *
+     * <p>
+     * 語意為「完整替換」而非「附加」：{@code fileUuids} 內的檔案會綁定至 {@code articleUuid}；
+     * 原本已綁定 {@code articleUuid}、但不在本次清單內的檔案會被解除綁定（{@code articleUuid} 設回 null）。
+     * 這是為了避免文章編輯時移除某張圖片後，該圖片仍殘留「屬於已發布文章」的公開讀取權限。
+     * </p>
+     *
+     * <p>
+     * <b>擁有權不變量（安全複審 CRITICAL 修復）</b>：{@code fileUuids} 內的檔案僅在「該檔案的上傳者
+     * == {@code articleUuid} 對應文章的作者」時才會被綁定；不符者安靜略過（記錄可疑嘗試但不拋錯，
+     * 因為呼叫端如 file 模組依文章內文解析出的 UUID 屬使用者輸入）。文章不存在或無法解析
+     * 其作者 UUID 時，fail-safe 為不綁定任何檔案。
+     * </p>
+     *
+     * @param articleUuid 文章 UUID
+     * @param fileUuids   應綁定至此文章的檔案 UUID 完整清單；可為空清單（代表解除此文章的所有綁定）
+     */
+    void bindToArticle(UUID articleUuid, List<UUID> fileUuids);
+
+    /**
+     * 判斷請求者是否有權讀取指定檔案內容（依授權矩陣，任一成立即放行）
+     *
+     * <p>
+     * 授權矩陣（見 {@code docs/superpowers/specs/2026-07-26-file-access-control-design.md} §4）：
+     * </p>
+     * <ol>
+     *   <li>{@code usageType = AVATAR} → 允許（含匿名）</li>
+     *   <li>已綁定文章且該文章狀態為 PUBLISHED → 允許（含匿名）</li>
+     *   <li>{@code requesterId} 等於上傳者 → 允許</li>
+     *   <li>{@code isAdmin} 為 true → 允許</li>
+     *   <li>以上皆非（含未綁定任何文章）→ 拒絕（fail-safe）</li>
+     * </ol>
+     *
+     * @param fileId      檔案 UUID
+     * @param requesterId 請求者 UUID；匿名請求傳 null
+     * @param isAdmin     請求者是否具 ADMIN 權限
+     * @return 允許讀取則 true，否則 false
+     * @throws dowob.xyz.blog.common.exception.BusinessException FILE_NOT_FOUND 若檔案不存在
+     */
+    boolean canRead(UUID fileId, UUID requesterId, boolean isAdmin);
+
+    /**
+     * 判斷請求者是否有權讀取指定檔案內容（授權矩陣同 {@link #canRead(UUID, UUID, boolean)}）
+     *
+     * <p>
+     * 接受呼叫端<b>已取得</b>的 {@link FileMetadata}，省掉一次 DB 查詢。內文圖片是熱路徑
+     * （一頁十張圖 = 十個 {@code /content} 請求），呼叫端若為了產生簽名網址等用途已經
+     * 取過 metadata，就該重用它。
+     * </p>
+     *
+     * @param metadata    已取得的檔案元資料（不可為 null）
+     * @param requesterId 請求者 UUID；匿名請求傳 null
+     * @param isAdmin     請求者是否具 ADMIN 權限
+     * @return 允許讀取則 true，否則 false
+     */
+    boolean canRead(FileMetadata metadata, UUID requesterId, boolean isAdmin);
+
+    /**
+     * 判斷檔案是否「公開可讀」（任何人含匿名皆可讀，因此可被共用快取存放）
+     *
+     * <p>
+     * 為授權矩陣中不依賴請求者身分的那一部分：{@code usageType = AVATAR}，或綁定的文章目前為公開可見狀態。
+     * 上傳者本人／ADMIN 才能讀的檔案回傳 false。供 {@code /content} 端點決定 {@code Cache-Control}。
+     * </p>
+     *
+     * @param metadata 已取得的檔案元資料（不可為 null）
+     * @return 公開可讀則 true
+     */
+    boolean isPubliclyReadable(FileMetadata metadata);
+
+    /**
+     * 開啟檔案內容的串流（供 {@code GET /api/v1/files/{id}/content} 由後端直接串流回瀏覽器）
+     *
+     * <p>
+     * 以 MinIO {@code getObject} 取得物件串流，不將整檔讀入記憶體；<b>呼叫端負責關閉</b>回傳的串流。
+     * 本方法不做任何權限檢查，呼叫端須先以 {@link #canRead(FileMetadata, UUID, boolean)} 完成授權判斷。
+     * </p>
+     *
+     * @param metadata 已取得的檔案元資料（不可為 null）
+     * @return 物件內容串流
+     * @throws dowob.xyz.blog.common.exception.SystemException STORAGE_ERROR 若物件儲存讀取失敗
+     */
+    InputStream openContent(FileMetadata metadata);
+}

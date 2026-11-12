@@ -1,0 +1,157 @@
+package dowob.xyz.blog.module.search.document;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.elasticsearch.annotations.DateFormat;
+import org.springframework.data.elasticsearch.annotations.Document;
+import org.springframework.data.elasticsearch.annotations.Field;
+import org.springframework.data.elasticsearch.annotations.FieldType;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * 文章 Elasticsearch Document
+ *
+ * <p>
+ * 對應 Elasticsearch alias {@code blog_articles}（背後是版本化的實體索引 {@code blog_articles_v*}，
+ * 由 {@code ArticleIndexAdmin} 管理；Repository 與查詢一律經 alias 讀寫，不得寫死實體索引名稱），
+ * 包含全文檢索所需欄位。
+ * 分詞器由 Elasticsearch 索引 Settings 配置（IK Analyzer），
+ * 此 Java 映射採預設，部署時請透過索引範本（Index Template）套用 IK；範本的 {@code index_patterns}
+ * 須涵蓋實體索引名稱 {@code blog_articles_v*}（alias 名稱不會被範本比對）。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@Document(indexName = "blog_articles", createIndex = false)
+public class ArticleDocument {
+
+    /**
+     * 作者已刪除（或查無此人）時索引內使用的通用匿名暱稱。
+     */
+    public static final String ANONYMOUS_NICKNAME = "已刪除使用者";
+
+    /**
+     * Elasticsearch 文件 ID（使用文章 UUID 字串）
+     */
+    @Id
+    private String id;
+
+    /**
+     * 文章公開 UUID 字串（與 {@link #id} 同值的 keyword 欄位）。
+     *
+     * <p>ES 的 {@code _id} 預設停用 fielddata，不能拿來排序；每日幽靈校正需要依穩定欄位做
+     * {@code search_after} keyset 分頁，故冗餘一份可排序的 keyword。</p>
+     */
+    @Field(type = FieldType.Keyword)
+    private String uuid;
+
+    /**
+     * 文章標題（全文檢索，boost 3.0）
+     */
+    @Field(type = FieldType.Text)
+    private String title;
+
+    /**
+     * 文章摘要（全文檢索，boost 2.0）
+     */
+    @Field(type = FieldType.Text)
+    private String summary;
+
+    /**
+     * 文章純文字內容，Markdown 去格式後（全文檢索，boost 1.0）
+     */
+    @Field(type = FieldType.Text)
+    private String content;
+
+    /**
+     * 文章 URL slug（keyword，用於回傳連結）
+     */
+    @Field(type = FieldType.Keyword)
+    private String slug;
+
+    /**
+     * 作者資訊
+     */
+    @Field(type = FieldType.Object)
+    private AuthorInfo author;
+
+    /**
+     * 文章標籤列表（Nested，支援 Faceted Filter）
+     */
+    @Field(type = FieldType.Nested)
+    private List<TagInfo> tags;
+
+    /**
+     * 發布時間
+     */
+    @Field(type = FieldType.Date, format = DateFormat.date_hour_minute_second)
+    private LocalDateTime publishedAt;
+
+    /**
+     * 文章狀態（keyword，僅索引 PUBLISHED）
+     */
+    @Field(type = FieldType.Keyword)
+    private String status;
+
+    /**
+     * 作者資訊嵌套物件
+     *
+     * <p>只存公開 UUID 與暱稱：Long 使用者主鍵屬 user 模組內部識別、username 是登入識別符，
+     * 兩者都不寫進搜尋索引（設計 §5 第 7 列）。</p>
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class AuthorInfo {
+
+        /**
+         * 作者公開 UUID（字串形式）
+         */
+        @Field(type = FieldType.Keyword)
+        private String uuid;
+
+        /**
+         * 作者暱稱（用於顯示）
+         */
+        @Field(type = FieldType.Text)
+        private String nickname;
+    }
+
+    /**
+     * 標籤資訊嵌套物件
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TagInfo {
+
+        /**
+         * 標籤公開 UUID
+         */
+        @Field(type = FieldType.Keyword)
+        private UUID id;
+
+        /**
+         * 標籤名稱
+         */
+        @Field(type = FieldType.Keyword)
+        private String name;
+
+        /**
+         * 標籤 URL slug
+         */
+        @Field(type = FieldType.Keyword)
+        private String slug;
+    }
+}

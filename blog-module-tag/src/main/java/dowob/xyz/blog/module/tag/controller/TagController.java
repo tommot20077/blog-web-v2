@@ -1,0 +1,159 @@
+package dowob.xyz.blog.module.tag.controller;
+
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
+import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.module.tag.model.Tag;
+import dowob.xyz.blog.module.tag.model.dto.TagDetailResponse;
+import dowob.xyz.blog.module.tag.service.TagService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.UUID;
+import io.swagger.v3.oas.annotations.Operation;
+
+/**
+ * 標籤公開 API 控制器
+ *
+ * <p>
+ * 提供標籤自動補全、熱門標籤、標籤詳情，
+ * 以及已認證使用者的追蹤/取消追蹤功能。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@io.swagger.v3.oas.annotations.tags.Tag(name = "標籤")
+@RestController
+@RequestMapping("/api/v1/tags")
+@RequiredArgsConstructor
+public class TagController {
+
+    /**
+     * 標籤業務服務
+     */
+    private final TagService tagService;
+
+    /**
+     * 取得標籤自動補全建議（公開）
+     *
+     * @param prefix 搜尋前綴
+     * @param limit  最大返回數量，預設 10；上限 20，超過者夾為 20，非正數回傳空列表（見 {@code TagServiceImpl}）
+     * @return 建議的 Slug 列表
+     */
+    @Operation(summary = "標籤自動完成",
+            description = "公開。依前綴回傳標籤名稱建議，limit 上限 20。")
+    @GetMapping("/suggest")
+    public ApiResponse<List<String>> suggest(
+            @RequestParam("q") String prefix,
+            @RequestParam(value = "limit", defaultValue = "10") int limit) {
+        return ApiResponse.success(tagService.suggest(prefix, limit));
+    }
+
+    /**
+     * 取得熱門標籤列表（公開）
+     *
+     * @param limit 最大返回數量，預設 20；上限 20，超過者夾為 20，非正數回傳空列表（見 {@code TagServiceImpl}）
+     * @return 熱門標籤列表
+     */
+    @Operation(summary = "熱門標籤",
+            description = "公開。回傳熱門標籤，limit 上限 20。")
+    @GetMapping("/hot")
+    public ApiResponse<List<Tag>> getHotTags(
+            @RequestParam(value = "limit", defaultValue = "20") int limit) {
+        return ApiResponse.success(tagService.getHotTags(limit));
+    }
+
+    /**
+     * 取得全部標籤列表（公開）
+     *
+     * <p>
+     * 回傳系統中所有標籤及其文章數（usageCount），依文章數由多到少排序，
+     * 供前端「標籤索引頁」的標籤雲使用。無筆數上限、無分頁。
+     * </p>
+     *
+     * <p>
+     * 此 mapping 為 literal path {@code /all}，於 Spring MVC 路由中優先於
+     * {@code /{slug}} path variable，故 {@code /all} 不會被誤判為某個標籤的 Slug。
+     * </p>
+     *
+     * @return 全部標籤列表，依文章數遞減排序；無標籤時回傳空列表
+     */
+    @Operation(summary = "所有標籤",
+            description = "公開。列出所有標籤。")
+    @GetMapping("/all")
+    public ApiResponse<List<Tag>> getAllTags() {
+        return ApiResponse.success(tagService.getAllTags());
+    }
+
+    /**
+     * 依 Slug 取得標籤詳情（公開）
+     *
+     * <p>已認證使用者會在 response.followed 看到自己對該標籤的追蹤狀態（以 {@link AuthUser#uuid()} 比對）；
+     * 未認證時 followed 為 false（不丟錯）。</p>
+     *
+     * @param slug   標籤 Slug
+     * @param user 當前登入者（AuthUser；可為 null，未認證時不注入）
+     * @return 標籤詳情
+     */
+    @Operation(summary = "取得標籤詳情",
+            description = "公開。以 slug 取得標籤詳情；登入者會帶入是否已追蹤。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0301 標籤不存在")
+    @GetMapping("/{slug}")
+    public ApiResponse<TagDetailResponse> getTagDetail(
+            @PathVariable String slug,
+            @AuthenticationPrincipal AuthUser user) {
+        UUID currentUserUuid = user == null ? null : user.uuid();
+        return ApiResponse.success(tagService.getTagDetail(slug, currentUserUuid));
+    }
+
+    /**
+     * 使用者追蹤標籤（需登入）
+     *
+     * <p>直接使用登入身分的 {@link AuthUser#uuid()}（JWT 驗證階段已確認使用者存在），不再跨模組查詢。</p>
+     *
+     * @param id   標籤 ID
+     * @param user 當前登入者（AuthUser；從 JWT 注入）
+     * @return 成功回應
+     */
+    @Operation(summary = "追蹤標籤",
+            description = "登入。追蹤指定標籤，重複追蹤為冪等。")
+    @PreAuthorize("isAuthenticated()")
+    @PostMapping("/{id}/follow")
+    @RateLimited("interaction-write")
+    public ApiResponse<Void> followTag(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal AuthUser user) {
+        tagService.followTag(id, user.uuid());
+        return ApiResponse.success();
+    }
+
+    /**
+     * 使用者取消追蹤標籤（需登入）
+     *
+     * <p>直接使用登入身分的 {@link AuthUser#uuid()}（JWT 驗證階段已確認使用者存在），不再跨模組查詢。</p>
+     *
+     * @param id   標籤 ID
+     * @param user 當前登入者（AuthUser；從 JWT 注入）
+     * @return 成功回應
+     */
+    @Operation(summary = "取消追蹤標籤",
+            description = "登入。取消追蹤指定標籤，未追蹤時為冪等。")
+    @PreAuthorize("isAuthenticated()")
+    @DeleteMapping("/{id}/follow")
+    public ApiResponse<Void> unfollowTag(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal AuthUser user) {
+        tagService.unfollowTag(id, user.uuid());
+        return ApiResponse.success();
+    }
+}

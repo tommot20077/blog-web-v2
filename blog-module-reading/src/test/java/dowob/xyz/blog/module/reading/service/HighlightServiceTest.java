@@ -1,0 +1,247 @@
+package dowob.xyz.blog.module.reading.service;
+
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.common.api.errorcode.ReadingErrorCode;
+import dowob.xyz.blog.module.reading.model.UserHighlight;
+import dowob.xyz.blog.module.reading.model.dto.request.CreateHighlightRequest;
+import dowob.xyz.blog.module.reading.model.dto.request.UpdateHighlightRequest;
+import dowob.xyz.blog.module.reading.model.dto.response.HighlightResponse;
+import dowob.xyz.blog.module.reading.repository.UserHighlightRepository;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class HighlightServiceTest {
+
+    @Mock private UserHighlightRepository repo;
+    @Mock private ArticleFacade articleFacade;
+    @InjectMocks private HighlightService service;
+
+    private final UUID userUuid = UUID.randomUUID();
+    private final UUID articleUuid = UUID.randomUUID();
+    private final UUID highlightUuid = UUID.randomUUID();
+
+    @Test
+    void createHighlight_savesWithUuidAndAllFields() {
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
+        when(repo.save(any(UserHighlight.class))).thenAnswer(inv -> {
+            UserHighlight h = inv.getArgument(0);
+            h.setId(1L);
+            return h;
+        });
+
+        CreateHighlightRequest req = new CreateHighlightRequest();
+        req.setSnippet("hello world");
+        req.setPrefix("intro: ");
+        req.setSuffix(" end");
+        req.setColor("#FFEB3B");
+        req.setNote("important");
+
+        service.create(articleUuid, userUuid, false, req);
+
+        ArgumentCaptor<UserHighlight> captor = ArgumentCaptor.forClass(UserHighlight.class);
+        verify(repo).save(captor.capture());
+        UserHighlight saved = captor.getValue();
+        assertThat(saved.getUuid()).isNotNull();
+        assertThat(saved.getUserUuid()).isEqualTo(userUuid);
+        assertThat(saved.getArticleUuid()).isEqualTo(articleUuid);
+        assertThat(saved.getSnippet()).isEqualTo("hello world");
+        assertThat(saved.getColor()).isEqualTo("#FFEB3B");
+        assertThat(saved.getNote()).isEqualTo("important");
+    }
+
+    @Test
+    void createHighlight_emptyNote_savesAsNull() {
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        CreateHighlightRequest req = new CreateHighlightRequest();
+        req.setSnippet("test");
+        req.setColor("#FFEB3B");
+        req.setNote(null);
+
+        service.create(articleUuid, userUuid, false, req);
+
+        ArgumentCaptor<UserHighlight> captor = ArgumentCaptor.forClass(UserHighlight.class);
+        verify(repo).save(captor.capture());
+        assertThat(captor.getValue().getNote()).isNull();
+    }
+
+    @Test
+    void getByArticle_returnsUserOwnedOnly() {
+        UserHighlight h1 = new UserHighlight();
+        h1.setId(1L); h1.setUuid(UUID.randomUUID());
+        when(repo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(userUuid, articleUuid))
+                .thenReturn(List.of(h1));
+
+        List<HighlightResponse> results = service.getByArticle(articleUuid, userUuid);
+
+        assertThat(results).hasSize(1);
+        verify(repo).findByUserUuidAndArticleUuidOrderByCreatedAtAsc(userUuid, articleUuid);
+    }
+
+    @Test
+    void updateHighlight_byOwner_updatesColorAndNote() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid); h.setArticleUuid(articleUuid);
+        h.setColor("#FFEB3B"); h.setNote("old");
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        UpdateHighlightRequest req = new UpdateHighlightRequest();
+        req.setColor("#00FF00");
+        req.setNote("new");
+
+        service.update(highlightUuid, userUuid, false, req);
+
+        ArgumentCaptor<UserHighlight> captor = ArgumentCaptor.forClass(UserHighlight.class);
+        verify(repo).save(captor.capture());
+        assertThat(captor.getValue().getColor()).isEqualTo("#00FF00");
+        assertThat(captor.getValue().getNote()).isEqualTo("new");
+    }
+
+    @Test
+    void updateHighlight_partialUpdate_keepsUntouched() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid); h.setArticleUuid(articleUuid);
+        h.setColor("#FFEB3B"); h.setNote("kept");
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(true);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        UpdateHighlightRequest req = new UpdateHighlightRequest();
+        req.setColor("#00FF00");
+
+        service.update(highlightUuid, userUuid, false, req);
+
+        ArgumentCaptor<UserHighlight> captor = ArgumentCaptor.forClass(UserHighlight.class);
+        verify(repo).save(captor.capture());
+        assertThat(captor.getValue().getColor()).isEqualTo("#00FF00");
+        assertThat(captor.getValue().getNote()).isEqualTo("kept");
+    }
+
+    @Test
+    @DisplayName("SEC-16：更新劃線時文章對操作者不可讀 → ARTICLE_NOT_FOUND，不存檔")
+    void updateHighlight_articleUnreadable_throwsArticleNotFound() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid); h.setArticleUuid(articleUuid);
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(false);
+
+        UpdateHighlightRequest req = new UpdateHighlightRequest();
+        req.setColor("#00FF00");
+
+        assertThatThrownBy(() -> service.update(highlightUuid, userUuid, false, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("SEC-16：刪除自己的劃線屬移除類，不檢查文章可讀性")
+    void deleteHighlight_doesNotConsultArticleReadability() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid); h.setArticleUuid(articleUuid);
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+
+        service.delete(highlightUuid, userUuid);
+
+        verify(repo).deleteById(1L);
+        org.mockito.Mockito.verifyNoInteractions(articleFacade);
+    }
+
+    @Test
+    void updateHighlight_byNonOwner_throwsAccessDenied() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(UUID.randomUUID());
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+
+        UpdateHighlightRequest req = new UpdateHighlightRequest();
+        req.setColor("#00FF00");
+
+        assertThatThrownBy(() -> service.update(highlightUuid, userUuid, false, req))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(ReadingErrorCode.HIGHLIGHT_ACCESS_DENIED.getMessage());
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void deleteHighlight_byOwner_hardDeletes() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(userUuid);
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+
+        service.delete(highlightUuid, userUuid);
+
+        verify(repo).deleteById(1L);
+    }
+
+    @Test
+    void deleteHighlight_byNonOwner_throwsAccessDenied() {
+        UserHighlight h = new UserHighlight();
+        h.setId(1L); h.setUuid(highlightUuid); h.setUserUuid(UUID.randomUUID());
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.of(h));
+
+        assertThatThrownBy(() -> service.delete(highlightUuid, userUuid))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(ReadingErrorCode.HIGHLIGHT_ACCESS_DENIED.getMessage());
+        verify(repo, never()).deleteById(any());
+    }
+
+    @Test
+    void deleteHighlight_nonExistent_throwsR0201() {
+        when(repo.findByUuid(highlightUuid)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.delete(highlightUuid, userUuid))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(ReadingErrorCode.HIGHLIGHT_NOT_FOUND.getMessage());
+    }
+
+    @Test
+    @DisplayName("create：article 不存在或不可讀 → throw ARTICLE_NOT_FOUND")
+    void create_articleNotFound_throwsArticleNotFound() {
+        UUID articleUuid = UUID.randomUUID();
+        when(articleFacade.isReadableBy(articleUuid, userUuid, false)).thenReturn(false);
+
+        CreateHighlightRequest req = new CreateHighlightRequest();
+        req.setSnippet("text");
+        req.setColor("yellow");
+
+        assertThatThrownBy(() -> service.create(articleUuid, userUuid, false, req))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo(ArticleErrorCode.ARTICLE_NOT_FOUND.getCode());
+        verify(repo, never()).save(any(UserHighlight.class));
+    }
+
+    @Test
+    @DisplayName("SEC-16：getByArticle 只回自己的劃線，不問文章存在或可讀；沒劃線回空清單（消除存在性 oracle）")
+    void getByArticle_noHighlights_returnsEmpty_withoutConsultingArticle() {
+        UUID articleUuid = UUID.randomUUID();
+        when(repo.findByUserUuidAndArticleUuidOrderByCreatedAtAsc(userUuid, articleUuid)).thenReturn(List.of());
+
+        assertThat(service.getByArticle(articleUuid, userUuid)).isEmpty();
+
+        org.mockito.Mockito.verifyNoInteractions(articleFacade);
+    }
+}

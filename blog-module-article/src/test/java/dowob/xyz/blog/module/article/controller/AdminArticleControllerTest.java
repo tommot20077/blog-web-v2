@@ -1,0 +1,341 @@
+package dowob.xyz.blog.module.article.controller;
+
+import dowob.xyz.blog.common.api.enums.Permission;
+import dowob.xyz.blog.module.article.support.TestUsers;
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.config.SecurityConfig;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
+import dowob.xyz.blog.infrastructure.security.JwtService;
+import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.module.article.config.ArticleWebTestConfiguration;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
+import dowob.xyz.blog.module.article.service.ArticleService;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.never;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+/**
+ * AdminArticleController 單元測試（Web 層）
+ *
+ * <p>
+ * 使用 {@code @WebMvcTest} 僅載入 Web 層，驗證管理員文章端點的
+ * HTTP 請求處理行為，包含權限控制、分頁參數與回應結構。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@WebMvcTest(AdminArticleController.class)
+@ContextConfiguration(classes = ArticleWebTestConfiguration.class)
+@Import(SecurityConfig.class)
+@DisplayName("AdminArticleController 單元測試")
+class AdminArticleControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private ArticleService articleService;
+
+    @MockitoBean
+    private ArticleQueryService articleQueryService;
+
+    @MockitoBean
+    private JwtService jwtService;
+
+    @MockitoBean
+    private StringRedisTemplate redisTemplate;
+
+    @MockitoBean
+    private UserAuthService userAuthService;
+
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
+
+    private static RequestPostProcessor asAdmin() {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(1L), Role.ADMIN), null, authorities);
+        return authentication(auth);
+    }
+
+    private static RequestPostProcessor asAuthor() {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.AUTHOR.getSpringSecurityRole()));
+        Role.AUTHOR.getPermissions().forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(3L), Role.AUTHOR), null, authorities);
+        return authentication(auth);
+    }
+
+    private static RequestPostProcessor asUser() {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole()));
+        Role.USER.getPermissions().forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(2L), Role.USER), null, authorities);
+        return authentication(auth);
+    }
+
+    // =========================================================================
+    // GET /api/admin/articles/pending
+    // =========================================================================
+
+    @Test
+    @DisplayName("GET /pending → 未認證 → 應回傳 401")
+    void getPendingArticles_unauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/articles/pending"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("GET /pending → 一般用戶 → 應回傳 403")
+    void getPendingArticles_asUser_shouldReturn403() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                        .with(asUser()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /pending → Admin → 應回傳 200 與分頁資料")
+    void getPendingArticles_asAdmin_shouldReturn200WithPageResult() throws Exception {
+        ArticleSummaryResponse article = ArticleSummaryResponse.builder()
+                .uuid(UUID.randomUUID())
+                .title("測試文章")
+                .status(ArticleStatus.PENDING_REVIEW)
+                .createdAt(LocalDateTime.now())
+                .build();
+        PageResult<ArticleSummaryResponse> pageResult = PageResult.of(1, 10, 1L, List.of(article));
+        when(articleQueryService.getPendingArticles(1, 10)).thenReturn(pageResult);
+
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                        .with(asAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.current").value(1))
+                .andExpect(jsonPath("$.data.size").value(10))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.records[0].title").value("測試文章"));
+
+        verify(articleQueryService).getPendingArticles(1, 10);
+    }
+
+    @Test
+    @DisplayName("GET /pending → Admin 自訂分頁參數 → 應傳遞正確參數")
+    void getPendingArticles_asAdminWithCustomPage_shouldPassCorrectParams() throws Exception {
+        PageResult<ArticleSummaryResponse> pageResult = PageResult.of(2, 5, 0L, List.of());
+        when(articleQueryService.getPendingArticles(2, 5)).thenReturn(pageResult);
+
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                        .param("page", "2")
+                        .param("size", "5")
+                        .with(asAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.current").value(2))
+                .andExpect(jsonPath("$.data.size").value(5));
+
+        verify(articleQueryService).getPendingArticles(2, 5);
+    }
+
+    @Test
+    @DisplayName("GET /pending → Admin 不帶分頁參數 → 應使用預設值 page=1, size=10")
+    void getPendingArticles_asAdminDefaultParams_shouldUseDefaults() throws Exception {
+        PageResult<ArticleSummaryResponse> pageResult = PageResult.of(1, 10, 0L, List.of());
+        when(articleQueryService.getPendingArticles(1, 10)).thenReturn(pageResult);
+
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                        .with(asAdmin()))
+                .andExpect(status().isOk());
+
+        verify(articleQueryService).getPendingArticles(1, 10);
+    }
+
+    // =========================================================================
+    // POST /api/v1/admin/articles/{uuid}/archive
+    // =========================================================================
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → 未認證 → 應回傳 401")
+    void archiveArticle_unauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive"))
+                .andExpect(status().isUnauthorized());
+        verify(articleService, never()).archiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → 一般用戶 → 應回傳 403（URL 層 hasRole(ADMIN) 即擋下）")
+    void archiveArticle_asUser_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive")
+                        .with(asUser()))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).archiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → AUTHOR → 應回傳 403（下架非作者自助操作）")
+    void archiveArticle_asAuthor_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive")
+                        .with(asAuthor()))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).archiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → Admin → 200，並以 ADMIN 角色委派 service")
+    void archiveArticle_asAdmin_shouldReturn200AndDelegate() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        ArticleResponse response = ArticleResponse.builder()
+                .uuid(uuid)
+                .title("已下架文章")
+                .status(ArticleStatus.ARCHIVED)
+                .build();
+        when(articleService.archiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid)).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                        .with(asAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("ARCHIVED"));
+
+        verify(articleService).archiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid);
+    }
+
+    // =========================================================================
+    // POST /api/v1/admin/articles/{uuid}/unarchive
+    // =========================================================================
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → 未認證 → 應回傳 401")
+    void unarchiveArticle_unauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/unarchive"))
+                .andExpect(status().isUnauthorized());
+        verify(articleService, never()).unarchiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → 一般用戶 → 應回傳 403")
+    void unarchiveArticle_asUser_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/unarchive")
+                        .with(asUser()))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).unarchiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → AUTHOR → 應回傳 403")
+    void unarchiveArticle_asAuthor_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/unarchive")
+                        .with(asAuthor()))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).unarchiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → Admin → 200，回到 DRAFT 並以 ADMIN 角色委派 service")
+    void unarchiveArticle_asAdmin_shouldReturn200AndDelegate() throws Exception {
+        UUID uuid = UUID.randomUUID();
+        ArticleResponse response = ArticleResponse.builder()
+                .uuid(uuid)
+                .title("已復原文章")
+                .status(ArticleStatus.DRAFT)
+                .build();
+        when(articleService.unarchiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid)).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                        .with(asAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        verify(articleService).unarchiveArticle(TestUsers.uuidOf(1L), Role.ADMIN, uuid);
+    }
+
+    // =========================================================================
+    // A9：持有 ROLE_ADMIN、但缺少該端點對應 permission（手工構造 authorities）→ 方法層 403
+    // =========================================================================
+
+    /** ROLE_ADMIN + 除了 {@code missing} 之外的所有 permission：URL 層放行，方法層必須擋下。 */
+    private static RequestPostProcessor asAdminWithout(Permission missing) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().stream().filter(p -> p != missing).forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(1L), Role.ADMIN), null, authorities);
+        return authentication(auth);
+    }
+
+    @Test
+    @DisplayName("GET /pending → ROLE_ADMIN 但缺 ADMIN_ARTICLE_REVIEW → 403，且不查詢")
+    void getPendingArticles_adminWithoutReviewPermission_shouldReturn403() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_REVIEW)))
+                .andExpect(status().isForbidden());
+        verify(articleQueryService, never()).getPendingArticles(anyInt(), anyInt());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/archive → ROLE_ADMIN 但缺 ADMIN_ARTICLE_ARCHIVE → 403，且不委派 service")
+    void archiveArticle_adminWithoutArchivePermission_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_ARCHIVE)))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).archiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /{uuid}/unarchive → ROLE_ADMIN 但缺 ADMIN_ARTICLE_ARCHIVE → 403，且不委派 service")
+    void unarchiveArticle_adminWithoutArchivePermission_shouldReturn403() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/unarchive")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_ARCHIVE)))
+                .andExpect(status().isForbidden());
+        verify(articleService, never()).unarchiveArticle(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("權限不可互通：只有 ADMIN_ARTICLE_REVIEW 者不能封存；只有 ADMIN_ARTICLE_ARCHIVE 者不能看待審清單")
+    void reviewAndArchivePermissions_areNotInterchangeable() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_ARCHIVE)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                        .with(asAdminWithout(Permission.ADMIN_ARTICLE_REVIEW)))
+                .andExpect(status().isForbidden());
+    }
+}

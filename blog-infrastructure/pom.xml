@@ -12,6 +12,12 @@
     <artifactId>blog-infrastructure</artifactId>
     <description>Infrastructure: Web, Security, RabbitMQ, Global Handlers</description>
 
+    <!-- Jacoco 棘輪下限（2026-11-05 現值減 2pp 無條件捨去；只可上調不可下調，Q13） -->
+    <properties>
+        <jacoco.minimum.line>0.91</jacoco.minimum.line>
+        <jacoco.minimum.branch>0.90</jacoco.minimum.branch>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>dowob.xyz</groupId>
@@ -105,6 +111,54 @@
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
             <version>4.12.0</version>
+        </dependency>
+
+        <!-- Spring Retry（重試機制，用於 RabbitMQ 消費者指數退避） -->
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+        </dependency>
+
+        <!-- Metrics facade：供 BatchedQuery 對無上界輸入的實際大小打點。
+             actuator 只在 blog-start，故此處顯式宣告 micrometer-core；
+             版本由 spring-boot-dependencies 管理。無 registry 時為 no-op。 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+
+        <!-- Test Dependencies -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- ConsumerExecutorIdempotencyIntegrationTest 以真實 Postgres＋正式 Flyway migration 驗證冪等交易 -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- RabbitMQ 重試／ack 模式／DLQ 的真 broker 整合測試（*IntegrationTest） -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-db-migration</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

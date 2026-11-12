@@ -1,0 +1,164 @@
+package dowob.xyz.blog.module.series.controller;
+
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
+import dowob.xyz.blog.common.api.request.PageQuery;
+import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
+import dowob.xyz.blog.module.series.model.dto.request.AddArticleToSeriesRequest;
+import dowob.xyz.blog.module.series.model.dto.request.CreateSeriesRequest;
+import dowob.xyz.blog.module.series.model.dto.request.UpdateSeriesRequest;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesDetailResponse;
+import dowob.xyz.blog.module.series.model.dto.response.SeriesSummaryResponse;
+import dowob.xyz.blog.module.series.service.SeriesService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.UUID;
+
+/**
+ * Series Controller — 7 端點。
+ *
+ * <ul>
+ *   <li>GET /series — 公開列表</li>
+ *   <li>GET /series/{slug} — 公開詳情（含我的進度）</li>
+ *   <li>POST /series — 建立 Series（需 ARTICLE_CREATE 權限）</li>
+ *   <li>PUT /series/{uuid} — 更新 Series（需 ARTICLE_CREATE + service 層 ownership）</li>
+ *   <li>DELETE /series/{uuid} — 刪除 Series（需 ARTICLE_CREATE + service 層 ownership）</li>
+ *   <li>PUT /series/{uuid}/articles/{articleUuid} — 加文章到 Series / 改 position（需 ARTICLE_CREATE + ownership）</li>
+ *   <li>DELETE /series/{uuid}/articles/{articleUuid} — 從 Series 移除文章（需 ARTICLE_CREATE + ownership）</li>
+ * </ul>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@RestController
+@RequestMapping("/api/v1/series")
+@RequiredArgsConstructor
+@Tag(name = "系列文章")
+public class SeriesController {
+
+    private final SeriesService seriesService;
+
+    @GetMapping
+    @Operation(summary = "Series 列表",
+            description = "公開（匿名可存取）。分頁列出所有 Series。")
+    public ApiResponse<PageResult<SeriesSummaryResponse>> list(
+            PageQuery pageQuery) {
+        return ApiResponse.success(seriesService.listPublic(pageQuery.page(), pageQuery.sizeOrDefault(20)));
+    }
+
+    /**
+     * 取得 Series 詳情。
+     *
+     * <p>
+     * <b>匿名可存取</b>——本端點依 {@code security.md} 原則 7 的「選填認證公開端點」豁免，
+     * 故不標註 {@code @PreAuthorize}。三項豁免條件均成立：
+     * </p>
+     * <ol>
+     *   <li>{@code SecurityConfig} 明確 {@code permitAll} {@code GET /api/v1/series/**}（對得上 Public Endpoints 表）；</li>
+     *   <li>{@code currentUserUuid}（{@code user.uuid()}）允許為 null，僅用於選填的閱讀進度（myProgress）個人化；</li>
+     *   <li>本 JavaDoc 即為所需的豁免標註。</li>
+     * </ol>
+     * <p>
+     * 文章可見性不倚賴此處的認證狀態：{@code getSeriesDetail} 對任何呼叫者一律只回 PUBLISHED 文章。
+     * </p>
+     *
+     * @param slug          Series URL slug
+     * @param user 當前登入者（AuthUser；未登入為 null，僅供 myProgress 個人化）
+     * @return Series 詳情（含文章列表與我的進度）
+     */
+    @GetMapping("/{slug}")
+    @Operation(summary = "Series 詳情",
+            description = "公開（匿名可存取）。以 slug 取得 Series 與其文章；登入時一併帶入我的閱讀進度。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "S0101 Series 不存在")
+    public ApiResponse<SeriesDetailResponse> get(
+            @PathVariable String slug,
+            @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(seriesService.getSeriesDetail(slug, (user == null ? null : user.uuid())));
+    }
+
+    @PostMapping
+    @RateLimited("article-write")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
+    @Operation(summary = "建立 Series",
+            description = "需 ARTICLE_CREATE 權限。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；S0104 Slug 已被使用")
+    public ApiResponse<SeriesSummaryResponse> create(
+            @AuthenticationPrincipal AuthUser user,
+            @Valid @RequestBody CreateSeriesRequest req) {
+        return ApiResponse.success(seriesService.createSeries(user.uuid(), req));
+    }
+
+    @PutMapping("/{uuid}")
+    @RateLimited("article-write")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
+    @Operation(summary = "更新 Series",
+            description = "需 ARTICLE_CREATE 權限；Series 擁有者或管理員。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；S0101 Series 不存在；S0102 非 Series 擁有者（管理員不受限）；S0104 Slug 已被使用")
+    public ApiResponse<SeriesSummaryResponse> update(
+            @PathVariable UUID uuid,
+            @AuthenticationPrincipal AuthUser user,
+            @Valid @RequestBody UpdateSeriesRequest req) {
+        boolean isAdmin = SecurityUtils.isAdmin();
+        return ApiResponse.success(seriesService.updateSeries(uuid, user.uuid(), isAdmin, req));
+    }
+
+    @DeleteMapping("/{uuid}")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
+    @Operation(summary = "刪除 Series",
+            description = "需 ARTICLE_CREATE 權限；Series 擁有者或管理員。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "S0101 Series 不存在；S0102 非 Series 擁有者（管理員不受限）")
+    public ApiResponse<Void> delete(
+            @PathVariable UUID uuid,
+            @AuthenticationPrincipal AuthUser user) {
+        boolean isAdmin = SecurityUtils.isAdmin();
+        seriesService.deleteSeries(uuid, user.uuid(), isAdmin);
+        return ApiResponse.success();
+    }
+
+    @PutMapping("/{uuid}/articles/{articleUuid}")
+    @RateLimited("article-write")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
+    @Operation(summary = "加入文章到 Series 或調整順序",
+            description = "需 ARTICLE_CREATE 權限；Series 擁有者或管理員，且文章須為本人（管理員不受限）的 PUBLISHED 文章。文章已在本 Series 時為調整 position。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；S0101 Series 不存在；S0102 非 Series 擁有者（管理員不受限）；非文章作者；S0107 文章不存在；S0103 文章必須為 PUBLISHED；S0106 文章已屬於另一個 Series；A0208 文章在加入過程中被並行修改，請重試")
+    public ApiResponse<Void> addArticle(
+            @PathVariable UUID uuid,
+            @PathVariable UUID articleUuid,
+            @AuthenticationPrincipal AuthUser user,
+            @Valid @RequestBody AddArticleToSeriesRequest req) {
+        boolean isAdmin = SecurityUtils.isAdmin();
+        seriesService.addArticleToSeries(uuid, articleUuid, user.uuid(), isAdmin, req.getPosition());
+        return ApiResponse.success();
+    }
+
+    @DeleteMapping("/{uuid}/articles/{articleUuid}")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
+    @Operation(summary = "從 Series 移除文章",
+            description = "需 ARTICLE_CREATE 權限；Series 擁有者或管理員。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "S0101 Series 不存在；S0102 非 Series 擁有者（管理員不受限）；S0107 文章不存在；S0105 文章不屬於此 Series")
+    public ApiResponse<Void> removeArticle(
+            @PathVariable UUID uuid,
+            @PathVariable UUID articleUuid,
+            @AuthenticationPrincipal AuthUser user) {
+        boolean isAdmin = SecurityUtils.isAdmin();
+        seriesService.removeArticleFromSeries(uuid, articleUuid, user.uuid(), isAdmin);
+        return ApiResponse.success();
+    }
+
+}

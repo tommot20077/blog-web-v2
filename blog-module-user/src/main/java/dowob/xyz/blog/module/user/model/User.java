@@ -21,6 +21,10 @@ import java.util.UUID;
 @Data
 @Table("users")
 public class User {
+
+    /**
+     * 資料庫主鍵 ID
+     */
     @Id
     private Long id;
 
@@ -33,6 +37,11 @@ public class User {
      * 電子信箱
      */
     private String email;
+
+    /**
+     * 用戶名（登入識別符，唯一）
+     */
+    private String username;
 
     /**
      * 密碼雜湊
@@ -55,6 +64,56 @@ public class User {
      * 個人簡介
      */
     private String bio;
+
+    /**
+     * 個人網站 URL
+     */
+    private String website;
+
+    /**
+     * 社群連結（JSONB 以 String 儲存）
+     */
+    @Column("social_links")
+    private String socialLinks;
+
+    /**
+     * 所在地（自由文字，可為 null）
+     */
+    private String location;
+
+    /**
+     * 通知偏好：留言通知。
+     *
+     * <p>預設初始化為 true。Spring Data JDBC 對未設值欄位會送明確 NULL，
+     * 覆蓋 DB DEFAULT，故此處必須在 Java 端預設為 true，避免新使用者 insert
+     * 送 NULL 違反 NOT NULL 約束。</p>
+     */
+    @Column("notification_comment")
+    private boolean notificationComment = true;
+
+    /**
+     * 通知偏好：按讚通知（預設 true，理由同 {@link #notificationComment}）。
+     */
+    @Column("notification_like")
+    private boolean notificationLike = true;
+
+    /**
+     * 通知偏好：審核結果通知（預設 true，理由同 {@link #notificationComment}）。
+     */
+    @Column("notification_review")
+    private boolean notificationReview = true;
+
+    /**
+     * 通知偏好：追蹤通知（預設 true，理由同 {@link #notificationComment}）。
+     */
+    @Column("notification_follow")
+    private boolean notificationFollow = true;
+
+    /**
+     * 通知偏好：電子報訂閱（預設 true，理由同 {@link #notificationComment}）。
+     */
+    @Column("notification_newsletter")
+    private boolean notificationNewsletter = true;
 
     /**
      * 角色

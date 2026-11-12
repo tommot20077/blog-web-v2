@@ -1,0 +1,399 @@
+package dowob.xyz.blog.e2e.auth;
+
+import dowob.xyz.blog.e2e.config.AbstractE2ETest;
+import dowob.xyz.blog.e2e.support.DataBuilder;
+import dowob.xyz.blog.e2e.support.DatabaseCleaner;
+import dowob.xyz.blog.e2e.support.E2EAssertions;
+import dowob.xyz.blog.e2e.support.MailInterceptor;
+import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.web.servlet.MvcResult;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * Auth 模組 E2E 測試
+ *
+ * <p>涵蓋註冊、登入、Token 刷新、登出、信箱驗證等完整認證流程。</p>
+ */
+@DisplayName("Auth E2E 測試")
+class AuthE2E extends AbstractE2ETest {
+
+    private static final String BASE_URL = "/api/v1/auth";
+
+    @Autowired
+    private DatabaseCleaner databaseCleaner;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private MailInterceptor mailInterceptor;
+
+    @AfterEach
+    void tearDown() {
+        databaseCleaner.cleanAll();
+    }
+
+    @Test
+    @DisplayName("註冊成功 — 用戶建立於 DB 且狀態為 PENDING_VERIFICATION")
+    void register_success() throws Exception {
+        // Arrange
+        String body = objectMapper.writeValueAsString(
+                DataBuilder.register("auth-reg@test.com", "Password123!", "authreguser", "AuthRegUser"));
+
+        // Act
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+
+        // Assert — 驗證 DB 中的用戶狀態
+        String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM users WHERE email = ?", String.class, "auth-reg@test.com");
+        assertThat(status).isEqualTo("PENDING_VERIFICATION");
+
+        Boolean emailVerified = jdbcTemplate.queryForObject(
+                "SELECT email_verified FROM users WHERE email = ?", Boolean.class, "auth-reg@test.com");
+        assertThat(emailVerified).isFalse();
+    }
+
+    @Test
+    @DisplayName("重複信箱註冊 — 回與新註冊相同的成功回應，且不建立第二個帳號（SEC-14／Q8）")
+    void register_duplicateEmail_returnsSameSuccessAsNewRegistration() throws Exception {
+        // Arrange — 先註冊一次，記下新註冊的完整回應
+        String body = objectMapper.writeValueAsString(
+                DataBuilder.register("dup@test.com", "Password123!", "dupuser1", "DupUser1"));
+        String firstResponse = mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Act — 以相同信箱再次註冊（username／nickname 為新）
+        String duplicateBody = objectMapper.writeValueAsString(
+                DataBuilder.register("dup@test.com", "Password123!", "dupuser2", "DupUser2"));
+        String secondResponse = mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(duplicateBody))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess())
+                .andReturn().getResponse().getContentAsString();
+
+        // Assert — 回應內容相同（排除每次不同的 timestamp；單看回應無法分辨 email 是否已存在；副作用列舉殘餘見 findings SEC-14），DB 仍只有一個帳號
+        com.fasterxml.jackson.databind.node.ObjectNode first =
+                (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(firstResponse);
+        com.fasterxml.jackson.databind.node.ObjectNode second =
+                (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(secondResponse);
+        first.remove("timestamp");
+        second.remove("timestamp");
+        assertThat(second).isEqualTo(first);
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE email = ?", Integer.class, "dup@test.com");
+        assertThat(count).isEqualTo(1);
+        Integer attackerRows = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM users WHERE username = ?", Integer.class, "dupuser2");
+        assertThat(attackerRows).isZero();
+    }
+
+    @Test
+    @DisplayName("重複 username 註冊 — 維持明確的 USERNAME_DUPLICATED 錯誤碼（HTTP 400）")
+    void register_duplicateUsername_returnsExplicitError() throws Exception {
+        String body = objectMapper.writeValueAsString(
+                DataBuilder.register("dupname1@test.com", "Password123!", "dupname", "DupName1"));
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk());
+
+        String duplicateBody = objectMapper.writeValueAsString(
+                DataBuilder.register("dupname2@test.com", "Password123!", "dupname", "DupName2"));
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(duplicateBody))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError(
+                        dowob.xyz.blog.common.api.errorcode.UserErrorCode.USERNAME_DUPLICATED.getCode()));
+    }
+
+    @Test
+    @DisplayName("激活後登入 — 回傳 accessToken")
+    void login_afterActivation_returnsTokens() throws Exception {
+        // Arrange — 註冊並透過 DB 激活
+        String registerBody = objectMapper.writeValueAsString(
+                DataBuilder.register("login@test.com", "Password123!", "loginuser", "LoginUser"));
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isOk());
+
+        jdbcTemplate.update(
+                "UPDATE users SET status = 'ACTIVE', email_verified = true WHERE email = ?",
+                "login@test.com");
+
+        // Act
+        String loginBody = objectMapper.writeValueAsString(
+                DataBuilder.login("login@test.com", "Password123!"));
+        MvcResult result = mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess())
+                .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
+                .andReturn();
+
+        // Assert — 回應中包含 refreshToken Cookie
+        Cookie refreshCookie = result.getResponse().getCookie("refreshToken");
+        assertThat(refreshCookie).isNotNull();
+        assertThat(refreshCookie.isHttpOnly()).isTrue();
+    }
+
+    @Test
+    @DisplayName("密碼錯誤登入 — 回傳錯誤碼 A0102")
+    void login_wrongPassword_returnsError() throws Exception {
+        // Arrange — 註冊並激活
+        String registerBody = objectMapper.writeValueAsString(
+                DataBuilder.register("wrongpw@test.com", "Password123!", "wrongpwuser", "WrongPwUser"));
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isOk());
+
+        jdbcTemplate.update(
+                "UPDATE users SET status = 'ACTIVE', email_verified = true WHERE email = ?",
+                "wrongpw@test.com");
+
+        // Act — 使用錯誤密碼登入
+        String loginBody = objectMapper.writeValueAsString(
+                DataBuilder.login("wrongpw@test.com", "wrongpassword"));
+        mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError("A0102"));
+    }
+
+    @Test
+    @DisplayName("未驗證信箱登入 — 回傳錯誤碼 A0111")
+    void login_unverifiedEmail_returnsError() throws Exception {
+        // Arrange — 僅註冊，不激活
+        String registerBody = objectMapper.writeValueAsString(
+                DataBuilder.register("unverified@test.com", "Password123!", "unverifieduser", "UnverifiedUser"));
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isOk());
+
+        // Act — 未驗證直接登入
+        String loginBody = objectMapper.writeValueAsString(
+                DataBuilder.login("unverified@test.com", "Password123!"));
+        mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError("A0111"));
+    }
+
+    @Test
+    @DisplayName("使用有效 refreshToken Cookie 刷新 — 回傳新 accessToken")
+    void refresh_withValidCookie_returnsNewAccessToken() throws Exception {
+        // Arrange — 註冊、激活、登入取得 refreshToken Cookie
+        String registerBody = objectMapper.writeValueAsString(
+                DataBuilder.register("refresh@test.com", "Password123!", "refreshuser", "RefreshUser"));
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isOk());
+
+        jdbcTemplate.update(
+                "UPDATE users SET status = 'ACTIVE', email_verified = true WHERE email = ?",
+                "refresh@test.com");
+
+        String loginBody = objectMapper.writeValueAsString(
+                DataBuilder.login("refresh@test.com", "Password123!"));
+        MvcResult loginResult = mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        Cookie refreshCookie = loginResult.getResponse().getCookie("refreshToken");
+        assertThat(refreshCookie).isNotNull();
+
+        // Act — 使用 refreshToken Cookie 刷新
+        mockMvc.perform(post(BASE_URL + "/refresh")
+                        .cookie(refreshCookie))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess())
+                .andExpect(jsonPath("$.data.accessToken").isNotEmpty());
+    }
+
+    @Test
+    @DisplayName("登出後 refreshToken 失效")
+    void logout_invalidatesRefreshToken() throws Exception {
+        // Arrange — 註冊、激活、登入
+        String registerBody = objectMapper.writeValueAsString(
+                DataBuilder.register("logout@test.com", "Password123!", "logoutuser", "LogoutUser"));
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isOk());
+
+        jdbcTemplate.update(
+                "UPDATE users SET status = 'ACTIVE', email_verified = true WHERE email = ?",
+                "logout@test.com");
+
+        String loginBody = objectMapper.writeValueAsString(
+                DataBuilder.login("logout@test.com", "Password123!"));
+        MvcResult loginResult = mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String accessToken = objectMapper.readTree(
+                loginResult.getResponse().getContentAsString()).get("data").get("accessToken").asText();
+        Cookie refreshCookie = loginResult.getResponse().getCookie("refreshToken");
+        assertThat(refreshCookie).isNotNull();
+
+        // Act — 登出
+        mockMvc.perform(post(BASE_URL + "/logout")
+                        .with(request -> {
+                            request.addHeader("Authorization", "Bearer " + accessToken);
+                            return request;
+                        })
+                        .cookie(refreshCookie))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+
+        // Assert — 使用已失效的 refreshToken 嘗試刷新，應回未認證錯誤
+        mockMvc.perform(post(BASE_URL + "/refresh")
+                        .cookie(refreshCookie))
+                .andExpect(status().isUnauthorized())
+                .andExpect(E2EAssertions.apiError("A0005"));
+    }
+
+    @Test
+    @DisplayName("驗證 Token 只存 SHA-256 — 信中明文可驗證，DB 的雜湊值本身不能驗證（A1）")
+    void verifyEmail_dbStoresOnlyHash_plainFromMailWorks_hashDoesNot() throws Exception {
+        String email = "hashonly@test.com";
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                DataBuilder.register(email, "Password123!", "hashonlyuser", "HashOnlyUser"))))
+                .andExpect(status().isOk());
+        String plain = mailInterceptor.interceptVerificationToken(email);
+        String stored = jdbcTemplate.queryForObject(
+                "SELECT vt.token_hash FROM verification_tokens vt JOIN users u ON u.id = vt.user_id " +
+                        "WHERE u.email = ? AND vt.type = 'EMAIL_VERIFICATION'", String.class, email);
+        assertThat(stored).isNotEqualTo(plain).matches("[0-9a-f]{64}");
+
+        mockMvc.perform(post(BASE_URL + "/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.verifyEmail(stored))))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError("A0104"));
+        mockMvc.perform(post(BASE_URL + "/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.verifyEmail(plain))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+    }
+
+    @Test
+    @DisplayName("忘記密碼全鏈路 — 申請 → 攔截重設信 → 用信中 Token 重設 → 舊密碼失效、新密碼可登入、Token 不可重複使用")
+    void forgotPassword_interceptMail_resetPassword_flow() throws Exception {
+        String email = "forgot@test.com";
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                DataBuilder.register(email, "OldPassword123!", "forgotuser", "ForgotUser"))))
+                .andExpect(status().isOk());
+        mockMvc.perform(post(BASE_URL + "/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                DataBuilder.verifyEmail(mailInterceptor.interceptVerificationToken(email)))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post(BASE_URL + "/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.forgotPassword(email))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+        String plain = mailInterceptor.interceptPasswordResetToken(email);
+
+        mockMvc.perform(post(BASE_URL + "/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.resetPassword(plain, "NewPassword456!"))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+
+        mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.login(email, "NewPassword456!"))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+        mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.login(email, "OldPassword123!"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError("A0102"));
+        mockMvc.perform(post(BASE_URL + "/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.resetPassword(plain, "Another789!x"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(E2EAssertions.apiError("A0104"));
+    }
+
+    @Test
+    @DisplayName("使用有效驗證 Token 激活帳號")
+    void verifyEmail_withValidToken_activatesAccount() throws Exception {
+        // Arrange — 註冊（會在 verification_tokens 建立記錄）
+        String registerBody = objectMapper.writeValueAsString(
+                DataBuilder.register("verify@test.com", "Password123!", "verifyuser", "VerifyUser"));
+        mockMvc.perform(post(BASE_URL + "/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isOk());
+
+        // 攔截驗證信取得信中的明文 Token（DB 只存 SHA-256，A1）
+        String verificationToken = mailInterceptor.interceptVerificationToken("verify@test.com");
+        assertThat(verificationToken).isNotNull();
+
+        // Act — 呼叫信箱驗證 API（token 屬憑證，走 request body 而非 query string）
+        mockMvc.perform(post(BASE_URL + "/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(DataBuilder.verifyEmail(verificationToken))))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess());
+
+        // Assert — 帳號應已啟用
+        String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM users WHERE email = ?", String.class, "verify@test.com");
+        assertThat(status).isEqualTo("ACTIVE");
+
+        Boolean emailVerified = jdbcTemplate.queryForObject(
+                "SELECT email_verified FROM users WHERE email = ?", Boolean.class, "verify@test.com");
+        assertThat(emailVerified).isTrue();
+
+        // 驗證啟用後可正常登入
+        String loginBody = objectMapper.writeValueAsString(
+                DataBuilder.login("verify@test.com", "Password123!"));
+        mockMvc.perform(post(BASE_URL + "/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(loginBody))
+                .andExpect(status().isOk())
+                .andExpect(E2EAssertions.apiSuccess())
+                .andExpect(jsonPath("$.data.accessToken").isNotEmpty());
+    }
+}

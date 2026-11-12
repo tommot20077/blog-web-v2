@@ -1,0 +1,673 @@
+package dowob.xyz.blog.module.version.controller;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.version.config.VersionTestApplication;
+import dowob.xyz.blog.module.version.model.ArticleVersion;
+import dowob.xyz.blog.module.version.repository.ArticleVersionRepository;
+import dowob.xyz.blog.module.version.service.VersioningService;
+import dowob.xyz.blog.module.version.support.SeededVersionUsers;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * VersionController 整合測試。
+ *
+ * <p>使用 Testcontainers 啟動 PostgreSQL 與 Redis，
+ * 透過 MockMvc 驗證 Version API 的完整 HTTP 流程與資料庫副作用。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@SpringBootTest(classes = VersionTestApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureMockMvc
+@Testcontainers
+@ActiveProfiles("test")
+@DisplayName("VersionController 整合測試")
+class VersionControllerIT {
+
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine")
+            .withDatabaseName("blog_test")
+            .withUsername("test")
+            .withPassword("test");
+
+    @Container
+    static com.redis.testcontainers.RedisContainer redis =
+            new com.redis.testcontainers.RedisContainer("redis:8.8.0-alpine");
+
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("spring.data.redis.url", redis::getRedisURI);
+    }
+
+    @Autowired private MockMvc mockMvc;
+    @Autowired private ObjectMapper objectMapper;
+    @Autowired private ArticleRepository articleRepo;
+    @Autowired private ArticleVersionRepository versionRepo;
+
+    @MockitoBean private ConnectionFactory connectionFactory;
+    @MockitoBean private RabbitTemplate rabbitTemplate;
+    @MockitoBean private TagFacade tagFacade;
+    @MockitoBean private UserFacade userFacade;
+    @MockitoBean private UserAuthService userAuthService;
+    @MockitoBean private ReadingFacade readingFacade;
+    @MockitoBean private SeriesFacade seriesFacade;
+
+    private static final Long USER1_ID = 1L;
+    private static final Long USER2_ID = 2L;
+    private static final Long ADMIN_ID = 3L;
+
+    @BeforeEach
+    void setup() {
+        versionRepo.deleteAll();
+        articleRepo.deleteAll();
+    }
+
+    @AfterEach
+    void cleanUp() {
+        versionRepo.deleteAll();
+        articleRepo.deleteAll();
+    }
+
+    /** 建立模擬認證的 RequestPostProcessor。 */
+    private RequestPostProcessor asUser(Long userId, Role role) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
+        role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(new AuthUser(SeededVersionUsers.uuidOf(userId), role), null, authorities);
+        return SecurityMockMvcRequestPostProcessors.authentication(auth);
+    }
+
+    /** 建立並儲存測試文章（DRAFT 狀態）。 */
+    private Article createArticle(Long authorId) {
+        return createArticle(authorId, ArticleStatus.DRAFT);
+    }
+
+    /** 建立並儲存指定狀態的測試文章（F-H1 內容凍結守衛測試用）。 */
+    private Article createArticle(Long authorId, ArticleStatus status) {
+        Article article = new Article();
+        article.setUuid(UUID.randomUUID());
+        article.setAuthorUuid(SeededVersionUsers.uuidOf(authorId));
+        article.setTitle("Test Article " + UUID.randomUUID());
+        article.setSlug("test-article-" + UUID.randomUUID());
+        article.setContent("This is test content for versioning.");
+        article.setContentHtml("<p>This is test content for versioning.</p>");
+        article.setStatus(status);
+        article.setLikeCount(0);
+        article.setCommentCount(0);
+        article.setViewCount(0L);
+        if (status == ArticleStatus.PUBLISHED) {
+            article.setPublishedAt(LocalDateTime.now());
+        }
+        article.setCreatedAt(LocalDateTime.now());
+        article.setUpdatedAt(LocalDateTime.now());
+        return articleRepo.save(article);
+    }
+
+    /** 建立並儲存測試版本快照。 */
+    private ArticleVersion createVersion(UUID articleUuid, Long authorId, String type, String note) {
+        ArticleVersion v = new ArticleVersion();
+        v.setUuid(UUID.randomUUID());
+        v.setArticleUuid(articleUuid);
+        v.setAuthorUuid(SeededVersionUsers.uuidOf(authorId));
+        v.setType(type);
+        v.setTitle("Version Title");
+        v.setSlug("version-slug-" + UUID.randomUUID());
+        v.setContent("Version content body.");
+        v.setStatus("DRAFT");
+        v.setNote(note);
+        v.setCreatedAt(LocalDateTime.now());
+        return versionRepo.save(v);
+    }
+
+    // ─────────────────────────────── LIST ───────────────────────────────────
+
+    @Test
+    @DisplayName("GET /versions - owner 取得版本列表 200")
+    void list_byOwner_returns200() throws Exception {
+        Article article = createArticle(USER1_ID);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "重要存檔");
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.records").isArray())
+                // architecture.md：對外只出 UUID，內部 Long ID 不得現身
+                .andExpect(jsonPath("$.data.records[0].uuid").exists())
+                .andExpect(jsonPath("$.data.records[0].authorId").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /versions - 非 owner 存取 → 400 V0102")
+    void list_byNonOwner_returnsV0102() throws Exception {
+        Article article = createArticle(USER1_ID);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid())
+                        .with(asUser(USER2_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0102"));
+    }
+
+    @Test
+    @DisplayName("GET /versions - admin 可看他人文章的版本列表 200")
+    void list_byAdmin_returns200() throws Exception {
+        Article article = createArticle(USER1_ID);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid())
+                        .with(asUser(ADMIN_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    // ─────────────────────────────── GET DETAIL ─────────────────────────────
+
+    @Test
+    @DisplayName("A9 GET /versions - Role.USER（無 ARTICLE_EDIT 權限）→ 403，即使是文章 owner")
+    void list_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("A9 GET /versions/{versionUuid} - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void getDetail_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}", article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("A9 GET /versions、/versions/{versionUuid} - 未認證 → 401")
+    void readEndpoints_unauthenticated_returns401() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions", article.getUuid()))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}", article.getUuid(), v.getUuid()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("GET /versions/{versionUuid} - owner 取得詳情 200 含 content")
+    void getDetail_byOwner_returns200WithContent() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "detail test");
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.uuid").value(v.getUuid().toString()))
+                .andExpect(jsonPath("$.data.content").value("Version content body."))
+                // architecture.md：對外只出 UUID，內部 Long ID 不得現身
+                .andExpect(jsonPath("$.data.authorId").doesNotExist())
+                .andExpect(jsonPath("$.data.categoryId").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /versions/{versionUuid} - version 不存在 → 400 V0101")
+    void getDetail_versionNotFound_returnsV0101() throws Exception {
+        Article article = createArticle(USER1_ID);
+        UUID nonExistentUuid = UUID.randomUUID();
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        article.getUuid(), nonExistentUuid)
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0101"));
+    }
+
+    // ─────────────────────────────── CREATE MANUAL ──────────────────────────
+
+    @Test
+    @DisplayName("POST /versions/manual - 合法請求 200")
+    void createManual_validRequest_returns200() throws Exception {
+        Article article = createArticle(USER1_ID);
+        Map<String, String> payload = Map.of("note", "手動存檔 v1");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", article.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(payload)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.type").value("MANUAL"))
+                .andExpect(jsonPath("$.data.note").value("手動存檔 v1"))
+                // 此端點原本直接回 ArticleVersion entity，內部 Long ID 全數外洩
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.id").doesNotExist())
+                .andExpect(jsonPath("$.data.articleId").doesNotExist())
+                .andExpect(jsonPath("$.data.authorId").doesNotExist())
+                .andExpect(jsonPath("$.data.categoryId").doesNotExist());
+
+        // 確認版本已寫入 DB
+        long count = 0;
+        for (ArticleVersion v : versionRepo.findAll()) {
+            if (v.getArticleUuid().equals(article.getUuid())) count++;
+        }
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("POST /versions/manual - admin 替他人文章建立快照：author_uuid 記的是文章作者而非 admin")
+    void createManual_byAdmin_recordsArticleAuthorUuid() throws Exception {
+        Article article = createArticle(USER1_ID);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", article.getUuid())
+                        .with(asUser(ADMIN_ID, Role.ADMIN))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+
+        ArticleVersion saved = null;
+        for (ArticleVersion v : versionRepo.findAll()) {
+            if (article.getUuid().equals(v.getArticleUuid())) saved = v;
+        }
+        assertThat(saved).isNotNull();
+        assertThat(saved.getAuthorUuid()).isEqualTo(SeededVersionUsers.USER1_UUID);
+        assertThat(saved.getArticleUuid()).isEqualTo(article.getUuid());
+    }
+
+    @Test
+    @DisplayName("POST /versions/manual - 非作者且非 admin → 400 V0102，不寫快照")
+    void createManual_byNonOwner_returnsV0102() throws Exception {
+        Article article = createArticle(USER1_ID);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", article.getUuid())
+                        .with(asUser(USER2_ID, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0102"));
+
+        assertThat(versionRepo.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("POST /versions/manual - 文章不存在 → 400 V0106")
+    void createManual_articleNotFound_returnsV0106() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", UUID.randomUUID())
+                        .with(asUser(USER1_ID, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0106"));
+    }
+
+    @Test
+    @DisplayName("POST /versions/manual - 未認證 → 401")
+    void createManual_unauthenticated_returns401() throws Exception {
+        Article article = createArticle(USER1_ID);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", article.getUuid())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * M-1（MEDIUM，PR #68 review）：手動快照建立會寫入完整內容複本，
+     * 與 restore（F-M1）同一威脅模型——被降級為 Role.USER 的前作者不該還能寫入。
+     * 比照 restore 收斂為 {@code ARTICLE_EDIT}。
+     */
+    @Test
+    @DisplayName("POST /versions/manual - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void createManual_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        Map<String, String> payload = Map.of("note", "手動存檔 v1");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/manual", article.getUuid())
+                        .with(asUser(USER1_ID, Role.USER))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(payload)))
+                .andExpect(status().isForbidden());
+
+        long count = 0;
+        for (ArticleVersion v : versionRepo.findAll()) {
+            if (v.getArticleUuid().equals(article.getUuid())) count++;
+        }
+        assertThat(count)
+                .as("權限不足時不得產生任何快照寫入副作用")
+                .isEqualTo(0);
+    }
+
+    // ─────────────────────────────── RESTORE ────────────────────────────────
+
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/restore - owner 還原成功 200")
+    void restore_byOwner_returns200() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+    }
+
+    /**
+     * F-H1（HIGH）：restore 繞過內容凍結守衛，構成審核 TOCTOU。
+     *
+     * <p><strong>攻擊情境</strong>：作者把文章送審（PENDING_REVIEW）→ admin 開始審 →
+     * 作者用 restore 把內容換成另一個版本 → admin 審的是 A、通過的是 B。
+     * SEC-02（PR #66）修完狀態面後 restore 不再改 status，換內容在狀態機上完全無痕，
+     * 反而讓這個攻擊更隱蔽。</p>
+     *
+     * <p>守衛與 {@code PUT /api/v1/articles/{uuid}} 共用同一套判斷
+     * （{@code ArticleContentFreezePolicy}），故錯誤碼一致為 A0209。</p>
+     */
+    @ParameterizedTest
+    @EnumSource(value = ArticleStatus.class, names = {"PENDING_REVIEW", "PUBLISHED", "ARCHIVED"})
+    @DisplayName("POST /versions/{versionUuid}/restore - 內容凍結狀態 → 400 A0209 且內容未被改寫")
+    void restore_frozenStatus_returnsA0209AndKeepsContent(ArticleStatus frozen) throws Exception {
+        Article article = createArticle(USER1_ID, frozen);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "TOCTOU 用快照");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0209"));
+
+        Article after = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(after.getContent())
+                .as("凍結狀態下內容不得被還原改寫（admin 審的是 A，通過的就必須是 A）")
+                .isEqualTo("This is test content for versioning.");
+        assertThat(after.getStatus()).isEqualTo(frozen);
+    }
+
+    /**
+     * 避免修過頭：restore 在 DRAFT / REJECTED 下是正常功能（被駁回後改稿重送正是它的用途），
+     * 內容凍結守衛不得把這兩個狀態一併擋掉。
+     */
+    @ParameterizedTest
+    @EnumSource(value = ArticleStatus.class, names = {"DRAFT", "REJECTED"})
+    @DisplayName("POST /versions/{versionUuid}/restore - DRAFT / REJECTED → 200 且內容確實被還原")
+    void restore_editableStatus_returns200AndRestoresContent(ArticleStatus editable) throws Exception {
+        Article article = createArticle(USER1_ID, editable);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+
+        Article after = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(after.getContent())
+                .as("DRAFT / REJECTED 是還原的正常用途，不得被守衛誤殺")
+                .isEqualTo("Version content body.");
+        assertThat(after.getStatus())
+                .as("還原只還原內容，狀態一律不動（SEC-02）")
+                .isEqualTo(editable);
+    }
+
+    /**
+     * F-M1（MEDIUM）：restore 端點原本只要求 {@code isAuthenticated()}，不需要 ARTICLE_EDIT，
+     * 導致被降級為 USER 的前作者仍能改寫自己的文章，且與 PUT 更新的權限標準不一致。
+     */
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/restore - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void restore_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+
+        Article after = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(after.getContent())
+                .as("權限不足時不得產生任何還原副作用")
+                .isEqualTo("This is test content for versioning.");
+    }
+
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/restore - 非作者（且非 ADMIN）→ 400 V0102")
+    void restore_byNonOwner_returnsV0102() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "restore me");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER2_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0102"));
+
+        Article after = articleRepo.findById(article.getId()).orElseThrow();
+        assertThat(after.getContent())
+                .as("非作者不得改寫他人文章內容")
+                .isEqualTo("This is test content for versioning.");
+    }
+
+
+    // ─────────────────────────────── PROMOTE ────────────────────────────────
+
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/promote - AUTO 升級成功 200")
+    void promote_autoVersion_returns200() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.type").value("MANUAL"))
+                // 此端點原本直接回 ArticleVersion entity，內部 Long ID 全數外洩
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.id").doesNotExist())
+                .andExpect(jsonPath("$.data.articleId").doesNotExist())
+                .andExpect(jsonPath("$.data.authorId").doesNotExist())
+                .andExpect(jsonPath("$.data.categoryId").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/promote - MANUAL 升級 → 400 V0104")
+    void promote_manualVersion_returnsV0104() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "already manual");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0104"));
+    }
+
+    /**
+     * M-1（MEDIUM，PR #68 review）：promote 把可被 {@code retainAuto} 汰除的 AUTO 快照
+     * 升級為永久保留的 MANUAL，與 restore（F-M1）同一威脅模型，比照收斂為 {@code ARTICLE_EDIT}。
+     */
+    @Test
+    @DisplayName("POST /versions/{versionUuid}/promote - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void promote_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+
+        ArticleVersion after = versionRepo.findByUuid(v.getUuid()).orElseThrow();
+        assertThat(after.getType())
+                .as("權限不足時不得產生任何升級副作用")
+                .isEqualTo(VersioningService.TYPE_AUTO);
+    }
+
+    // ─────────────────────────────── DELETE ─────────────────────────────────
+
+    @Test
+    @DisplayName("DELETE /versions/{versionUuid} - MANUAL 快照刪除成功 200")
+    void delete_manualVersion_returns200() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "to delete");
+
+        mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"));
+
+        assertThat(versionRepo.findByUuid(v.getUuid())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("DELETE /versions/{versionUuid} - PUBLISHED 快照不可刪 → 400 V0103")
+    void delete_publishedVersion_returnsV0103() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_PUBLISHED, "Published v1");
+
+        mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0103"));
+    }
+
+    /**
+     * M-1（MEDIUM，PR #68 review）：刪除快照是破壞性且不可逆的操作，與 restore（F-M1）
+     * 同一威脅模型——被降級為 Role.USER 的前作者不該還能清掉自己文章的版本證據，
+     * 比照收斂為 {@code ARTICLE_EDIT}。
+     */
+    @Test
+    @DisplayName("DELETE /versions/{versionUuid} - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void delete_roleUserWithoutArticleEdit_returns403() throws Exception {
+        Article article = createArticle(USER1_ID);
+        ArticleVersion v = createVersion(article.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "to delete");
+
+        mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        article.getUuid(), v.getUuid())
+                        .with(asUser(USER1_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+
+        assertThat(versionRepo.findByUuid(v.getUuid()))
+                .as("權限不足時不得產生任何刪除副作用")
+                .isPresent();
+    }
+
+    // ─────────────────── ARTICLE-VERSION MISMATCH（巢狀 URL 一致性） ───────────────
+
+    @Test
+    @DisplayName("GET /articles/{A}/versions/{B} - version 屬於另一篇 → 400 V0108")
+    void getDetail_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
+        Article articleA = createArticle(USER1_ID);
+        Article articleB = createArticle(USER1_ID);
+        ArticleVersion vOfB = createVersion(articleB.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "B's version");
+
+        mockMvc.perform(get("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        articleA.getUuid(), vOfB.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0108"));
+    }
+
+    @Test
+    @DisplayName("POST /articles/{A}/versions/{B}/restore - version 屬於另一篇 → 400 V0108")
+    void restore_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
+        Article articleA = createArticle(USER1_ID);
+        Article articleB = createArticle(USER1_ID);
+        ArticleVersion vOfB = createVersion(articleB.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "B's snap");
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/restore",
+                        articleA.getUuid(), vOfB.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0108"));
+    }
+
+    @Test
+    @DisplayName("POST /articles/{A}/versions/{B}/promote - version 屬於另一篇 → 400 V0108")
+    void promote_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
+        Article articleA = createArticle(USER1_ID);
+        Article articleB = createArticle(USER1_ID);
+        ArticleVersion vOfB = createVersion(articleB.getUuid(), USER1_ID, VersioningService.TYPE_AUTO, null);
+
+        mockMvc.perform(post("/api/v1/articles/{articleUuid}/versions/{versionUuid}/promote",
+                        articleA.getUuid(), vOfB.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0108"));
+    }
+
+    @Test
+    @DisplayName("DELETE /articles/{A}/versions/{B} - version 屬於另一篇 → 400 V0108")
+    void delete_versionBelongsToAnotherArticle_returnsV0108() throws Exception {
+        Article articleA = createArticle(USER1_ID);
+        Article articleB = createArticle(USER1_ID);
+        ArticleVersion vOfB = createVersion(articleB.getUuid(), USER1_ID, VersioningService.TYPE_MANUAL, "B's");
+
+        mockMvc.perform(delete("/api/v1/articles/{articleUuid}/versions/{versionUuid}",
+                        articleA.getUuid(), vOfB.getUuid())
+                        .with(asUser(USER1_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("V0108"));
+    }
+}

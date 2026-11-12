@@ -1,0 +1,382 @@
+package dowob.xyz.blog.module.article.controller;
+
+import dowob.xyz.blog.infrastructure.ratelimit.RateLimited;
+import io.swagger.v3.oas.annotations.Operation;
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.request.PageQuery;
+import dowob.xyz.blog.common.api.response.ApiResponse;
+import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
+import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
+import dowob.xyz.blog.infrastructure.web.ClientIpResolver;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
+import dowob.xyz.blog.module.article.service.ArticleQueryService;
+import dowob.xyz.blog.module.article.service.ArticleService;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.UUID;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
+/**
+ * 文章 REST Controller
+ *
+ * <p>
+ * 提供文章 CRUD 相關的 HTTP 端點。
+ * 從 SecurityContextHolder 取得當前用戶 ID 與角色，傳入 Service。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Tag(name = "文章")
+@RestController
+@RequestMapping("/api/v1/articles")
+@RequiredArgsConstructor
+public class ArticleController {
+
+    /**
+     * 文章服務（Write）
+     */
+    private final ArticleService articleService;
+
+    /**
+     * 文章查詢服務（Read，CQRS 分層）
+     */
+    private final ArticleQueryService articleQueryService;
+
+    /**
+     * Client IP 解析器（瀏覽數去重用；信任鏈由 app.http.trusted-proxy-count 控制）
+     */
+    private final ClientIpResolver clientIpResolver;
+
+    /**
+     * 分頁取得已發布文章列表（公開）
+     *
+     * <p>
+     * 篩選、排序與分頁皆在伺服器端完成（見 {@link ArticleListQuery}）：
+     * {@code tags}（AND）、{@code categorySlug}（OR，沿用既有參數名，單值呼叫仍有效）、
+     * {@code authorUuids}（OR）、{@code publishedWithinDays}、{@code sort}
+     * （{@code latest} / {@code popular} / {@code commented}）。
+     * 不帶任何篩選參數時回傳全部已發布文章，依發布時間由新到舊。
+     * </p>
+     *
+     * @param pageQuery 分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                  {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
+     * @param listQuery 篩選與排序參數（已由 compact constructor 正規化）
+     * @return 分頁文章摘要列表；total 為符合篩選條件的總數
+     */
+    @Operation(summary = "已發布文章列表",
+            description = "公開。分頁列出已發布文章，可依標籤、分類、作者、發布天數等條件篩選與排序；登入者會帶入是否已按讚。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0210 篩選條件的值過多")
+    @GetMapping
+    public ApiResponse<PageResult<ArticleSummaryResponse>> getPublishedArticles(
+            PageQuery pageQuery,
+            ArticleListQuery listQuery) {
+        return ApiResponse.success(articleQueryService.getPublishedArticles(
+                listQuery, pageQuery.page(), pageQuery.sizeOrDefault(10)));
+    }
+
+    /**
+     * 取得全部已發布文章的歸檔精簡投影（公開）
+     *
+     * <p>
+     * 供前端「年度歸檔」頁面使用，回傳全部已發布文章的精簡投影
+     * （uuid / title / slug / publishedAt / tags），依 publishedAt 由新到舊排序，
+     * 無已發布文章時回傳空清單。此端點為公開，與 {@link #getPublishedArticles} 同等不需登入。
+     * </p>
+     *
+     * <p>
+     * <b>量級假設與保護</b>（PERF-04）：本端點刻意<b>不分頁、不截斷</b>——前端年度歸檔頁需要全量，
+     * 自行依年份分組並統計總篇數，任何截斷都會讓統計與年份區塊悄悄變錯，屬契約語意變更。
+     * 假設已發布文章為數千篇以內（與 V22 索引註解的規模假設一致；單筆約 200 bytes，五千篇約 1 MB JSON）。
+     * 在此量級下的保護是：四欄投影（不撈正文）、標籤批次查詢（經 {@code BatchedQuery} 切批）、
+     * 走 {@code idx_articles_published_latest} 免排序、整份回應 Redis 快取（命中時不查 DB，
+     * 發布／下架／刪除時主動失效，另有 10 分鐘 TTL 兜底）。若已發布文章成長到數萬篇，
+     * 應改為依年份查詢的契約（新增 year 參數或年份索引端點），而非在此加硬上限。
+     * </p>
+     *
+     * @return 歸檔文章投影列表（依 publishedAt 由新到舊排序）
+     */
+    @Operation(summary = "文章歸檔",
+            description = "公開。依年月彙整已發布文章，用於歸檔頁。")
+    @GetMapping("/archive")
+    public ApiResponse<List<ArticleArchiveResponse>> getArchive() {
+        return ApiResponse.success(articleQueryService.getArchive());
+    }
+
+    /**
+     * 根據 slug 取得單篇文章詳情（公開）
+     *
+     * @param slug           文章 URL slug
+     * @param request        HTTP 請求（用於取得客戶端 IP）
+     * @param user       當前登入者（AuthUser；匿名為 null）
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 文章完整資訊
+     */
+    @Operation(summary = "以 slug 取得文章",
+            description = "公開（登入者可看自己的非公開文章，管理員可看全部）。回傳文章詳情並計入瀏覽數。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在（不存在或對呼叫者不可見）")
+    @GetMapping("/slug/{slug}")
+    public ApiResponse<ArticleResponse> getArticleBySlug(@PathVariable String slug,
+                                                          HttpServletRequest request,
+                                                          @AuthenticationPrincipal AuthUser user,
+                                                          Authentication authentication) {
+        Role viewerRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleQueryService.getArticleBySlug(slug, (user == null ? null : user.uuid()), viewerRole, clientIpResolver.resolve(request)));
+    }
+
+    /**
+     * 取得單篇文章詳情
+     *
+     * <p>
+     * <b>匿名可存取</b>——本端點依 {@code security.md} 原則 7 的「選填認證公開端點」豁免，
+     * 故不標註 {@code @PreAuthorize}。三項豁免條件均成立：
+     * </p>
+     * <ol>
+     *   <li>路徑 {@code GET /api/v1/articles/{uuid}} 於 {@code SecurityConfig} 以明確清單 {@code permitAll}
+     *       （UUID 形狀比對，非萬用字元；見 {@code SecurityConfig.PUBLIC_ARTICLE_DETAIL}）；</li>
+     *   <li>{@code viewerId} 允許為 null，僅用於選填個人化與未發布文章的作者可見性判斷；</li>
+     *   <li>本 JavaDoc 即為所需的豁免標註。</li>
+     * </ol>
+     *
+     * @param uuid           文章公開 UUID
+     * @param request        HTTP 請求（用於取得客戶端 IP）
+     * @param user       當前登入者（AuthUser；匿名為 null）
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 文章完整資訊
+     */
+    @Operation(summary = "以 uuid 取得文章",
+            description = "公開（登入者可看自己的非公開文章，管理員可看全部）。回傳文章詳情並計入瀏覽數。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在（不存在或對呼叫者不可見）")
+    @GetMapping("/{uuid}")
+    public ApiResponse<ArticleResponse> getArticle(@PathVariable UUID uuid, HttpServletRequest request,
+                                                    @AuthenticationPrincipal AuthUser user,
+                                                    Authentication authentication) {
+        Role viewerRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleQueryService.getArticleByUuid(uuid, (user == null ? null : user.uuid()), viewerRole, clientIpResolver.resolve(request)));
+    }
+
+    /**
+     * 建立文章（需 AUTHOR 或 ADMIN 角色）
+     *
+     * @param request  建立文章請求
+     * @param user 當前登入者（AuthUser；作者以其 uuid 識別）
+     * @return 建立後的文章完整資訊
+     */
+    @Operation(summary = "建立文章",
+            description = "需 ARTICLE_CREATE 權限。建立草稿文章，標籤名稱不存在時會自動建立。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0205 分類不存在；A0305 標籤名稱不合法")
+    @PreAuthorize("hasAuthority('ARTICLE_CREATE')")
+    @PostMapping
+    @RateLimited("article-write")
+    public ApiResponse<EditorArticleResponse> createArticle(@Valid @RequestBody CreateArticleRequest request,
+                                                             @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(articleService.createArticle(user.uuid(), request));
+    }
+
+    /**
+     * 更新文章（需 AUTHOR 本人或 ADMIN）
+     *
+     * @param uuid           文章公開 UUID
+     * @param request        更新請求
+     * @param user     當前登入者（AuthUser）
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 更新後的文章完整資訊
+     */
+    @Operation(summary = "更新文章內容",
+            description = "request 可帶 version（取自 GET /{uuid}/edit 或上一次存檔回應）：與目前版本不一致回 409（A0208）。"
+                    + "省略 version 則不做版本比對。成功回應帶遞增後的新 version。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0201 文章不存在；A0203 非文章作者（管理員不受此限）；A0209 目前狀態不允許編輯內容；A0204 目前狀態不允許此操作（狀態轉換不合法）；A0205 分類不存在；A0305 標籤名稱不合法")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "A0208 文章已被其他人修改（version 不一致）")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
+    @PutMapping("/{uuid}")
+    @RateLimited("article-write")
+    public ApiResponse<EditorArticleResponse> updateArticle(
+            @PathVariable UUID uuid,
+            @Valid @RequestBody UpdateArticleRequest request,
+            @AuthenticationPrincipal AuthUser user,
+            Authentication authentication) {
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleService.updateArticle(user.uuid(), operatorRole, uuid, request));
+    }
+
+    /**
+     * 取得文章供 Editor 編輯（需認證，僅作者本人）
+     *
+     * @param uuid        文章公開 UUID
+     * @param user 當前登入者（AuthUser）
+     * @return Editor 用文章資訊
+     */
+    @Operation(summary = "取得文章編輯資料",
+            description = "需 ARTICLE_EDIT 權限且為作者本人。回傳編輯器用的完整內容與目前 version。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在；A0203 非文章作者")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
+    @GetMapping("/{uuid}/edit")
+    public ApiResponse<EditorArticleResponse> getArticleForEdit(
+            @PathVariable UUID uuid,
+            @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(articleService.getArticleForEdit(uuid, user.uuid()));
+    }
+
+    /**
+     * 刪除文章（需 AUTHOR 本人或 ADMIN）
+     *
+     * @param uuid           文章公開 UUID
+     * @param user     當前登入者（AuthUser）
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 成功回應
+     */
+    @Operation(summary = "刪除文章",
+            description = "需 ARTICLE_DELETE 權限；作者本人或管理員。刪除後以事件通知下游模組清理關聯資料。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在；A0203 非文章作者（管理員不受此限）")
+    @PreAuthorize("hasAuthority('ARTICLE_DELETE')")
+    @DeleteMapping("/{uuid}")
+    public ApiResponse<Void> deleteArticle(@PathVariable UUID uuid,
+                                           @AuthenticationPrincipal AuthUser user,
+                                           Authentication authentication) {
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
+        articleService.deleteArticle(user.uuid(), operatorRole, uuid);
+        return ApiResponse.success();
+    }
+
+    /**
+     * 取得我的文章列表（需登入）
+     *
+     * @param pageQuery  分頁參數（query string 仍為 {@code page} / {@code size}；
+     *                   {@code size} 上限見 {@link PageQuery#MAX_SIZE}）
+     * @param status   文章狀態篩選（可選）
+     * @param user 當前登入者（AuthUser；作者以其 uuid 識別）
+     * @return 分頁文章摘要列表
+     */
+    @Operation(summary = "我的文章列表",
+            description = "登入。分頁列出自己的文章，可依狀態篩選。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗（status 不是合法值）")
+    @PreAuthorize("isAuthenticated()")
+    @GetMapping("/me")
+    public ApiResponse<PageResult<ArticleSummaryResponse>> getMyArticles(
+            PageQuery pageQuery,
+            @RequestParam(required = false) ArticleStatus status,
+            @AuthenticationPrincipal AuthUser user) {
+        return ApiResponse.success(articleQueryService.getMyArticles(user.uuid(), pageQuery.page(), pageQuery.sizeOrDefault(10), status));
+    }
+
+    /**
+     * 提交文章審核（需 AUTHOR 本人或 ADMIN）
+     *
+     * @param uuid           文章公開 UUID
+     * @param user     當前登入者（AuthUser）
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 提交審核後的文章完整資訊
+     */
+    @Operation(summary = "送審文章",
+            description = "需 ARTICLE_EDIT 權限；作者本人或管理員。DRAFT 送交審核（PENDING_REVIEW）。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在；A0203 非文章作者（管理員不受此限）；A0204 目前狀態不允許此操作")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
+    @PostMapping("/{uuid}/submit")
+    @RateLimited("article-write")
+    public ApiResponse<ArticleResponse> submitForReview(@PathVariable UUID uuid,
+                                                         @AuthenticationPrincipal AuthUser user,
+                                                         Authentication authentication) {
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleService.submitForReview(user.uuid(), operatorRole, uuid));
+    }
+
+    /**
+     * 抽回送審文章（僅限文章作者本人）
+     *
+     * <p>
+     * 將 PENDING_REVIEW 的文章退回 DRAFT，供作者在審核完成前反悔並繼續編輯。
+     * 僅 PENDING_REVIEW 狀態可抽回，其餘狀態回傳 A0204（狀態轉換不合法）。
+     * </p>
+     *
+     * <p>
+     * 權限嚴於其他寫入端點：<b>僅作者本人可抽回，ADMIN 抽回他人文章會得到 A0203</b>。
+     * 抽回與駁回為職責分離的兩個動作，ADMIN 審核不通過應改呼叫 {@code /reject}。
+     * </p>
+     *
+     * @param uuid           文章公開 UUID
+     * @param user     當前登入者（AuthUser）
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 抽回後的文章完整資訊
+     */
+    @Operation(summary = "撤回送審",
+            description = "需 ARTICLE_EDIT 權限；僅作者本人。PENDING_REVIEW 撤回為 DRAFT。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在；A0203 非文章作者；A0204 目前狀態不允許此操作")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
+    @PostMapping("/{uuid}/withdraw")
+    @RateLimited("article-write")
+    public ApiResponse<ArticleResponse> withdrawArticle(@PathVariable UUID uuid,
+                                                        @AuthenticationPrincipal AuthUser user,
+                                                        Authentication authentication) {
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleService.withdrawArticle(user.uuid(), operatorRole, uuid));
+    }
+
+    /**
+     * 發布文章（需 AUTHOR 本人或 ADMIN）
+     *
+     * @param uuid           文章公開 UUID
+     * @param user     當前登入者（AuthUser）
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 發布後的文章完整資訊
+     */
+    @Operation(summary = "發布文章",
+            description = "需 ARTICLE_EDIT 權限；作者本人或管理員。依狀態機轉為 PUBLISHED；待審文章只有管理員能發布。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0201 文章不存在；A0203 非文章作者（管理員不受此限）；待審文章僅管理員可發布；A0204 目前狀態不允許此操作")
+    @PreAuthorize("hasAuthority('ARTICLE_EDIT')")
+    @PostMapping("/{uuid}/publish")
+    @RateLimited("article-write")
+    public ApiResponse<ArticleResponse> publishArticle(@PathVariable UUID uuid,
+                                                       @AuthenticationPrincipal AuthUser user,
+                                                       Authentication authentication) {
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleService.publishArticle(user.uuid(), operatorRole, uuid));
+    }
+
+    /**
+     * 駁回文章（僅 ADMIN）
+     *
+     * @param uuid           文章公開 UUID
+     * @param request        駁回請求（含原因）
+     * @param user     當前登入者（AuthUser）
+     * @param authentication 當前認證資訊（用於解析角色）
+     * @return 駁回後的文章完整資訊
+     */
+    @Operation(summary = "駁回文章",
+            description = "需 ADMIN_ARTICLE_REVIEW 權限。將待審文章駁回並附上理由。")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0201 文章不存在；A0203 非管理員；A0204 目前狀態不允許此操作")
+    @PreAuthorize("hasAuthority('ADMIN_ARTICLE_REVIEW')")
+    @PostMapping("/{uuid}/reject")
+    public ApiResponse<ArticleResponse> rejectArticle(
+            @PathVariable UUID uuid,
+            @Valid @RequestBody RejectArticleRequest request,
+            @AuthenticationPrincipal AuthUser user,
+            Authentication authentication) {
+        Role operatorRole = SecurityUtils.resolveRole(authentication);
+        return ApiResponse.success(articleService.rejectArticle(user.uuid(), operatorRole, uuid, request.getReason()));
+    }
+
+}

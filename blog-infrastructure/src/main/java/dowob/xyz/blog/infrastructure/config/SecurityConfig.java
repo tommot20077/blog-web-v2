@@ -1,10 +1,15 @@
 package dowob.xyz.blog.infrastructure.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dowob.xyz.blog.common.api.errorcode.CommonErrorCode;
+import dowob.xyz.blog.common.api.response.ApiResponse;
 import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.core.env.Environment;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -14,12 +19,20 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import org.springframework.beans.factory.annotation.Value;
+
+import jakarta.servlet.http.HttpServletResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -34,29 +47,208 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SecurityConfig {
 
+    /**
+     * UUID 形狀的路徑參數樣板（8-4-4-4-12 hex）。
+     *
+     * <p>用來限縮 articles 公開規則的比對範圍：若改用單段萬用字元 {@code /api/v1/articles/*}，
+     * 任何未來新增的字面量子路徑（例如既有的 {@code /api/v1/articles/me}）都會被通配吃掉而
+     * 意外變成 URL 層公開。以 UUID 形狀比對可讓「非 UUID 的字面量路徑」預設落入
+     * {@code anyRequest().authenticated()}（fail-closed）。</p>
+     */
+    private static final String UUID_PATH_VARIABLE =
+            "{uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}}";
+
+    /** 公開的文章詳情端點：{@code GET /api/v1/articles/{uuid}} */
+    private static final String PUBLIC_ARTICLE_DETAIL = "/api/v1/articles/" + UUID_PATH_VARIABLE;
+
+    /** 公開的文章留言端點：{@code GET /api/v1/articles/{uuid}/comments} */
+    private static final String PUBLIC_ARTICLE_COMMENTS = PUBLIC_ARTICLE_DETAIL + "/comments";
+
+    /**
+     * 公開的留言回覆分頁端點：{@code GET /api/v1/comments/{uuid}/replies}（D3，Yuan 2026-11-07 拍板）。
+     *
+     * <p>與 {@link #PUBLIC_ARTICLE_COMMENTS} 同一個公開面：匿名可到達，實際可見性在 service
+     * （文章不可讀回 404）。只比對 UUID 形狀的 {@code /replies}，同前綴的 {@code /api/v1/comments/**}
+     * 其他路徑與非 GET 方法一律落入 {@code anyRequest().authenticated()}。</p>
+     */
+    private static final String PUBLIC_COMMENT_REPLIES = "/api/v1/comments/" + UUID_PATH_VARIABLE + "/replies";
+
+    /** 公開的作者頁資料端點：{@code GET /api/v1/users/{uuid}/profile} */
+    private static final String PUBLIC_USER_PROFILE = "/api/v1/users/" + UUID_PATH_VARIABLE + "/profile";
+
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    private final ObjectMapper objectMapper;
+
+    private final Environment environment;
+
+    /**
+     * CORS 允許的來源清單，透過環境變數注入。
+     *
+     * <p>生產環境同域部署時 CORS 不觸發，前提是 app 還原得出 client 看到的 scheme／host／port：
+     * {@code app.http.trusted-proxy-count >= 1} 且 proxy 帶 {@code X-Forwarded-Proto}
+     * （由 {@code TrustedForwardedRequestFilter} 還原，且其順序早於本設定建立的 {@code CorsFilter}）。
+     * count = 0 時 TLS 終結 proxy 後方的 https 同網域 Origin 會被視為跨域。</p>
+     */
+    @Value("${app.cors.allowed-origins:http://localhost:3000,http://localhost:5500,http://127.0.0.1:5500}")
+    private List<String> allowedOrigins;
+
+    /**
+     * springdoc 是否啟用（SEC-21）。與 {@code springdoc.api-docs.enabled} 同一開關，預設 false；
+     * 僅 dev／demo／{@code SPRINGDOC_ENABLED=true} 為 true，此時才放行 swagger／api-docs 路徑。
+     */
+    @Value("${springdoc.api-docs.enabled:false}")
+    private boolean springdocEnabled;
+
+    /**
+     * 比對「從 management port 進來的 {@code /actuator/**} 請求」（C7）。
+     *
+     * <p>以請求的<b>實際連線 port</b>（{@code getLocalPort()}，不是可被偽造的 Host header）與
+     * {@code local.management.port} 比對。{@code local.*.port} 要等 web server 啟動後才有值，而本 bean 建立得更早，
+     * 所以在<b>請求時</b>才讀取。fail-closed 條件：沒有設定獨立的 management port、或其值等於主 port
+     * （共用同一個對外 port）時，一律不匹配，{@code /actuator/**} 退回需要 ADMIN。</p>
+     *
+     * @return 匹配 management port 上 actuator 請求的 matcher
+     */
+    private RequestMatcher managementPortActuatorRequest() {
+        RequestMatcher actuatorPath = new AntPathRequestMatcher("/actuator/**");
+        return request -> {
+            Integer managementPort = environment.getProperty("local.management.port", Integer.class);
+            Integer serverPort = environment.getProperty("local.server.port", Integer.class);
+            return managementPort != null
+                    && !managementPort.equals(serverPort)
+                    && request.getLocalPort() == managementPort
+                    && actuatorPath.matches(request);
+        };
+    }
+
+    /**
+     * 建立 Spring Security 過濾器鏈
+     *
+     * <p>
+     * 停用 CSRF 與 Session，設定 CORS、路由授權規則，
+     * 並在 UsernamePasswordAuthenticationFilter 前插入 JWT 過濾器。
+     * </p>
+     *
+     * @param http Spring Security HTTP 配置器
+     * @return 已配置的 SecurityFilterChain
+     * @throws Exception 配置過程中發生的例外
+     */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
+                .authorizeHttpRequests(auth -> {
+                    if (springdocEnabled) {
+                        auth.requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll();
+                    }
+                    auth
+                        // K3s liveness/readiness probe（C7）：actuator 搬到獨立的 management port 後，
+                        // 主 port 以 management.endpoint.health.probes.add-additional-paths 提供 /livez、/readyz。
+                        .requestMatchers("/livez", "/readyz").permitAll()
+
+                        // 從 management port 進來的 /actuator/**（health、info、Prometheus 抓取端都不帶 JWT）：匿名放行。
+                        // 刻意不另設 /actuator/health/**、/actuator/info 的全域 permitAll：那會在 management port
+                        // 被誤設成主 port 時讓 health／info 匿名可讀，與 fail-closed 矛盾。
+                        // 前提是「management port 不對外」（不經 ingress／Service 發布，見 security.md 部署注意事項）；
+                        // 主 port 的同一路徑落入下一條 hasRole("ADMIN")，維持 fail-closed。
+                        .requestMatchers(managementPortActuatorRequest()).permitAll()
+
+                        // 主 port 上所有 /actuator/**（health、info、metrics、prometheus 等）限 ADMIN。
+                        // 必須排在上面 management port 規則之後、anyRequest 之前；
+                        // 少了這條，暴露 metrics 等於讓任何已登入使用者讀到端點清單與呼叫量。
+                        // 這是主 port 上的 fail-closed 兜底：Prometheus 端點正常只在 management port，
+                        // 主 port 不存在該路徑（見 ActuatorManagementPortE2E）。
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
+
                         // 靜態資源與 Swagger
-                        .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
+                        // SEC-21：springdoc 預設關閉（僅 dev／demo／SPRINGDOC_ENABLED=true 才存在端點）。
+                        // 只在啟用時才對 swagger／api-docs 路徑 permitAll（見本 lambda 前的條件式）；
+                        // 關閉時這些路徑不在放行清單，匿名請求落入 anyRequest().authenticated() 回 401，
+                        // 掃描器探測不會穿過 Security 打到靜態資源 handler（否則會 500 並洗 ERROR log）。
                         .requestMatchers("/favicon.ico", "/error").permitAll()
 
-                        // 認證相關 API
+                        // 認證相關 API（logout 需認證，refresh 靠 cookie 驗證故保持公開）
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout").authenticated()
                         .requestMatchers("/api/v1/auth/**").permitAll()
 
-                        // 公開的 GET 請求 (文章、標籤等) - 暫定，後續可細調
-                        .requestMatchers(HttpMethod.GET, "/api/v1/articles/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/users/**").permitAll()
+                        // 公開的 GET 請求（文章、標籤、檔案元資料、分類、系列）
+                        /*
+                         * 公開的文章讀取端點（SEC-09 收窄）。
+                         *
+                         * 原本是 `GET /api/v1/articles/**` 整段 permitAll，使 me / edit / versions /
+                         * highlights / progress 在 URL 層等同公開，只靠方法層 @PreAuthorize 兜底，
+                         * 違反 ai-docs/security.md 原則 1「兩層防護缺一不可」——任何一個 handler
+                         * 漏標 @PreAuthorize 就直接裸奔。
+                         *
+                         * 改為明確列舉「匿名可讀」的四條讀取端點 + 留言列表，其餘（含未來新增的
+                         * 子資源）一律落入 anyRequest().authenticated()。
+                         *
+                         * 清單依據（逐條對應實作）：
+                         *   GET /api/v1/articles                  ArticleController#getPublishedArticles（無 @PreAuthorize）
+                         *   GET /api/v1/articles/archive          ArticleController#getArchive（無 @PreAuthorize）
+                         *   GET /api/v1/articles/slug/{slug}      ArticleController#getArticleBySlug（無 @PreAuthorize）
+                         *   GET /api/v1/articles/{uuid}           ArticleController#getArticle（無 @PreAuthorize）
+                         *   GET /api/v1/articles/{uuid}/comments  CommentController#list（原則 7 豁免，JavaDoc 明載匿名可讀）
+                         *   GET /api/v1/comments/{uuid}/replies   CommentController#listReplies（同上；回覆分頁，D3）
+                         *
+                         * 護欄：新增任何 articles 子端點時，預設就是「需認證」；要放行必須同步
+                         * 更新本清單、ai-docs/security.md 的 Public Endpoints 表與 SecurityConfigTest，
+                         * 且依 ai-docs/judgment.md §5 需 Yuan 拍板。
+                         */
+                        .requestMatchers(HttpMethod.GET, "/api/v1/articles").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/articles/archive").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/articles/slug/*").permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_ARTICLE_DETAIL).permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_ARTICLE_COMMENTS).permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_COMMENT_REPLIES).permitAll()
 
-                        // 其他所有請求需認證
-                        .anyRequest().authenticated())
+                        .requestMatchers(HttpMethod.GET, "/api/v1/tags/**").permitAll()
+                        /*
+                         * 檔案 GET 端點（含 /api/v1/files/{id} 元資料、/api/v1/files/{id}/content 內容代理）。
+                         *
+                         * 這裡的 permitAll 只代表「允許請求到達 Controller」，不代表資料本身公開！
+                         * /api/v1/files/{id}/content 的真正授權判斷在 FileService#canRead()
+                         * （依授權矩陣：AVATAR 與已發布文章圖片對匿名開放；草稿圖片與未綁定檔案
+                         * 僅上傳者與 ADMIN 可讀，見 docs/superpowers/specs/2026-07-26-file-access-control-design.md §4）。
+                         *
+                         * 護欄：日後絕不可因為看到這行 permitAll 就以為「檔案是公開端點」而移除或繞過
+                         * service 層的 canRead() 檢查——那等於讓草稿圖片對外洩漏，正是本次
+                         * 檔案存取控制（B4）要防止的漏洞。
+                         */
+                        .requestMatchers(HttpMethod.GET, "/api/v1/files/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/categories/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/series/**").permitAll()
+
+                        /*
+                         * 公開作者功能（Yuan 已同意，judgment.md §5；ai-docs/security.md Public Endpoints 表）：
+                         *   GET /api/v1/users/{uuid}/profile  PublicAuthorController#getPublicProfile（僅 ACTIVE 使用者，其餘一律 404）
+                         *   GET /api/v1/authors               PublicAuthorController#searchAuthors（只列 ACTIVE 且有已發布文章者，最多 20 筆）
+                         * 兩者都不取用 @AuthenticationPrincipal，回應不隨登入者而變。
+                         * 以 UUID 形狀限定 profile 路徑，故 /api/v1/users/me/... 等字面量子路徑仍落入 anyRequest().authenticated()；
+                         * 只開放 GET，PATCH /api/v1/users/{uuid}/profile 之類的寫入維持需認證。
+                         */
+                        .requestMatchers(HttpMethod.GET, PUBLIC_USER_PROFILE).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/authors").permitAll()
+
+                        /** 推薦 API（公開） */
+                        .requestMatchers(HttpMethod.GET, "/api/v1/recommend/**").permitAll()
+
+                        /** 搜尋 API（公開查詢與建議，歷史記錄仍需認證） */
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/search/suggest").permitAll()
+
+                        /** Admin 管理端點，僅 ADMIN 可存取 */
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+
+                        /** 其他所有請求需認證 */
+                        .anyRequest().authenticated();
+                })
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(unauthorizedEntryPoint())
+                        .accessDeniedHandler(accessDeniedHandler()))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
@@ -67,6 +259,45 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * 自訂未認證入口點，將未登入請求回傳 401 + 統一 {@link ApiResponse} 結構。
+     *
+     * <p>避免 Spring 預設輸出 {@code {timestamp,status,error,path}}（與全站 ApiResponse 不一致）。</p>
+     *
+     * @return 回傳 401 的 {@link AuthenticationEntryPoint}
+     */
+    @Bean
+    public AuthenticationEntryPoint unauthorizedEntryPoint() {
+        return (request, response, authException) ->
+                writeApiResponse(response, HttpServletResponse.SC_UNAUTHORIZED, CommonErrorCode.UNAUTHENTICATED);
+    }
+
+    /**
+     * 自訂無權限拒絕處理器，將 403 回應改為統一 {@link ApiResponse} 結構。
+     *
+     * @return 回傳 403 的 {@link AccessDeniedHandler}
+     */
+    @Bean
+    public AccessDeniedHandler accessDeniedHandler() {
+        return (request, response, accessDeniedException) ->
+                writeApiResponse(response, HttpServletResponse.SC_FORBIDDEN, CommonErrorCode.FORBIDDEN);
+    }
+
+    /**
+     * 將給定 {@link CommonErrorCode} 序列化為 {@link ApiResponse} JSON 寫入 HTTP 回應。
+     *
+     * @param response   HTTP 回應物件
+     * @param httpStatus HTTP 狀態碼
+     * @param errorCode  業務錯誤碼
+     */
+    private void writeApiResponse(HttpServletResponse response, int httpStatus, CommonErrorCode errorCode)
+            throws java.io.IOException {
+        response.setStatus(httpStatus);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        objectMapper.writeValue(response.getWriter(), ApiResponse.failed(errorCode));
+    }
+
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
@@ -75,9 +306,12 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of("*")); // 生產環境建議指定具體域名
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        configuration.setAllowedOrigins(allowedOrigins);
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
+        configuration.setAllowCredentials(true);
+        // 429 的 Retry-After（SEC-23）：跨域（例如本機前端 :3000 打後端 :8080）時瀏覽器預設讀不到此 header
+        configuration.setExposedHeaders(List.of("Retry-After"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);

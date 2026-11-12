@@ -18,9 +18,15 @@ import org.springframework.context.annotation.Configuration;
         "dowob.xyz.blog.module.user.mapper",
         "dowob.xyz.blog.module.article.mapper",
         "dowob.xyz.blog.module.tag.mapper",
-        "dowob.xyz.blog.module.file.mapper"
+        "dowob.xyz.blog.module.file.mapper",
+        "dowob.xyz.blog.module.comment.mapper",
+        "dowob.xyz.blog.module.reading.mapper",
+        "dowob.xyz.blog.module.series.mapper",
+        "dowob.xyz.blog.module.version.mapper"
 })
 public class MyBatisConfig {
-    // 使用 Spring Boot 自動配置，不需要手動建立 SqlSessionFactory
-    // 若需要自定義設定，可在 application.yaml 中配置 mybatis.* 屬性
+    /**
+     * 使用 Spring Boot 自動配置，不需要手動建立 SqlSessionFactory。
+     * 若需要自定義設定，可在 application.yaml 中配置 mybatis.* 屬性。
+     */
 }

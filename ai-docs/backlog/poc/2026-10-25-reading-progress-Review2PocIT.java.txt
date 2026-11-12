@@ -1,0 +1,117 @@
+package dowob.xyz.blog.module.reading.job;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.reading.mapper.ReadingProgressMapper;
+import dowob.xyz.blog.module.reading.service.ReadingProgressService;
+import dowob.xyz.blog.module.reading.support.ReadingCleanupITSupport;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+import java.math.BigDecimal;
+import java.util.Set;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class Review2PocIT extends ReadingCleanupITSupport {
+    @Autowired private ReadingProgressService progressService;
+    @Autowired private StringRedisTemplate redis;
+    @Autowired private ArticleFacade articleFacade;
+    @Autowired private ReadingProgressMapper realMapper;
+
+    private Runnable beforeUpsert;
+    private Runnable afterUpsert;
+
+    private final ReadingProgressMapper hooking = (u, a, p, h) -> {
+        if (beforeUpsert != null) { Runnable r = beforeUpsert; beforeUpsert = null; r.run(); }
+        int n = realMapper.upsert(u, a, p, h);
+        if (afterUpsert != null) { Runnable r = afterUpsert; afterUpsert = null; r.run(); }
+        return n;
+    };
+
+    @BeforeEach
+    void clean() {
+        Set<String> keys = redis.keys(RedisKeyConstant.READING_PROGRESS_PREFIX + "*");
+        if (keys != null && !keys.isEmpty()) redis.delete(keys);
+        redis.delete(RedisKeyConstant.READING_DIRTY_KEY);
+    }
+
+    private BigDecimal db(UUID a) {
+        return jdbc.query("SELECT progress FROM user_reading_progress WHERE user_uuid = ? AND article_uuid = ?",
+                rs -> rs.next() ? rs.getBigDecimal(1) : null, USER_UUID, a);
+    }
+    private boolean dirty(UUID a) {
+        return Boolean.TRUE.equals(redis.opsForSet().isMember(RedisKeyConstant.READING_DIRTY_KEY, USER_UUID + ":" + a));
+    }
+    private String hkey(UUID a) { return RedisKeyConstant.READING_PROGRESS_PREFIX + USER_UUID + ":" + a; }
+
+    /** POC-1: 同一毫秒、不同進度 -> CAS 相等 -> 新進度的 dirty 標記被抹掉。 */
+    @Test
+    void poc1_sameMillisecondCollisionLosesDirty() {
+        Article art = createArticle(ArticleStatus.PUBLISHED);
+        UUID a = art.getUuid();
+        progressService.update(USER_UUID, a, new BigDecimal("0.30"), "first");
+        Object u = redis.opsForHash().get(hkey(a), "updatedAt");
+        ReadingProgressFlushJob job = new ReadingProgressFlushJob(redis, articleFacade, hooking);
+        afterUpsert = () -> {   // 與 service.update 相同的寫法，但 updatedAt 與前一次同一毫秒
+            redis.opsForHash().putAll(hkey(a), java.util.Map.of("progress", "0.60", "lastHeading", "second", "updatedAt", u.toString()));
+            redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, USER_UUID + ":" + a);
+        };
+        job.flush();
+        job.flush();
+        assertThat(db(a)).as("同毫秒碰撞：DB 應為 0.60").isEqualByComparingTo("0.60");
+    }
+
+    /** POC-2: 兩個 flusher 交錯 + upsert 無單調保護 -> 舊值蓋掉新值，且 dirty 已被較新的 flusher 清掉。 */
+    @Test
+    void poc2_twoFlushersStaleUpsertOverwritesNewer() throws Exception {
+        Article art = createArticle(ArticleStatus.PUBLISHED);
+        UUID a = art.getUuid();
+        progressService.update(USER_UUID, a, new BigDecimal("0.30"), "first");
+        ReadingProgressFlushJob job2 = new ReadingProgressFlushJob(redis, articleFacade, realMapper);
+        ReadingProgressFlushJob job1 = new ReadingProgressFlushJob(redis, articleFacade, hooking);
+        beforeUpsert = () -> {   // job1 已讀 hash(0.30) 但 upsert 被延遲：期間 update 0.60 + 另一個實例 flush
+            try { Thread.sleep(5); } catch (InterruptedException ignored) { }
+            progressService.update(USER_UUID, a, new BigDecimal("0.60"), "second");
+            job2.flush();
+        };
+        job1.flush();
+        job1.flush();
+        assertThat(db(a)).as("DB 應為較新的 0.60").isEqualByComparingTo("0.60");
+        assertThat(dirty(a)).isFalse();
+    }
+
+    /** POC-3: 完成(>=0.95) 直寫 + DEL 與 flush 交錯 -> 舊進度蓋掉完成進度。 */
+    @Test
+    void poc3_completionOverwrittenByStaleFlush() {
+        Article art = createArticle(ArticleStatus.PUBLISHED);
+        UUID a = art.getUuid();
+        progressService.update(USER_UUID, a, new BigDecimal("0.30"), "first");
+        ReadingProgressFlushJob job = new ReadingProgressFlushJob(redis, articleFacade, hooking);
+        beforeUpsert = () -> progressService.update(USER_UUID, a, new BigDecimal("0.97"), "end");
+        job.flush();
+        job.flush();
+        assertThat(db(a)).as("完成進度 0.97 不得被舊的 0.30 蓋掉").isEqualByComparingTo("0.97");
+    }
+
+    /** POC-4: 讀到空 hash 之後、CAS 之前有新 update -> 必須保留成員（現有測試沒有涵蓋空 hash 路徑的交錯）。 */
+    @Test
+    void poc4_emptyHashThenUpdateBeforeCas_keepsMember() {
+        Article art = createArticle(ArticleStatus.PUBLISHED);
+        UUID a = art.getUuid();
+        redis.opsForSet().add(RedisKeyConstant.READING_DIRTY_KEY, USER_UUID + ":" + a);
+        StringRedisTemplate spy = org.mockito.Mockito.spy(redis);
+        org.mockito.Mockito.doAnswer(inv -> {
+            progressService.update(USER_UUID, a, new BigDecimal("0.40"), "x");
+            return inv.callRealMethod();
+        }).when(spy).execute(org.mockito.ArgumentMatchers.any(org.springframework.data.redis.core.script.RedisScript.class),
+                org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.any(Object[].class));
+        new ReadingProgressFlushJob(spy, articleFacade, realMapper).flush();
+        assertThat(dirty(a)).as("空 hash 讀取後才有的新 update，標記不得被抹掉").isTrue();
+    }
+}

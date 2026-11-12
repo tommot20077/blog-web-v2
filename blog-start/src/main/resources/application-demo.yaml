@@ -1,5 +1,8 @@
 # 此檔案用於演示配置結構 (Demo)
 # 實際值應由環境變數或 deployment.yaml 注入
+#
+# demo 屬於非正式 profile（RuntimeProfiles）：基底 application.yaml 不再內建預設憑證（SEC-12），
+# 本檔的展示用預設值僅供 demo compose 使用，嚴禁用於正式環境；JWT 私鑰未設時亦只在 demo 等非正式 profile 才會自動產生。
 
 spring:
   application:
@@ -18,9 +21,18 @@ spring:
     username: ${RABBITMQ_USERNAME:guest}
     password: ${RABBITMQ_PASSWORD:guest}
 
+  # Redis
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
   # Elasticsearch
   elasticsearch:
     uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
+    username: ${ELASTICSEARCH_USERNAME:elastic}
+    password: ${ELASTICSEARCH_PASSWORD:__CHANGE_ME_ELASTIC_PASSWORD__}
 
 # MinIO Config
 minio:
@@ -28,3 +40,10 @@ minio:
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin}
   bucket-name: ${MINIO_BUCKET:blog-files}
+
+# SEC-21：非正式環境開啟 Swagger UI 與 /v3/api-docs（基底 yaml 預設關閉）
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

@@ -38,6 +38,36 @@ public enum CommonErrorCode implements IErrorCode {
      */
     REQUEST_PARAM_MISSING("A0004", "請求參數缺失"),
 
+    /**
+     * 未認證（未登入或 Token 無效）
+     */
+    UNAUTHENTICATED("A0005", "請先登入"),
+
+    /**
+     * 已認證但無權限存取資源
+     */
+    FORBIDDEN("A0006", "權限不足"),
+
+    /**
+     * 資料衝突（唯一鍵衝突的通用兜底；對應 HTTP 409）
+     *
+     * <p>訊息刻意不含 SQL、約束名或欄位值。業務上能明確辨識的衝突（如 slug 已被使用）
+     * 應由 service 層轉成更具體的業務錯誤碼，本碼只在未被攔下時兜底。NOT NULL、外鍵等非唯一鍵的完整性違反是程式缺陷，不使用本碼（回 500 並記 ERROR）。</p>
+     */
+    DATA_CONFLICT("A0007", "資料衝突，請確認後再試"),
+
+    /**
+     * 樂觀鎖衝突（資料在讀取後已被他人修改；對應 HTTP 409）
+     */
+    OPTIMISTIC_LOCK_CONFLICT("A0008", "資料已被他人修改，請重新整理後再試"),
+
+    /**
+     * 通用應用層限流超限（對應 HTTP 429，並帶 {@code Retry-After} header，單位秒）
+     *
+     * <p>與 {@code UserErrorCode.RATE_LIMIT_EXCEEDED}（A0113，auth 流程，HTTP 400）是兩個獨立的碼：
+     * 本碼只由 {@code @RateLimited} 攔截器產生。</p>
+     */
+    TOO_MANY_REQUESTS("A0009", "請求過於頻繁，請稍後再試"),
 
     /**
      * 系統執行出錯，請稍後再試
@@ -47,7 +77,17 @@ public enum CommonErrorCode implements IErrorCode {
     /**
      * 資料庫服務異常
      */
-    DATABASE_ERROR("B0100", "資料庫服務異常");
+    DATABASE_ERROR("B0100", "資料庫服務異常"),
+
+    /**
+     * 物件儲存服務異常（如 MinIO 上傳/刪除失敗）
+     */
+    STORAGE_ERROR("B0200", "儲存服務異常，請稍後再試"),
+
+    /**
+     * 檔案 I/O 異常（如讀取檔案內容或 MIME 偵測失敗）
+     */
+    FILE_IO_ERROR("B0201", "檔案處理異常，請稍後再試");
 
     /**
      * 錯誤碼

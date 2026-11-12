@@ -1,0 +1,342 @@
+package dowob.xyz.blog.module.article.facade;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+/**
+ * ArticleLookupFacadeImpl 單元測試
+ *
+ * <p>
+ * 驗證「最小依賴」文章查詢 Facade 的行為：直接查 {@link ArticleRepository}，
+ * 將 {@link Article} entity 轉為跨模組 {@link ArticleData}。
+ * </p>
+ *
+ * <p>
+ * 這個 Bean 存在的唯一理由是打斷 article ⇄ file 模組的 Spring 循環依賴
+ * （見 {@code ArticleLookupFacade} javadoc），因此測試特別驗證：
+ * {@code articleUuid == null} 時不得碰 repository，直接回傳 empty。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@ExtendWith(MockitoExtension.class)
+@DisplayName("ArticleLookupFacadeImpl 單元測試")
+class ArticleLookupFacadeImplTest {
+
+    /** Mock：文章資料存取 */
+    @Mock
+    private ArticleRepository articleRepository;
+
+    /** Mock：users reference data 查詢（assembler 用，只讀 mapper，不引入 service / facade 依賴） */
+    @Mock
+    private ArticleMapper articleMapper;
+
+    /** Mock：作者名下文章查詢 mapper */
+    @Mock
+    private dowob.xyz.blog.module.article.mapper.ArticleAuthorCleanupMapper articleAuthorCleanupMapper;
+
+    /** 受測物件 */
+    private ArticleLookupFacadeImpl articleLookupFacadeImpl;
+
+    /**
+     * 組裝受測物件：注入真實的 {@link ArticleDataAssembler}，
+     * 讓原有的欄位對應測試仍驗到真正的轉換邏輯。
+     */
+    @BeforeEach
+    void setUp() {
+        articleLookupFacadeImpl = new ArticleLookupFacadeImpl(articleRepository, new ArticleDataAssembler(), articleAuthorCleanupMapper);
+    }
+
+    /**
+     * 驗證：文章存在時應回傳完整對應的 ArticleData（含 authorUuid 與 status，
+     * 這兩個欄位是 file 模組授權判斷的依據）。
+     */
+    @Test
+    @DisplayName("findByUuid → 文章存在 → 應回傳含 authorUuid / status 的 ArticleData")
+    void findByUuid_articleExists_shouldReturnArticleData() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setId(42L);
+        article.setUuid(articleUuid);
+        UUID authorUuid = UUID.randomUUID();
+        article.setAuthorUuid(authorUuid);
+        article.setStatus(ArticleStatus.PUBLISHED);
+        UUID seriesUuid = UUID.randomUUID();
+        article.setSeriesUuid(seriesUuid);
+        article.setSeriesPosition(2);
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        Optional<ArticleData> result = articleLookupFacadeImpl.findByUuid(articleUuid);
+
+        assertThat(result).isPresent();
+        ArticleData data = result.get();
+        assertThat(data.authorUuid()).isEqualTo(authorUuid);
+        assertThat(data.uuid()).isEqualTo(articleUuid);
+        assertThat(data.status()).isEqualTo("PUBLISHED");
+        assertThat(data.seriesUuid()).isEqualTo(seriesUuid);
+        assertThat(data.seriesPosition()).isEqualTo(2);
+    }
+
+    /**
+     * 驗證：status 為 null 時不得 NPE，status 欄位以 null 回傳。
+     */
+    @Test
+    @DisplayName("findByUuid → 文章 status 為 null → status 欄位應為 null 且不拋錯")
+    void findByUuid_nullStatus_shouldReturnNullStatus() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setId(1L);
+        article.setUuid(articleUuid);
+        article.setAuthorUuid(UUID.randomUUID());
+        article.setStatus(null);
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        Optional<ArticleData> result = articleLookupFacadeImpl.findByUuid(articleUuid);
+
+        assertThat(result).isPresent();
+        assertThat(result.get().status()).isNull();
+    }
+
+    /**
+     * 驗證：文章不存在時回傳 empty（呼叫端 file 模組據此 fail-safe 視為不公開）。
+     */
+    @Test
+    @DisplayName("findByUuid → 文章不存在 → 應回傳 Optional.empty()")
+    void findByUuid_articleNotFound_shouldReturnEmpty() {
+        UUID articleUuid = UUID.randomUUID();
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        Optional<ArticleData> result = articleLookupFacadeImpl.findByUuid(articleUuid);
+
+        assertThat(result).isEmpty();
+    }
+
+    /**
+     * 驗證：articleUuid 為 null 時直接回傳 empty，不查 repository。
+     */
+    @Test
+    @DisplayName("findByUuid → articleUuid 為 null → 應回傳 empty 且不查 repository")
+    void findByUuid_nullUuid_shouldReturnEmptyWithoutRepositoryCall() {
+        Optional<ArticleData> result = articleLookupFacadeImpl.findByUuid(null);
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(articleRepository);
+    }
+    /**
+     * 驗證（設計 §3.1）：回傳的 ArticleData 帶 authorUuid 與 seriesUuid。
+     */
+    @Test
+    @DisplayName("findByUuid → 文章有作者與系列 → authorUuid 與 seriesUuid 非 null 且正確")
+    void findByUuid_withAuthorAndSeries_shouldFillUuidFields() {
+        UUID articleUuid = UUID.randomUUID();
+        UUID authorUuid = UUID.randomUUID();
+        UUID seriesUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setId(42L);
+        article.setUuid(articleUuid);
+        article.setAuthorUuid(authorUuid);
+        article.setStatus(ArticleStatus.PUBLISHED);
+        article.setSeriesUuid(seriesUuid);
+        article.setSeriesPosition(2);
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        ArticleData data = articleLookupFacadeImpl.findByUuid(articleUuid).orElseThrow();
+
+        assertThat(data.authorUuid()).isEqualTo(authorUuid);
+        assertThat(data.seriesUuid()).isEqualTo(seriesUuid);
+    }
+
+    /**
+     * 驗證：文章無系列時 seriesUuid 為 null。
+     */
+    @Test
+    @DisplayName("findByUuid → 文章無系列 → seriesUuid 為 null")
+    void findByUuid_noSeries_shouldLeaveSeriesUuidNull() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setId(42L);
+        article.setUuid(articleUuid);
+        article.setAuthorUuid(UUID.randomUUID());
+        article.setStatus(ArticleStatus.DRAFT);
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        ArticleData data = articleLookupFacadeImpl.findByUuid(articleUuid).orElseThrow();
+
+        assertThat(data.seriesUuid()).isNull();
+    }
+
+    /**
+     * 驗證（M4）：只以「保留」狀態（PUBLISHED／ARCHIVED，由 ArticleStatus 政策推得）查詢，並把結果轉成 UUID 集合。
+     */
+    @Test
+    @DisplayName("findFileUuidsReferencedByRetainedArticles → 以保留狀態查詢並轉成 UUID 集合")
+    void findFileUuidsReferencedByRetainedArticles_queriesRetainedStatusesOnly() {
+        UUID author = UUID.randomUUID();
+        UUID f1 = UUID.randomUUID();
+        UUID f2 = UUID.randomUUID();
+        when(articleAuthorCleanupMapper.findReferencedFileUuidsByAuthorAndStatuses(
+                org.mockito.ArgumentMatchers.eq(author), org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(java.util.List.of(f1.toString(), f2.toString()));
+
+        java.util.Set<UUID> result = articleLookupFacadeImpl.findFileUuidsReferencedByRetainedArticles(author);
+
+        assertThat(result).containsExactlyInAnyOrder(f1, f2);
+        org.mockito.ArgumentCaptor<java.util.List<String>> statuses = org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        org.mockito.Mockito.verify(articleAuthorCleanupMapper)
+                .findReferencedFileUuidsByAuthorAndStatuses(org.mockito.ArgumentMatchers.eq(author), statuses.capture());
+        assertThat(statuses.getValue()).containsExactlyInAnyOrder("PUBLISHED", "ARCHIVED");
+    }
+
+    @Test
+    @DisplayName("findFileUuidsReferencedByRetainedArticles → authorUuid 為 null → 空集合且不查詢")
+    void findFileUuidsReferencedByRetainedArticles_nullAuthor_returnsEmptyWithoutQuery() {
+        assertThat(articleLookupFacadeImpl.findFileUuidsReferencedByRetainedArticles(null)).isEmpty();
+        verifyNoInteractions(articleAuthorCleanupMapper);
+    }
+
+    @Test
+    @DisplayName("findFileUuidsReferencedByAuthorArticles → 以全部 ArticleStatus 查詢（含草稿）並轉成 UUID 集合（DATA-07：單篇刪除後其餘文章仍在）")
+    void findFileUuidsReferencedByAuthorArticles_queriesAllStatuses() {
+        UUID author = UUID.randomUUID();
+        UUID f1 = UUID.randomUUID();
+        when(articleAuthorCleanupMapper.findReferencedFileUuidsByAuthorAndStatuses(
+                org.mockito.ArgumentMatchers.eq(author), org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(java.util.List.of(f1.toString()));
+
+        java.util.Set<UUID> result = articleLookupFacadeImpl.findFileUuidsReferencedByAuthorArticles(author);
+
+        assertThat(result).containsExactly(f1);
+        org.mockito.ArgumentCaptor<java.util.List<String>> statuses = org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        org.mockito.Mockito.verify(articleAuthorCleanupMapper)
+                .findReferencedFileUuidsByAuthorAndStatuses(org.mockito.ArgumentMatchers.eq(author), statuses.capture());
+        assertThat(statuses.getValue()).containsExactlyInAnyOrder(
+                java.util.Arrays.stream(ArticleStatus.values()).map(Enum::name).toArray(String[]::new));
+    }
+
+    @Test
+    @DisplayName("findFileUuidsReferencedByAuthorArticles → authorUuid 為 null → 空集合且不查詢")
+    void findFileUuidsReferencedByAuthorArticles_nullAuthor_returnsEmptyWithoutQuery() {
+        assertThat(articleLookupFacadeImpl.findFileUuidsReferencedByAuthorArticles(null)).isEmpty();
+        verifyNoInteractions(articleAuthorCleanupMapper);
+    }
+
+    @Test
+    @DisplayName("filterExistingUuids → 去重、略過 null，經 mapper 查詢後轉成 UUID 集合")
+    void filterExistingUuids_dedupesAndMapsToUuids() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        when(articleAuthorCleanupMapper.findExistingUuidsIn(org.mockito.ArgumentMatchers.anyList()))
+                .thenReturn(java.util.List.of(a.toString()));
+
+        java.util.Set<UUID> result = articleLookupFacadeImpl
+                .filterExistingUuids(java.util.Arrays.asList(a, b, a, null));
+
+        assertThat(result).containsExactly(a);
+        org.mockito.ArgumentCaptor<java.util.List<UUID>> sent = org.mockito.ArgumentCaptor.forClass(java.util.List.class);
+        org.mockito.Mockito.verify(articleAuthorCleanupMapper).findExistingUuidsIn(sent.capture());
+        assertThat(sent.getValue()).containsExactly(a, b);
+    }
+
+    @Test
+    @DisplayName("filterExistingUuids → null 或空集合：空結果且不查詢")
+    void filterExistingUuids_nullOrEmpty_returnsEmptyWithoutQuery() {
+        assertThat(articleLookupFacadeImpl.filterExistingUuids(null)).isEmpty();
+        assertThat(articleLookupFacadeImpl.filterExistingUuids(java.util.List.of())).isEmpty();
+        verifyNoInteractions(articleAuthorCleanupMapper);
+    }
+
+    /** W5A：file 模組消費內容變更事件時，以此取得文章最新內文來回填檔案綁定 */
+    @Test
+    @DisplayName("findContentByUuid → 文章存在 → 回傳目前內文")
+    void findContentByUuid_articleExists_returnsContent() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setUuid(articleUuid);
+        article.setContent("![a](/api/v1/files/x/content)");
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        assertThat(articleLookupFacadeImpl.findContentByUuid(articleUuid)).contains("![a](/api/v1/files/x/content)");
+    }
+
+    @Test
+    @DisplayName("findContentByUuid → 文章內文為 null → 以空字串表示（與「文章不存在」區分）")
+    void findContentByUuid_nullContent_returnsEmptyString() {
+        UUID articleUuid = UUID.randomUUID();
+        Article article = new Article();
+        article.setUuid(articleUuid);
+        article.setContent(null);
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.of(article));
+
+        assertThat(articleLookupFacadeImpl.findContentByUuid(articleUuid)).contains("");
+    }
+
+    @Test
+    @DisplayName("findContentByUuid → 文章不存在 → empty")
+    void findContentByUuid_articleMissing_returnsEmpty() {
+        UUID articleUuid = UUID.randomUUID();
+        when(articleRepository.findByUuid(articleUuid)).thenReturn(Optional.empty());
+
+        assertThat(articleLookupFacadeImpl.findContentByUuid(articleUuid)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("findContentByUuid → articleUuid 為 null → empty 且不查 DB")
+    void findContentByUuid_nullUuid_returnsEmpty() {
+        assertThat(articleLookupFacadeImpl.findContentByUuid(null)).isEmpty();
+    }
+
+    /** B1：近期更新文章的 keyset 分頁委派 mapper，字串轉回 UUID，游標與頁大小原樣傳遞 */
+    @Test
+    @DisplayName("findUuidsUpdatedSinceAnyStatus → 委派 mapper（since／游標／頁大小原樣傳遞）並轉回 UUID")
+    void findUuidsUpdatedSinceAnyStatus_delegatesToMapperAndParsesUuids() {
+        LocalDateTime since = LocalDateTime.of(2026, 11, 4, 4, 17);
+        UUID after = UUID.randomUUID();
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        when(articleAuthorCleanupMapper.findUuidsUpdatedSince(since, after, 2))
+                .thenReturn(List.of(a.toString(), b.toString()));
+
+        List<UUID> result = articleLookupFacadeImpl.findUuidsUpdatedSinceAnyStatus(since, after, 2);
+
+        assertThat(result).containsExactly(a, b);
+    }
+
+    /** B1：limit 非正數不查 DB，直接回空清單 */
+    @Test
+    @DisplayName("findUuidsUpdatedSinceAnyStatus → limit <= 0 → 空清單且不碰 mapper")
+    void findUuidsUpdatedSinceAnyStatus_nonPositiveLimit_returnsEmptyWithoutQuery() {
+        assertThat(articleLookupFacadeImpl.findUuidsUpdatedSinceAnyStatus(LocalDateTime.now(), null, 0)).isEmpty();
+        assertThat(articleLookupFacadeImpl.findUuidsUpdatedSinceAnyStatus(LocalDateTime.now(), null, -5)).isEmpty();
+        verifyNoInteractions(articleAuthorCleanupMapper);
+    }
+
+    /** B1 fail-safe：since 為 null 不得退化成「全部文章」 */
+    @Test
+    @DisplayName("findUuidsUpdatedSinceAnyStatus → since 為 null → IllegalArgumentException（不可退化成全部文章）")
+    void findUuidsUpdatedSinceAnyStatus_nullSince_throws() {
+        assertThatThrownBy(() -> articleLookupFacadeImpl.findUuidsUpdatedSinceAnyStatus(null, null, 10))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(articleAuthorCleanupMapper);
+    }
+}

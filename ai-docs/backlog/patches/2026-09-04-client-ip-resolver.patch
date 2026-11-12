@@ -1,0 +1,200 @@
+commit 59c170d96bd3ce8fa9f0585ce36f080832302922
+Author: Claude <noreply@anthropic.com>
+Date:   Thu Jul 9 23:15:20 2026 +0000
+
+    fix(auth): 修補 token 撤銷鏈與 client IP 解析的安全漏洞
+    
+    工作包 A（輪 0 地基修復，TDD）：
+    - A1 changePassword 同步刪除 Redis refresh ZSet，撤銷所有裝置 refresh token
+    - A2 resetPassword 同步更新 Redis auth hash 版本並撤銷 refresh token
+      （原實作連版本都未同步，舊 access token 在 TTL 內仍有效）
+    - A3 refresh 邏輯下移 AuthService.refreshAccessToken：以 DB 權威狀態簽發，
+      修復 hash miss fallback v1/USER 與 FIELD_ROLE 零寫入端導致
+      AUTHOR/ADMIN 刷新後被降級為 USER 的缺陷
+    - A4 新增 ClientIpResolver（rightmost-untrusted 演算法，信任層數可配置），
+      取代直接信任 X-Forwarded-For 第一節，防止偽造 IP 繞過限流
+    
+    測試：AuthServiceTest 79、AuthControllerTest 41、UserServiceTest 19、
+    ClientIpResolverTest 6 全數通過；固化舊缺陷行為的 web 層測試改寫至新接縫
+    
+    Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01LC927FSn73bijPdFHsPsoH
+
+diff --git a/blog-infrastructure/src/main/java/dowob/xyz/blog/infrastructure/web/ClientIpResolver.java b/blog-infrastructure/src/main/java/dowob/xyz/blog/infrastructure/web/ClientIpResolver.java
+new file mode 100644
+index 0000000..6aed50b
+--- /dev/null
++++ b/blog-infrastructure/src/main/java/dowob/xyz/blog/infrastructure/web/ClientIpResolver.java
+@@ -0,0 +1,58 @@
++package dowob.xyz.blog.infrastructure.web;
++
++import jakarta.servlet.http.HttpServletRequest;
++import org.springframework.beans.factory.annotation.Value;
++import org.springframework.stereotype.Component;
++
++/**
++ * Client IP 解析器（供 IP 層級限流等安全機制使用）
++ *
++ * <p>
++ * 採 rightmost-untrusted 演算法：將 {@code [X-Forwarded-For 各節..., remoteAddr]} 視為請求鏈，
++ * 從右往左跳過 {@code trustedProxyCount} 層受信任的反向代理後取值。
++ * X-Forwarded-For 左側節點可由 client 任意偽造，右側節點由自家 proxy 逐層附加不可偽造，
++ * 因此絕不可直接取第一節——否則攻擊者可偽造任意 IP 繞過限流。
++ * </p>
++ *
++ * <p>
++ * 信任層數由 {@code app.http.trusted-proxy-count} 配置（預設 1，對應單層 nginx 反向代理）；
++ * 設 0 表示服務直接對外，完全忽略 X-Forwarded-For。
++ * </p>
++ *
++ * @author Yuan
++ * @version 1.0
++ */
++@Component
++public class ClientIpResolver {
++
++    /** X-Forwarded-For 標頭名稱 */
++    private static final String X_FORWARDED_FOR = "X-Forwarded-For";
++
++    /** 受信任的反向代理層數 */
++    private final int trustedProxyCount;
++
++    public ClientIpResolver(@Value("${app.http.trusted-proxy-count:1}") int trustedProxyCount) {
++        this.trustedProxyCount = trustedProxyCount;
++    }
++
++    /**
++     * 解析請求的 client IP
++     *
++     * @param request HTTP 請求
++     * @return client IP 字串；無法解析時退回 {@link HttpServletRequest#getRemoteAddr()}
++     */
++    public String resolve(HttpServletRequest request) {
++        String forwardedFor = request.getHeader(X_FORWARDED_FOR);
++        if (trustedProxyCount <= 0 || forwardedFor == null || forwardedFor.isBlank()) {
++            return request.getRemoteAddr();
++        }
++
++        String[] chain = forwardedFor.split(",");
++        // 鏈尾的 remoteAddr 是第 1 層信任 proxy，故 XFF 內只需再跳過 trustedProxyCount - 1 節
++        int index = chain.length - trustedProxyCount;
++        if (index < 0) {
++            return request.getRemoteAddr();
++        }
++        return chain[index].trim();
++    }
++}
+diff --git a/blog-infrastructure/src/test/java/dowob/xyz/blog/infrastructure/web/ClientIpResolverTest.java b/blog-infrastructure/src/test/java/dowob/xyz/blog/infrastructure/web/ClientIpResolverTest.java
+new file mode 100644
+index 0000000..d6cfb6b
+--- /dev/null
++++ b/blog-infrastructure/src/test/java/dowob/xyz/blog/infrastructure/web/ClientIpResolverTest.java
+@@ -0,0 +1,108 @@
++package dowob.xyz.blog.infrastructure.web;
++
++import jakarta.servlet.http.HttpServletRequest;
++import org.junit.jupiter.api.DisplayName;
++import org.junit.jupiter.api.Test;
++import org.junit.jupiter.api.extension.ExtendWith;
++import org.mockito.Mock;
++import org.mockito.junit.jupiter.MockitoExtension;
++
++import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.Mockito.when;
++
++/**
++ * ClientIpResolver 單元測試
++ *
++ * <p>
++ * 驗證 rightmost-untrusted 演算法：以 [X-Forwarded-For 各節..., remoteAddr] 為鏈，
++ * 從右往左跳過受信任 proxy 層數後取值，使 client 端偽造的左側節點永遠不被採用。
++ * </p>
++ *
++ * @author Yuan
++ * @version 1.0
++ */
++@ExtendWith(MockitoExtension.class)
++class ClientIpResolverTest {
++
++    /** Mock：HTTP 請求 */
++    @Mock
++    private HttpServletRequest request;
++
++    /**
++     * 驗證：無 X-Forwarded-For 標頭時應回傳 remoteAddr。
++     */
++    @Test
++    @DisplayName("無 XFF 標頭 → 應回傳 remoteAddr")
++    void resolve_withoutXff_shouldReturnRemoteAddr() {
++        ClientIpResolver resolver = new ClientIpResolver(1);
++        when(request.getHeader("X-Forwarded-For")).thenReturn(null);
++        when(request.getRemoteAddr()).thenReturn("10.0.0.5");
++
++        assertThat(resolver.resolve(request)).isEqualTo("10.0.0.5");
++    }
++
++    /**
++     * 驗證：client 偽造 XFF 第一節時，1 層信任 proxy 應取 proxy 附加的最後一節（真實 IP），
++     * 而非可偽造的第一節。這是 IP 限流繞過的核心防線。
++     */
++    @Test
++    @DisplayName("偽造 XFF 第一節 + 1 層信任 proxy → 應取最後一節（真實 IP）")
++    void resolve_withForgedFirstEntry_shouldReturnRightmostUntrusted() {
++        ClientIpResolver resolver = new ClientIpResolver(1);
++        // 攻擊者送 "1.2.3.4"，反向代理附加真實 IP "203.0.113.7"
++        when(request.getHeader("X-Forwarded-For")).thenReturn("1.2.3.4, 203.0.113.7");
++
++        assertThat(resolver.resolve(request)).isEqualTo("203.0.113.7");
++    }
++
++    /**
++     * 驗證：2 層信任 proxy（如 ingress + nginx）時應取右數第二節。
++     */
++    @Test
++    @DisplayName("2 層信任 proxy → 應取右數第二節")
++    void resolve_withTwoTrustedProxies_shouldSkipInnerProxy() {
++        ClientIpResolver resolver = new ClientIpResolver(2);
++        when(request.getHeader("X-Forwarded-For")).thenReturn("1.2.3.4, 203.0.113.7, 10.42.0.1");
++
++        assertThat(resolver.resolve(request)).isEqualTo("203.0.113.7");
++    }
++
++    /**
++     * 驗證：0 層信任 proxy（直接對外）時應完全忽略 XFF，只信 remoteAddr。
++     */
++    @Test
++    @DisplayName("0 層信任 proxy → 應忽略 XFF，回傳 remoteAddr")
++    void resolve_withZeroTrustedProxies_shouldIgnoreXff() {
++        ClientIpResolver resolver = new ClientIpResolver(0);
++        when(request.getHeader("X-Forwarded-For")).thenReturn("1.2.3.4");
++        when(request.getRemoteAddr()).thenReturn("198.51.100.9");
++
++        assertThat(resolver.resolve(request)).isEqualTo("198.51.100.9");
++    }
++
++    /**
++     * 驗證：信任層數超過 XFF 鏈長度（異常配置或直連）時應退回 remoteAddr。
++     */
++    @Test
++    @DisplayName("信任層數超過鏈長 → 應退回 remoteAddr")
++    void resolve_trustedCountExceedsChain_shouldFallBackToRemoteAddr() {
++        ClientIpResolver resolver = new ClientIpResolver(3);
++        when(request.getHeader("X-Forwarded-For")).thenReturn("203.0.113.7");
++        when(request.getRemoteAddr()).thenReturn("10.0.0.5");
++
++        assertThat(resolver.resolve(request)).isEqualTo("10.0.0.5");
++    }
++
++    /**
++     * 驗證：空白 XFF 標頭應視同不存在。
++     */
++    @Test
++    @DisplayName("空白 XFF 標頭 → 應回傳 remoteAddr")
++    void resolve_blankXff_shouldReturnRemoteAddr() {
++        ClientIpResolver resolver = new ClientIpResolver(1);
++        when(request.getHeader("X-Forwarded-For")).thenReturn("   ");
++        when(request.getRemoteAddr()).thenReturn("10.0.0.5");
++
++        assertThat(resolver.resolve(request)).isEqualTo("10.0.0.5");
++    }
++}

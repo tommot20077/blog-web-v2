@@ -1,0 +1,365 @@
+package dowob.xyz.blog.module.user.service;
+
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.enums.UserStatus;
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.module.user.model.User;
+import dowob.xyz.blog.module.user.model.VerificationToken;
+import dowob.xyz.blog.module.user.util.TokenHasher;
+import dowob.xyz.blog.module.user.repository.UserRepository;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * AuthService 整合測試
+ *
+ * <p>
+ * 使用 Testcontainers 啟動真實的 PostgreSQL 與 Redis 容器，
+ * 驗證 AuthService 與 UserService 的完整業務流程（含資料庫持久化與 Redis 快取互動）。
+ * VerificationTokenRepository 為 MockBean，因整合測試著重於 User 狀態與 Redis 驗證。
+ * </p>
+ *
+ * @author Yuan
+ * @version 2.1
+ */
+class AuthServiceIntegrationTest extends AbstractIntegrationTest {
+
+    /** 受測服務 */
+    @Autowired
+    private AuthService authService;
+
+    /** 用戶自助服務（用於 changePassword / deleteAccount 整合測試） */
+    @Autowired
+    private UserService userService;
+
+    /** 用於驗證資料庫狀態 */
+    @Autowired
+    private UserRepository userRepository;
+
+    /** 用於驗證 Redis 狀態 */
+    @Autowired
+    private StringRedisTemplate redisTemplate;
+
+    /** 用於建立測試帳號的密碼加密器 */
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    /** 測試用電子信箱 */
+    private static final String TEST_EMAIL = "integration@example.com";
+
+    /** 測試用密碼 */
+    private static final String TEST_PASSWORD = "password123";
+
+    /** 測試用用戶名 */
+    private static final String TEST_USERNAME = "integrationuser";
+
+    /** 測試用暱稱 */
+    private static final String TEST_NICKNAME = "integrationUser";
+
+    /**
+     * 每個測試後清理資料庫與 Redis，確保測試隔離。
+     */
+    @AfterEach
+    void cleanUp() {
+        userRepository.findByEmail(TEST_EMAIL).ifPresent(user -> {
+            userRepository.delete(user);
+            redisTemplate.delete(RedisKeyConstant.getUserAuthKey(user.getUuid()));
+            redisTemplate.delete(RedisKeyConstant.getUserRefreshKey(user.getUuid()));
+        });
+    }
+
+    /* =========================================================================
+       AuthService 整合測試
+       ========================================================================= */
+
+    /**
+     * 驗證：呼叫 register() 後，用戶應真實存入 PostgreSQL 資料庫。
+     */
+    @Test
+    @DisplayName("register → 應將用戶持久化至資料庫")
+    void register_shouldPersistUserToDatabase() {
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        Optional<User> saved = userRepository.findByEmail(TEST_EMAIL);
+
+        assertThat(saved).isPresent();
+        assertThat(saved.get().getEmail()).isEqualTo(TEST_EMAIL);
+        assertThat(saved.get().getNickname()).isEqualTo(TEST_NICKNAME);
+        assertThat(saved.get().getRole()).isEqualTo(Role.USER);
+        assertThat(saved.get().getStatus()).isEqualTo(UserStatus.PENDING_VERIFICATION);
+    }
+
+    /**
+     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{uuid}} 應包含
+     * {@code version} 與 {@code status} 兩個欄位，且 status 應為 ACTIVE。
+     */
+    @Test
+    @DisplayName("login → 應將 version 與 status 寫入 Redis Hash")
+    void login_shouldSetVersionInRedis() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+        String redisKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        Map<Object, Object> entries = redisTemplate.opsForHash().entries(redisKey);
+        assertThat(entries).containsKey(RedisKeyConstant.FIELD_VERSION);
+        assertThat(entries).containsKey(RedisKeyConstant.FIELD_STATUS);
+        assertThat(entries.get(RedisKeyConstant.FIELD_STATUS)).isEqualTo(UserStatus.ACTIVE.name());
+    }
+
+    /**
+     * 驗證（Z1）：呼叫 login() 後，Redis Hash {@code user:auth:{uuid}} 不再包含 {@code id} 欄位。
+     */
+    @Test
+    @DisplayName("Z1 login → 整合測試：auth hash 不含 id 欄位")
+    void login_shouldNotWriteIdIntoAuthHash() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        Map<Object, Object> entries = redisTemplate.opsForHash()
+                .entries(RedisKeyConstant.getUserAuthKey(user.getUuid()));
+        assertThat(entries).doesNotContainKey("id");
+        assertThat(entries).containsKeys(
+                RedisKeyConstant.FIELD_VERSION, RedisKeyConstant.FIELD_STATUS, RedisKeyConstant.FIELD_ROLE);
+        assertThat(redisTemplate.hasKey("user:auth:" + user.getId())).isFalse();
+    }
+
+    /**
+     * 驗證：呼叫 login() 後，Redis Hash {@code user:auth:{uuid}} 應包含 {@code role} 欄位，
+     * 且值為該用戶的實際角色。此欄位供 {@code /refresh} 沿用，避免刷新時角色被降級為 USER。
+     */
+    @Test
+    @DisplayName("login → 應將 role 寫入 Redis Hash（供 refresh 沿用，避免角色降級）")
+    void login_shouldSetRoleInRedis() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE, Role.AUTHOR);
+        String redisKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+
+        authService.login(TEST_EMAIL, TEST_PASSWORD);
+
+        Map<Object, Object> entries = redisTemplate.opsForHash().entries(redisKey);
+        assertThat(entries).containsKey(RedisKeyConstant.FIELD_ROLE);
+        assertThat(entries.get(RedisKeyConstant.FIELD_ROLE)).isEqualTo(Role.AUTHOR.name());
+    }
+
+    /**
+     * 驗證：呼叫 verifyEmail() 後，用戶狀態應更新為 ACTIVE、emailVerified=true，
+     * 且 verificationTokenRepository.delete() 應被呼叫（整合驗證 Token 刪除行為）。
+     */
+    @Test
+    @DisplayName("verifyEmail → 整合測試：應將用戶狀態設為 ACTIVE 並標記信箱已驗證")
+    void verifyEmail_shouldActivateUserInDatabase() {
+        User user = buildAndSaveUser(UserStatus.PENDING_VERIFICATION);
+        String tokenValue = "integration-email-token";
+
+        VerificationToken mockToken = new VerificationToken();
+        mockToken.setId(99L);
+        mockToken.setUserId(user.getId());
+        mockToken.setTokenHash(TokenHasher.sha256Hex(tokenValue));
+        mockToken.setType("EMAIL_VERIFICATION");
+        mockToken.setExpiresAt(LocalDateTime.now().plusHours(24));
+
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenValue), "EMAIL_VERIFICATION"))
+                .thenReturn(Optional.of(mockToken));
+
+        authService.verifyEmail(tokenValue);
+
+        User updated = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(updated.isEmailVerified()).isTrue();
+        verify(verificationTokenRepository).delete(any(VerificationToken.class));
+    }
+
+    /**
+     * 驗證：DELETED 帳號呼叫 login() 應拋出 BusinessException（整合驗證帳號封鎖邏輯）。
+     */
+    @Test
+    @DisplayName("login → DELETED 帳號 → 整合測試：應拋出 BusinessException 拒絕登入")
+    void login_withDeletedAccount_shouldRejectLogin() {
+        buildAndSaveUser(UserStatus.DELETED);
+
+        assertThatThrownBy(() -> authService.login(TEST_EMAIL, TEST_PASSWORD))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    /* =========================================================================
+       UserService 整合測試
+       ========================================================================= */
+
+    /**
+     * 驗證：changePassword() 後，應撤銷該用戶所有 session——DB tokenVersion 升為 v2，
+     * 且 Redis {@code user:auth:{uuid}} 與 refresh ZSet 均清空，使既有 access token
+     * 與被盜的 refresh token 立即失效。
+     */
+    @Test
+    @DisplayName("changePassword → 整合測試：應撤銷所有 session（DB 版本升 v2、清 auth 與 refresh）")
+    void changePassword_shouldRevokeAllSessions() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());
+
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, UserStatus.ACTIVE.name());
+        redisTemplate.opsForZSet().add(refreshKey, "stolen-refresh-token", System.currentTimeMillis());
+
+        userService.changePassword(user.getUuid(), TEST_PASSWORD, "newPassword456");
+
+        User updated = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(updated.getTokenVersion()).isEqualTo("v2");
+        assertThat(redisTemplate.hasKey(authKey)).isFalse();
+        assertThat(redisTemplate.hasKey(refreshKey)).isFalse();
+    }
+
+    /**
+     * 驗證：deleteAccount() 後，Redis 中 user:auth:{uuid} 與 user:refresh:{uuid} 兩個鍵應被清除。
+     */
+    @Test
+    @DisplayName("deleteAccount → 整合測試：Redis user:auth:{uuid} 與 user:refresh:{uuid} 應被清除")
+    void deleteAccount_shouldClearRedisCache() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());
+
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
+        redisTemplate.opsForValue().set(refreshKey, "some-refresh-token");
+
+        userService.deleteAccount(user.getUuid(), TEST_PASSWORD);
+
+        assertThat(redisTemplate.hasKey(authKey)).isFalse();
+        assertThat(redisTemplate.hasKey(refreshKey)).isFalse();
+    }
+
+    /**
+     * 驗證：resetPassword()（忘記密碼救援）後，應撤銷該用戶所有 session——
+     * Redis {@code user:auth:{uuid}} 與 refresh ZSet 均清空，使被盜的 access/refresh token
+     * 立即失效。這是帳號救援的核心安全保證：重設密碼必須讓攻擊者現有 session 全數失效。
+     */
+    @Test
+    @DisplayName("resetPassword → 整合測試：應撤銷所有 session（清 auth 與 refresh）")
+    void resetPassword_shouldRevokeAllSessions() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+        String authKey = RedisKeyConstant.getUserAuthKey(user.getUuid());
+        String refreshKey = RedisKeyConstant.getUserRefreshKey(user.getUuid());
+
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_VERSION, "v1");
+        redisTemplate.opsForHash().put(authKey, RedisKeyConstant.FIELD_STATUS, UserStatus.ACTIVE.name());
+        redisTemplate.opsForZSet().add(refreshKey, "stolen-refresh-token", System.currentTimeMillis());
+
+        String tokenValue = "integration-reset-token";
+        VerificationToken resetToken = new VerificationToken();
+        resetToken.setId(88L);
+        resetToken.setUserId(user.getId());
+        resetToken.setTokenHash(TokenHasher.sha256Hex(tokenValue));
+        resetToken.setType("PASSWORD_RESET");
+        resetToken.setExpiresAt(LocalDateTime.now().plusHours(1));
+        when(verificationTokenRepository.findByTokenHashAndType(TokenHasher.sha256Hex(tokenValue), "PASSWORD_RESET"))
+                .thenReturn(Optional.of(resetToken));
+
+        authService.resetPassword(tokenValue, "newPassword456");
+
+        assertThat(redisTemplate.hasKey(authKey)).isFalse();
+        assertThat(redisTemplate.hasKey(refreshKey)).isFalse();
+    }
+
+    /**
+     * 驗證：register() 後，5 個通知偏好欄位應預設為 true（NOT NULL DEFAULT TRUE）。
+     * 這同時驗證 V18 migration 與 Java model 預設初始化避免送 NULL 違反約束。
+     */
+    @Test
+    @DisplayName("register → 通知偏好欄位應預設為 true 並成功持久化（不違反 NOT NULL）")
+    void register_shouldDefaultNotificationPreferencesToTrue() {
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        User saved = userRepository.findByEmail(TEST_EMAIL).orElseThrow();
+
+        assertThat(saved.isNotificationComment()).isTrue();
+        assertThat(saved.isNotificationLike()).isTrue();
+        assertThat(saved.isNotificationReview()).isTrue();
+        assertThat(saved.isNotificationFollow()).isTrue();
+        assertThat(saved.isNotificationNewsletter()).isTrue();
+    }
+
+    /**
+     * 驗證：updateProfile() 後，avatarUrl 與 location 應真實持久化至 PostgreSQL（V18 新欄位）。
+     */
+    @Test
+    @DisplayName("updateProfile → avatarUrl 與 location 應持久化至資料庫")
+    void updateProfile_shouldPersistAvatarUrlAndLocation() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+
+        userService.updateProfile(user.getUuid(), TEST_NICKNAME, "簡介", null, null,
+                "https://cdn.example.com/avatar.png", "Taipei");
+
+        User updated = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(updated.getAvatarUrl()).isEqualTo("https://cdn.example.com/avatar.png");
+        assertThat(updated.getLocation()).isEqualTo("Taipei");
+    }
+
+    /**
+     * 驗證：updateNotificationPreferences() 後，5 個布林欄位應真實持久化至 PostgreSQL。
+     */
+    @Test
+    @DisplayName("updateNotificationPreferences → 5 個通知偏好應持久化至資料庫")
+    void updateNotificationPreferences_shouldPersistFlags() {
+        User user = buildAndSaveUser(UserStatus.ACTIVE);
+
+        userService.updateNotificationPreferences(user.getUuid(), false, true, false, true, false);
+
+        User updated = userRepository.findById(user.getId()).orElseThrow();
+        assertThat(updated.isNotificationComment()).isFalse();
+        assertThat(updated.isNotificationLike()).isTrue();
+        assertThat(updated.isNotificationReview()).isFalse();
+        assertThat(updated.isNotificationFollow()).isTrue();
+        assertThat(updated.isNotificationNewsletter()).isFalse();
+    }
+
+    /* =========================================================================
+       測試輔助方法
+       ========================================================================= */
+
+    /**
+     * 直接存入資料庫建立指定狀態的測試用戶。
+     *
+     * @param status 用戶狀態
+     * @return 已儲存並帶有 ID 的 User 實體
+     */
+    private User buildAndSaveUser(UserStatus status) {
+        return buildAndSaveUser(status, Role.USER);
+    }
+
+    /**
+     * 直接存入資料庫建立指定狀態與角色的測試用戶。
+     *
+     * @param status 用戶狀態
+     * @param role   用戶角色
+     * @return 已儲存並帶有 ID 的 User 實體
+     */
+    private User buildAndSaveUser(UserStatus status, Role role) {
+        User user = new User();
+        user.setUuid(UUID.randomUUID());
+        user.setEmail(TEST_EMAIL);
+        user.setUsername(TEST_USERNAME);
+        user.setNickname(TEST_NICKNAME);
+        user.setPasswordHash(passwordEncoder.encode(TEST_PASSWORD));
+        user.setRole(role);
+        user.setStatus(status);
+        user.setTokenVersion("v1");
+        return userRepository.save(user);
+    }
+}

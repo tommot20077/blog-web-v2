@@ -1,0 +1,313 @@
+package dowob.xyz.blog.module.article.service;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.common.util.SecurityUtils;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.SeriesBasicInfo;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
+import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+/**
+ * 文章查詢服務（CQRS Read 層）。
+ *
+ * <p>對 Controller 提供文章讀取入口；委派 {@link ArticleService} 取得原始資料，
+ * 再以 {@link dowob.xyz.blog.infrastructure.facade.ReadingFacade} 補上當前使用者的 liked / bookmarked / progress 狀態，
+ * 並以 {@link dowob.xyz.blog.infrastructure.facade.SeriesFacade} 填充 series 導覽資訊（seriesNav）。</p>
+ *
+ * <p>採此分層的原因：避免 ArticleServiceImpl 與其他 Service 形成循環依賴。
+ * 將「Read + 使用者狀態組裝」與「Write + 計數維護」分開，符合 CQRS-lite 慣例。</p>
+ *
+ * <p>ArticleSummaryResponse 未暴露 DB 主鍵（id），故透過 {@link ArticleMapper#findIdsByUuids}
+ * 批量查詢 UUID→id，避免 N+1 問題。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Service
+@RequiredArgsConstructor
+public class ArticleQueryService {
+
+    private final ArticleService articleService;
+    private final ArticleMapper articleMapper;
+    private final ReadingFacade readingFacade;
+    private final SeriesFacade seriesFacade;
+    private final ArticleArchiveCache archiveCache;
+
+    // ─── 列表查詢（帶 liked 填充）───
+
+    /**
+     * 依篩選條件分頁取得已發布文章列表（含 liked 狀態）。
+     *
+     * @param query 篩選與排序參數（已正規化）
+     * @param page  頁碼（從 1 開始）
+     * @param size  每頁筆數
+     * @return 分頁文章摘要列表（liked 已填充）
+     */
+    // 純讀列表（不發 MQ、不寫 Redis 計數）：唯讀交易讓含 enrich 在內的多次查詢共用同一條連線（PERF-29）；詳情路徑刻意不開交易
+    @Transactional(readOnly = true)
+    public PageResult<ArticleSummaryResponse> getPublishedArticles(ArticleListQuery query, int page, int size) {
+        PageResult<ArticleSummaryResponse> result = articleService.getPublishedArticles(query, page, size);
+        enrich(result.getRecords());
+        return result;
+    }
+
+    /**
+     * 分頁取得當前登入用戶的文章列表（含 liked 狀態）。
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param page     頁碼（從 1 開始）
+     * @param size     每頁筆數
+     * @param status   文章狀態篩選（null 表示查詢全部）
+     * @return 分頁文章摘要列表（liked 已填充）
+     */
+    // 純讀列表（不發 MQ、不寫 Redis 計數）：唯讀交易讓含 enrich 在內的多次查詢共用同一條連線（PERF-29）；詳情路徑刻意不開交易
+    @Transactional(readOnly = true)
+    public PageResult<ArticleSummaryResponse> getMyArticles(
+            UUID authorUuid, int page, int size, ArticleStatus status) {
+        PageResult<ArticleSummaryResponse> result =
+                articleService.getMyArticles(authorUuid, page, size, status);
+        enrich(result.getRecords());
+        return result;
+    }
+
+    /**
+     * 分頁取得待審文章列表（含 liked 狀態，僅 ADMIN）。
+     *
+     * @param page 頁碼（從 1 開始）
+     * @param size 每頁筆數
+     * @return 分頁文章摘要列表（liked 已填充）
+     */
+    // 純讀列表（不發 MQ、不寫 Redis 計數）：唯讀交易讓含 enrich 在內的多次查詢共用同一條連線（PERF-29）；詳情路徑刻意不開交易
+    @Transactional(readOnly = true)
+    public PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size) {
+        PageResult<ArticleSummaryResponse> result = articleService.getPendingArticles(page, size);
+        enrich(result.getRecords());
+        return result;
+    }
+
+    /**
+     * 取得全部已發布文章的歸檔精簡投影（供前端年度歸檔頁使用）。
+     *
+     * <p>先讀 {@link ArticleArchiveCache}（Redis）：命中時直接回傳，不委派 {@link ArticleService}，
+     * 也就不會開啟交易、不查 DB。未命中才委派 {@link ArticleService#getArchive()} 並回填快取
+     * （空清單也回填）。快取的失效時機與 TTL 兜底見 {@link ArticleArchiveCache}。
+     * 快取放在這一層而非 {@code ArticleServiceImpl}，是因為後者標了 {@code @Transactional(readOnly = true)}，
+     * 在那裡命中快取仍會白白借出一條 DB 連線。</p>
+     *
+     * <p>歸檔投影僅含 uuid / title / slug / publishedAt / tags，無使用者個人化狀態（liked/bookmarked/progress），
+     * 故不經 enrich 處理，原樣回傳（也因此可以整份共用快取）。結果依 publishedAt 由新到舊排序，
+     * 無已發布文章時回傳空清單。</p>
+     *
+     * @return 歸檔文章投影列表（依 publishedAt 由新到舊排序，無資料回傳空清單）
+     */
+    public List<ArticleArchiveResponse> getArchive() {
+        return archiveCache.get().orElseGet(() -> {
+            List<ArticleArchiveResponse> archive = articleService.getArchive();
+            archiveCache.put(archive);
+            return archive;
+        });
+    }
+
+    // ─── 單篇查詢（帶 liked 填充）───
+
+    /**
+     * 根據 UUID 取得文章詳情（含 liked 狀態）。
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param viewerUuid    觀看者公開 UUID（匿名為 null）
+     * @param viewerRole  觀看者角色（匿名為 null）
+     * @param clientIp    客戶端 IP（用於防刷）
+     * @return 文章完整資訊（liked 已填充）
+     */
+    public ArticleResponse getArticleByUuid(
+            UUID articleUuid, UUID viewerUuid, Role viewerRole, String clientIp) {
+        ArticleResponse resp = articleService.getArticleByUuid(articleUuid, viewerUuid, viewerRole, clientIp);
+        enrichSingle(resp);
+        return resp;
+    }
+
+    /**
+     * 根據 slug 取得文章詳情（含 liked 狀態）。
+     *
+     * @param slug       文章 URL slug
+     * @param viewerUuid   觀看者公開 UUID（匿名為 null）
+     * @param viewerRole 觀看者角色（匿名為 null）
+     * @param clientIp   客戶端 IP（用於防刷）
+     * @return 文章完整資訊（liked 已填充）
+     */
+    public ArticleResponse getArticleBySlug(
+            String slug, UUID viewerUuid, Role viewerRole, String clientIp) {
+        ArticleResponse resp = articleService.getArticleBySlug(slug, viewerUuid, viewerRole, clientIp);
+        enrichSingle(resp);
+        return resp;
+    }
+
+    // ─── 收藏列表查詢 ───
+
+    /**
+     * 根據文章 ID 列表批次取得文章摘要（含 liked 狀態）。
+     *
+     * <p>供 BookmarkController 使用：先取得摘要，再批次填充 liked 狀態（含 series 導覽）。</p>
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return 文章摘要列表（liked 已填充）
+     */
+    public List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds) {
+        return getArticleSummariesByIds(articleIds, true);
+    }
+
+    /**
+     * 根據文章 ID 列表批次取得文章摘要，可選擇是否填充 series 導覽（seriesUuid / seriesTitle）。
+     *
+     * <p>SeriesService 詳情已自行以所屬 series 的 row 覆寫這兩欄，故傳 {@code false} 略過 enrich 內
+     * 的 SeriesFacade 批次查詢，避免查了又被覆寫的白工。其餘 caller 走預設 {@code true}。</p>
+     *
+     * @param articleIds       文章資料庫主鍵列表
+     * @param includeSeriesNav 是否以 SeriesFacade 補 seriesUuid / seriesTitle
+     * @return 文章摘要列表（liked 已填充）
+     */
+    public List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds, boolean includeSeriesNav) {
+        List<ArticleSummaryResponse> records = articleService.getArticleSummariesByIds(articleIds);
+        enrich(records, includeSeriesNav);
+        return records;
+    }
+
+    // ─── 私有 helper ───
+
+    /**
+     * 批次填充 ArticleSummaryResponse 列表的 liked / bookmarked / lastReadProgress / seriesUuid / seriesTitle 欄位。
+     *
+     * <p>ArticleSummaryResponse 未暴露 DB 主鍵，故先透過 UUID 批量查詢取得 id Map，
+     * 再以 id 批量查詢各狀態，避免 N+1。未登入時 liked/bookmarked=false，lastReadProgress=null。</p>
+     *
+     * <p>seriesUuid / seriesTitle 透過 SeriesFacade 補充（對有 seriesPosition 的文章）；
+     * seriesPosition 已由 ArticleServiceImpl.toSummaryResponse 填入。</p>
+     *
+     * @param records ArticleSummaryResponse 列表
+     */
+    private void enrich(List<ArticleSummaryResponse> records) {
+        enrich(records, true);
+    }
+
+    private void enrich(List<ArticleSummaryResponse> records, boolean includeSeriesNav) {
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        UUID userUuid = currentUserUuidOrNull();
+
+        // 批量取得 uuid → id 對應
+        List<UUID> uuids = records.stream()
+                .map(ArticleSummaryResponse::getUuid)
+                .collect(Collectors.toList());
+        List<Article> idRows = BatchedQuery.queryInBatches(uuids, articleMapper::findIdsByUuids);
+        Map<UUID, Long> uuidToId = idRows.stream()
+                .collect(Collectors.toMap(Article::getUuid, Article::getId));
+
+        // 文章 uuid → 所屬系列 uuid（M6-b：直接取自 articles.series_uuid，不再經 series 主鍵轉換）
+        Map<UUID, UUID> articleToSeriesUuid = idRows.stream()
+                .filter(a -> a.getSeriesUuid() != null)
+                .collect(Collectors.toMap(Article::getUuid, Article::getSeriesUuid));
+
+        // 補充 seriesUuid / seriesTitle（批次查詢，避免 N+1）；caller 若自行覆寫這兩欄可傳 false 略過
+        if (includeSeriesNav && !articleToSeriesUuid.isEmpty()) {
+            Map<UUID, SeriesBasicInfo> seriesMap = seriesFacade.batchGetSeriesBasicInfoByUuids(
+                    new HashSet<>(articleToSeriesUuid.values()));
+            records.forEach(r -> {
+                if (r.getSeriesPosition() != null) {
+                    SeriesBasicInfo info = seriesMap.get(articleToSeriesUuid.get(r.getUuid()));
+                    if (info != null) {
+                        r.setSeriesUuid(info.getSeriesUuid());
+                        r.setSeriesTitle(info.getSeriesTitle());
+                    }
+                }
+            });
+        }
+
+        if (userUuid == null) {
+            records.forEach(r -> {
+                r.setLiked(false);
+                r.setBookmarked(false);
+                r.setLastReadProgress(null);
+            });
+            return;
+        }
+
+        // 按讚／收藏（M2-b）與閱讀進度（M2-c）都以 UUID 識別
+        Set<UUID> likedUuids = readingFacade.batchIsLiked(userUuid, uuids);
+        Set<UUID> bookmarkedUuids = readingFacade.batchIsBookmarked(userUuid, uuids);
+        Map<UUID, BigDecimal> progressMap = readingFacade.batchGetProgress(userUuid, uuids);
+
+        records.forEach(r -> {
+            Long id = uuidToId.get(r.getUuid());
+            r.setLiked(id != null && likedUuids.contains(r.getUuid()));
+            r.setBookmarked(id != null && bookmarkedUuids.contains(r.getUuid()));
+            r.setLastReadProgress(id != null ? progressMap.get(r.getUuid()) : null);
+        });
+    }
+
+    /**
+     * 填充單篇 ArticleResponse 的 liked / bookmarked / lastReadProgress / seriesNav 欄位。
+     *
+     * <p>ArticleResponse 未暴露 DB 主鍵，透過 UUID 查詢 id，再判斷各狀態。
+     * 未登入時 liked/bookmarked=false，lastReadProgress=null；seriesNav 不受登入狀態影響。</p>
+     *
+     * @param resp ArticleResponse（可為 null）
+     */
+    private void enrichSingle(ArticleResponse resp) {
+        if (resp == null) {
+            return;
+        }
+        Long articleId = articleService.findIdByUuid(resp.getUuid());
+
+        // 填充 series 導覽資訊（不受登入狀態影響；SeriesFacade 以 uuid 自行處理文章不存在）
+        seriesFacade.getSeriesNavigation(resp.getUuid()).ifPresent(resp::setSeriesNav);
+
+        UUID userUuid = currentUserUuidOrNull();
+        if (userUuid == null) {
+            resp.setLiked(false);
+            resp.setBookmarked(false);
+            resp.setLastReadProgress(null);
+            return;
+        }
+        resp.setLiked(articleId != null && readingFacade.isLiked(userUuid, resp.getUuid()));
+        resp.setBookmarked(articleId != null && readingFacade.isBookmarked(userUuid, resp.getUuid()));
+        if (resp.getUuid() != null) {
+            resp.setLastReadProgress(readingFacade.getProgress(userUuid, resp.getUuid()));
+        }
+    }
+
+    /**
+     * 從 SecurityContextHolder 取得當前登入使用者 UUID，未登入時回傳 null。
+     *
+     * <p>Principal 為 {@link AuthUser}（JwtAuthenticationFilter 寫入），經 {@link SecurityUtils#currentAuthUser} 取出。
+     * 按讚／收藏（M2-b）、閱讀進度（M2-c）與是否登入的判斷一律以 UUID 為準，本類別不再使用 Long 使用者主鍵。</p>
+     *
+     * @return 使用者公開 UUID，或 null（匿名 / 未認證）
+     */
+    private UUID currentUserUuidOrNull() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return SecurityUtils.currentAuthUser(auth).map(AuthUser::uuid).orElse(null);
+    }
+}

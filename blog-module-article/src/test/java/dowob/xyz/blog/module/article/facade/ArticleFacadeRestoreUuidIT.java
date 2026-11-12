@@ -1,0 +1,255 @@
+package dowob.xyz.blog.module.article.facade;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleContentData;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleRestoreSource;
+import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.module.article.config.ArticleTestApplication;
+import dowob.xyz.blog.module.article.service.ArticleMarkdownRenderer;
+import dowob.xyz.blog.module.article.service.ArticleTocCodec;
+import dowob.xyz.blog.module.article.service.RenderResult;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+
+/**
+ * M3-a：UUID 版 {@link ArticleFacade#findContentByUuid} 與
+ * {@link ArticleFacade#applyRestoreContent(UUID, ArticleRestoreSource)} 對真實 PostgreSQL 的整合測試。
+ *
+ * <p>驗證重點：還原由 article 內部渲染，content_html／toc 等於 renderer／codec 對同一份 Markdown 的結果；
+ * 還原不改狀態（SEC-02）；內容凍結守衛（A0209）；{@code findContentByUuid} 不分狀態回傳。</p>
+ *
+ * <p>文章直接以 SQL 寫入，避免耦合 article 模組的建立流程。tag／file／user 等跨模組 facade 與 RabbitMQ 以 mock 取代，
+ * tags 以 {@code TagFacade.syncArticleTags} 收到的參數作為比對對象。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@SpringBootTest(classes = ArticleTestApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Testcontainers
+@ActiveProfiles("test")
+@DisplayName("ArticleFacade M3-a UUID 版還原與內容查詢整合測試")
+class ArticleFacadeRestoreUuidIT {
+
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine")
+            .withDatabaseName("blog_test")
+            .withUsername("test")
+            .withPassword("test");
+
+    @Container
+    static com.redis.testcontainers.RedisContainer redis =
+            new com.redis.testcontainers.RedisContainer("redis:8.8.0-alpine");
+
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("spring.data.redis.url", redis::getRedisURI);
+    }
+
+    /** 測試用作者公開 UUID（articles.author_uuid 無 FK，直接寫入固定值） */
+    private static final UUID SEEDED_AUTHOR_UUID = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+
+    private static final String MARKDOWN =
+            "# 標題\n\n前言\n\n## 第一節\n\n內容\n\n### 第一節之一\n\n細節\n\n## 第二節\n\n結尾";
+
+    @Autowired private ArticleFacade articleFacade;
+    @Autowired private ArticleMarkdownRenderer renderer;
+    @Autowired private ArticleTocCodec tocCodec;
+    @Autowired private JdbcTemplate jdbcTemplate;
+
+    @MockitoBean private ConnectionFactory connectionFactory;
+    @MockitoBean private RabbitTemplate rabbitTemplate;
+    @MockitoBean private TagFacade tagFacade;
+    @MockitoBean private UserFacade userFacade;
+    @MockitoBean private UserAuthService userAuthService;
+    @MockitoBean private ReadingFacade readingFacade;
+    @MockitoBean private SeriesFacade seriesFacade;
+
+    /** 本測試寫入的文章 uuid，供清理 */
+    private final List<UUID> insertedArticles = new ArrayList<>();
+
+    @BeforeEach
+    void setUp() {
+        reset(tagFacade, rabbitTemplate);
+    }
+
+    @AfterEach
+    void cleanUp() {
+        insertedArticles.forEach(uuid -> jdbcTemplate.update("DELETE FROM articles WHERE uuid = ?", uuid));
+        insertedArticles.clear();
+    }
+
+    private UUID insertArticle(String status) {
+        UUID uuid = UUID.randomUUID();
+        jdbcTemplate.update(
+                "INSERT INTO articles (uuid, author_uuid, title, slug, summary, content_md, content_html, toc, "
+                        + "cover_image_url, status, reject_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                uuid, SEEDED_AUTHOR_UUID, "舊標題-" + uuid, "old-" + uuid, "舊摘要", "舊內容", "<p>舊</p>", "[]",
+                "https://cdn/old.jpg", status, "REJECTED".equals(status) ? "內部評語" : null);
+        insertedArticles.add(uuid);
+        return uuid;
+    }
+
+    private Map<String, Object> rowOf(UUID uuid) {
+        return jdbcTemplate.queryForMap(
+                "SELECT title, slug, summary, content_md, content_html, toc, cover_image_url, status, reject_reason "
+                        + "FROM articles WHERE uuid = ?", uuid);
+    }
+
+    private ArticleRestoreSource source(String slug, List<UUID> tags) {
+        return new ArticleRestoreSource("新標題", slug, MARKDOWN, "新摘要", "https://cdn/new.jpg", tags);
+    }
+
+    private List<UUID> capturedTags(UUID articleUuid) {
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<UUID>> captor = ArgumentCaptor.forClass(List.class);
+        verify(tagFacade).syncArticleTags(eq(articleUuid), captor.capture());
+        return captor.getValue();
+    }
+
+    // ─── 還原 ───
+
+    @Test
+    @DisplayName("UUID 版還原：content_html 與 toc 等於 renderer／codec 對同一份 Markdown 的結果")
+    void applyRestoreContent_uuidVersion_persistsRendererAndCodecOutput() {
+        UUID uuid = insertArticle("DRAFT");
+        RenderResult expected = renderer.render(MARKDOWN);
+
+        articleFacade.applyRestoreContent(uuid, source("render-" + uuid, List.of()));
+
+        Map<String, Object> row = rowOf(uuid);
+        assertThat(row.get("content_html")).isEqualTo(expected.html());
+        assertThat(row.get("toc")).isEqualTo(tocCodec.serialize(expected.toc()));
+    }
+
+    @Test
+    @DisplayName("UUID 版還原：title／slug／summary／content_md／cover_image_url 以與還原前不同的值寫入 DB")
+    void applyRestoreContent_uuidVersion_persistsAllContentColumns() {
+        UUID uuid = insertArticle("DRAFT");
+        Map<String, Object> before = rowOf(uuid);
+        String newSlug = "restored-" + uuid;
+
+        articleFacade.applyRestoreContent(uuid, source(newSlug, List.of()));
+
+        Map<String, Object> row = rowOf(uuid);
+        assertThat(before.get("title")).isNotEqualTo("新標題");
+        assertThat(before.get("summary")).isNotEqualTo("新摘要");
+        assertThat(before.get("cover_image_url")).isNotEqualTo("https://cdn/new.jpg");
+        assertThat(row.get("title")).isEqualTo("新標題");
+        assertThat(row.get("slug")).isEqualTo(newSlug);
+        assertThat(row.get("summary")).isEqualTo("新摘要");
+        assertThat(row.get("cover_image_url")).isEqualTo("https://cdn/new.jpg");
+        assertThat(row.get("content_md")).isEqualTo(MARKDOWN);
+    }
+
+    @Test
+    @DisplayName("SEC-02：UUID 版還原不改變文章狀態（DRAFT／REJECTED 皆然，rejectReason 亦不動）")
+    void applyRestoreContent_uuidVersion_doesNotChangeStatus() {
+        UUID draft = insertArticle("DRAFT");
+        UUID rejected = insertArticle("REJECTED");
+
+        articleFacade.applyRestoreContent(draft, source("sec02-d-" + draft, List.of()));
+        articleFacade.applyRestoreContent(rejected, source("sec02-r-" + rejected, List.of()));
+
+        assertThat(rowOf(draft).get("status")).isEqualTo("DRAFT");
+        Map<String, Object> rejectedRow = rowOf(rejected);
+        assertThat(rejectedRow.get("status")).isEqualTo("REJECTED");
+        assertThat(rejectedRow.get("reject_reason")).isEqualTo("內部評語");
+    }
+
+    @Test
+    @DisplayName("UUID 版還原：tags 為 null 以空清單同步；不再同步綁定檔案（改由 file 模組消費 RESTORED 事件，W5A）")
+    void applyRestoreContent_uuidVersion_nullTagsSyncEmptyAndNoSyncFileBinding() {
+        UUID uuid = insertArticle("DRAFT");
+
+        articleFacade.applyRestoreContent(uuid, source("tags-" + uuid, null));
+
+        assertThat(capturedTags(uuid)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("UUID 版還原：內容凍結狀態拒絕（A0209）且內容不變")
+    void applyRestoreContent_uuidVersion_frozenStatusRejected() {
+        for (String frozen : List.of("PENDING_REVIEW", "PUBLISHED", "ARCHIVED")) {
+            UUID uuid = insertArticle(frozen);
+
+            assertThatThrownBy(() -> articleFacade.applyRestoreContent(uuid, source("frozen-" + uuid, List.of())))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(t -> ((BusinessException) t).getCode())
+                    .isEqualTo("A0209");
+            assertThat(rowOf(uuid).get("content_md")).isEqualTo("舊內容");
+            assertThat(rowOf(uuid).get("status")).isEqualTo(frozen);
+        }
+    }
+
+    @Test
+    @DisplayName("UUID 版還原：文章不存在 → A0201")
+    void applyRestoreContent_uuidVersion_articleNotFound() {
+        assertThatThrownBy(() -> articleFacade.applyRestoreContent(UUID.randomUUID(), source("nf", List.of())))
+                .isInstanceOf(BusinessException.class)
+                .extracting(t -> ((BusinessException) t).getCode())
+                .isEqualTo("A0201");
+    }
+
+    // ─── findContentByUuid ───
+
+    @Test
+    @DisplayName("findContentByUuid：各種狀態的文章皆回傳，status 與 uuid 正確，authorUuid 非 null")
+    void findContentByUuid_returnsEveryStatus() {
+        for (String status : List.of("DRAFT", "PENDING_REVIEW", "PUBLISHED", "REJECTED", "ARCHIVED")) {
+            UUID uuid = insertArticle(status);
+
+            Optional<ArticleContentData> byUuid = articleFacade.findContentByUuid(uuid);
+
+            assertThat(byUuid).as("status=%s", status).isPresent();
+            assertThat(byUuid.get().authorUuid()).isNotNull();
+            assertThat(byUuid.get().uuid()).isEqualTo(uuid);
+            assertThat(byUuid.get().status()).isEqualTo(status);
+        }
+    }
+
+    @Test
+    @DisplayName("findContentByUuid：查無或 null → empty")
+    void findContentByUuid_unknownOrNull_returnsEmpty() {
+        assertThat(articleFacade.findContentByUuid(UUID.randomUUID())).isEmpty();
+        assertThat(articleFacade.findContentByUuid(null)).isEmpty();
+    }
+}

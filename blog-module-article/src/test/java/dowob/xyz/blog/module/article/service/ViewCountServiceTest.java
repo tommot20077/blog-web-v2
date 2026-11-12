@@ -1,0 +1,273 @@
+package dowob.xyz.blog.module.article.service;
+
+import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.*;
+
+/**
+ * {@link ViewCountServiceImpl} 單元測試
+ *
+ * <p>
+ * 驗證瀏覽計數服務的核心邏輯，包含：
+ * DB + Redis 合計取值、Redis 增量、批次刷入 DB、
+ * 以及錯誤情境（非法 UUID key、非數字值、DB 異常）的容錯行為。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+@DisplayName("ViewCountService 單元測試")
+class ViewCountServiceTest {
+
+    /** 文章 Mapper（Mock） */
+    @Mock
+    private ArticleMapper articleMapper;
+
+    /** Redis 模板（Mock） */
+    @Mock
+    private StringRedisTemplate stringRedisTemplate;
+
+    /** Value Operations（Mock） */
+    @Mock
+    private ValueOperations<String, String> valueOps;
+
+    /** Redis SCAN Cursor（Mock） */
+    @SuppressWarnings("rawtypes")
+    @Mock
+    private Cursor cursor;
+
+    /** 待測服務 */
+    @InjectMocks
+    private ViewCountServiceImpl viewCountService;
+
+    /**
+     * 每個測試前注入 valueOps mock 並設定 scan 的預設回傳
+     */
+    @BeforeEach
+    @SuppressWarnings("unchecked")
+    void setUp() {
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOps);
+        when(stringRedisTemplate.scan(any(ScanOptions.class))).thenReturn(cursor);
+        when(cursor.hasNext()).thenReturn(false);
+    }
+
+    /**
+     * 情境一：DB 有資料、Redis 無資料 → 回傳 DB 值
+     */
+    @Test
+    @DisplayName("getViewCount：DB 有值，Redis 無值 → 回傳 DB 計數")
+    void getViewCount_dbOnlyNoRedis_returnsDbCount() {
+        UUID uuid = UUID.randomUUID();
+        when(articleMapper.findViewCountByUuid(uuid)).thenReturn(10L);
+        when(valueOps.get("article:views:" + uuid)).thenReturn(null);
+
+        long result = viewCountService.getViewCount(uuid);
+
+        assertThat(result).isEqualTo(10L);
+    }
+
+    /**
+     * 情境二：DB 有資料、Redis 有增量 → 回傳兩者合計
+     */
+    @Test
+    @DisplayName("getViewCount：DB 有值，Redis 有值 → 回傳合計")
+    void getViewCount_dbPlusRedis_returnsCombined() {
+        UUID uuid = UUID.randomUUID();
+        when(articleMapper.findViewCountByUuid(uuid)).thenReturn(10L);
+        when(valueOps.get("article:views:" + uuid)).thenReturn("5");
+
+        long result = viewCountService.getViewCount(uuid);
+
+        assertThat(result).isEqualTo(15L);
+    }
+
+    /**
+     * 情境三：DB 回傳 null（新文章尚無記錄）、Redis 有值 → null 視為 0
+     */
+    @Test
+    @DisplayName("getViewCount：DB 回傳 null，Redis 有值 → null 視為 0")
+    void getViewCount_nullDb_treatsAsZero() {
+        UUID uuid = UUID.randomUUID();
+        when(articleMapper.findViewCountByUuid(uuid)).thenReturn(null);
+        when(valueOps.get("article:views:" + uuid)).thenReturn("3");
+
+        long result = viewCountService.getViewCount(uuid);
+
+        assertThat(result).isEqualTo(3L);
+    }
+
+    /**
+     * 情境四：呼叫 incrementRedisViewCount → 應呼叫 Redis increment
+     */
+    @Test
+    @DisplayName("incrementRedisViewCount：應呼叫 Redis increment 對應 key")
+    void incrementRedisViewCount_callsRedisIncrement() {
+        UUID uuid = UUID.randomUUID();
+
+        viewCountService.incrementRedisViewCount(uuid);
+
+        verify(valueOps).increment("article:views:" + uuid);
+    }
+
+    /**
+     * 情境五：flushViewCounts 無任何 key → 不呼叫 DB
+     */
+    @Test
+    @DisplayName("flushViewCounts：Redis 無 key → 不寫入 DB")
+    void flushViewCounts_noKeys_doesNothing() {
+        viewCountService.flushViewCounts();
+
+        verify(articleMapper, never()).incrementViewCountBatch(any(), anyLong());
+    }
+
+    /**
+     * 情境六：flushViewCounts 有 key → 原子讀取+刪除後寫入 DB
+     */
+    @Test
+    @DisplayName("flushViewCounts：Redis 有 key → getAndDelete 原子操作後寫入 DB")
+    @SuppressWarnings("unchecked")
+    void flushViewCounts_withKeys_flushesToDbThenDeletesKey() {
+        UUID uuid1 = UUID.randomUUID();
+        String key = "article:views:" + uuid1;
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(key);
+        when(valueOps.getAndDelete(key)).thenReturn("3");
+
+        viewCountService.flushViewCounts();
+
+        verify(articleMapper).incrementViewCountBatch(uuid1, 3L);
+    }
+
+    /**
+     * 情境七：key 含非法 UUID → 跳過該 key，不中斷整個 flush
+     */
+    @Test
+    @DisplayName("flushViewCounts：key 含非法 UUID → 跳過不中斷")
+    @SuppressWarnings("unchecked")
+    void flushViewCounts_withMalformedUuidKey_ignoresEntry() {
+        String malformedKey = "article:views:not-a-uuid";
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(malformedKey);
+
+        assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
+        verify(articleMapper, never()).incrementViewCountBatch(any(), anyLong());
+    }
+
+    /**
+     * 情境八：Redis 值非數字 → 跳過該 key，不中斷整個 flush
+     */
+    @Test
+    @DisplayName("flushViewCounts：Redis 值非數字 → 跳過不中斷")
+    @SuppressWarnings("unchecked")
+    void flushViewCounts_withNonNumericValue_ignoresEntry() {
+        UUID uuid = UUID.randomUUID();
+        String key = "article:views:" + uuid;
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(key);
+        when(valueOps.getAndDelete(key)).thenReturn("not-a-number");
+
+        assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
+        verify(articleMapper, never()).incrementViewCountBatch(any(), anyLong());
+    }
+
+    /**
+     * 情境九：DB 拋出異常 → 還原 Redis 的計數（Rollback），且不中斷整個 flush
+     */
+    @Test
+    @DisplayName("flushViewCounts：DB 拋出異常 → 還原 Redis 計數，不中斷整個 flush")
+    @SuppressWarnings("unchecked")
+    void flushViewCounts_dbFailure_rollsBackRedisCount() {
+        UUID uuid = UUID.randomUUID();
+        String key = "article:views:" + uuid;
+        when(cursor.hasNext()).thenReturn(true, false);
+        when(cursor.next()).thenReturn(key);
+        when(valueOps.getAndDelete(key)).thenReturn("5");
+        doThrow(new RuntimeException("DB 寫入失敗")).when(articleMapper)
+                .incrementViewCountBatch(any(), anyLong());
+
+        assertThatCode(() -> viewCountService.flushViewCounts()).doesNotThrowAnyException();
+        verify(valueOps).increment(key, 5L);
+    }
+
+    /**
+     * B4：批次合併 DB 值與 Redis 增量，Redis 只能打一次 MGET，不得逐篇 GET
+     */
+    @Test
+    @DisplayName("addRedisDeltas：DB 值加上 Redis 增量；缺值與非數字視為 0；只一次 MGET、零次逐篇 GET")
+    void addRedisDeltas_mergesDbAndRedisWithSingleMget() {
+        UUID withDelta = UUID.randomUUID();
+        UUID noDelta = UUID.randomUUID();
+        UUID garbage = UUID.randomUUID();
+        Map<UUID, Long> db = new LinkedHashMap<>();
+        db.put(withDelta, 10L);
+        db.put(noDelta, 7L);
+        db.put(garbage, 3L);
+        when(valueOps.multiGet(anyList())).thenReturn(java.util.Arrays.asList("5", null, "abc"));
+
+        Map<UUID, Long> result = viewCountService.addRedisDeltas(db);
+
+        assertThat(result).containsEntry(withDelta, 15L).containsEntry(noDelta, 7L).containsEntry(garbage, 3L);
+        verify(valueOps, times(1)).multiGet(List.of(
+                "article:views:" + withDelta, "article:views:" + noDelta, "article:views:" + garbage));
+        verify(valueOps, never()).get(any());
+    }
+
+    /**
+     * B4：空輸入不連 Redis
+     */
+    @Test
+    @DisplayName("addRedisDeltas：空輸入回傳空 Map，不呼叫 Redis")
+    void addRedisDeltas_emptyInput_noRedisCall() {
+        assertThat(viewCountService.addRedisDeltas(Map.of())).isEmpty();
+        assertThat(viewCountService.addRedisDeltas(null)).isEmpty();
+
+        verify(valueOps, never()).multiGet(any());
+    }
+
+    /**
+     * B4 review：MGET 與 DB 查詢一樣依 BatchedQuery.BATCH_SIZE 切批
+     */
+    @Test
+    @DisplayName("addRedisDeltas：1200 筆切成 500／500／200 共三次 MGET，結果依輸入順序合併")
+    void addRedisDeltas_splitsMgetIntoBatches() {
+        Map<UUID, Long> db = new LinkedHashMap<>();
+        for (int i = 0; i < 1200; i++) {
+            db.put(UUID.randomUUID(), (long) i);
+        }
+        List<Integer> batchSizes = new java.util.ArrayList<>();
+        when(valueOps.multiGet(anyList())).thenAnswer(inv -> {
+            List<String> keys = inv.getArgument(0);
+            batchSizes.add(keys.size());
+            return keys.stream().map(k -> "1").toList();
+        });
+
+        Map<UUID, Long> result = viewCountService.addRedisDeltas(db);
+
+        verify(valueOps, times(3)).multiGet(anyList());
+        assertThat(batchSizes).containsExactly(500, 500, 200);
+        assertThat(result).hasSize(1200);
+        db.forEach((uuid, base) -> assertThat(result.get(uuid)).isEqualTo(base + 1));
+    }
+}

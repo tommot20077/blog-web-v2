@@ -1,0 +1,60 @@
+package dowob.xyz.blog.module.article.model.dto.request;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.module.article.model.ArticleContentLimits;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import lombok.Data;
+
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * 建立文章請求 DTO
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Data
+public class CreateArticleRequest {
+
+    /**
+     * 文章標題（必填）
+     */
+    @NotBlank(message = "標題不得為空")
+    @Size(min = 1, max = 120, message = "標題長度須為 1-120 字元")
+    private String title;
+
+    /**
+     * 文章 Markdown 內容（必填）
+     */
+    @NotBlank(message = "內容不得為空")
+    @Size(max = ArticleContentLimits.MAX_CONTENT_LENGTH, message = "內容長度不得超過 200000 字元")
+    private String content;
+
+    /**
+     * 文章摘要（可選）
+     */
+    @Size(max = 500, message = "摘要長度不得超過 500 字")
+    private String summary;
+
+    /**
+     * 初始狀態（預設為 DRAFT）
+     */
+    private ArticleStatus status = ArticleStatus.DRAFT;
+
+    /**
+     * 文章分類 UUID 列表（可選）
+     */
+    private List<UUID> categoryIds;
+
+    /**
+     * 封面圖片 URL（可選）
+     */
+    private String coverImageUrl;
+
+    /**
+     * 標籤名稱列表（可選，會自動正規化並查找或建立標籤）
+     */
+    private List<String> tagNames;
+}

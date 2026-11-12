@@ -2,6 +2,8 @@ package dowob.xyz.blog.common.constant;
 
 import lombok.experimental.UtilityClass;
 
+import java.util.UUID;
+
 /**
  * Redis Key 常量與生成工具
  *
@@ -13,24 +15,567 @@ public class RedisKeyConstant {
 
     /**
      * 用戶認證快取 (Hash)
-     * Key: user:auth:{userId}
+     * Key: user:auth:{userUuid}
      */
     public static final String USER_AUTH_KEY_PREFIX = "user:auth:";
+
+    /**
+     * 用戶 Refresh Token 快取 (String)
+     * Key: user:refresh:{userUuid}
+     */
+    public static final String USER_REFRESH_KEY_PREFIX = "user:refresh:";
 
     /**
      * Auth Hash Fields
      */
     public static final String FIELD_VERSION = "version";
+
+    /**
+     * Auth Hash 狀態欄位
+     */
     public static final String FIELD_STATUS = "status";
-    public static final String FIELD_IS_ACTIVE = "isActive"; // 兼容舊代碼，建議統一
 
     /**
      * 生成用戶認證 Redis Key
      *
-     * @param userId 用戶ID
+     * @param userUuid 用戶 UUID
      * @return Redis Key
      */
-    public static String getUserAuthKey(Long userId) {
-        return USER_AUTH_KEY_PREFIX + userId;
+    public static String getUserAuthKey(UUID userUuid) {
+        return USER_AUTH_KEY_PREFIX + userUuid;
+    }
+
+    /**
+     * 忘記密碼每分鐘限速 Key 前綴 (String)
+     * Key: rate:forgot-pwd:min:{email}
+     */
+    public static final String FORGOT_PWD_MIN_PREFIX = "rate:forgot-pwd:min:";
+
+    /**
+     * 忘記密碼每日限速 Key 前綴 (String)
+     * Key: rate:forgot-pwd:day:{email}
+     */
+    public static final String FORGOT_PWD_DAY_PREFIX = "rate:forgot-pwd:day:";
+
+    /**
+     * 生成用戶 Refresh Token Redis Key
+     *
+     * @param userUuid 用戶 UUID
+     * @return Redis Key
+     */
+    public static String getUserRefreshKey(UUID userUuid) {
+        return USER_REFRESH_KEY_PREFIX + userUuid;
+    }
+
+    /**
+     * 生成忘記密碼每分鐘限速 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getForgotPwdMinKey(String email) {
+        return FORGOT_PWD_MIN_PREFIX + email;
+    }
+
+    /**
+     * 生成忘記密碼每日限速 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getForgotPwdDayKey(String email) {
+        return FORGOT_PWD_DAY_PREFIX + email;
+    }
+
+    /**
+     * 文章瀏覽計數暫存 Key 前綴 (String)
+     * Key: article:views:{articleUuid}
+     * <p>用於批次累積瀏覽增量，由 {@code ViewCountFlushJob} 定期刷入 DB。</p>
+     */
+    public static final String ARTICLE_VIEWS_PREFIX = "article:views:";
+
+    /**
+     * 文章歸檔頁回應快取 Key (String，整份 JSON)
+     * Key: article:archive
+     * <p>{@code GET /api/v1/articles/archive} 的整份回應；文章發布／下架／刪除時由 article 模組主動刪除，
+     * {@link #ARTICLE_ARCHIVE_TTL_MINUTES} 為失效遺漏時的兜底。</p>
+     */
+    public static final String ARTICLE_ARCHIVE_KEY = "article:archive";
+
+    /** 文章歸檔頁快取 TTL（分鐘）：主動失效遺漏（Redis 當下不可達、標籤改名等不經 article 模組的變更）時的陳舊上限 */
+    public static final long ARTICLE_ARCHIVE_TTL_MINUTES = 10L;
+
+    /**
+     * 登入失敗計數 Key 前綴 (String)
+     * Key: login:fail:{userUuid}
+     */
+    public static final String LOGIN_FAIL_PREFIX = "login:fail:";
+
+    /**
+     * 登入失敗最大允許次數，超過此值帳號將被暫時鎖定
+     */
+    public static final int LOGIN_FAIL_MAX = 5;
+
+    /**
+     * 帳號鎖定持續時間（分鐘）
+     */
+    public static final long LOGIN_FAIL_TTL_MINUTES = 15;
+
+    /** 用戶認證快取 TTL（天），與 Refresh Token 生命週期對齊 */
+    public static final long USER_AUTH_TTL_DAYS = 7;
+
+    /** 搜尋歷史 TTL（天） */
+    public static final long SEARCH_HISTORY_TTL_DAYS = 30;
+
+    /** 文章瀏覽計數安全網 TTL（小時），FlushJob 正常清理，此為失敗殘留的保護 */
+    public static final long ARTICLE_VIEWS_TTL_HOURS = 24;
+
+    /**
+     * 生成登入失敗計數 Redis Key
+     *
+     * @param userUuid 用戶 UUID
+     * @return Redis Key
+     */
+    public static String getLoginFailKey(UUID userUuid) {
+        return LOGIN_FAIL_PREFIX + userUuid;
+    }
+
+    /**
+     * 重發驗證信每分鐘限速 Key 前綴 (String)
+     * Key: rate:resend-verify:min:{email}
+     */
+    public static final String RESEND_VERIFY_MIN_PREFIX = "rate:resend-verify:min:";
+
+    /**
+     * 重發驗證信每日限速 Key 前綴 (String)
+     * Key: rate:resend-verify:day:{email}
+     */
+    public static final String RESEND_VERIFY_DAY_PREFIX = "rate:resend-verify:day:";
+
+    /**
+     * 信箱驗證碼 Key 前綴 (String)
+     * Key: auth:email-verify:code:{email}
+     */
+    public static final String EMAIL_VERIFY_CODE_PREFIX = "auth:email-verify:code:";
+
+    /** 信箱驗證碼 TTL（分鐘） */
+    public static final long EMAIL_VERIFY_CODE_TTL_MINUTES = 10L;
+
+    /**
+     * 信箱驗證碼失敗計數 Key 前綴 (String)
+     * Key: auth:email-verify:fail:{email}
+     */
+    public static final String EMAIL_VERIFY_CODE_FAIL_PREFIX = "auth:email-verify:fail:";
+
+    /** 信箱驗證碼最大允許失敗次數，超過此值將拒絕進一步驗證（防暴力破解） */
+    public static final int EMAIL_VERIFY_CODE_MAX_ATTEMPTS = 5;
+
+    /**
+     * 生成重發驗證信每分鐘限速 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getResendVerifyMinKey(String email) {
+        return RESEND_VERIFY_MIN_PREFIX + email;
+    }
+
+    /**
+     * 生成重發驗證信每日限速 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getResendVerifyDayKey(String email) {
+        return RESEND_VERIFY_DAY_PREFIX + email;
+    }
+
+    /**
+     * 生成信箱驗證碼 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getEmailVerifyCodeKey(String email) {
+        return EMAIL_VERIFY_CODE_PREFIX + email;
+    }
+
+    /**
+     * 生成信箱驗證碼失敗計數 Redis Key
+     *
+     * @param email 用戶信箱
+     * @return Redis Key
+     */
+    public static String getEmailVerifyCodeFailKey(String email) {
+        return EMAIL_VERIFY_CODE_FAIL_PREFIX + email;
+    }
+
+    /** ===================== IP 層級登入/註冊限流 ===================== */
+
+    /**
+     * 登入 IP 層級限流 Key 前綴 (String)
+     * Key: auth:login:ip:{ip}
+     * <p>以 client IP 計數登入嘗試，與 {@link #LOGIN_FAIL_PREFIX}（user.id 帳號鎖定）並存，
+     * 用於防範跨帳號的分散撞庫與帳號枚舉。</p>
+     */
+    public static final String LOGIN_IP_PREFIX = "auth:login:ip:";
+
+    /**
+     * 註冊 IP 層級限流 Key 前綴 (String)
+     * Key: auth:register:ip:{ip}
+     */
+    public static final String REGISTER_IP_PREFIX = "auth:register:ip:";
+
+    /**
+     * 單一 IP 在限流窗口內允許的最大登入嘗試次數。
+     * <p>設定較寬（20）以避免 NAT / 反向代理下多個正常用戶共用對外 IP 時被誤鎖。</p>
+     */
+    public static final int LOGIN_IP_MAX = 20;
+
+    /** 登入 IP 限流窗口（分鐘） */
+    public static final long LOGIN_IP_TTL_MINUTES = 15L;
+
+    /**
+     * 單一 IP 在限流窗口內允許的最大註冊次數。
+     * <p>註冊為低頻操作，採較嚴格上限（10）抑制大量假帳號建立。</p>
+     */
+    public static final int REGISTER_IP_MAX = 10;
+
+    /** 註冊 IP 限流窗口（分鐘），等同每小時 */
+    public static final long REGISTER_IP_TTL_MINUTES = 60L;
+
+    /**
+     * 生成登入 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getLoginIpKey(String ip) {
+        return LOGIN_IP_PREFIX + ip;
+    }
+
+    /**
+     * 生成註冊 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getRegisterIpKey(String ip) {
+        return REGISTER_IP_PREFIX + ip;
+    }
+
+    /**
+     * 忘記密碼 IP 層級限流 Key 前綴 (String)
+     * Key: auth:forgot-password:ip:{ip}
+     * <p>SEC-22／A3：與 per-email 限流並存；三個端點各自計數，互不影響。</p>
+     */
+    public static final String FORGOT_PASSWORD_IP_PREFIX = "auth:forgot-password:ip:";
+
+    /**
+     * 重寄驗證信 IP 層級限流 Key 前綴 (String)
+     * Key: auth:resend-verification:ip:{ip}
+     */
+    public static final String RESEND_VERIFICATION_IP_PREFIX = "auth:resend-verification:ip:";
+
+    /**
+     * 驗證碼校驗 IP 層級限流 Key 前綴 (String)
+     * Key: auth:verify-code:ip:{ip}
+     */
+    public static final String VERIFY_CODE_IP_PREFIX = "auth:verify-code:ip:";
+
+    /** 忘記密碼：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3；獨立常數方便日後分開調整） */
+    public static final int FORGOT_PASSWORD_IP_MAX = 10;
+
+    /** 忘記密碼 IP 限流窗口（分鐘），等同每小時 */
+    public static final long FORGOT_PASSWORD_IP_TTL_MINUTES = 60L;
+
+    /** 重寄驗證信：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3） */
+    public static final int RESEND_VERIFICATION_IP_MAX = 10;
+
+    /** 重寄驗證信 IP 限流窗口（分鐘），等同每小時 */
+    public static final long RESEND_VERIFICATION_IP_TTL_MINUTES = 60L;
+
+    /** 驗證碼校驗：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3） */
+    public static final int VERIFY_CODE_IP_MAX = 10;
+
+    /** 驗證碼校驗 IP 限流窗口（分鐘），等同每小時 */
+    public static final long VERIFY_CODE_IP_TTL_MINUTES = 60L;
+
+    /**
+     * 生成忘記密碼 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getForgotPasswordIpKey(String ip) {
+        return FORGOT_PASSWORD_IP_PREFIX + ip;
+    }
+
+    /**
+     * 生成重寄驗證信 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getResendVerificationIpKey(String ip) {
+        return RESEND_VERIFICATION_IP_PREFIX + ip;
+    }
+
+    /**
+     * 生成驗證碼校驗 IP 層級限流 Redis Key
+     *
+     * @param ip client IP
+     * @return Redis Key
+     */
+    public static String getVerifyCodeIpKey(String ip) {
+        return VERIFY_CODE_IP_PREFIX + ip;
+    }
+
+    /**
+     * 重複信箱註冊通知限流 Key 前綴 (String)
+     * Key: rate:register-dup-notice:{email}
+     * <p>SEC-14／Q8：註冊時 email 已存在會寄通知信給原信箱主人；以此 key 限制同一信箱在
+     * {@link #REGISTER_DUP_NOTICE_TTL_MINUTES} 窗口內最多一封，避免註冊端點被拿來對受害者灌信。</p>
+     */
+    public static final String REGISTER_DUP_NOTICE_PREFIX = "rate:register-dup-notice:";
+
+    /**
+     * 重複信箱註冊通知限流窗口（分鐘）：24 小時。
+     * <p>通知信內容固定、只用來提醒「有人用你的信箱註冊」，窗口取長以壓低灌信上限（每信箱每天最多一封）；
+     * 真正忘記密碼的使用者可走忘記密碼流程。</p>
+     */
+    public static final long REGISTER_DUP_NOTICE_TTL_MINUTES = 1440L;
+
+    /**
+     * 生成重複信箱註冊通知限流 Redis Key
+     *
+     * @param email 原信箱主人的電子信箱（資料庫儲存值）
+     * @return Redis Key
+     */
+    public static String getRegisterDuplicateNoticeKey(String email) {
+        return REGISTER_DUP_NOTICE_PREFIX + email;
+    }
+
+    /** ===================== Tag ===================== */
+
+    /**
+     * 熱門標籤 ZSet Key
+     * Key: tag:hot
+     */
+    public static final String TAG_HOT_KEY = "tag:hot";
+
+    /**
+     * 標籤自動補全 ZSet Key
+     * Key: tag:autocomplete
+     */
+    public static final String TAG_AUTOCOMPLETE_KEY = "tag:autocomplete";
+
+    /**
+     * 標籤詳情 Hash Key 前綴
+     * Key: tag:{slug}
+     */
+    public static final String TAG_DETAIL_PREFIX = "tag:";
+
+    /**
+     * 生成標籤詳情 Redis Key
+     *
+     * @param slug 標籤 slug
+     * @return Redis Key
+     */
+    public static String getTagDetailKey(String slug) {
+        return TAG_DETAIL_PREFIX + slug;
+    }
+
+    /** ===================== Search ===================== */
+
+    /**
+     * 熱門搜尋詞 ZSet Key
+     * Key: search:hot
+     */
+    public static final String SEARCH_HOT_KEY = "search:hot";
+
+    /**
+     * 個人搜尋歷史 List Key 前綴
+     * Key: search:history:{userUuid}
+     */
+    public static final String SEARCH_HISTORY_PREFIX = "search:history:";
+
+    /**
+     * 生成個人搜尋歷史 Redis Key
+     *
+     * @param userUuid 用戶 UUID
+     * @return Redis Key
+     */
+    public static String getSearchHistoryKey(UUID userUuid) {
+        return SEARCH_HISTORY_PREFIX + userUuid;
+    }
+
+    /**
+     * 搜尋索引全量重建時間戳 Key (String，值為 ISO-8601 時間字串)
+     * Key: search:reindex:at
+     * <p>由 {@code SearchReindexService} 於背景全量重建完成（alias 已切換）後寫入，
+     * 供 Admin 後台查詢索引狀態時讀取「最後重建時間」；從未重建過時該 Key 不存在。</p>
+     */
+    public static final String SEARCH_REINDEX_AT_KEY = "search:reindex:at";
+
+    /**
+     * 搜尋索引全量重建作業狀態 Key (Hash：jobId／state／processed／total／startedAt／finishedAt／error)
+     * Key: search:reindex:job
+     */
+    public static final String SEARCH_REINDEX_JOB_KEY = "search:reindex:job";
+
+    /**
+     * 搜尋索引全量重建進行中標記 Key (String，值為重建中的新實體索引名稱；附 TTL，重建期間續期)
+     * Key: search:reindex:active
+     */
+    public static final String SEARCH_REINDEX_ACTIVE_KEY = "search:reindex:active";
+
+    /**
+     * 全量重建期間有變動的文章 Set Key（文章 UUID 字串；切換 alias 前後回查 DB 補進新索引）
+     * Key: search:reindex:dirty:articles
+     */
+    public static final String SEARCH_REINDEX_DIRTY_ARTICLES_KEY = "search:reindex:dirty:articles";
+
+    /**
+     * 全量重建期間暱稱被改寫（刪帳匿名化）的作者 Set Key（作者 UUID 字串）
+     * Key: search:reindex:dirty:authors
+     */
+    public static final String SEARCH_REINDEX_DIRTY_AUTHORS_KEY = "search:reindex:dirty:authors";
+
+    /** ===================== Recommend ===================== */
+
+    /**
+     * 熱門排行 ZSet Key 前綴
+     * Key: recommend:trending:{period}
+     */
+    public static final String RECOMMEND_TRENDING_PREFIX = "recommend:trending:";
+
+    /**
+     * 生成熱門排行 Redis Key
+     *
+     * @param period 排行週期（如 24h、7d、30d）
+     * @return Redis Key
+     */
+    public static String getTrendingKey(String period) {
+        return RECOMMEND_TRENDING_PREFIX + period;
+    }
+
+    /**
+     * 相關文章推薦快取 Key 前綴
+     * Key: recommend:related:{articleUuid}
+     */
+    public static final String RECOMMEND_RELATED_PREFIX = "recommend:related:";
+
+    /**
+     * 生成相關文章推薦快取 Redis Key
+     *
+     * @param articleUuid 文章 UUID 字串
+     * @return Redis Key
+     */
+    public static String getRelatedKey(String articleUuid) {
+        return RECOMMEND_RELATED_PREFIX + articleUuid;
+    }
+
+    /**
+     * 熱門排行更新分散式鎖 Key
+     * Key: lock:trending-refresh
+     */
+    public static final String LOCK_TRENDING_REFRESH = "lock:trending-refresh";
+
+    /**
+     * 搜尋索引全量重建分散式鎖 Key（值為持有中的 jobId）
+     * Key: lock:search-reindex
+     */
+    public static final String LOCK_SEARCH_REINDEX = "lock:search-reindex";
+
+    /**
+     * 孤兒校正分散式鎖 Key 前綴
+     * Key: lock:reconciliation:{module}:{table}
+     */
+    public static final String LOCK_RECONCILIATION_PREFIX = "lock:reconciliation:";
+
+    /**
+     * 孤兒校正續跑游標 Key 前綴（String，值為最後處理的 UUID）
+     * Key: reconciliation:cursor:{module}:{table}
+     */
+    public static final String RECONCILIATION_CURSOR_PREFIX = "reconciliation:cursor:";
+
+    /**
+     * 生成孤兒校正分散式鎖 Key
+     *
+     * @param module 模組名稱
+     * @param table  表名
+     * @return Redis Key
+     */
+    public static String getReconciliationLockKey(String module, String table) {
+        return LOCK_RECONCILIATION_PREFIX + module + ":" + table;
+    }
+
+    /**
+     * 生成孤兒校正續跑游標 Key
+     *
+     * @param module 模組名稱
+     * @param table  表名
+     * @return Redis Key
+     */
+    public static String getReconciliationCursorKey(String module, String table) {
+        return RECONCILIATION_CURSOR_PREFIX + module + ":" + table;
+    }
+
+    /** ===================== Auth Hash Fields ===================== */
+
+    /**
+     * Auth Hash 角色欄位
+     */
+    public static final String FIELD_ROLE = "role";
+
+    /** ===================== Reading Progress（批 2 / V14）===================== */
+
+    /**
+     * 閱讀進度 Hash Key 前綴
+     * Key: reading:progress:{userUuid}:{articleUuid}
+     * 欄位：progress、lastHeading、updatedAt（使用者送出該進度的 JVM epoch ms，Lua 單調寫入的版本）
+     *
+     * <p>M2-c 起使用者與文章一律以公開 UUID 識別；舊格式 {@code {Long userId}:{articleUuid}} 的 key 不遷移
+     * （無正式環境，TTL 到期自然消失），其 dirty 成員會被 flush job 視為無法解析而移除。</p>
+     */
+    public static final String READING_PROGRESS_PREFIX = "reading:progress:";
+
+    /**
+     * 待 flush dirty Set Key
+     * Members: "{userUuid}:{articleUuid}"
+     */
+    public static final String READING_DIRTY_KEY = "reading:dirty";
+
+    /** Reading progress Redis key TTL（天）*/
+    public static final long READING_PROGRESS_TTL_DAYS = 3L;
+
+    /** 視為已讀完的進度門檻（>= 0.95 觸發單調 UPSERT DB，並把快取設成完讀值但不標 dirty、不 DEL hash）*/
+    public static final java.math.BigDecimal READING_PROGRESS_COMPLETED_THRESHOLD = new java.math.BigDecimal("0.95");
+
+    /** ===================== 應用層限流（SEC-23 / A4）===================== */
+
+    /**
+     * 通用應用層限流計數 Key 前綴 (String，固定窗口)
+     * Key: ratelimit:{rule}:u:{userUuid} 或 ratelimit:{rule}:ip:{clientIp}
+     */
+    public static final String RATE_LIMIT_PREFIX = "ratelimit:";
+
+    /** 限流計數主體標記：已登入使用者 */
+    public static final String RATE_LIMIT_SUBJECT_USER = "u";
+
+    /** 限流計數主體標記：client IP */
+    public static final String RATE_LIMIT_SUBJECT_IP = "ip";
+
+    /**
+     * 生成通用應用層限流計數 Redis Key。
+     *
+     * @param rule        規則名稱（對應 {@code app.rate-limit.rules.<rule>}）
+     * @param subjectType 計數主體標記，{@link #RATE_LIMIT_SUBJECT_USER} 或 {@link #RATE_LIMIT_SUBJECT_IP}
+     * @param subjectId   主體識別（userUuid 或 client IP）
+     * @return Redis Key
+     */
+    public static String getRateLimitKey(String rule, String subjectType, String subjectId) {
+        return RATE_LIMIT_PREFIX + rule + ":" + subjectType + ":" + subjectId;
     }
 }

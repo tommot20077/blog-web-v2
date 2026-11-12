@@ -1,0 +1,156 @@
+package dowob.xyz.blog.module.article.model;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import lombok.Data;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.annotation.Version;
+import org.springframework.data.relational.core.mapping.Column;
+import org.springframework.data.relational.core.mapping.Table;
+
+import java.time.LocalDateTime;
+import java.util.UUID;
+
+/**
+ * 文章實體
+ *
+ * <p>
+ * 對應資料庫 articles 表，封裝部落格文章的完整資料。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Data
+@Table("articles")
+public class Article {
+
+    /**
+     * 資料庫主鍵（內部使用）
+     */
+    @Id
+    private Long id;
+
+    /**
+     * 對外公開的 UUID 識別碼
+     */
+    private UUID uuid;
+
+    /**
+     * 作者的公開 UUID（對應 users.uuid；跨模組識別一律為 UUID，故<b>沒有</b>資料庫 FK；V31 起取代舊的 Long 作者主鍵欄位）
+     */
+    @Column("author_uuid")
+    private UUID authorUuid;
+
+    /**
+     * 文章標題
+     */
+    private String title;
+
+    /**
+     * URL slug（用於 SEO 友善網址，由 Service 層自動生成）
+     */
+    private String slug;
+
+    /**
+     * 文章摘要（可選）
+     */
+    private String summary;
+
+    /**
+     * 文章 Markdown 原文
+     */
+    @Column("content_md")
+    private String content;
+
+    /**
+     * 封面圖片 URL（預留欄位，Phase 3 實作）
+     */
+    @Column("cover_image_url")
+    private String coverImageUrl;
+
+    /**
+     * 文章 HTML 預渲染內容（由 Service 層從 content_md 轉換）
+     */
+    @Column("content_html")
+    private String contentHtml;
+
+    /**
+     * 文章章節導覽（TOC）JSON 字串（由 Service 層從 content_md 渲染時同步產生）
+     *
+     * <p>無 heading 時為 {@code "[]"}（非 null）。Spring Data JDBC 對未顯式設值欄位會送出
+     * 顯式 NULL，故 create/update 兩條路徑皆須顯式 set 此欄位。</p>
+     */
+    @Column("toc")
+    private String toc;
+
+    /**
+     * 文章狀態
+     */
+    private ArticleStatus status;
+
+    /**
+     * 瀏覽次數
+     */
+    @Column("view_count")
+    private long viewCount;
+
+    /**
+     * 按讚次數
+     */
+    @Column("like_count")
+    private long likeCount;
+
+    /**
+     * 留言數量
+     */
+    @Column("comment_count")
+    private int commentCount;
+
+    /**
+     * 發布時間（發布後由 Service 設定）
+     */
+    @Column("published_at")
+    private LocalDateTime publishedAt;
+
+    /**
+     * 所屬系列的公開 UUID（nullable；對應 series.uuid；跨模組識別一律為 UUID，故<b>沒有</b>資料庫 FK；
+     * V32 起取代舊的 Long 系列主鍵欄位）。系列被刪除時由 article 訂閱 {@code SeriesDeletedEvent} 清空，
+     * 並以每日校正排程兜底。
+     */
+    @Column("series_uuid")
+    private UUID seriesUuid;
+
+    /**
+     * 在系列中的排序位置（nullable）
+     */
+    @Column("series_position")
+    private Integer seriesPosition;
+
+    /**
+     * 建立時間
+     */
+    @CreatedDate
+    @Column("created_at")
+    private LocalDateTime createdAt;
+
+    /**
+     * 樂觀鎖版本號
+     */
+    @Version
+    private Long version;
+
+    /**
+     * 最後更新時間
+     */
+    @LastModifiedDate
+    @Column("updated_at")
+    private LocalDateTime updatedAt;
+
+    /**
+     * 駁回原因（由管理員設定）
+     */
+    @Column("reject_reason")
+    private String rejectReason;
+}

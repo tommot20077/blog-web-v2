@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  守衛 #5 XML 掃描的合規對照 fixture。
+
+  namespace 宣告 owner 為 article 模組，<sql> 共用片段唯讀 JOIN tag 參照資料（Yuan 2026-10-31 決定放行）。
+  片段內容沒有 insert／update／delete／truncate／merge，依內容判定為讀取，故合規。被抓到即為假陽性。
+-->
+<mapper namespace="dowob.xyz.blog.module.article.mapper.CompliantArticleSqlFragmentMapper">
+
+    <sql id="tagJoin">
+        JOIN article_tags at ON at.article_id = a.uuid
+        JOIN tags t ON t.id = at.tag_id
+    </sql>
+
+    <select id="findWithTags" resultType="map">
+        SELECT a.id, t.name FROM articles a <include refid="tagJoin"/>
+    </select>
+
+</mapper>

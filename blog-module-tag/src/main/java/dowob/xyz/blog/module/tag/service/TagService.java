@@ -1,0 +1,102 @@
+package dowob.xyz.blog.module.tag.service;
+
+import dowob.xyz.blog.module.tag.model.Tag;
+import dowob.xyz.blog.module.tag.model.dto.TagDetailResponse;
+import dowob.xyz.blog.module.tag.model.dto.UpdateTagRequest;
+
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * 標籤服務介面
+ *
+ * <p>
+ * 定義標籤查詢、使用者追蹤及管理員操作的業務合約。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+public interface TagService {
+
+    /**
+     * 根據前綴返回標籤自動補全建議
+     *
+     * @param prefix 搜尋前綴
+     * @param limit  最大返回數量；實作須夾上界，非正數回傳空列表
+     * @return Slug 列表
+     */
+    List<String> suggest(String prefix, int limit);
+
+    /**
+     * 取得熱門標籤列表
+     *
+     * @param limit 最大返回數量；實作須夾上界，非正數回傳空列表
+     * @return 熱門標籤列表
+     */
+    List<Tag> getHotTags(int limit);
+
+    /**
+     * 取得全部標籤（無筆數上限、無分頁）
+     *
+     * <p>
+     * 回傳所有標籤及其文章數（usageCount），依文章數由多到少排序，
+     * 供前端「標籤索引頁」的標籤雲使用。
+     * </p>
+     *
+     * @return 全部標籤列表，依文章數遞減排序；無標籤時回傳空列表
+     */
+    List<Tag> getAllTags();
+
+    /**
+     * 依 Slug 取得標籤詳情（不帶 user context — followed 永遠 false）
+     *
+     * @param slug 標籤 Slug
+     * @return 標籤詳情回應
+     */
+    TagDetailResponse getTagDetail(String slug);
+
+    /**
+     * 依 Slug 取得標籤詳情，附加當前使用者的追蹤狀態
+     *
+     * @param slug              標籤 Slug
+     * @param currentUserUuid   當前使用者 UUID（可為 null，未認證時即為 null）
+     * @return 標籤詳情回應，followed 反映該使用者是否已追蹤此標籤
+     */
+    TagDetailResponse getTagDetail(String slug, UUID currentUserUuid);
+
+    /**
+     * 使用者追蹤標籤
+     *
+     * @param tagId  標籤 ID
+     * @param userId 使用者 ID
+     */
+    void followTag(UUID tagId, UUID userId);
+
+    /**
+     * 使用者取消追蹤標籤
+     *
+     * @param tagId  標籤 ID
+     * @param userId 使用者 ID
+     */
+    void unfollowTag(UUID tagId, UUID userId);
+
+    /**
+     * 管理員更新標籤屬性
+     *
+     * @param id      標籤 ID
+     * @param request 更新請求
+     * @return 更新後的標籤實體
+     */
+    Tag adminUpdateTag(UUID id, UpdateTagRequest request);
+
+    /**
+     * 管理員刪除標籤
+     *
+     * <p>守衛：{@code article_tags} 只要還有任何一列（含草稿等未發布文章）就拒絕（{@code TAG_IN_USE}），
+     * 不看 {@code usage_count}（它只計已發布文章）。</p>
+     *
+     * @param id 標籤 ID
+     */
+    void adminDeleteTag(UUID id);
+}
