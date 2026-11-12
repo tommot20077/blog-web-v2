@@ -1,3 +1,13 @@
+# 注意：刻意不設定 server.forward-headers-strategy（framework／native 皆會讓 X-Forwarded-For 無條件覆寫 remoteAddr，
+# 等於信任 client 偽造的 IP，SEC-01）。client IP 一律經 ClientIpResolver，由 app.http.trusted-proxy-count 控制信任層數。
+# 副作用評估：
+#   - Cookie 的 Secure 旗標由 app.cookie.secure 控制、不看 request scheme；程式未依 request 組絕對 URL
+#     （無 ServletUriComponentsBuilder／getRequestURL）。
+#   - 但 TLS 在 proxy 終結時 app 看到 scheme=http、port=80，Spring 的 CorsUtils.isCorsRequest 會把同網域請求
+#     （Origin: https://90030.xyz）誤判為跨域 → 403 Invalid CORS request。故由 TrustedForwardedRequestFilter
+#     （先於 Spring Security 過濾器鏈）在 trusted-proxy-count > 0 時採用 X-Forwarded-Proto／Host／Port 還原
+#     scheme／host／port；count = 0 時完全忽略這些 header。該 filter 不處理任何 IP（IP 只由 ClientIpResolver 決定）。
+
 spring:
   application:
     name: blog-web-v2
@@ -5,23 +15,109 @@ spring:
     pathmatch:
       matching-strategy: ant_path_matcher
 
+  # 上傳大小上限（FILE-05／A6b）：未設定時框架預設只有 1MB，合法圖片會在進入 service 前被擋下。
+  # - max-file-size = 20MB：必須等於文章圖片單檔上限 blog.file.max-article-image-size（MultipartYamlBindingTest 守住）。
+  #   頭像單檔上限 5MB（blog.file.max-avatar-size）較小，由 FileServiceImpl 依 usageType 在 service 層擋下，
+  #   超過同樣回 400 FILE_TOO_LARGE。
+  # - max-request-size = 21MB：單檔 20MB 再加 1MB 容納 multipart boundary／其他 part（usageType、articleUuid）的 overhead，
+  #   不放更大以免放行「多檔合計很大」的請求。
+  # - server.tomcat.max-swallow-size = 32MB（見檔案下方 server 區塊）：必須大於 max-request-size，理由見該處。
+  # 前方 nginx client_max_body_size 與正式環境 ingress proxy-body-size 需 >= max-request-size（屬部署項，建議 24MB，不在本 repo 設定）。
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+
+  # 排程池（findings PERF-16）：預設只有 1 條執行緒，flush／trending 等 fixedDelay job 與
+  # 每日孤兒校正 job 會互相等待；孤兒校正框架另有單次頁數上限避免長掃描佔住執行緒。
+  task:
+    scheduling:
+      pool:
+        size: 4
+
+  # 憑證類屬性（帳號／密碼／金鑰）一律不給預設值（SEC-12）：未設環境變數時解析為空，
+  # 正式環境由 RequiredSecretsEnvironmentPostProcessor 在啟動時 fail-fast；
+  # 開發用值只放在 application-dev／demo／e2e（或測試資源）。host／port 等非憑證可保留預設。
   # Database
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/blogv2}
-    username: ${DATABASE_USERNAME:postgres}
-    password: ${DATABASE_PASSWORD:password}
+    username: ${DATABASE_USERNAME:}
+    password: ${DATABASE_PASSWORD:}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      # 連線池預算（Z3-b，與下方 spring.rabbitmq.listener.simple 綁定）：
+      #   executeIdempotent 的 consumer 在整個 body 期間持有一條 DB 連線（寄信 consumer 的 SMTP 最壞約 15 秒）。
+      #   使用 DB 的 @RabbitListener container 共 13 個：其中 11 個沿用全域並行度（最多 max-concurrency 條執行緒），
+      #   另有 file.article-binding、file.article-deleted 以 @RabbitListener(concurrency = "1-1") 各固定為 1 條（寫 "1" 不夠：max 會沿用全域 max-concurrency=2，見 RabbitListenerYamlBindingTest）
+      #   （前者：同一篇文章的事件須依序處理；後者：body 含 MinIO 網路呼叫，文章刪除不頻繁，單一 consumer 足夠）。
+      #   最壞同時佔用 = 11 × max-concurrency + 2 = 11 × 2 + 2 = 24 條；32 − 24 = 8 條留給 HTTP／排程
+      #   （Yuan 2026-11-05 決定由 30 調為 32：恢復「HTTP 預留 ≥ 6」；W7-d1 移除 series.article-deleted consumer 後預留為 8，池大小未調，僅更新預算算式）。
+      #   調高 MQ_LISTENER_MAX_CONCURRENCY 時，務必同步調高本值：maximum-pool-size ≥ 11 × max-concurrency + 2 + HTTP 預留。
+      #   多副本部署時 DB 總連線 = 副本數 × 本值，需不超過 Postgres max_connections。
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:32}
+      # minimum-idle 未設時等於 maximum-pool-size，會讓每個副本常駐 32 條連線（原本預設 10）；
+      # 改為平時只保留 10 條，尖峰（MQ consumer 吃滿）才長到 maximum-pool-size，閒置後由 Hikari 收回。
+      minimum-idle: ${DB_POOL_MIN_IDLE:10}
 
   # RabbitMQ
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:guest}
-    password: ${RABBITMQ_PASSWORD:guest}
+    username: ${RABBITMQ_USERNAME:}
+    password: ${RABBITMQ_PASSWORD:}
+    virtual-host: ${RABBITMQ_VHOST:blog}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    # 逾時（全站 MQ 共用的連線層設定）：未設時 connection-timeout 為 client 預設 60s、channel-rpc-timeout 為 10 分鐘。
+    # broker 黑洞（網路丟封包而非拒絕連線）時，所有呼叫端——publisher 的 convertAndSend、DlqDepthMetrics.refresh()
+    # 的 passive declare、@RabbitListener 容器重連——都會卡到逾時才返回；其中排程池只有 4 條
+    # （spring.task.scheduling.pool.size），卡住的 refresh 會佔掉其中一條而拖慢其他 job。
+    # 5s／10s 讓失敗在數秒內浮現（publisher 照舊 best-effort 吞掉並計 mq.publisher.failed）。
+    # 影響面：連線建立超過 5s、或單一 channel RPC（declare、confirm 等）超過 10s 會判定失敗。
+    connection-timeout: ${RABBITMQ_CONNECTION_TIMEOUT:5s}
+    channel-rpc-timeout: ${RABBITMQ_CHANNEL_RPC_TIMEOUT:10s}
+    listener:
+      simple:
+        # AUTO：listener 正常返回即 ack、拋例外即 nack(requeue)，重試攔截器才有機會介入。
+        # MANUAL 下容器不會對一般例外 nack，訊息停在 unacked，重試形同死碼（見 AckModeRetryProofIntegrationTest）。
+        acknowledge-mode: auto
+        # 並行度（PERF-30）：stateful retry 的退避睡眠發生在 consumer 執行緒上，單一毒訊息會佔住一條執行緒
+        # 約 6 秒（1s＋5s）。concurrency ≥ 2 讓同一 queue 的其他訊息由另一條執行緒處理，不被頭部阻塞。
+        concurrency: ${MQ_LISTENER_CONCURRENCY:2}
+        # 上限刻意等於 concurrency（不自動擴張）：每個 container 的最大並行度受 DB 連線池預算約束（見 hikari 註解）。
+        max-concurrency: ${MQ_LISTENER_MAX_CONCURRENCY:2}
+        # prefetch=1：退避睡眠中的執行緒只持有「正在重試的那一則」未確認訊息，不會把其他訊息囤在
+        # 自己的 prefetch 緩衝裡等睡眠結束（prefetch>1 時緩衝中的訊息會一起被卡住約 6 秒）。
+        prefetch: ${MQ_LISTENER_PREFETCH:1}
+
+  # SMTP / Transactional Mail
+  mail:
+    host: ${SPRING_MAIL_HOST:smtp-relay.brevo.com}
+    port: ${SPRING_MAIL_PORT:587}
+    username: ${SPRING_MAIL_USERNAME:}
+    password: ${SPRING_MAIL_PASSWORD:}
+    properties:
+      "[mail.smtp.auth]": ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH:true}
+      "[mail.smtp.starttls.enable]": ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE:true}
+      "[mail.smtp.connectiontimeout]": ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_CONNECTIONTIMEOUT:5000}
+      "[mail.smtp.timeout]": ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_TIMEOUT:5000}
+      "[mail.smtp.writetimeout]": ${SPRING_MAIL_PROPERTIES_MAIL_SMTP_WRITETIMEOUT:5000}
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DATABASE:0}
+      # 指令逾時與連線逾時：Lettuce 預設 60s／10s，Redis 異常時會長時間拖住請求執行緒
+      timeout: ${REDIS_TIMEOUT:2s}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:2s}
 
   # Elasticsearch
   elasticsearch:
     uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
+    username: ${ELASTICSEARCH_USERNAME:}
+    password: ${ELASTICSEARCH_PASSWORD:}
 
   # Flyway
   flyway:
@@ -30,25 +126,173 @@ spring:
 
 # MyBatis 配置
 mybatis:
+  mapper-locations: classpath*:mapper/*.xml
   configuration:
     map-underscore-to-camel-case: true
     use-generated-keys: true
   type-aliases-package: dowob.xyz.blog.module
+  type-handlers-package: dowob.xyz.blog.infrastructure.config
+
+# Tomcat 吞掉超限請求剩餘 body 的上限（FILE-05）：
+# 上傳超過 multipart 上限時，Spring 回 400 FILE_TOO_LARGE，但 Tomcat 為了讓連線可重用，會先把請求剩下的 body
+# 讀掉；剩餘量超過 max-swallow-size（Tomcat 預設 2MB）就直接斷線，前端拿不到 400。
+# 設為 32MB：略大於可預期的誤傳大小（max-request-size 21MB 之上再容許約 11MB 超量；FileUploadSizeLimitE2E 以 28MB 驗證）。
+# 不設 -1（無上限）：那會讓攻擊者以巨大 body 長時間占住連線。更大的 body 仍會被斷線，這是刻意的。
+# 部署提醒：前方 nginx／ingress 的 body 上限應再比 max-request-size 寬一點（建議 24MB），否則超限請求會先被代理以 413 擋下。
+server:
+  tomcat:
+    max-swallow-size: 32MB
 
 # MinIO Config
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
-  access-key: ${MINIO_ACCESS_KEY:minioadmin}
-  secret-key: ${MINIO_SECRET_KEY:minioadmin}
+  access-key: ${MINIO_ACCESS_KEY:}
+  secret-key: ${MINIO_SECRET_KEY:}
   bucket-name: ${MINIO_BUCKET:blog-files}
+  # 逾時（RACE-16／PERF-28）：避免物件儲存無回應時呼叫端無限期卡住。read／write 為「兩次資料之間的閒置」逾時。
+  connect-timeout: ${MINIO_CONNECT_TIMEOUT:5s}
+  read-timeout: ${MINIO_READ_TIMEOUT:30s}
+  write-timeout: ${MINIO_WRITE_TIMEOUT:30s}
+
+# 檔案模組設定
+blog:
+  file:
+    quotas:
+      USER: 10MB
+      AUTHOR: 2GB
+    # 單檔大小上限（A6b）：文章圖片（封面、內文）20MB、頭像 5MB；文章圖片值須等於 spring.servlet.multipart.max-file-size。
+    max-article-image-size: 20MB
+    max-avatar-size: 5MB
+    # 圖片總像素上限（寬 × 高，不限單邊；FILE-04／A6）：100MP。全景圖（例如 30000×3000＝90MP）可通過。
+    # 上傳端（FileServiceImpl）只讀 header 檢查，超過回 400 INVALID_IMAGE_DIMENSIONS；
+    # 縮圖端（ThumbnailConsumer）解碼前再擋一次，超限不產生縮圖。防 decompression bomb 讓 worker OOM。
+    max-image-pixels: 100000000
+    # 每日綁定校正（B1）與未綁定檔清理（D6），04:17 執行（FileBindingReconcileJob）：先補綁定、再清理。
+    # - recent-article-days：補綁定掃描「最近 N 天 updated_at 有變動」的文章（不分狀態，含草稿，使草稿引用的圖不被清理誤刪）。
+    # - unbound-file-retention-days：未綁定、非頭像、且不被作者任何文章引用的檔案，建立超過 N 天才清理。
+    # - max-deletes-per-run：單次最多刪除的檔案數（每個含 MinIO 呼叫）；超過的留到隔天，以游標續跑。
+    binding-reconcile:
+      recent-article-days: 3
+      unbound-file-retention-days: 7
+      max-deletes-per-run: 500
+    allowed-mime-types:
+      - image/jpeg
+      - image/png
+      - image/webp
+      - image/gif
+
+# Actuator 配置
+#
+# 暴露面設計（ARCH-16／決策 C7，Yuan 2026-11-07）：actuator 搬到獨立的 management port，該 port「不對外」——
+# 不經過 ingress／Service，只由叢集內部（Prometheus 抓取端）存取。因此 /actuator/prometheus 不需要 JWT，
+# 暴露面就是「能連到這個 port 的網路」。部署時務必確認 management port 沒有被 ingress、Service(LoadBalancer／NodePort)
+# 或 docker -p 對外發布（見 ai-docs/security.md）。
+# 主 port 只保留 K3s probe 用的 /livez、/readyz（add-additional-paths），其餘 /actuator/** 在主 port 不存在。
+management:
+  server:
+    # 預設 9091；以 MANAGEMENT_SERVER_PORT 覆寫。e2e profile 用隨機 port（0）。
+    port: ${MANAGEMENT_SERVER_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        # metrics：BatchedQuery 輸入分佈（ARCH-16 第一步）；prometheus：Prometheus 文字格式匯出。
+        # 授權面：這些端點只在 management port；主 port 的 SecurityConfig 對 /actuator/** 維持 fail-closed
+        # （守衛見 SecurityConfigTest 的 *Actuator* 案例與 ActuatorManagementPortE2E）。
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+        # 在主 port 額外提供 /livez、/readyz（K3s probe 用），management port 搬走後探針不需改打另一個 port
+        add-additional-paths: true
+
+# CORS 配置：此為開發環境預設白名單。
+# 生產環境同域部署（前端與 /api 同網域）時，「同域請求不觸發 CORS」的前提是 app 還原得出 client 看到的
+# scheme／host／port：即 APP_HTTP_TRUSTED_PROXY_COUNT >= 1 且 proxy 鏈正確帶出 X-Forwarded-Proto
+# （見 TrustedForwardedRequestFilter）。count = 0 又在 TLS 終結 proxy 後方時，https 的同網域 Origin 會被視為跨域，
+# 若 APP_CORS_ALLOWED_ORIGINS 未列該網域就回 403 Invalid CORS request。
+app:
+  http:
+    # 受信任的反向代理層數（SEC-01）：ClientIpResolver 取 X-Forwarded-For 由右數第 N 節；
+    # TrustedForwardedRequestFilter 對 X-Forwarded-Proto／Host／Port 也用同一個 N 取右數第 N 個值。
+    #   0 = 完全不信任 XFF／X-Forwarded-*、使用 remoteAddr（預設；本機 docker、CI、無 proxy 的部署）。
+    #       啟動時會記一行 WARN（prod 若忘了設，所有請求共用 proxy IP 當限流 key）
+    #   1 = prod：Client → Cloudflare → nginx（realip 覆寫 XFF）→ Ingress → app，依 nginx 設定結果設 1
+    # 設太大 → 取到攻擊者可控節點（等於無防護）；設太小 → 全站共用一個限流桶（退化但不被繞過）。拿不準時寧可設小。
+    trusted-proxy-count: ${APP_HTTP_TRUSTED_PROXY_COUNT:0}
+  frontend-base-url: ${APP_FRONTEND_BASE_URL:http://localhost:3000}
+  mail:
+    default-from:
+      address: ${APP_MAIL_DEFAULT_FROM_ADDRESS:no-reply@90030.xyz}
+      name: ${APP_MAIL_DEFAULT_FROM_NAME:Blog}
+    security-from:
+      address: ${APP_MAIL_SECURITY_FROM_ADDRESS:${APP_MAIL_DEFAULT_FROM_ADDRESS:no-reply@90030.xyz}}
+      name: ${APP_MAIL_SECURITY_FROM_NAME:Blog Security Bot}
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5500,http://127.0.0.1:5500}
+  # 應用層限流（SEC-23 / A4，Yuan 2026-11-07 拍板）：handler 上的 @RateLimited("<rule>") 對應下列規則。
+  # 超限回 429（錯誤碼 A0009）並帶 Retry-After（秒）。固定窗口，Redis key：ratelimit:{rule}:{u|ip}:{id}。
+  #   subject=USER：已登入者以 userUuid 計、匿名者以 client IP 計（ClientIpResolver，prod 須設 APP_HTTP_TRUSTED_PROXY_COUNT）
+  #   subject=IP  ：一律以 IP 計，登入者也一樣
+  # 每條規則的 limit／window 可用環境變數覆寫（APP_RATE_LIMIT_<RULE>_LIMIT／_WINDOW；window 例：30s、1m、1h）。
+  # 規則名稱打錯或缺漏 → 啟動失敗（RateLimitRuleValidator），不會靜默不限流。
+  rate-limit:
+    rules:
+      # 留言新增、編輯、回覆：每人每分鐘 10 次
+      comment-write:
+        limit: ${APP_RATE_LIMIT_COMMENT_WRITE_LIMIT:10}
+        window: ${APP_RATE_LIMIT_COMMENT_WRITE_WINDOW:1m}
+      # 按讚（文章／留言）、收藏、劃線新增與更新、標籤追蹤：每人每分鐘 60 次
+      interaction-write:
+        limit: ${APP_RATE_LIMIT_INTERACTION_WRITE_LIMIT:60}
+        window: ${APP_RATE_LIMIT_INTERACTION_WRITE_WINDOW:1m}
+      # 閱讀進度（捲動時高頻回報）：每人每分鐘 120 次（Yuan 2026-11-07 追加決策）
+      reading-progress:
+        limit: ${APP_RATE_LIMIT_READING_PROGRESS_LIMIT:120}
+        window: ${APP_RATE_LIMIT_READING_PROGRESS_WINDOW:1m}
+      # 檔案上傳：每人每小時 30 次
+      upload:
+        limit: ${APP_RATE_LIMIT_UPLOAD_LIMIT:30}
+        window: ${APP_RATE_LIMIT_UPLOAD_WINDOW:1h}
+      # 文章建立、更新與狀態轉換（submit／withdraw／publish）、版本手動快照／還原／升格、系列新增與修改：每人每分鐘 30 次
+      article-write:
+        limit: ${APP_RATE_LIMIT_ARTICLE_WRITE_LIMIT:30}
+        window: ${APP_RATE_LIMIT_ARTICLE_WRITE_WINDOW:1m}
+      # 帳號設定（個人資料、通知偏好、改密碼、版本偏好）：每人每分鐘 30 次
+      account-write:
+        limit: ${APP_RATE_LIMIT_ACCOUNT_WRITE_LIMIT:30}
+        window: ${APP_RATE_LIMIT_ACCOUNT_WRITE_WINDOW:1m}
+      # 搜尋：每 IP 每分鐘 120 次（一律以 IP 計，登入者也一樣；前端邊打字邊搜尋且有 CGNAT 共用 IP，Yuan 2026-11-07 由 30 調高）
+      search:
+        limit: ${APP_RATE_LIMIT_SEARCH_LIMIT:120}
+        window: ${APP_RATE_LIMIT_SEARCH_WINDOW:1m}
+        subject: ip
+      # 搜尋建議：每 IP 每分鐘 120 次（獨立計數，一律 IP）
+      search-suggest:
+        limit: ${APP_RATE_LIMIT_SEARCH_SUGGEST_LIMIT:120}
+        window: ${APP_RATE_LIMIT_SEARCH_SUGGEST_WINDOW:1m}
+        subject: ip
+
+# Version 模組設定
+version:
+  auto:
+    enabled: true
+    retain: 50
+    interval-seconds: 60
+    diff-chars: 50
 
 # SpringDoc OpenAPI 配置
+# SEC-21（Yuan 2026-11-04 決定）：預設關閉 Swagger UI 與 /v3/api-docs；dev／demo 於各自 yaml 開啟，
+# 其他環境（例如前端同步 openapi 快照的 e2e 堆疊）以 SPRINGDOC_ENABLED=true 明確開啟，兩個開關共用同一變數。
 springdoc:
   swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:false}
     path: /swagger-ui.html
     operations-sorter: method
     display-request-duration: true
   api-docs:
+    enabled: ${SPRINGDOC_ENABLED:false}
     path: /v3/api-docs
   packages-to-scan: dowob.xyz.blog
   default-flat-param-object: true

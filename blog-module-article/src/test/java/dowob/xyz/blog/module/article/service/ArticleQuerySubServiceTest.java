@@ -1,0 +1,731 @@
+package dowob.xyz.blog.module.article.service;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
+import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.infrastructure.facade.dto.AuthorInfo;
+import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.PublishedArticleCriteria;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
+import dowob.xyz.blog.module.article.model.ArticleArchiveRow;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.TagSummaryResponse;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
+@DisplayName("ArticleQuerySubService")
+class ArticleQuerySubServiceTest {
+
+    @Mock
+    private ArticleRepository articleRepository;
+
+    @Mock
+    private ArticleMapper articleMapper;
+
+    @Mock
+    private ArticleEntityFinder entityFinder;
+
+    @Mock
+    private ArticleResponseMapper responseMapper;
+
+    private ArticleQuerySubService querySubService;
+
+    private static final UUID AUTHOR_UUID = new UUID(0L, 1L);
+    private static final UUID OTHER_USER_UUID = new UUID(0L, 2L);
+    private static final Long ARTICLE_ID = 11L;
+    private static final UUID SERIES_UUID = UUID.randomUUID();
+    private static final UUID ARTICLE_UUID = UUID.randomUUID();
+
+    @BeforeEach
+    void setUp() {
+        querySubService = new ArticleQuerySubService(
+                articleRepository, articleMapper, entityFinder, responseMapper
+        );
+    }
+
+    private Article buildArticle(ArticleStatus status) {
+        Article article = new Article();
+        article.setId(ARTICLE_ID);
+        article.setUuid(ARTICLE_UUID);
+        article.setAuthorUuid(AUTHOR_UUID);
+        article.setTitle("Test article");
+        article.setContent("Test content");
+        article.setSummary("Test summary");
+        article.setSlug("test-slug-abcd1234");
+        article.setStatus(status);
+        article.setViewCount(0L);
+        article.setLikeCount(0L);
+        article.setCommentCount(0);
+        article.setCreatedAt(LocalDateTime.now());
+        article.setUpdatedAt(LocalDateTime.now());
+        return article;
+    }
+
+    private ArticleResponse articleResponse(Article article) {
+        return ArticleResponse.builder()
+                .uuid(article.getUuid())
+                .slug(article.getSlug())
+                .status(article.getStatus())
+                .build();
+    }
+
+    private EditorArticleResponse editorResponse(Article article) {
+        return EditorArticleResponse.builder()
+                .uuid(article.getUuid())
+                .content(article.getContent())
+                .status(article.getStatus())
+                .build();
+    }
+
+    private ArticleSummaryResponse summaryResponse(Article article) {
+        return ArticleSummaryResponse.builder()
+                .uuid(article.getUuid())
+                .status(article.getStatus())
+                .updatedAt(article.getUpdatedAt())
+                .build();
+    }
+
+    @Nested
+    @DisplayName("getArticleByUuid")
+    class GetArticleByUuidTests {
+
+        @Test
+        @DisplayName("published article can be read anonymously and mapped")
+        void getArticle_published_anonymous() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            ArticleResponse expected = articleResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, null, null);
+
+            assertThat(response).isSameAs(expected);
+            verify(responseMapper).toResponse(article);
+        }
+
+        @Test
+        @DisplayName("draft article can be read by author")
+        void getArticle_draft_authorCanAccess() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            ArticleResponse expected = articleResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR);
+
+            assertThat(response).isSameAs(expected);
+        }
+
+        @Test
+        @DisplayName("draft article can be read by admin")
+        void getArticle_draft_adminCanAccess() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            ArticleResponse expected = articleResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.ADMIN);
+
+            assertThat(response).isSameAs(expected);
+        }
+
+        @Test
+        @DisplayName("draft article is hidden from non-author")
+        void getArticle_draft_otherUserDenied() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+            verify(responseMapper, never()).toResponse(any());
+        }
+
+        @Test
+        @DisplayName("pending review article can be read by author")
+        void getArticle_pendingReview_authorCanAccess() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            ArticleResponse expected = articleResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            ArticleResponse response = querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR);
+
+            assertThat(response).isSameAs(expected);
+        }
+
+        @Test
+        @DisplayName("pending review article is hidden from non-author")
+        void getArticle_pendingReview_otherUserDenied() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.AUTHOR))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+            verify(responseMapper, never()).toResponse(any());
+        }
+
+        /**
+         * 下架文章的可見性：與 DRAFT / PENDING_REVIEW 同一條政策（僅作者與 ADMIN）。
+         * 這三案把政策釘在測試上，讓 checkReadPermission 委派 ArticleVisibility 的重構
+         * 有可比對的行為基準（政策內容不變，只換實作位置）。
+         */
+        @Test
+        @DisplayName("archived article is hidden from anonymous viewer")
+        void getArticle_archived_anonymousDenied() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, null, Role.USER))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+            verify(responseMapper, never()).toResponse(any());
+        }
+
+        @Test
+        @DisplayName("archived article can be read by author")
+        void getArticle_archived_authorCanAccess() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            ArticleResponse expected = articleResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            assertThat(querySubService.getArticleByUuid(ARTICLE_UUID, AUTHOR_UUID, Role.AUTHOR)).isSameAs(expected);
+        }
+
+        @Test
+        @DisplayName("archived article can be read by admin")
+        void getArticle_archived_adminCanAccess() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            ArticleResponse expected = articleResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            assertThat(querySubService.getArticleByUuid(ARTICLE_UUID, OTHER_USER_UUID, Role.ADMIN)).isSameAs(expected);
+        }
+
+        /**
+         * fail-safe：作者欄位為 null 時，匿名檢視者不得因為「兩個 null 相等」而被當成作者本人。
+         *
+         * <p>articles.author_uuid 是 NOT NULL，正常資料不會走到這裡；但「作者比對」的正確形狀
+         * 就是必須先確定有檢視者。這正是 checkReadPermission 自己一份實作與
+         * {@code ArticleVisibility} 唯一的差異（後者多了 viewerId != null 守衛），
+         * 委派之後這個邊界才有唯一解。</p>
+         */
+        @Test
+        @DisplayName("author uuid 為 null 時，匿名檢視者不得被當成作者本人")
+        void getArticle_nullAuthorUuid_anonymousDenied() {
+            Article article = buildArticle(ArticleStatus.ARCHIVED);
+            article.setAuthorUuid(null);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> querySubService.getArticleByUuid(ARTICLE_UUID, null, Role.USER))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+            verify(responseMapper, never()).toResponse(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("getArticleBySlug")
+    class GetArticleBySlugTests {
+
+        @Test
+        @DisplayName("published article can be read by slug and mapped")
+        void getArticleBySlug_published_success() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            ArticleResponse expected = articleResponse(article);
+            when(articleRepository.findBySlug(article.getSlug())).thenReturn(Optional.of(article));
+            when(responseMapper.toResponse(article)).thenReturn(expected);
+
+            ArticleResponse response = querySubService.getArticleBySlug(article.getSlug(), null, null);
+
+            assertThat(response).isSameAs(expected);
+            verify(responseMapper).toResponse(article);
+        }
+
+        @Test
+        @DisplayName("missing slug throws article not found")
+        void getArticleBySlug_notFound() {
+            when(articleRepository.findBySlug("missing-slug")).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> querySubService.getArticleBySlug("missing-slug", null, null))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+        }
+
+        @Test
+        @DisplayName("draft article by slug is hidden from non-author")
+        void getArticleBySlug_draftArticle_otherUserDenied() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(articleRepository.findBySlug(article.getSlug())).thenReturn(Optional.of(article));
+
+            assertThatThrownBy(() -> querySubService.getArticleBySlug(article.getSlug(), OTHER_USER_UUID, Role.AUTHOR))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+            verify(responseMapper, never()).toResponse(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("getArticleForEdit")
+    class GetArticleForEditTests {
+
+        @Test
+        @DisplayName("author can read editor response")
+        void getArticleForEdit_authorCanAccess() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            EditorArticleResponse expected = editorResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toEditorResponse(article)).thenReturn(expected);
+
+            EditorArticleResponse response = querySubService.getArticleForEdit(ARTICLE_UUID, AUTHOR_UUID);
+
+            assertThat(response).isSameAs(expected);
+            verify(responseMapper).toEditorResponse(article);
+        }
+
+        @Test
+        @DisplayName("rejected article can be read by author for edit")
+        void getArticleForEdit_rejectedArticle_authorCanAccess() {
+            Article article = buildArticle(ArticleStatus.REJECTED);
+            EditorArticleResponse expected = editorResponse(article);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+            when(responseMapper.toEditorResponse(article)).thenReturn(expected);
+
+            EditorArticleResponse response = querySubService.getArticleForEdit(ARTICLE_UUID, AUTHOR_UUID);
+
+            assertThat(response).isSameAs(expected);
+        }
+
+        @Test
+        @DisplayName("missing article propagates finder not found")
+        void getArticleForEdit_notFound() {
+            UUID missingUuid = UUID.randomUUID();
+            when(entityFinder.findByUuidOrThrow(missingUuid))
+                    .thenThrow(new BusinessException(ArticleErrorCode.ARTICLE_NOT_FOUND));
+
+            assertThatThrownBy(() -> querySubService.getArticleForEdit(missingUuid, AUTHOR_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_NOT_FOUND.getMessage());
+        }
+
+        @Test
+        @DisplayName("non-author cannot read editor response")
+        void getArticleForEdit_otherUser_denied() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            when(entityFinder.findByUuidOrThrow(ARTICLE_UUID)).thenReturn(article);
+
+            assertThatThrownBy(() -> querySubService.getArticleForEdit(ARTICLE_UUID, OTHER_USER_UUID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining(ArticleErrorCode.ARTICLE_ACCESS_DENIED.getMessage());
+            verify(responseMapper, never()).toEditorResponse(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("getPublishedArticles")
+    class GetPublishedArticlesTests {
+
+        @Test
+        @DisplayName("不篩選時回傳映射後的分頁，total 取自同一組條件的 count")
+        void getPublishedArticles_unfiltered_returnsMappedPage() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            ArticleSummaryResponse summary = summaryResponse(article);
+            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
+            when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(0L), eq(10)))
+                    .thenReturn(List.of(article));
+            when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(1L);
+            when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
+            when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
+
+            PageResult<ArticleSummaryResponse> result =
+                    querySubService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
+
+            assertThat(result.getRecords()).containsExactly(summary);
+            assertThat(result.getTotal()).isEqualTo(1L);
+            assertThat(result.getCurrent()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("第二頁以 (page - 1) * size 計算 offset")
+        void getPublishedArticles_secondPage_usesCalculatedOffset() {
+            when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(10L), eq(10)))
+                    .thenReturn(List.of());
+            when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(5L);
+            when(responseMapper.batchToTagResponsesMap(List.of())).thenReturn(Map.of());
+
+            PageResult<ArticleSummaryResponse> result =
+                    querySubService.getPublishedArticles(ArticleListQuery.unfiltered(), 2, 10);
+
+            assertThat(result.getRecords()).isEmpty();
+            verify(articleMapper).findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(10L), eq(10));
+        }
+
+        @Test
+        @DisplayName("篩選參數轉成查詢條件傳給 mapper，列表與 count 用同一組條件（total 才會與篩選結果一致）")
+        void getPublishedArticles_filtered_passesSameCriteriaToPageAndCount() {
+            UUID author = UUID.randomUUID();
+            ArticleListQuery query = new ArticleListQuery(
+                    List.of("java", "spring"), List.of("tech"), List.of(author), 30, "commented");
+            when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(0L), eq(10)))
+                    .thenReturn(List.of());
+            when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(7L);
+            when(responseMapper.batchToTagResponsesMap(List.of())).thenReturn(Map.of());
+
+            LocalDateTime before = LocalDateTime.now();
+            PageResult<ArticleSummaryResponse> result = querySubService.getPublishedArticles(query, 1, 10);
+            LocalDateTime after = LocalDateTime.now();
+
+            ArgumentCaptor<PublishedArticleCriteria> pageCriteria = ArgumentCaptor.forClass(PublishedArticleCriteria.class);
+            ArgumentCaptor<PublishedArticleCriteria> countCriteria = ArgumentCaptor.forClass(PublishedArticleCriteria.class);
+            verify(articleMapper).findPublishedPageByCriteria(pageCriteria.capture(), eq(0L), eq(10));
+            verify(articleMapper).countPublishedByCriteria(countCriteria.capture());
+            assertThat(countCriteria.getValue()).isSameAs(pageCriteria.getValue());
+
+            PublishedArticleCriteria criteria = pageCriteria.getValue();
+            assertThat(criteria.getTagSlugs()).containsExactly("java", "spring");
+            assertThat(criteria.getTagCount()).isEqualTo(2);
+            assertThat(criteria.getCategorySlugs()).containsExactly("tech");
+            assertThat(criteria.getAuthorUuids()).containsExactly(author);
+            assertThat(criteria.getSortKey()).isEqualTo("commented");
+            assertThat(criteria.getPublishedAfter()).isBetween(before.minusDays(30), after.minusDays(30));
+            assertThat(result.getTotal()).isEqualTo(7L);
+        }
+
+        @Test
+        @DisplayName("整頁作者只解析一次：同一作者去重，且不逐筆查詢（PERF-02）")
+        void getPublishedArticles_resolvesAuthorsInSingleBatch() {
+            Article first = publishedArticle(101L, AUTHOR_UUID);
+            Article second = publishedArticle(102L, AUTHOR_UUID);
+            Article third = publishedArticle(103L, OTHER_USER_UUID);
+            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of();
+            Map<UUID, AuthorInfo> authorMap = Map.of(
+                    AUTHOR_UUID, new AuthorInfo(AUTHOR_UUID, "Alice"),
+                    OTHER_USER_UUID, new AuthorInfo(OTHER_USER_UUID, "Bob"));
+            when(articleMapper.findPublishedPageByCriteria(any(PublishedArticleCriteria.class), eq(0L), eq(10)))
+                    .thenReturn(List.of(first, second, third));
+            when(articleMapper.countPublishedByCriteria(any(PublishedArticleCriteria.class))).thenReturn(3L);
+            when(responseMapper.batchToTagResponsesMap(anyList())).thenReturn(tagMap);
+            when(responseMapper.batchToAuthorInfoMap(List.of(AUTHOR_UUID, OTHER_USER_UUID))).thenReturn(authorMap);
+            ArticleSummaryResponse s1 = ArticleSummaryResponse.builder().uuid(first.getUuid()).build();
+            ArticleSummaryResponse s2 = ArticleSummaryResponse.builder().uuid(second.getUuid()).build();
+            ArticleSummaryResponse s3 = ArticleSummaryResponse.builder().uuid(third.getUuid()).build();
+            when(responseMapper.toSummaryResponse(first, tagMap, authorMap)).thenReturn(s1);
+            when(responseMapper.toSummaryResponse(second, tagMap, authorMap)).thenReturn(s2);
+            when(responseMapper.toSummaryResponse(third, tagMap, authorMap)).thenReturn(s3);
+
+            PageResult<ArticleSummaryResponse> result =
+                    querySubService.getPublishedArticles(ArticleListQuery.unfiltered(), 1, 10);
+
+            assertThat(result.getRecords()).containsExactly(s1, s2, s3);
+            verify(responseMapper, times(1)).batchToAuthorInfoMap(anyList());
+            verify(responseMapper).batchToAuthorInfoMap(List.of(AUTHOR_UUID, OTHER_USER_UUID));
+        }
+
+        /**
+         * 建立一篇已發布文章（各自獨立的 id / uuid），供多作者分頁情境使用。
+         *
+         * @param id       文章主鍵
+         * @param authorUuid 作者公開 UUID
+         * @return 已發布文章
+         */
+        private Article publishedArticle(Long id, UUID authorUuid) {
+            Article article = new Article();
+            article.setId(id);
+            article.setUuid(UUID.randomUUID());
+            article.setAuthorUuid(authorUuid);
+            article.setStatus(ArticleStatus.PUBLISHED);
+            return article;
+        }
+    }
+
+    @Nested
+    @DisplayName("getMyArticles")
+    class GetMyArticlesTests {
+
+        @Test
+        @DisplayName("null status returns all author articles")
+        void getMyArticles_statusNull_returnsAll() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            ArticleSummaryResponse summary = summaryResponse(article);
+            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
+            when(articleMapper.findByAuthorUuidPaged(AUTHOR_UUID, 0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countByAuthorUuid(AUTHOR_UUID)).thenReturn(1L);
+            when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
+            when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
+
+            PageResult<ArticleSummaryResponse> result =
+                    querySubService.getMyArticles(AUTHOR_UUID, 1, 10, null);
+
+            assertThat(result.getRecords()).containsExactly(summary);
+            assertThat(result.getTotal()).isEqualTo(1L);
+            verify(articleMapper).findByAuthorUuidPaged(AUTHOR_UUID, 0L, 10);
+            verify(articleMapper, never()).findByAuthorUuidAndStatus(any(), any(), anyLong(), anyInt());
+        }
+
+        @Test
+        @DisplayName("status filter returns matching author articles")
+        void getMyArticles_statusDraft_returnsDraftOnly() {
+            Article article = buildArticle(ArticleStatus.DRAFT);
+            ArticleSummaryResponse summary = summaryResponse(article);
+            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
+            when(articleMapper.findByAuthorUuidAndStatus(AUTHOR_UUID, ArticleStatus.DRAFT, 0L, 10))
+                    .thenReturn(List.of(article));
+            when(articleMapper.countByAuthorUuidAndStatus(AUTHOR_UUID, ArticleStatus.DRAFT)).thenReturn(1L);
+            when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
+            when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
+
+            PageResult<ArticleSummaryResponse> result =
+                    querySubService.getMyArticles(AUTHOR_UUID, 1, 10, ArticleStatus.DRAFT);
+
+            assertThat(result.getRecords()).containsExactly(summary);
+            assertThat(result.getTotal()).isEqualTo(1L);
+            verify(articleMapper).findByAuthorUuidAndStatus(AUTHOR_UUID, ArticleStatus.DRAFT, 0L, 10);
+            verify(articleMapper).countByAuthorUuidAndStatus(AUTHOR_UUID, ArticleStatus.DRAFT);
+            verify(articleMapper, never()).findByAuthorUuidPaged(any(), anyLong(), anyInt());
+        }
+    }
+
+    @Nested
+    @DisplayName("getPendingArticles")
+    class GetPendingArticlesTests {
+
+        @Test
+        @DisplayName("returns mapped pending review page")
+        void getPendingArticles_success() {
+            Article article = buildArticle(ArticleStatus.PENDING_REVIEW);
+            ArticleSummaryResponse summary = summaryResponse(article);
+            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of());
+            when(articleMapper.findPendingReviewPage(0L, 10)).thenReturn(List.of(article));
+            when(articleMapper.countPendingReview()).thenReturn(1L);
+            when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID))).thenReturn(tagMap);
+            when(responseMapper.toSummaryResponse(article, tagMap, Map.of())).thenReturn(summary);
+
+            PageResult<ArticleSummaryResponse> result = querySubService.getPendingArticles(1, 10);
+
+            assertThat(result.getRecords()).containsExactly(summary);
+            assertThat(result.getTotal()).isEqualTo(1L);
+        }
+    }
+
+    @Nested
+    @DisplayName("findIdByUuid")
+    class FindIdByUuidTests {
+
+        @Test
+        @DisplayName("delegates to mapper")
+        void findIdByUuid_delegatesToMapper() {
+            when(articleMapper.findIdByUuid(ARTICLE_UUID)).thenReturn(ARTICLE_ID);
+
+            Long result = querySubService.findIdByUuid(ARTICLE_UUID);
+
+            assertThat(result).isEqualTo(ARTICLE_ID);
+            verify(articleMapper).findIdByUuid(ARTICLE_UUID);
+        }
+    }
+
+    @Nested
+    @DisplayName("findByUuid")
+    class FindByUuidTests {
+
+        @Test
+        @DisplayName("delegates to repository")
+        void findByUuid_delegatesToRepository() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findByUuid(ARTICLE_UUID)).thenReturn(Optional.of(article));
+
+            Optional<Article> result = querySubService.findByUuid(ARTICLE_UUID);
+
+            assertThat(result).containsSame(article);
+            verify(articleRepository).findByUuid(ARTICLE_UUID);
+            verifyNoInteractions(entityFinder);
+        }
+    }
+
+    @Nested
+    @DisplayName("cross-module reads")
+    class OtherCrossModuleTests {
+
+        @Test
+        @DisplayName("findById delegates to repository")
+        void findById_delegatesToRepository() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findById(ARTICLE_ID)).thenReturn(Optional.of(article));
+
+            Optional<Article> result = querySubService.findById(ARTICLE_ID);
+
+            assertThat(result).containsSame(article);
+            verify(articleRepository).findById(ARTICLE_ID);
+        }
+
+        @Test
+        @DisplayName("findByIds returns repository iteration in list")
+        void findByIds_delegatesToRepository() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleRepository.findAllById(List.of(ARTICLE_ID))).thenReturn(List.of(article));
+
+            List<Article> result = querySubService.findByIds(List.of(ARTICLE_ID));
+
+            assertThat(result).containsExactly(article);
+            verify(articleRepository).findAllById(List.of(ARTICLE_ID));
+        }
+
+        @Test
+        @DisplayName("findByIds returns empty list for null or empty input")
+        void findByIds_emptyInput_returnsEmptyList() {
+            assertThat(querySubService.findByIds(null)).isEmpty();
+            assertThat(querySubService.findByIds(List.of())).isEmpty();
+            verify(articleRepository, never()).findAllById(anyList());
+        }
+
+        @Test
+        @DisplayName("findBySeriesUuidOrderByPosition delegates to mapper")
+        void findBySeriesUuidOrderByPosition_delegatesToMapper() {
+            Article article = buildArticle(ArticleStatus.PUBLISHED);
+            when(articleMapper.findBySeriesUuidOrderByPosition(SERIES_UUID)).thenReturn(List.of(article));
+
+            List<Article> result = querySubService.findBySeriesUuidOrderByPosition(SERIES_UUID);
+
+            assertThat(result).containsExactly(article);
+            verify(articleMapper).findBySeriesUuidOrderByPosition(SERIES_UUID);
+        }
+
+        @Test
+        @DisplayName("getArticleSummariesByIds 批次載入（findAllById + 單次 tag 查詢），不逐筆 findById")
+        void getArticleSummariesByIds_batchesLoadAndTags_noNPlusOne() {
+            Article a1 = buildArticle(ArticleStatus.PUBLISHED);
+            UUID uuid2 = UUID.randomUUID();
+            Article a2 = new Article();
+            a2.setId(22L);
+            a2.setUuid(uuid2);
+            a2.setStatus(ArticleStatus.PUBLISHED);
+
+            ArticleSummaryResponse s1 = summaryResponse(a1);
+            ArticleSummaryResponse s2 = ArticleSummaryResponse.builder().uuid(uuid2).build();
+            // findAllById 回傳順序刻意打亂，驗證輸出仍照 input id 順序 [ARTICLE_ID, 22]
+            when(articleRepository.findAllById(List.of(ARTICLE_ID, 22L))).thenReturn(List.of(a2, a1));
+            Map<UUID, List<TagSummaryResponse>> tagMap = Map.of(ARTICLE_UUID, List.of(), uuid2, List.of());
+            when(responseMapper.batchToTagResponsesMap(List.of(ARTICLE_UUID, uuid2))).thenReturn(tagMap);
+            when(responseMapper.toSummaryResponse(a1, tagMap, Map.of())).thenReturn(s1);
+            when(responseMapper.toSummaryResponse(a2, tagMap, Map.of())).thenReturn(s2);
+
+            List<ArticleSummaryResponse> result =
+                    querySubService.getArticleSummariesByIds(List.of(ARTICLE_ID, 22L));
+
+            // 輸出照 input 順序
+            assertThat(result).containsExactly(s1, s2);
+            // 批次：findAllById 一次、tag 查詢一次；不得逐筆 findById
+            verify(articleRepository).findAllById(List.of(ARTICLE_ID, 22L));
+            verify(articleRepository, never()).findById(any());
+            verify(responseMapper).batchToTagResponsesMap(List.of(ARTICLE_UUID, uuid2));
+            /* 作者同樣整批解析一次（a2 未設作者，不得把 null 送進批次查詢） */
+            verify(responseMapper).batchToAuthorInfoMap(List.of(AUTHOR_UUID));
+        }
+
+        @Test
+        @DisplayName("getArticleSummariesByIds returns empty list for null or empty input")
+        void getArticleSummariesByIds_emptyInput_returnsEmptyList() {
+            assertThat(querySubService.getArticleSummariesByIds(null)).isEmpty();
+            assertThat(querySubService.getArticleSummariesByIds(List.of())).isEmpty();
+            verify(articleRepository, never()).findAllById(anyList());
+        }
+    }
+
+    @Nested
+    @DisplayName("getArchive — 歸檔投影（PERF-04）")
+    class GetArchiveTests {
+
+        private ArticleArchiveRow row(UUID uuid, String title, LocalDateTime publishedAt) {
+            ArticleArchiveRow row = new ArticleArchiveRow();
+            row.setUuid(uuid);
+            row.setTitle(title);
+            row.setSlug("slug-" + title);
+            row.setPublishedAt(publishedAt);
+            return row;
+        }
+
+        @Test
+        @DisplayName("只走投影查詢 findArchiveRows，絕不呼叫會撈正文欄位的 ES 索引查詢")
+        void getArchive_usesProjectionQuery_neverBodyLoadingIndexQuery() {
+            when(articleMapper.findArchiveRows()).thenReturn(List.of());
+
+            querySubService.getArchive();
+
+            verify(articleMapper).findArchiveRows();
+            verify(articleMapper, never()).findPublishedForIndexAfter(any(), anyInt());
+            verify(articleMapper, never()).findPublishedForIndexByUuids(any());
+        }
+
+        @Test
+        @DisplayName("無已發布文章：回空清單，且不查標籤")
+        void getArchive_empty_returnsEmptyWithoutTagQuery() {
+            when(articleMapper.findArchiveRows()).thenReturn(List.of());
+
+            assertThat(querySubService.getArchive()).isEmpty();
+
+            verifyNoInteractions(responseMapper);
+        }
+
+        @Test
+        @DisplayName("組裝：保留 SQL 給的順序；標籤名稱來自整批標籤查詢（一次），無標籤者為空清單")
+        void getArchive_assemblesRowsInOrderWithBatchedTags() {
+            UUID newer = UUID.randomUUID();
+            UUID older = UUID.randomUUID();
+            LocalDateTime t1 = LocalDateTime.of(2026, 6, 1, 10, 0);
+            LocalDateTime t2 = LocalDateTime.of(2025, 1, 1, 10, 0);
+            when(articleMapper.findArchiveRows()).thenReturn(List.of(row(newer, "新", t1), row(older, "舊", t2)));
+            when(responseMapper.batchToTagResponsesMap(List.of(newer, older))).thenReturn(Map.of(
+                    newer, List.of(
+                            TagSummaryResponse.builder().id(UUID.randomUUID()).name("Java").slug("java").build(),
+                            TagSummaryResponse.builder().id(UUID.randomUUID()).name("Spring").slug("spring").build())));
+
+            var result = querySubService.getArchive();
+
+            assertThat(result).extracting(ArticleArchiveResponse::getUuid).containsExactly(newer, older);
+            assertThat(result).extracting(ArticleArchiveResponse::getTitle).containsExactly("新", "舊");
+            assertThat(result).extracting(ArticleArchiveResponse::getSlug).containsExactly("slug-新", "slug-舊");
+            assertThat(result).extracting(ArticleArchiveResponse::getPublishedAt).containsExactly(t1, t2);
+            assertThat(result.get(0).getTags()).containsExactly("Java", "Spring");
+            assertThat(result.get(1).getTags()).isEmpty();
+            verify(responseMapper, times(1)).batchToTagResponsesMap(anyList());
+        }
+    }
+}

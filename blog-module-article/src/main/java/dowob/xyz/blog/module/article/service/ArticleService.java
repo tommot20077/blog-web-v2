@@ -1,0 +1,273 @@
+package dowob.xyz.blog.module.article.service;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.response.PageResult;
+import dowob.xyz.blog.module.article.model.dto.request.ArticleListQuery;
+import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleArchiveResponse;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleSummaryResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
+
+import java.util.List;
+import java.util.UUID;
+
+
+/**
+ * 文章服務介面
+ *
+ * <p>
+ * 定義文章模組的所有業務操作合約。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+public interface ArticleService {
+
+    /**
+     * 建立文章
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param request  建立文章請求
+     * @return 建立後的 Editor 文章資訊
+     */
+    EditorArticleResponse createArticle(UUID authorUuid, CreateArticleRequest request);
+
+    /**
+     * 更新文章（僅允許 DRAFT 或 REJECTED 狀態）
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @param request      更新請求
+     * @return 更新後的 Editor 文章資訊
+     * @throws org.springframework.web.server.ResponseStatusException HTTP 403 當文章狀態為 PENDING_REVIEW / PUBLISHED / ARCHIVED
+     */
+    EditorArticleResponse updateArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid, UpdateArticleRequest request);
+
+    /**
+     * 取得文章供 Editor 編輯（僅作者本人）
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param requesterUuid 請求者公開 UUID
+     * @return Editor 用文章資訊
+     * @throws org.springframework.web.server.ResponseStatusException HTTP 403 當請求者非作者
+     */
+    EditorArticleResponse getArticleForEdit(UUID articleUuid, UUID requesterUuid);
+
+    /**
+     * 刪除文章
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     */
+    void deleteArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
+
+    /**
+     * 根據 UUID 取得文章詳情
+     *
+     * <p>
+     * 公開 API：已發布文章任何人可存取；其他狀態需作者本人或 ADMIN 權限。
+     * 匿名存取（viewerUuid/viewerRole 為 null）只能取得 PUBLISHED 文章。
+     * clientIp 用於 Redis 防刷計數（同 IP 5 分鐘內只計算一次瀏覽）。
+     * </p>
+     *
+     * @param articleUuid 文章公開 UUID
+     * @param viewerUuid    觀看者公開 UUID（匿名為 null）
+     * @param viewerRole  觀看者角色（匿名為 null）
+     * @param clientIp    客戶端 IP（用於防刷）
+     * @return 文章完整資訊
+     */
+    ArticleResponse getArticleByUuid(UUID articleUuid, UUID viewerUuid, Role viewerRole, String clientIp);
+
+    /**
+     * 依篩選條件分頁取得已發布文章列表（公開）
+     *
+     * @param query 篩選與排序參數（已正規化；不篩選時用 {@link ArticleListQuery#unfiltered()}）
+     * @param page  頁碼（從 1 開始）
+     * @param size  每頁筆數
+     * @return 分頁文章摘要列表；total 為符合篩選條件的總數
+     */
+    PageResult<ArticleSummaryResponse> getPublishedArticles(ArticleListQuery query, int page, int size);
+
+    /**
+     * 分頁取得當前登入用戶的文章列表
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param page     頁碼（從 1 開始）
+     * @param size     每頁筆數
+     * @param status   文章狀態篩選（null 表示查詢全部）
+     * @return 分頁文章摘要列表
+     */
+    PageResult<ArticleSummaryResponse> getMyArticles(UUID authorUuid, int page, int size, ArticleStatus status);
+
+    /**
+     * 發布文章
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @return 發布後的文章完整資訊
+     */
+    ArticleResponse publishArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
+
+    /**
+     * 駁回文章（僅 ADMIN）
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @param reason       駁回原因
+     * @return 駁回後的文章完整資訊
+     */
+    ArticleResponse rejectArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid, String reason);
+
+    /**
+     * 分頁取得待審文章列表（僅 ADMIN）
+     *
+     * @param page 頁碼（從 1 開始）
+     * @param size 每頁筆數
+     * @return 分頁文章摘要列表
+     */
+    PageResult<ArticleSummaryResponse> getPendingArticles(int page, int size);
+
+    /**
+     * 取得全部已發布文章的歸檔精簡投影（供前端年度歸檔頁使用）。
+     *
+     * <p>
+     * 唯讀查詢、無分頁：回傳所有 PUBLISHED 文章的最小欄位（uuid / title / slug / publishedAt / tags），
+     * 依 publishedAt 由新到舊排序；草稿、待審、封存等非已發布狀態不納入。無已發布文章時回傳空清單。
+     * </p>
+     *
+     * @return 歸檔文章投影列表（依 publishedAt 由新到舊排序，無資料回傳空清單）
+     */
+    List<ArticleArchiveResponse> getArchive();
+
+    /**
+     * 提交文章審核（DRAFT → PENDING_REVIEW）
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @return 提交審核後的文章完整資訊
+     */
+    ArticleResponse submitForReview(UUID operatorUuid, Role operatorRole, UUID articleUuid);
+
+    /**
+     * 抽回送審文章（PENDING_REVIEW → DRAFT）
+     *
+     * <p>
+     * 供作者在審核完成前反悔、將文章退回草稿繼續編輯。
+     * 僅 PENDING_REVIEW 狀態可抽回；<b>權限僅限文章作者本人，ADMIN 亦不可抽回他人文章</b>
+     * （抽回與駁回職責分離：ADMIN 處理他人送審文章應走 {@link #rejectArticle}）。
+     * </p>
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色（保留以與其他狀態轉換方法簽章一致，不影響授權判斷）
+     * @param articleUuid  文章公開 UUID
+     * @return 抽回後的文章完整資訊
+     */
+    ArticleResponse withdrawArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
+
+    /**
+     * 下架文章（PUBLISHED → ARCHIVED，僅 ADMIN）
+     *
+     * <p>
+     * 把已發布文章自公開面撤下，並移除其 Elasticsearch 索引；文章列、留言、按讚、
+     * 版本快照全部保留，可再以 {@link #unarchiveArticle} 復原——是硬刪之外的可逆替代路徑。
+     * <b>權限僅限 ADMIN</b>（下架是編審決定，作者不可自助執行，一律回 A0203）。
+     * 來源狀態非 PUBLISHED 一律回 A0204。
+     * </p>
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
+     * @param articleUuid  文章公開 UUID
+     * @return 下架後的文章完整資訊
+     */
+    ArticleResponse archiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
+
+    /**
+     * 復原已下架文章（ARCHIVED → DRAFT，僅 ADMIN）
+     *
+     * <p>
+     * 復原後文章回到草稿狀態、可再次編輯；要重新公開必須走既有的
+     * {@link #submitForReview} / {@link #publishArticle} 流程，刻意不直接回到 PUBLISHED。
+     * <b>權限僅限 ADMIN</b>；來源狀態非 ARCHIVED 一律回 A0204。
+     * </p>
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
+     * @param articleUuid  文章公開 UUID
+     * @return 復原後的文章完整資訊
+     */
+    ArticleResponse unarchiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid);
+
+    /**
+     * 根據 slug 取得文章詳情
+     *
+     * @param slug       文章 URL slug
+     * @param viewerUuid   觀看者公開 UUID（匿名為 null）
+     * @param viewerRole 觀看者角色（匿名為 null）
+     * @param clientIp   客戶端 IP（用於防刷）
+     * @return 文章完整資訊
+     */
+    ArticleResponse getArticleBySlug(String slug, UUID viewerUuid, Role viewerRole, String clientIp);
+
+    /**
+     * 根據文章公開 UUID 查詢資料庫主鍵
+     *
+     * <p>
+     * 供跨模組 Service 透過公開 UUID 取得 article PK，避免直接 JOIN articles 表。
+     * </p>
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章資料庫主鍵，若不存在則回傳 null
+     */
+    Long findIdByUuid(UUID uuid);
+
+    /**
+     * 根據文章 ID 列表批次取得文章摘要（供收藏列表等跨模組查詢使用）。
+     *
+     * <p>Task 12 完整實作；此為 stub，逐筆查詢。</p>
+     *
+     * @param articleIds 文章資料庫主鍵列表
+     * @return 文章摘要列表（依 articleIds 順序）
+     */
+    List<ArticleSummaryResponse> getArticleSummariesByIds(List<Long> articleIds);
+
+    /**
+     * 根據 ID 列表批次查詢文章實體（供跨模組 uuid 反向映射使用）。
+     *
+     * @param ids 文章資料庫主鍵列表
+     * @return 文章實體列表
+     */
+    java.util.List<dowob.xyz.blog.module.article.model.Article> findByIds(java.util.List<Long> ids);
+
+    /**
+     * 根據文章公開 UUID 查詢文章實體（供跨模組使用，例如 Series 模組）。
+     *
+     * @param uuid 文章公開 UUID
+     * @return 文章 Optional
+     */
+    java.util.Optional<dowob.xyz.blog.module.article.model.Article> findByUuid(UUID uuid);
+
+    /**
+     * 查詢指定 Series 內的所有文章，按 series_position 排序（供 Series 詳情頁使用）。
+     *
+     * @param seriesUuid Series 公開 UUID
+     * @return 按 series_position 升冪排序的文章列表
+     */
+    java.util.List<dowob.xyz.blog.module.article.model.Article> findBySeriesUuidOrderByPosition(UUID seriesUuid);
+
+    /**
+     * 根據資料庫主鍵查詢文章實體（供 SeriesFacade 等跨模組使用）。
+     *
+     * @param id 文章資料庫主鍵
+     * @return 文章 Optional
+     */
+    java.util.Optional<dowob.xyz.blog.module.article.model.Article> findById(Long id);
+}

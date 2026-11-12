@@ -1,0 +1,2225 @@
+package dowob.xyz.blog.module.article.controller;
+
+import dowob.xyz.blog.common.constant.RedisKeyConstant;
+import dowob.xyz.blog.module.article.support.TestUsers;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.infrastructure.facade.ReadingFacade;
+import dowob.xyz.blog.infrastructure.facade.SeriesFacade;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.UserDisplayInfo;
+import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig;
+import dowob.xyz.blog.module.article.config.ArticleTestApplication;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.request.RejectArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Objects;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.not;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * 文章 Controller 整合測試
+ *
+ * <p>
+ * 使用 TestContainers 啟動 PostgreSQL，測試完整 API 流程。
+ * 使用 Spring Security Test 的 RequestPostProcessor 模擬認證，
+ * 確保 SecurityContext 在完整過濾器鏈中正確傳遞。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@SpringBootTest(classes = ArticleTestApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureMockMvc
+@Testcontainers
+@ActiveProfiles("test")
+@DisplayName("ArticleController 整合測試")
+class ArticleControllerIT {
+
+    /**
+     * PostgreSQL TestContainer
+     */
+    @Container
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine")
+            .withDatabaseName("blog_test")
+            .withUsername("test")
+            .withPassword("test");
+
+    /**
+     * Redis TestContainer
+     */
+    @Container
+    static com.redis.testcontainers.RedisContainer redis =
+            new com.redis.testcontainers.RedisContainer("redis:8.8.0-alpine");
+
+    /**
+     * 動態注入容器連線設定
+     *
+     * @param registry Spring 動態屬性源
+     */
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("spring.data.redis.url", redis::getRedisURI);
+    }
+
+    /**
+     * MockMvc 測試客戶端
+     */
+    @Autowired
+    private MockMvc mockMvc;
+
+    /**
+     * JSON 序列化工具
+     */
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    /**
+     * 文章 Repository（用於測試清理）
+     */
+    @Autowired
+    private ArticleRepository articleRepository;
+
+    /**
+     * 直接檢視／清除 Redis（PERF-04 歸檔頁快取）
+     */
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+
+    /**
+     * 直接操作資料庫（公開列表篩選情境：標籤、分類、第二位作者與可控的排序鍵）
+     */
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    /**
+     * Mock RabbitMQ ConnectionFactory（避免啟動時找不到 Bean）
+     */
+    @MockitoBean
+    private ConnectionFactory connectionFactory;
+
+    /**
+     * Mock RabbitTemplate（避免 IT 真正發送 MQ 訊息）
+     */
+    @MockitoBean
+    private RabbitTemplate rabbitTemplate;
+
+    /**
+     * Mock TagFacade（避免依賴 Tag Module）
+     */
+    @MockitoBean
+    private TagFacade tagFacade;
+
+
+    /**
+     * Mock UserFacade（避免依賴 User Module）
+     */
+    @MockitoBean
+    private UserFacade userFacade;
+
+    /**
+     * Mock UserAuthService（避免依賴 User Module 實作）
+     */
+    @MockitoBean
+    private UserAuthService userAuthService;
+
+    /**
+     * Mock ReadingFacade（避免依賴 Reading Module 實作）
+     */
+    @MockitoBean
+    private ReadingFacade readingFacade;
+
+    /**
+     * Mock SeriesFacade（避免依賴 Series Module 實作）
+     */
+    @MockitoBean
+    private SeriesFacade seriesFacade;
+
+    /**
+     * 測試用預設作者 ID（對應 V1 Migration 預設資料）
+     */
+    private static final Long AUTHOR_ID = 1L;
+
+    /**
+     * 測試用作者 UUID
+     */
+    private static final UUID AUTHOR_UUID = TestUsers.uuidOf(AUTHOR_ID);
+
+    /**
+     * 第二位測試作者 ID（公開列表作者篩選情境；其 AuthUser.uuid 為 {@code TestUsers.uuidOf(id)}）
+     */
+    private static final Long SECOND_AUTHOR_ID = 2L;
+
+    /**
+     * 第二位測試作者的公開 UUID（與 {@link #asUser} 為該 id 建立的 AuthUser.uuid 相同）
+     */
+    private static final UUID SECOND_AUTHOR_UUID = TestUsers.uuidOf(SECOND_AUTHOR_ID);
+
+    /**
+     * 每次測試後清理文章資料
+     *
+     * <p>先刪文章（article_categories 隨 CASCADE 清除），再刪列表篩選情境建立的標籤與分類。
+     * V33 起 article_tags.article_id 沒有指向 articles 的 FK（刪文章不再 CASCADE 清除關聯，改由 tag 模組的事件 consumer
+     * 負責，本測試不載入它），而 article_tags.tag_id 無 CASCADE——所以刪標籤前要先顯式清掉其關聯列，順序不可顛倒。</p>
+     */
+    @AfterEach
+    void cleanUp() {
+        articleRepository.deleteAll();
+        /* PERF-04：歸檔頁回應有 Redis 快取；本類別在 cleanUp 直接以 repository 刪文章（不經 service，不會觸發失效），
+         * 若不清掉，上一個測試留下的快取會被下一個測試讀到。 */
+        stringRedisTemplate.delete(RedisKeyConstant.ARTICLE_ARCHIVE_KEY);
+        jdbcTemplate.update("DELETE FROM article_tags WHERE tag_id IN (SELECT id FROM tags WHERE slug LIKE 'it-list-%')");
+        jdbcTemplate.update("DELETE FROM tags WHERE slug LIKE 'it-list-%'");
+        jdbcTemplate.update("DELETE FROM categories WHERE slug LIKE 'it-list-%'");
+    }
+
+    /**
+     * 建立模擬認證的 RequestPostProcessor
+     *
+     * <p>
+     * 使用 Spring Security Test 提供的機制，
+     * 確保認證物件在完整過濾器鏈中正確傳遞。
+     * </p>
+     *
+     * @param userId 用戶 ID
+     * @param role   角色
+     * @return RequestPostProcessor
+     */
+    /**
+     * 建立模擬認證的 RequestPostProcessor
+     *
+     * <p>
+     * 使用 Spring Security Test 提供的機制，
+     * 確保認證物件在完整過濾器鏈中正確傳遞。
+     * 同時注入角色對應的所有 {@link dowob.xyz.blog.common.api.enums.Permission} 作為 Authority，
+     * 以支援 {@code @PreAuthorize("hasAuthority('...')")} 的宣告式存取控制。
+     * </p>
+     *
+     * @param userId 用戶 ID
+     * @param role   角色
+     * @return RequestPostProcessor
+     */
+    private RequestPostProcessor asUser(Long userId, Role role) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(role.getSpringSecurityRole()));
+        role.getPermissions().forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(new AuthUser(TestUsers.uuidOf(userId), role), null, authorities);
+        return SecurityMockMvcRequestPostProcessors.authentication(auth);
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles - 公開取得已發布文章列表（空列表）")
+    void getPublishedArticles_emptyList() throws Exception {
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.records").isArray())
+                .andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles → POST publish → GET 完整流程")
+    void createAndGetArticle_fullFlow() throws Exception {
+        stubUserFacade();
+
+        /** 建立文章 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("整合測試文章");
+        createRequest.setContent("整合測試內容 Markdown");
+        createRequest.setSummary("摘要");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.status").value("DRAFT"))
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        /** 發布文章 */
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        /** 匿名取得已發布文章 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("整合測試文章"))
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        /** 確認列表中有此文章 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles - 列表作者欄位由單次 UUID 版批次查詢填入，不逐筆查詢（PERF-02）")
+    void getPublishedArticles_authorResolvedByBatchLookup() throws Exception {
+        /** 批次路徑回傳特殊暱稱，藉此確認列表欄位確實來自 UUID 版批次查詢 */
+        when(userFacade.getDisplayInfoByUuids(anyCollection()))
+                .thenReturn(Map.of(AUTHOR_UUID, new UserDisplayInfo(AUTHOR_UUID, "BatchAuthor", null)));
+
+        for (int i = 0; i < 3; i++) {
+            String uuid = createArticle("批次作者文章 " + i, "內容 " + i);
+            mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                    .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                    .andExpect(status().isOk());
+        }
+        /** 建立與發布過程的呼叫不計入，只驗證列表請求本身 */
+        clearInvocations(userFacade);
+
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records", hasSize(3)))
+                .andExpect(jsonPath("$.data.records[0].authorNickname").value("BatchAuthor"))
+                .andExpect(jsonPath("$.data.records[0].authorUuid").value(AUTHOR_UUID.toString()));
+
+        verify(userFacade, times(1)).getDisplayInfoByUuids(anyCollection());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} - 作者更新自己的文章")
+    void updateArticle_authorUpdatesOwn() throws Exception {
+        stubUserFacade();
+
+        /** 建立文章 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("原始標題");
+        createRequest.setContent("原始內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        /** 更新文章 */
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("更新後標題");
+
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("更新後標題"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/articles/{uuid} - 作者刪除自己的文章")
+    void deleteArticle_authorDeletesOwn() throws Exception {
+        stubUserFacade();
+
+        /** 建立文章 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("待刪文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        /** 刪除文章 */
+        mockMvc.perform(delete("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 確認已刪除（匿名也找不到） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/me - 取得我的文章列表")
+    void getMyArticles_success() throws Exception {
+        stubUserFacade();
+
+        /** 建立兩篇文章 */
+        for (int i = 1; i <= 2; i++) {
+            CreateArticleRequest req = new CreateArticleRequest();
+            req.setTitle("我的文章 " + i);
+            req.setContent("內容 " + i);
+            mockMvc.perform(post("/api/v1/articles")
+                    .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(req)))
+                    .andExpect(status().isOk());
+        }
+
+        mockMvc.perform(get("/api/v1/articles/me")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.records").isArray());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles - title 為空 → 回傳 code=400")
+    void createArticle_emptyTitle_validationError() throws Exception {
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle("");
+        request.setContent("內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/publish - 非法狀態轉換（PUBLISHED→PUBLISHED）→ A0204")
+    void publishArticle_alreadyPublished_error() throws Exception {
+        stubUserFacade();
+
+        /** 建立並發布文章 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("待發布");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 嘗試再次發布 → 非法狀態轉換 */
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/reject - Admin 駁回待審文章 → 狀態為 REJECTED")
+    void rejectArticle_adminRejects_success() throws Exception {
+        stubUserFacade();
+
+        /** 建立文章並送審 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("待審文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        /** 送審 */
+        UpdateArticleRequest submitRequest = new UpdateArticleRequest();
+        submitRequest.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PENDING_REVIEW);
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(submitRequest)))
+                .andExpect(status().isOk());
+
+        /** Admin 駁回 */
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("內容不符合規範");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+    }
+
+    /**
+     * 建立一篇文章並送審，回傳其 uuid（供駁回驗證測試使用）。
+     *
+     * @return PENDING_REVIEW 文章的 uuid 字串
+     * @throws Exception MockMvc 執行失敗
+     */
+    private String createPendingReviewArticle() throws Exception {
+        stubUserFacade();
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("待審文章");
+        createRequest.setContent("內容");
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+        UpdateArticleRequest submitRequest = new UpdateArticleRequest();
+        submitRequest.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PENDING_REVIEW);
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(submitRequest)))
+                .andExpect(status().isOk());
+        return uuid;
+    }
+
+    @Test
+    @DisplayName("SEC-24 POST /reject - reason 超過 500 字 → 400 且文章維持待審")
+    void rejectArticle_reasonTooLong_returns400() throws Exception {
+        String uuid = createPendingReviewArticle();
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("r".repeat(501));
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("reason")));
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"));
+    }
+
+    @Test
+    @DisplayName("SEC-24 POST /reject - reason 剛好 500 字、或未帶 reason（現行允許空值）→ 仍可駁回")
+    void rejectArticle_reasonAtLimitOrAbsent_stillAccepted() throws Exception {
+        String atLimit = createPendingReviewArticle();
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("r".repeat(500));
+        mockMvc.perform(post("/api/v1/articles/" + atLimit + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+
+        String absent = createPendingReviewArticle();
+        mockMvc.perform(post("/api/v1/articles/" + absent + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+    }
+
+    @Test
+    @DisplayName("GET /api/admin/articles/pending - ADMIN 取得待審列表成功（200）")
+    void getPendingArticles_adminSuccess() throws Exception {
+        stubUserFacade();
+
+        /** 建立並送審一篇文章 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("待審文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        UpdateArticleRequest submitRequest = new UpdateArticleRequest();
+        submitRequest.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PENDING_REVIEW);
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(submitRequest)))
+                .andExpect(status().isOk());
+
+        /** Admin 查詢待審列表 */
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.records").isArray());
+    }
+
+    @Test
+    @DisplayName("GET /api/admin/articles/pending - AUTHOR 呼叫 → 403")
+    void getPendingArticles_nonAdminForbidden() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/articles/pending")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/reject - AUTHOR（無 ADMIN_ARTICLE_REVIEW 權限）→ 403")
+    void rejectArticle_authorForbidden_returns403() throws Exception {
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("想試試駁回");
+
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/reject")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isForbidden());
+    }
+
+    /** ROLE_ADMIN + 除了 {@code missing} 之外的所有 permission（手工構造 authorities）。 */
+    private RequestPostProcessor asAdminWithout(Long userId, dowob.xyz.blog.common.api.enums.Permission missing) {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().stream().filter(p -> p != missing)
+                .forEach(p -> authorities.add(new SimpleGrantedAuthority(p.name())));
+        return SecurityMockMvcRequestPostProcessors.authentication(new UsernamePasswordAuthenticationToken(
+                new AuthUser(TestUsers.uuidOf(userId), Role.ADMIN), null, authorities));
+    }
+
+    @Test
+    @DisplayName("A9 POST /api/v1/articles/{uuid}/reject - ROLE_ADMIN 但缺 ADMIN_ARTICLE_REVIEW → 403（此端點不在 /admin URL 層，只有方法層把關）")
+    void rejectArticle_adminWithoutReviewPermission_returns403() throws Exception {
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("缺權限不應能駁回");
+
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/reject")
+                .with(asAdminWithout(AUTHOR_ID, dowob.xyz.blog.common.api.enums.Permission.ADMIN_ARTICLE_REVIEW))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/me - 匿名存取 → 需登入，回傳 401")
+    void getMyArticles_anonymous_returns401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/me"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles - Role.USER 呼叫應回傳 403（缺少 ARTICLE_CREATE）")
+    void createArticle_userRole_forbidden() throws Exception {
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle("USER 發文");
+        request.setContent("不應被允許");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} - Role.USER 呼叫應回傳 403（缺少 ARTICLE_EDIT）")
+    void updateArticle_userRole_forbidden() throws Exception {
+        UpdateArticleRequest request = new UpdateArticleRequest();
+        request.setTitle("嘗試更新");
+
+        mockMvc.perform(put("/api/v1/articles/" + UUID.randomUUID())
+                .with(asUser(AUTHOR_ID, Role.USER))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/articles/{uuid} - Role.USER 呼叫應回傳 403（缺少 ARTICLE_DELETE）")
+    void deleteArticle_userRole_forbidden() throws Exception {
+        mockMvc.perform(delete("/api/v1/articles/" + UUID.randomUUID())
+                .with(asUser(AUTHOR_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles - Role.ADMIN 呼叫應正常通過（擁有 ARTICLE_CREATE）")
+    void createArticle_adminRole_success() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle("Admin 發文");
+        request.setContent("管理員內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.uuid").exists());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - 回應中包含 authorNickname 欄位")
+    void getArticle_responseContainsAuthorNickname() throws Exception {
+        stubUserFacade();
+
+        /** 建立文章並發布 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("暱稱驗證文章");
+        createRequest.setContent("驗證 authorNickname 欄位");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 匿名取得已發布文章，驗證 authorNickname */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.authorNickname").value("TestAuthor"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - 回應中包含 contentHtml 欄位（含 HTML 標籤）")
+    void getArticle_shouldReturnContentHtml() throws Exception {
+        stubUserFacade();
+
+        /** 建立文章並發布 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("HTML 渲染驗證");
+        createRequest.setContent("這是 Markdown 段落內容。");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 匿名取得已發布文章，驗證 contentHtml 存在且含 HTML 標籤 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.contentHtml").exists())
+                .andExpect(jsonPath("$.data.contentHtml").value(org.hamcrest.Matchers.containsString("<")));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/slug/{slug} - 以 slug 取得已發布文章")
+    void getArticleBySlug_success() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("Slug 測試文章");
+        createRequest.setContent("Slug 測試內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        // 從已發布文章的 GET 回應中取得 slug（EditorArticleResponse 不含 slug）
+        String getResponse = mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String slug = objectMapper.readTree(getResponse).path("data").path("slug").asText();
+
+        mockMvc.perform(get("/api/v1/articles/slug/" + slug))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("Slug 測試文章"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/submit - 作者送審草稿 → 狀態為 PENDING_REVIEW")
+    void submitForReview_authorSubmitsDraft_success() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("送審測試文章");
+        createRequest.setContent("送審測試內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/submit")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?categorySlug=xxx - 以分類 slug 篩選已發布文章")
+    void getPublishedArticles_withCategorySlug() throws Exception {
+        mockMvc.perform(get("/api/v1/articles")
+                .param("categorySlug", "nonexistent-category"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/me?status=DRAFT - 以狀態篩選我的文章")
+    void getMyArticles_withStatusFilter() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("草稿篩選測試");
+        createRequest.setContent("草稿內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/me")
+                .param("status", "DRAFT")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - 同 IP 連續兩次存取，MQ 瀏覽事件只發送一次（防刷）")
+    void getArticle_shouldNotCountViewTwice_whenSameIpWithinWindow() throws Exception {
+        stubUserFacade();
+
+        /** 建立文章並發布 */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("防刷測試文章");
+        createRequest.setContent("防刷測試內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 第一次存取：應發送 MQ 瀏覽事件並回應 200 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk());
+
+        /** 第二次存取（同 IP，5 分鐘內）：不再發送 MQ 事件 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk());
+
+        /** 驗證 MQ 瀏覽事件（ArticleViewedEvent）整個流程只發送過一次 */
+        org.mockito.Mockito.verify(rabbitTemplate, org.mockito.Mockito.times(1))
+                .convertAndSend(
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.infrastructure.event.ArticleEventContract.EXCHANGE),
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
+                        org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
+    }
+
+    /**
+     * 驗證：取得文章時發送的 viewed 事件不得在交易作用域內送出。
+     *
+     * <p>規範依據：{@code ai-docs/code-standards.md} §Transaction+MQ 時序——禁止在 @Transactional
+     * 方法內呼叫 rabbitTemplate.convertAndSend。讀路徑雖無 DB 寫入，但仍屬字面違規，
+     * 且會在 MQ 網路 I/O 期間持有 DB 連線。</p>
+     *
+     * <p>本測試以事件送出當下是否存在作用中交易作為判準——僅驗事件有發，
+     * 在修復前後皆會通過，無法鑑別此缺陷。</p>
+     */
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - viewed 事件不得在交易作用域內送出")
+    void getArticle_publishesViewedOutsideTransaction() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("交易邊界驗證文章");
+        createRequest.setContent("驗證 viewed 事件不在交易內送出");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 記錄 viewed 事件送出當下是否仍在交易作用域內 */
+        AtomicBoolean txActiveAtPublish = new AtomicBoolean(false);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            txActiveAtPublish.set(TransactionSynchronizationManager.isActualTransactionActive());
+            return null;
+        }).when(rabbitTemplate).convertAndSend(
+                org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.infrastructure.event.ArticleEventContract.EXCHANGE),
+                org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
+                org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk());
+
+        /** 先確認事件確實有送出，避免因未呼叫而讓下方斷言空過 */
+        org.mockito.Mockito.verify(rabbitTemplate, org.mockito.Mockito.times(1))
+                .convertAndSend(
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.infrastructure.event.ArticleEventContract.EXCHANGE),
+                        org.mockito.ArgumentMatchers.eq(dowob.xyz.blog.module.article.config.ArticleRabbitMqConfig.ROUTING_KEY_VIEWED),
+                        org.mockito.ArgumentMatchers.any(dowob.xyz.blog.module.article.event.ArticleViewedEvent.class));
+
+        assertThat(txActiveAtPublish.get())
+                .as("viewed 事件不得在交易作用域內送出（code-standards §Transaction+MQ 時序）")
+                .isFalse();
+    }
+
+    // ===== Editor API 測試 =====
+
+    @Test
+    @DisplayName("POST /api/v1/articles → 回傳 EditorArticleResponse（有 uuid、content，無 contentHtml、viewCount）")
+    void createArticle_returnsEditorArticleResponse() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle("Editor 建立文章");
+        request.setContent("# Markdown 內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.uuid").exists())
+                .andExpect(jsonPath("$.data.content").value("# Markdown 內容"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"))
+                .andExpect(jsonPath("$.data.contentHtml").doesNotExist())
+                .andExpect(jsonPath("$.data.viewCount").doesNotExist())
+                .andExpect(jsonPath("$.data.slug").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} → DRAFT 狀態 → 成功更新，回傳 EditorArticleResponse（無 contentHtml）")
+    void updateArticle_draft_allowed_returnsEditorResponse() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("草稿");
+        createRequest.setContent("初始內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("更新後標題");
+
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("更新後標題"))
+                .andExpect(jsonPath("$.data.contentHtml").doesNotExist())
+                .andExpect(jsonPath("$.data.viewCount").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} → PUBLISHED 狀態 → 400（ARTICLE_EDIT_NOT_ALLOWED）")
+    void updateArticle_published_returns403() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("待發布文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("試圖修改已發布文章");
+
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 作者本人可取得 EditorArticleResponse")
+    void getArticleForEdit_authorCanAccess() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("可編輯文章");
+        createRequest.setContent("**Markdown 內容**");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid + "/edit")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.uuid").value(uuid))
+                .andExpect(jsonPath("$.data.content").value("**Markdown 內容**"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"))
+                .andExpect(jsonPath("$.data.contentHtml").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 未認證 → 401")
+    void getArticleForEdit_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + UUID.randomUUID() + "/edit"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void getArticleForEdit_roleUser_returns403() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + UUID.randomUUID() + "/edit")
+                .with(asUser(AUTHOR_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 他人文章 → 400（ARTICLE_ACCESS_DENIED）")
+    void getArticleForEdit_otherUserArticle_returns403() throws Exception {
+        stubUserFacade();
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("他人文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid + "/edit")
+                .with(asUser(99L, Role.AUTHOR)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid}/edit → 文章不存在 → 400（ARTICLE_NOT_FOUND）")
+    void getArticleForEdit_notFound_returns400() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + UUID.randomUUID() + "/edit")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles/archive - 公開取得歸檔（200、只含 PUBLISHED、依 publishedAt desc）")
+    void getArchive_returns200WithPublishedOnly() throws Exception {
+        stubUserFacade();
+
+        /** 建立並發布第一篇（較早發布） */
+        String firstUuid = createArticle("歸檔文章 A", "內容 A");
+        mockMvc.perform(post("/api/v1/articles/" + firstUuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 建立並發布第二篇（較晚發布，應排在最前面） */
+        String secondUuid = createArticle("歸檔文章 B", "內容 B");
+        mockMvc.perform(post("/api/v1/articles/" + secondUuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 建立一篇草稿（未發布，不應出現在歸檔中） */
+        createArticle("草稿不應出現", "草稿內容");
+
+        /** 匿名（無認證）存取歸檔端點 → 公開、200、信封、只含已發布且依 publishedAt desc */
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data").isArray())
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[0].title").value("歸檔文章 B"))
+                .andExpect(jsonPath("$.data[1].title").value("歸檔文章 A"))
+                .andExpect(jsonPath("$.data[0].uuid").value(secondUuid))
+                .andExpect(jsonPath("$.data[0].slug").exists())
+                .andExpect(jsonPath("$.data[0].publishedAt").exists());
+    }
+
+    @Test
+    @DisplayName("PERF-04：第二次 GET /archive 由 Redis 回應，不再查 DB（DB 被偷改後仍回快取內容），且 Redis 內確有快取鍵與 TTL")
+    void getArchive_secondCallServedFromRedis_notFromDb() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("原始標題");
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data[0].title").value("原始標題"));
+        assertThat(stringRedisTemplate.hasKey(RedisKeyConstant.ARTICLE_ARCHIVE_KEY)).isTrue();
+        Long ttl = stringRedisTemplate.getExpire(RedisKeyConstant.ARTICLE_ARCHIVE_KEY, java.util.concurrent.TimeUnit.SECONDS);
+        assertThat(ttl).isBetween(1L, RedisKeyConstant.ARTICLE_ARCHIVE_TTL_MINUTES * 60);
+
+        /* 繞過 service 直接改 DB（不會觸發失效）：若第二次還打 DB，標題會變 */
+        jdbcTemplate.update("UPDATE articles SET title = '被偷改' WHERE uuid = ?::uuid", uuid);
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].title").value("原始標題"));
+    }
+
+    @Test
+    @DisplayName("PERF-04：快取已填入後發布新文章 → 快取失效，下一次 GET /archive 立即看到新文章")
+    void getArchive_publishInvalidatesCache() throws Exception {
+        stubUserFacade();
+        createPublishedArticle("先發布的");
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(1)));
+        assertThat(stringRedisTemplate.hasKey(RedisKeyConstant.ARTICLE_ARCHIVE_KEY)).isTrue();
+
+        createPublishedArticle("後發布的");
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(2)))
+                .andExpect(jsonPath("$.data[0].title").value("後發布的"));
+    }
+
+    @Test
+    @DisplayName("PERF-04：快取已填入後 PUT 把 DRAFT 直接轉 PUBLISHED → 快取失效")
+    void getArchive_putDraftToPublishedInvalidatesCache() throws Exception {
+        stubUserFacade();
+        String draft = createArticle("草稿轉發布", "內容");
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(0)));
+        assertThat(stringRedisTemplate.hasKey(RedisKeyConstant.ARTICLE_ARCHIVE_KEY)).isTrue();
+
+        UpdateArticleRequest update = new UpdateArticleRequest();
+        update.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PUBLISHED);
+        mockMvc.perform(put("/api/v1/articles/" + draft)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(update)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0].title").value("草稿轉發布"));
+    }
+
+    @Test
+    @DisplayName("PERF-04：快取已填入後刪除已發布文章 → 快取失效，歸檔頁不再列出")
+    void getArchive_deleteInvalidatesCache() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("將被刪除");
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(1)));
+
+        mockMvc.perform(delete("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(jsonPath("$.data", hasSize(0)));
+    }
+
+    @Test
+    @DisplayName("PERF-04：快取內容壞掉（非 JSON）→ 當作未命中，回 200 並以 DB 結果覆寫快取")
+    void getArchive_corruptedCache_fallsBackToDbAndHeals() throws Exception {
+        stubUserFacade();
+        createPublishedArticle("正常文章");
+        stringRedisTemplate.opsForValue().set(RedisKeyConstant.ARTICLE_ARCHIVE_KEY, "{broken");
+
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)));
+
+        assertThat(stringRedisTemplate.opsForValue().get(RedisKeyConstant.ARTICLE_ARCHIVE_KEY)).startsWith("[");
+    }
+
+    /**
+     * 建立一篇草稿文章並回傳其 UUID（測試輔助方法）
+     *
+     * @param title   文章標題
+     * @param content 文章 Markdown 內容
+     * @return 新建文章的公開 UUID 字串
+     * @throws Exception MockMvc 執行例外
+     */
+    private String createArticle(String title, String content) throws Exception {
+        CreateArticleRequest req = new CreateArticleRequest();
+        req.setTitle(title);
+        req.setContent(content);
+        String response = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(response).path("data").path("uuid").asText();
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles - title 超過 120 字 → 回傳 code=400")
+    void createArticle_titleTooLong_shouldReturn400() throws Exception {
+        String longTitle = "a".repeat(121);
+        CreateArticleRequest request = new CreateArticleRequest();
+        request.setTitle(longTitle);
+        request.setContent("內容");
+
+        mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/articles/{uuid} - title 超過 120 字 → 回傳 code=400")
+    void updateArticle_titleTooLong_shouldReturn400() throws Exception {
+        String longTitle = "a".repeat(121);
+        UpdateArticleRequest request = new UpdateArticleRequest();
+        request.setTitle(longTitle);
+
+        mockMvc.perform(put("/api/v1/articles/" + UUID.randomUUID())
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400"));
+    }
+
+    /**
+     * 建立一篇文章並送審，回傳其 UUID（withdraw 測試輔助方法）
+     *
+     * @param title 文章標題
+     * @return 已進入 PENDING_REVIEW 狀態的文章公開 UUID 字串
+     * @throws Exception MockMvc 執行例外
+     */
+    private String createPendingReviewArticle(String title) throws Exception {
+        String uuid = createArticle(title, "內容");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/submit")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"));
+        return uuid;
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - 作者抽回自己的待審文章 → 狀態變 DRAFT")
+    void withdrawArticle_authorWithdrawsOwnPendingReview_success() throws Exception {
+        stubUserFacade();
+
+        String uuid = createPendingReviewArticle("待抽回文章");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        /** 抽回後應可再次編輯（PUT 守衛只放行 DRAFT / REJECTED） */
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("抽回後改標題");
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("抽回後改標題"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - DRAFT 狀態抽回 → A0204")
+    void withdrawArticle_draftStatus_returnsA0204() throws Exception {
+        stubUserFacade();
+
+        String uuid = createArticle("草稿文章", "內容");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - PUBLISHED 狀態抽回 → A0204")
+    void withdrawArticle_publishedStatus_returnsA0204() throws Exception {
+        stubUserFacade();
+
+        String uuid = createArticle("已發布文章", "內容");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - REJECTED 狀態抽回 → A0204")
+    void withdrawArticle_rejectedStatus_returnsA0204() throws Exception {
+        stubUserFacade();
+
+        String uuid = createPendingReviewArticle("待駁回文章");
+
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("內容不符合規範");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - 其他 AUTHOR 抽回他人文章 → A0203")
+    void withdrawArticle_nonOwnerAuthor_returnsA0203() throws Exception {
+        stubUserFacade();
+
+        String uuid = createPendingReviewArticle("他人的待審文章");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(99L, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0203"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - ADMIN 抽回他人文章 → A0203（職責分離：ADMIN 應走 reject）")
+    void withdrawArticle_adminOnOthersArticle_returnsA0203() throws Exception {
+        stubUserFacade();
+
+        String uuid = createPendingReviewArticle("他人送審的文章");
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/withdraw")
+                .with(asUser(99L, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0203"));
+
+        /** ADMIN 對他人送審文章的正當途徑是 reject，該路徑不受本次收緊影響 */
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("內容不符合規範");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(99L, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - Role.USER（無 ARTICLE_EDIT 權限）→ 403")
+    void withdrawArticle_userRole_returns403() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.USER)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - 未認證 → 401")
+    void withdrawArticle_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/withdraw"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/articles/{uuid}/withdraw - 文章不存在 → A0201")
+    void withdrawArticle_articleNotFound_returnsA0201() throws Exception {
+        mockMvc.perform(post("/api/v1/articles/" + UUID.randomUUID() + "/withdraw")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+    }
+
+    // ===== TOC 契約測試（T5：端到端驗證 T1-T4 渲染器 → 持久化 → DTO 串起來真的 work）=====
+
+    @Test
+    @DisplayName("建立含h2h3的文章_GET詳情_toc為結構化陣列")
+    void createArticleWithH2H3_getDetail_tocIsStructuredArray() throws Exception {
+        stubUserFacade();
+
+        /** 建立含 h2/h3 標題的文章：h2「安裝步驟」→ h3「Port 被佔用」→ h2「常見問題」（文件順序） */
+        String markdown = "## 安裝步驟\n\n安裝說明段落。\n\n### Port 被佔用\n\n子節說明文字。\n\n## 常見問題\n\n常見問題說明段落。";
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("TOC 契約驗證文章");
+        createRequest.setContent(markdown);
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 匿名取得已發布文章詳情，驗證 toc 為非空的結構化陣列，且順序與文件順序一致 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.toc").isArray())
+                .andExpect(jsonPath("$.data.toc", hasSize(3)))
+                // 第一個 ## 標題「安裝步驟」→ 陣列第一個 entry，level 為 2
+                .andExpect(jsonPath("$.data.toc[0].id").value("heading-安裝步驟"))
+                .andExpect(jsonPath("$.data.toc[0].id").value(matchesPattern("^heading-.*")))
+                .andExpect(jsonPath("$.data.toc[0].text").value("安裝步驟"))
+                .andExpect(jsonPath("$.data.toc[0].level").value(2))
+                // ### 子標題「Port 被佔用」緊接於後，level 為 3
+                .andExpect(jsonPath("$.data.toc[1].id").value("heading-port-被佔用"))
+                .andExpect(jsonPath("$.data.toc[1].id").value(matchesPattern("^heading-.*")))
+                .andExpect(jsonPath("$.data.toc[1].text").value("Port 被佔用"))
+                .andExpect(jsonPath("$.data.toc[1].level").value(3))
+                // 第二個 ## 標題「常見問題」排在最後，level 為 2
+                .andExpect(jsonPath("$.data.toc[2].id").value("heading-常見問題"))
+                .andExpect(jsonPath("$.data.toc[2].id").value(matchesPattern("^heading-.*")))
+                .andExpect(jsonPath("$.data.toc[2].text").value("常見問題"))
+                .andExpect(jsonPath("$.data.toc[2].level").value(2));
+    }
+
+    @Test
+    @DisplayName("建立無heading的文章_GET詳情_toc為空陣列")
+    void createArticleWithoutHeading_getDetail_tocIsEmptyArray() throws Exception {
+        stubUserFacade();
+
+        /** 建立純段落文章（內文無任何 ## / ### 標題） */
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("無標題章節文章");
+        createRequest.setContent("這是一段純文字內容，沒有任何標題。第二句話延伸內容，僅為段落。");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk());
+
+        /** 匿名取得已發布文章詳情，驗證 toc 為空陣列（非 null） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.toc").isArray())
+                .andExpect(jsonPath("$.data.toc", hasSize(0)));
+    }
+
+    /**
+     * 內部審核評語（rejectReason）不得出現在匿名可存取的公開回應中。
+     *
+     * <p>刻意在文章發布「之後」直接把 reject_reason 寫回 DB，模擬修復前既已存在的殘留資料
+     * ——縱深防禦第一層必須在清空邏輯失效（或歷史資料未清）時仍然守得住，
+     * 故本測試不依賴第二層的清空行為。</p>
+     */
+    @Test
+    @DisplayName("GET /api/v1/articles/{uuid} - 已發布文章殘留 rejectReason → 匿名與他人看不到，作者與 ADMIN 看得到")
+    void getArticle_publishedWithStaleRejectReason_maskedFromNonOwner() throws Exception {
+        stubUserFacade();
+
+        final String internalNote = "INTERNAL-REVIEW-NOTE-DO-NOT-LEAK";
+        final Long otherUserId = 42L;
+        final Long adminUserId = 43L;
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("曾被駁回後發布的文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        /** 模擬殘留資料：已發布文章的 reject_reason 仍留在 DB */
+        Article stored = articleRepository.findByUuid(UUID.fromString(uuid)).orElseThrow();
+        stored.setRejectReason(internalNote);
+        articleRepository.save(stored);
+
+        /** 匿名讀者：整份回應都不得出現內部評語 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rejectReason").isEmpty())
+                .andExpect(content().string(not(containsString(internalNote))));
+
+        /** 其他已登入的一般使用者：同樣不得看到 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(otherUserId, Role.USER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rejectReason").isEmpty())
+                .andExpect(content().string(not(containsString(internalNote))));
+
+        /** 匿名的公開列表：同樣不得出現 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.records[0].rejectReason").isEmpty())
+                .andExpect(content().string(not(containsString(internalNote))));
+
+        /** 作者本人：看得到（審核回饋需送達作者） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rejectReason").value(internalNote));
+
+        /** ADMIN：看得到（審核者需檢視自己寫的評語） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(adminUserId, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.rejectReason").value(internalNote));
+
+        /** 作者的「我的文章」列表：看得到（P0 審核流程契約） */
+        mockMvc.perform(get("/api/v1/articles/me")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.records[0].rejectReason").value(internalNote));
+    }
+
+    /**
+     * 縱深防禦第二層：兩步走繞過路徑（REJECTED →PUT DRAFT→ DRAFT →publish→ PUBLISHED）
+     * 全程不經 submitForReview，rejectReason 必須在離開 REJECTED 時就被清掉。
+     */
+    @Test
+    @DisplayName("REJECTED →PUT status=DRAFT→ publish：兩步走繞過路徑也必須清空 rejectReason")
+    void rejectedArticle_twoStepBypassToPublished_clearsRejectReasonInDatabase() throws Exception {
+        stubUserFacade();
+
+        final String internalNote = "INTERNAL-REVIEW-NOTE-TWO-STEP";
+
+        CreateArticleRequest createRequest = new CreateArticleRequest();
+        createRequest.setTitle("兩步走繞過的文章");
+        createRequest.setContent("內容");
+
+        String createResponse = mockMvc.perform(post("/api/v1/articles")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        String uuid = objectMapper.readTree(createResponse).path("data").path("uuid").asText();
+
+        /** 送審 */
+        UpdateArticleRequest submitRequest = new UpdateArticleRequest();
+        submitRequest.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.PENDING_REVIEW);
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(submitRequest)))
+                .andExpect(status().isOk());
+
+        /** ADMIN 駁回 */
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason(internalNote);
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("REJECTED"));
+
+        /** 第一步：PUT status=DRAFT（不經 submitForReview） */
+        UpdateArticleRequest toDraft = new UpdateArticleRequest();
+        toDraft.setStatus(dowob.xyz.blog.common.api.enums.ArticleStatus.DRAFT);
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(toDraft)))
+                .andExpect(status().isOk());
+
+        assertThat(articleRepository.findByUuid(UUID.fromString(uuid)).orElseThrow().getRejectReason())
+                .as("離開 REJECTED 時就該清空")
+                .isNull();
+
+        /** 第二步：發布 */
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        assertThat(articleRepository.findByUuid(UUID.fromString(uuid)).orElseThrow().getRejectReason())
+                .as("已發布文章不得殘留內部審核評語")
+                .isNull();
+
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(content().string(not(containsString(internalNote))));
+    }
+
+    // =========================================================================
+    // 下架 / 復原（POST /api/v1/admin/articles/{uuid}/archive 與 /unarchive）
+    //
+    // 端點在 AdminArticleController（/api/v1/admin/** 前綴），故同時受 URL 層
+    // hasRole("ADMIN") 與方法層 @PreAuthorize 雙重把關；以下用完整過濾器鏈驗證。
+    // =========================================================================
+
+    /**
+     * 建立一篇文章並發布，回傳其 UUID（archive 測試輔助方法）
+     *
+     * @param title 文章標題
+     * @return 已進入 PUBLISHED 狀態的文章公開 UUID 字串
+     * @throws Exception MockMvc 執行例外
+     */
+    private String createPublishedArticle(String title) throws Exception {
+        String uuid = createArticle(title, "內容");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+        return uuid;
+    }
+
+    /**
+     * 讓 {@code UserFacade.getDisplayInfoByUuids} 對任何被查詢的 UUID 都回傳暱稱 "TestAuthor"
+     * （M6-a：文章回應的作者資訊一律經 UUID 版 facade 批次解析，已不再有 Long 版呼叫）。
+     */
+    @SuppressWarnings("unchecked")
+    private void stubUserFacade() {
+        when(userFacade.getDisplayInfoByUuids(anyCollection())).thenAnswer(invocation -> {
+            Collection<UUID> uuids = invocation.getArgument(0);
+            Map<UUID, UserDisplayInfo> result = new HashMap<>();
+            uuids.stream().filter(Objects::nonNull)
+                    .forEach(u -> result.put(u, new UserDisplayInfo(u, "TestAuthor", null)));
+            return result;
+        });
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - ADMIN 下架已發布文章 → ARCHIVED，且自所有公開讀取路徑消失")
+    void archiveArticle_adminArchivesPublished_removedFromAllPublicReadPaths() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("即將下架的文章");
+
+        /** 前置斷言：下架前，文章確實出現在各公開讀取路徑 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)));
+        String slug = objectMapper.readTree(
+                mockMvc.perform(get("/api/v1/articles/" + uuid))
+                        .andExpect(status().isOk())
+                        .andReturn().getResponse().getContentAsString())
+                .path("data").path("slug").asText();
+        mockMvc.perform(get("/api/v1/articles/slug/" + slug))
+                .andExpect(status().isOk());
+
+        /** 下架 */
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("ARCHIVED"));
+
+        /** 連鎖副作用 1：公開列表不再包含此文章 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(0));
+
+        /** 連鎖副作用 2：公開歸檔投影（GET /articles/archive）不再包含此文章 */
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(0)));
+
+        /** 連鎖副作用 3：匿名以 uuid / slug 取詳情皆回 A0201（非公開內容不可讀） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+        mockMvc.perform(get("/api/v1/articles/slug/" + slug))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0201"));
+
+        /** 連鎖副作用 4：發出 article.archived 事件（search 模組據此移除 ES 索引） */
+        verify(rabbitTemplate).convertAndSend(
+                eq(ArticleEventContract.EXCHANGE),
+                eq(ArticleEventContract.ROUTING_KEY_ARCHIVED),
+                any(Object.class));
+
+        /** 作者本人仍可看到自己的已下架文章（與其他非公開狀態一致） */
+        mockMvc.perform(get("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("ARCHIVED"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - AUTHOR 下架自己的文章 → 403（下架非作者自助操作）")
+    void archiveArticle_authorForbidden_returns403() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("作者想自己下架的文章");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isForbidden());
+
+        /** 狀態未被改動，也不得發出下架事件 */
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+        verify(rabbitTemplate, never()).convertAndSend(
+                eq(ArticleEventContract.EXCHANGE),
+                eq(ArticleEventContract.ROUTING_KEY_ARCHIVED),
+                any(Object.class));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - 未認證 → 401")
+    void archiveArticle_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/articles/" + UUID.randomUUID() + "/archive"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - DRAFT 文章下架 → A0204（守衛未被繞過）")
+    void archiveArticle_draftArticle_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createArticle("草稿文章", "內容");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - PENDING_REVIEW 文章下架 → A0204")
+    void archiveArticle_pendingReviewArticle_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createPendingReviewArticle("待審文章");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - REJECTED 文章下架 → A0204")
+    void archiveArticle_rejectedArticle_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createPendingReviewArticle("待駁回文章");
+        RejectArticleRequest rejectRequest = new RejectArticleRequest();
+        rejectRequest.setReason("內容不符合規範");
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/reject")
+                .with(asUser(AUTHOR_ID, Role.ADMIN))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(rejectRequest)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/archive - 已下架文章再次下架 → A0204")
+    void archiveArticle_alreadyArchived_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("重複下架測試");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/unarchive - ADMIN 復原已下架文章 → DRAFT 且可再次編輯")
+    void unarchiveArticle_adminRestoresArchived_backToDraftAndEditable() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("待復原文章");
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("00000"))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        /** 復原後回到可編輯狀態（PUT 守衛只放行 DRAFT / REJECTED） */
+        UpdateArticleRequest updateRequest = new UpdateArticleRequest();
+        updateRequest.setTitle("復原後改標題");
+        mockMvc.perform(put("/api/v1/articles/" + uuid)
+                .with(asUser(AUTHOR_ID, Role.AUTHOR))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequest)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title").value("復原後改標題"));
+
+        /** 仍未公開：DRAFT 不進公開列表 */
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/unarchive - PUBLISHED 文章復原 → A0204")
+    void unarchiveArticle_publishedArticle_returnsA0204() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("已發布文章");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0204"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/admin/articles/{uuid}/unarchive - AUTHOR → 403")
+    void unarchiveArticle_authorForbidden_returns403() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("他人想復原的文章");
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("下架 → 復原 → 重新發布：文章回到公開面，並重新發出建立索引的 published 事件")
+    void archiveThenUnarchiveThenRepublish_articlePublicAgain() throws Exception {
+        stubUserFacade();
+        String uuid = createPublishedArticle("走完整輪迴的文章");
+
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/archive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/v1/admin/articles/" + uuid + "/unarchive")
+                .with(asUser(AUTHOR_ID, Role.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+
+        /** 重新公開必須重走 publish 流程（不由 unarchive 直接回 PUBLISHED） */
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                .with(asUser(AUTHOR_ID, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1));
+        mockMvc.perform(get("/api/v1/articles/" + uuid))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+
+        /** ES 索引由 published 事件重建（下架時移除、重新發布時重新建立） */
+        verify(rabbitTemplate, times(2)).convertAndSend(
+                eq(ArticleEventContract.EXCHANGE),
+                eq(ArticleEventContract.ROUTING_KEY_PUBLISHED),
+                any(Object.class));
+    }
+
+    /* =========================================================================
+       公開列表伺服器端篩選／排序（SEC-04 前置：前端改伺服器端分頁前的後端契約）
+       以下斷言的是 SQL 語意本身——單元測試 mock 了 mapper，渲染測試不連資料庫，
+       AND／OR 結果、排序與 tie-breaker 的確定性只能在真實 PostgreSQL 上驗證。
+       ========================================================================= */
+
+    @Test
+    @DisplayName("GET /api/v1/articles - 預設依 published_at 由新到舊，而非 created_at")
+    void listArticles_defaultOrder_isPublishedAtNotCreatedAt() throws Exception {
+        stubUserFacade();
+        String createdFirst = createPublishedArticle("先建立、較晚發布");
+        String createdSecond = createPublishedArticle("後建立、較早發布");
+        LocalDateTime now = LocalDateTime.now();
+        setPublishedAt(createdFirst, now);
+        setPublishedAt(createdSecond, now.minusDays(1));
+
+        assertThat(listUuids(get("/api/v1/articles"))).containsExactly(createdFirst, createdSecond);
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?tags= - 多個標籤為 AND：文章須帶有全部標籤")
+    void listArticles_tagsFilter_requiresAllTags() throws Exception {
+        stubUserFacade();
+        UUID java = insertTag("it-list-java");
+        UUID spring = insertTag("it-list-spring");
+        String both = createPublishedArticle("Java + Spring");
+        String javaOnly = createPublishedArticle("只有 Java");
+        String springOnly = createPublishedArticle("只有 Spring");
+        tagArticle(both, java);
+        tagArticle(both, spring);
+        tagArticle(javaOnly, java);
+        tagArticle(springOnly, spring);
+
+        assertThat(listUuids(get("/api/v1/articles").param("tags", "it-list-java,it-list-spring")))
+                .containsExactly(both);
+        assertThat(listUuids(get("/api/v1/articles").param("tags", "it-list-java")))
+                .containsExactlyInAnyOrder(both, javaOnly);
+        mockMvc.perform(get("/api/v1/articles").param("tags", "it-list-java,it-list-spring"))
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?categorySlug= - 多個分類為 OR 且不重複；舊的單值呼叫仍有效")
+    void listArticles_categoryFilter_isOrWithoutDuplicatesAndLegacySingleValueWorks() throws Exception {
+        stubUserFacade();
+        long categoryA = insertCategory("it-list-a");
+        long categoryB = insertCategory("it-list-b");
+        String inA = createPublishedArticle("分類 A");
+        String inB = createPublishedArticle("分類 B");
+        String inBoth = createPublishedArticle("分類 A 與 B");
+        createPublishedArticle("無分類");
+        categorizeArticle(inA, categoryA);
+        categorizeArticle(inB, categoryB);
+        categorizeArticle(inBoth, categoryA);
+        categorizeArticle(inBoth, categoryB);
+
+        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "it-list-a")))
+                .containsExactlyInAnyOrder(inA, inBoth);
+        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "it-list-a,it-list-b")))
+                .containsExactlyInAnyOrder(inA, inB, inBoth);
+        mockMvc.perform(get("/api/v1/articles").param("categorySlug", "it-list-a,it-list-b"))
+                .andExpect(jsonPath("$.data.total").value(3));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?authorUuids= - 以作者公開 UUID 篩選")
+    void listArticles_authorFilter_matchesByAuthorUuid() throws Exception {
+        stubUserFacade();
+        createPublishedArticle("作者一的文章");
+        String bySecond = createPublishedArticleAs("作者二的文章", SECOND_AUTHOR_ID);
+
+        assertThat(listUuids(get("/api/v1/articles").param("authorUuids", SECOND_AUTHOR_UUID.toString())))
+                .containsExactly(bySecond);
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?publishedWithinDays= - 排除早於區間的文章，total 同步")
+    void listArticles_publishedWithinDays_excludesOlderArticles() throws Exception {
+        stubUserFacade();
+        String recent = createPublishedArticle("五天前發布");
+        String old = createPublishedArticle("一百天前發布");
+        LocalDateTime now = LocalDateTime.now();
+        setPublishedAt(recent, now.minusDays(5));
+        setPublishedAt(old, now.minusDays(100));
+
+        assertThat(listUuids(get("/api/v1/articles").param("publishedWithinDays", "30")))
+                .containsExactly(recent);
+        mockMvc.perform(get("/api/v1/articles").param("publishedWithinDays", "30"))
+                .andExpect(jsonPath("$.data.total").value(1));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?sort=popular|commented - 依瀏覽數／留言數由多到少（兩組數字互不相關，欄位對調或方向顛倒都會失敗）")
+    void listArticles_popularAndCommentedSort_orderByCounters() throws Exception {
+        stubUserFacade();
+        String a = createPublishedArticle("瀏覽 10、留言 2");
+        String b = createPublishedArticle("瀏覽 30、留言 1");
+        String c = createPublishedArticle("瀏覽 20、留言 3");
+        setCounters(a, 10, 2);
+        setCounters(b, 30, 1);
+        setCounters(c, 20, 3);
+
+        assertThat(listUuids(get("/api/v1/articles").param("sort", "popular")))
+                .containsExactly(b, c, a);
+        assertThat(listUuids(get("/api/v1/articles").param("sort", "commented")))
+                .containsExactly(c, a, b);
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles - 排序鍵全部相同時，依 id tie-breaker 得到確定順序，逐頁走完不重複、不遺漏")
+    void listArticles_paginationWithTiedSortKeys_isDeterministicAcrossPages() throws Exception {
+        stubUserFacade();
+        LocalDateTime sameMoment = LocalDateTime.now().minusHours(1);
+        List<String> created = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            String uuid = createPublishedArticle("同一時刻發布 " + i);
+            setPublishedAt(uuid, sameMoment);
+            created.add(uuid);
+        }
+
+        List<String> walked = new ArrayList<>();
+        for (int page = 1; page <= 3; page++) {
+            walked.addAll(listUuids(get("/api/v1/articles")
+                    .param("page", String.valueOf(page))
+                    .param("size", "2")));
+        }
+
+        /** 後建立者 id 較大，tie-breaker 為 id DESC，故預期順序恰為建立順序的反向 */
+        assertThat(walked).containsExactlyElementsOf(created.reversed());
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?authorUuids= - 超過 20 個 → 400（A0210），不截斷後照查")
+    void listArticles_tooManyFilterValues_returns400() throws Exception {
+        StringBuilder authors = new StringBuilder();
+        for (int i = 0; i < 21; i++) {
+            authors.append(i == 0 ? "" : ",").append(UUID.randomUUID());
+        }
+
+        mockMvc.perform(get("/api/v1/articles").param("authorUuids", authors.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("A0210"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/articles?categorySlug= - 大寫輸入轉小寫後比對（V23 起分類 slug 由 CHECK 保證全小寫）")
+    void listArticles_categorySlug_uppercaseInputMatchesLowercaseSlug() throws Exception {
+        stubUserFacade();
+        long category = insertCategory("it-list-case");
+        String article = createPublishedArticle("大寫輸入的分類篩選");
+        categorizeArticle(article, category);
+
+        assertThat(listUuids(get("/api/v1/articles").param("categorySlug", "IT-LIST-CASE")))
+                .containsExactly(article);
+    }
+
+    /**
+     * 呼叫列表端點並取出 records 的 uuid（依回傳順序）。
+     *
+     * @param request 列表請求
+     * @return 文章 UUID 字串清單
+     * @throws Exception MockMvc 執行例外
+     */
+    private List<String> listUuids(MockHttpServletRequestBuilder request) throws Exception {
+        String body = mockMvc.perform(request)
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        List<String> uuids = new ArrayList<>();
+        for (JsonNode record : objectMapper.readTree(body).path("data").path("records")) {
+            uuids.add(record.path("uuid").asText());
+        }
+        return uuids;
+    }
+
+    /**
+     * 以指定作者建立並發布一篇文章。
+     *
+     * @param title    文章標題
+     * @param authorId 作者資料庫主鍵
+     * @return 已發布文章的公開 UUID 字串
+     * @throws Exception MockMvc 執行例外
+     */
+    private String createPublishedArticleAs(String title, Long authorId) throws Exception {
+        CreateArticleRequest req = new CreateArticleRequest();
+        req.setTitle(title);
+        req.setContent("內容");
+        String response = mockMvc.perform(post("/api/v1/articles")
+                        .with(asUser(authorId, Role.AUTHOR))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String uuid = objectMapper.readTree(response).path("data").path("uuid").asText();
+        mockMvc.perform(post("/api/v1/articles/" + uuid + "/publish")
+                        .with(asUser(authorId, Role.AUTHOR)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("PUBLISHED"));
+        return uuid;
+    }
+
+    /**
+     * 插入一個測試標籤（slug 須以 {@code it-list-} 開頭，供清理辨識）。
+     *
+     * @param slug 標籤 slug
+     * @return 標籤 id
+     */
+    private UUID insertTag(String slug) {
+        UUID id = UUID.randomUUID();
+        jdbcTemplate.update("INSERT INTO tags (id, name, slug) VALUES (?, ?, ?)", id, slug, slug);
+        return id;
+    }
+
+    /**
+     * 為文章加上標籤（article_tags.article_id 為文章 UUID）。
+     *
+     * @param articleUuid 文章公開 UUID 字串
+     * @param tagId       標籤 id
+     */
+    private void tagArticle(String articleUuid, UUID tagId) {
+        jdbcTemplate.update("INSERT INTO article_tags (article_id, tag_id) VALUES (?, ?)",
+                UUID.fromString(articleUuid), tagId);
+    }
+
+    /**
+     * 插入一個測試分類（slug 須以 {@code it-list-} 開頭，供清理辨識）。
+     *
+     * @param slug 分類 slug
+     * @return 分類主鍵
+     */
+    private long insertCategory(String slug) {
+        Long id = jdbcTemplate.queryForObject(
+                "INSERT INTO categories (name, slug) VALUES (?, ?) RETURNING id", Long.class, slug, slug);
+        return id;
+    }
+
+    /**
+     * 將文章歸入分類（article_categories.article_id 為文章主鍵）。
+     *
+     * @param articleUuid 文章公開 UUID 字串
+     * @param categoryId  分類主鍵
+     */
+    private void categorizeArticle(String articleUuid, long categoryId) {
+        jdbcTemplate.update("INSERT INTO article_categories (article_id, category_id) "
+                        + "SELECT id, ? FROM articles WHERE uuid = ?",
+                categoryId, UUID.fromString(articleUuid));
+    }
+
+    /**
+     * 直接設定文章的發布時間（API 發布時一律寫入「現在」，排序情境需要可控的值）。
+     *
+     * @param articleUuid 文章公開 UUID 字串
+     * @param publishedAt 發布時間
+     */
+    private void setPublishedAt(String articleUuid, LocalDateTime publishedAt) {
+        jdbcTemplate.update("UPDATE articles SET published_at = ? WHERE uuid = ?",
+                publishedAt, UUID.fromString(articleUuid));
+    }
+
+    /**
+     * 直接設定文章的瀏覽數與留言數（反正規化計數，排序情境需要可控的值）。
+     *
+     * @param articleUuid  文章公開 UUID 字串
+     * @param viewCount    瀏覽數
+     * @param commentCount 留言數
+     */
+    private void setCounters(String articleUuid, long viewCount, int commentCount) {
+        jdbcTemplate.update("UPDATE articles SET view_count = ?, comment_count = ? WHERE uuid = ?",
+                viewCount, commentCount, UUID.fromString(articleUuid));
+    }
+}

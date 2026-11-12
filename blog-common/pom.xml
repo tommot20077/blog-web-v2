@@ -12,6 +12,12 @@
     <artifactId>blog-common</artifactId>
     <description>Common utilities, API results, and Exceptions</description>
 
+    <!-- Jacoco 棘輪下限（2026-11-05 現值減 2pp 無條件捨去；只可上調不可下調，Q13） -->
+    <properties>
+        <jacoco.minimum.line>0.95</jacoco.minimum.line>
+        <jacoco.minimum.branch>0.93</jacoco.minimum.branch>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -32,6 +38,21 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-lang3</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-web</artifactId>
+        </dependency>
+        <!-- DataIntegrityViolationException / OptimisticLockingFailureException（org.springframework.dao）所在；
+             GlobalExceptionHandler 的資料衝突兜底需要。版本由 Spring Boot BOM 管理。 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-tx</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

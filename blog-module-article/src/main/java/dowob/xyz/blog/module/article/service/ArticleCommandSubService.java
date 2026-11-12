@@ -1,0 +1,809 @@
+package dowob.xyz.blog.module.article.service;
+
+import dowob.xyz.blog.common.api.enums.ArticleStatus;
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.api.errorcode.ArticleErrorCode;
+import dowob.xyz.blog.common.exception.BusinessException;
+import dowob.xyz.blog.common.exception.HttpStatusBusinessException;
+import org.springframework.http.HttpStatus;
+import dowob.xyz.blog.infrastructure.event.TagInfo;
+import dowob.xyz.blog.infrastructure.facade.TagFacade;
+import dowob.xyz.blog.infrastructure.event.ArticleContentChangedEvent;
+import dowob.xyz.blog.module.article.mapper.ArticleMapper;
+import dowob.xyz.blog.module.article.mapper.CategoryMapper;
+import dowob.xyz.blog.module.article.model.Article;
+import dowob.xyz.blog.module.article.model.Category;
+import dowob.xyz.blog.module.article.model.dto.request.CreateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.request.UpdateArticleRequest;
+import dowob.xyz.blog.module.article.model.dto.response.ArticleResponse;
+import dowob.xyz.blog.module.article.model.dto.response.EditorArticleResponse;
+import dowob.xyz.blog.module.article.repository.ArticleRepository;
+import dowob.xyz.blog.module.article.repository.CategoryRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+class ArticleCommandSubService {
+
+    private final ArticleRepository articleRepository;
+    private final ArticleMapper articleMapper;
+    private final ArticleEventPublisher articleEventPublisher;
+    private final CategoryMapper categoryMapper;
+    private final CategoryRepository categoryRepository;
+    private final TagFacade tagFacade;
+    private final ArticleMarkdownRenderer markdownRenderer;
+    private final TransactionTemplate transactionTemplate;
+    private final ArticleEntityFinder entityFinder;
+    private final ArticleResponseMapper articleResponseMapper;
+
+    /**
+     * TOC JSON 編解碼器（寫入端序列化，讀取端由 ArticleResponseMapper 反序列化）
+     */
+    private final ArticleTocCodec articleTocCodec;
+
+    /** 歸檔頁快取：改變「已發布集合」的寫入路徑在 commit 後經它失效（PERF-04） */
+    private final ArticleArchiveCache archiveCache;
+
+    /**
+     * 文章狀態機的<b>唯一真相</b>：每個狀態允許轉往哪些狀態。
+     *
+     * <p>所有會改動 {@code article.status} 的路徑一律經 {@link #validateStatusTransition} 查此表，
+     * 不得各自內嵌判斷（SEC-02：內嵌判斷讓 submitForReview / withdraw / restore 各自長出一套規則，
+     * 其中 restore 那套等於沒有守衛）。新增狀態時只要漏改此表，
+     * {@code ArticleCommandSubServiceTest} 的轉換矩陣測試會立刻紅。</p>
+     *
+     * <p><b>表與入口的分工</b>：此表定義「狀態機上存在哪些邊」；個別入口可以更嚴
+     * （例如 withdraw 只走 PENDING_REVIEW → DRAFT 這一條，不因表裡也有
+     * ARCHIVED / REJECTED → DRAFT 就一併開放），但<b>不得更寬</b>。入口自己的限制屬於操作語意，
+     * 一律寫在該方法內並註明理由。</p>
+     */
+    private static final Map<ArticleStatus, Set<ArticleStatus>> VALID_TRANSITIONS = Map.of(
+            ArticleStatus.DRAFT, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.PENDING_REVIEW),
+            ArticleStatus.PENDING_REVIEW, Set.of(ArticleStatus.PUBLISHED, ArticleStatus.DRAFT, ArticleStatus.REJECTED),
+            ArticleStatus.PUBLISHED, Set.of(ArticleStatus.ARCHIVED),
+            ArticleStatus.ARCHIVED, Set.of(ArticleStatus.DRAFT),
+            /* REJECTED → PENDING_REVIEW：被駁回後改一改重新送審，submitForReview 一直支援，
+             * 只是原本沒被寫進表（表是規格、實作是真相，兩者對不上）。SEC-02 收斂時補齊。 */
+            ArticleStatus.REJECTED, Set.of(ArticleStatus.DRAFT, ArticleStatus.PENDING_REVIEW));
+
+    /**
+     * 建立文章
+     *
+     * @param authorUuid 作者公開 UUID
+     * @param request  建立文章請求
+     * @return 建立後的文章完整資訊
+     */
+    public EditorArticleResponse createArticle(UUID authorUuid, CreateArticleRequest request) {
+        Article article = new Article();
+        article.setUuid(UUID.randomUUID());
+        article.setAuthorUuid(authorUuid);
+        article.setTitle(request.getTitle());
+        article.setContent(request.getContent());
+        RenderResult renderResult = markdownRenderer.render(request.getContent());
+        article.setContentHtml(renderResult == null ? null : renderResult.html());
+        article.setToc(articleTocCodec.serialize(renderResult == null ? null : renderResult.toc()));
+        article.setSummary(extractSummary(request.getContent(), request.getSummary()));
+        article.setSlug(generateSlug(request.getTitle()));
+        // 建立文章時狀態一律強制為 DRAFT，防止用戶繞過審核流程直接發布
+        article.setStatus(ArticleStatus.DRAFT);
+        article.setViewCount(0L);
+        article.setLikeCount(0L);
+        article.setCommentCount(0);
+        if (request.getCoverImageUrl() != null) {
+            article.setCoverImageUrl(request.getCoverImageUrl());
+        }
+
+        /**
+         * DB 操作（save + syncTags）在同一個 transaction 內。
+         * 回傳 Object[] 以同時取得 saved Article 與 tagInfos。
+         */
+        Object[] txResult = transactionTemplate.execute(status -> {
+            Article saved = articleRepository.save(article);
+
+            /** 同步文章分類 */
+            if (request.getCategoryIds() != null && !request.getCategoryIds().isEmpty()) {
+                syncCategories(saved.getId(), request.getCategoryIds(), Set.of());
+            }
+
+            /** 同步文章標籤 */
+            List<TagInfo> tags = List.of();
+            if (request.getTagNames() != null && !request.getTagNames().isEmpty()) {
+                tags = tagFacade.findOrCreateTags(request.getTagNames());
+                List<UUID> tagIds = tags.stream().map(TagInfo::id).collect(Collectors.toList());
+                tagFacade.syncArticleTags(saved.getUuid(), tagIds);
+            }
+            return new Object[]{saved, tags};
+        });
+
+        Article saved = (Article) txResult[0];
+        @SuppressWarnings("unchecked")
+        List<TagInfo> tagInfos = (List<TagInfo>) txResult[1];
+
+        /**
+         * DB 已 commit，best-effort 發送 ContentChanged(SAVED) MQ（供 version 模組觸發快照）。
+         * 建立狀態也是一份可還原的版本；若缺這行，初版內容永遠不會有快照，
+         * 作者第一次編輯並儲存後，初版內容就永久遺失（BUG-003）。
+         */
+        articleEventPublisher.publishContentChanged(saved, ArticleContentChangedEvent.Action.SAVED);
+
+        /** DB 已 commit，best-effort 發送標籤事件 MQ（失敗不影響建立結果） */
+        if (tagInfos != null && !tagInfos.isEmpty()) {
+            List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
+            articleEventPublisher.publishTagged(saved, tagIds);
+        }
+
+        return articleResponseMapper.toEditorResponse(saved);
+    }
+
+    /**
+     * 更新文章
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @param request      更新請求
+     * @return 更新後的文章完整資訊
+     */
+    public EditorArticleResponse updateArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid,
+            UpdateArticleRequest request) {
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        checkWritePermission(operatorUuid, operatorRole, article);
+
+        /*
+         * 內容凍結守衛：只有 DRAFT / REJECTED 允許改寫內容，其餘狀態拋 ARTICLE_EDIT_NOT_ALLOWED。
+         * 判斷本身已收斂進 ArticleContentFreezePolicy（唯一真相），與版本還原路徑
+         * （ArticleFacadeImpl.applyRestoreContent）共用同一份——F-H1：還原原本不受此約束，
+         * 作者送審後仍能換掉內容（審核 TOCTOU）；修法若在還原那邊複製一份判斷，
+         * 就會再造出 SEC-02 剛收斂掉的「多套真相」。
+         */
+        ArticleContentFreezePolicy.assertContentEditable(article.getStatus());
+        /*
+         * RACE-05（決策 B2）：request 有帶 version 時，必須與剛載入的 DB 版本一致，否則代表編輯器載入之後
+         * 文章已被其他地方（另一分頁／裝置）改過——回 409，不寫入、不合併，由前端提示重新載入。
+         * 沒帶 version 維持舊行為（只靠下方 save 的 @Version 防「讀取到存檔」之間的極短視窗），
+         * 以相容前後端分開部署。只約束這條內容更新路徑；狀態轉換端點維持全域 409（決策 B3）。
+         */
+        if (request.getVersion() != null && !request.getVersion().equals(article.getVersion())) {
+            throw new HttpStatusBusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE, HttpStatus.CONFLICT);
+        }
+        /** 狀態轉換前先記下：判斷這次 PUT 是否進出「已發布集合」（歸檔頁快取失效依據） */
+        ArticleStatus previousStatus = article.getStatus();
+
+        if (request.getTitle() != null) {
+            article.setTitle(request.getTitle());
+            article.setSlug(generateSlug(request.getTitle()));
+        }
+        if (request.getContent() != null) {
+            article.setContent(request.getContent());
+            RenderResult renderResult = markdownRenderer.render(request.getContent());
+            article.setContentHtml(renderResult.html());
+            article.setToc(articleTocCodec.serialize(renderResult.toc()));
+        }
+        // request.getContent() 為 null：不重算 TOC，也不覆寫 article 上既有的 toc
+        // （entityFinder 載入的 Article 已帶有 DB 既有值，save 時原樣寫回）
+        if (request.getSummary() != null) {
+            String baseContent = request.getContent() != null ? request.getContent() : article.getContent();
+            article.setSummary(extractSummary(baseContent, request.getSummary()));
+        }
+        if (request.getStatus() != null) {
+            /*
+             * 入口語意守衛（比狀態機更嚴，見 VALID_TRANSITIONS 的「表與入口的分工」）：
+             * PUT 不得把 REJECTED 文章直接送審。REJECTED → PENDING_REVIEW 是合法轉換，
+             * 但「被駁回後重新送審」是審核流程的動作，語意上屬於 submitForReview
+             * （POST /{uuid}/submit）；PUT 是內容編輯端點，不承載審核流程語意。
+             * 此限制是 SEC-02 收斂前就有的行為（REJECTED → PENDING_REVIEW 當時不在表裡），
+             * 補表後改以顯式守衛保留，不在安全修復裡夾帶行為放寬。
+             *
+             * 註：此守衛原本的理由是「只有 submitForReview 會清 rejectReason，從 PUT 轉過去
+             * 待審文章會帶著上一輪的駁回理由」。該前提已不成立——本方法下方的
+             * clearRejectReasonIfNotRejected 會在任何 PUT 狀態轉換後一併清空駁回理由。
+             * 守衛保留的是操作語意的分工，不再是 rejectReason 的殘留風險。
+             */
+            if (article.getStatus() == ArticleStatus.REJECTED
+                    && request.getStatus() == ArticleStatus.PENDING_REVIEW) {
+                throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
+            }
+            validateStatusTransition(article.getStatus(), request.getStatus(), operatorRole);
+            article.setStatus(request.getStatus());
+            if (request.getStatus() == ArticleStatus.PUBLISHED && article.getPublishedAt() == null) {
+                article.setPublishedAt(LocalDateTime.now());
+            }
+        }
+        if (request.getCoverImageUrl() != null) {
+            article.setCoverImageUrl(request.getCoverImageUrl());
+        }
+
+        /**
+         * 狀態轉換後統一清除過期的駁回理由。
+         * 涵蓋 REJECTED →(PUT status=DRAFT)→ DRAFT 與其後的 DRAFT → PENDING_REVIEW / PUBLISHED
+         * ——這條「兩步走」路徑全程不經 submitForReview，若不清除，理由會一路殘留到公開回應。
+         */
+        clearRejectReasonIfNotRejected(article);
+
+        /** DB 操作（save + syncCategories + syncTags）在同一個 transaction 內 */
+        Object[] txResult = transactionTemplate.execute(status -> {
+            Article updated;
+            try {
+                updated = articleRepository.save(article);
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                /* 兩個請求同時通過上方 version 比對、在 save 才撞鎖：與比對不一致同一語意，一樣回 409 */
+                throw new HttpStatusBusinessException(ArticleErrorCode.ARTICLE_CONCURRENT_UPDATE, HttpStatus.CONFLICT);
+            }
+
+            /** 同步文章分類（null 表示不更新，空列表表示清除） */
+            if (request.getCategoryIds() != null) {
+                syncCategories(updated.getId(), request.getCategoryIds(),
+                        categoryMapper.findCategoryIdsByArticleId(updated.getId()));
+            }
+
+            /** 同步文章標籤（null 表示不更新，空列表表示清除所有標籤） */
+            List<TagInfo> tags = List.of();
+            if (request.getTagNames() != null) {
+                if (request.getTagNames().isEmpty()) {
+                    tagFacade.deleteArticleTags(updated.getUuid());
+                } else {
+                    tags = tagFacade.findOrCreateTags(request.getTagNames());
+                    List<UUID> tagIds = tags.stream().map(TagInfo::id).collect(Collectors.toList());
+                    tagFacade.syncArticleTags(updated.getUuid(), tagIds);
+                }
+            }
+            return new Object[]{updated, tags};
+        });
+
+        Article updated = (Article) txResult[0];
+        @SuppressWarnings("unchecked")
+        List<TagInfo> tagInfos = (List<TagInfo>) txResult[1];
+
+        /**
+         * DB 已 commit，歸檔頁快取失效：進入（DRAFT → PUBLISHED）或離開 PUBLISHED，或在 PUBLISHED 狀態下被改寫
+         * （標題／slug 會出現在歸檔頁），都會改變歸檔內容。今日內容凍結守衛讓後兩者走不到，
+         * 條件仍以「前後任一為 PUBLISHED」表達，守衛日後放寬時快取不會悄悄漏失效。
+         */
+        if (previousStatus == ArticleStatus.PUBLISHED || updated.getStatus() == ArticleStatus.PUBLISHED) {
+            archiveCache.evict();
+        }
+
+        /**
+         * 這次 PUT 是否讓文章「進入」PUBLISHED。與「發布」端點同一語意：進入已發布集合就是一次發布，
+         * 下游（推薦快取、標籤計數、搜尋索引、version 發布快照）都以 Published 事件為準。
+         */
+        boolean enteredPublished = previousStatus != ArticleStatus.PUBLISHED
+                && updated.getStatus() == ArticleStatus.PUBLISHED;
+
+        /** DB 已 commit，best-effort 發送更新事件 MQ */
+        if (updated.getStatus() == ArticleStatus.PUBLISHED) {
+            articleEventPublisher.publishUpdated(updated);
+        }
+
+        /** DB 已 commit，best-effort 補發發布事件（與「發布」端點一致；Updated 照舊保留） */
+        if (enteredPublished) {
+            /** payload 的標籤須是 DB 現況（請求沒帶 tagNames 時 tagInfos 為空），由 publisher 在 best-effort 範圍內回查 */
+            articleEventPublisher.publishPublished(updated);
+        }
+
+        /**
+         * best-effort 發送 ContentChanged MQ（任何狀態下都發，供 version 模組觸發快照）：
+         * 進入 PUBLISHED 發 PUBLISHED（與「發布」端點一致，version 凍結發布快照並清 AUTO 快照），其餘發 SAVED。
+         * 兩者擇一不並發：SAVED 與 PUBLISHED 走同一 queue，並發會多產生一份隨即被清掉的 AUTO 快照。
+         */
+        articleEventPublisher.publishContentChanged(updated, enteredPublished
+                ? ArticleContentChangedEvent.Action.PUBLISHED
+                : ArticleContentChangedEvent.Action.SAVED);
+
+        /** DB 已 commit，best-effort 發送標籤事件 MQ */
+        if (tagInfos != null && !tagInfos.isEmpty()) {
+            List<UUID> tagIds = tagInfos.stream().map(TagInfo::id).toList();
+            articleEventPublisher.publishTagged(updated, tagIds);
+        }
+
+        return articleResponseMapper.toEditorResponse(updated);
+    }
+
+    /**
+     * 刪除文章
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     */
+    public void deleteArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        checkWritePermission(operatorUuid, operatorRole, article);
+
+        /* delete 前讀取：article 刪除後 FK CASCADE 會清 article_tags / article_categories，
+         * 下游 consumer 也撈不到。所以要在 delete 前撈 + 包進 ArticleDeletedEvent payload。
+         * seriesUuid 隨事件帶出（W7-d1 起 series 不再訂閱本事件，目前沒有 consumer 讀它）；M6-b 起文章自己就存有
+         * series_uuid，直接讀取（不再查 SeriesFacade，沒有查詢失敗的可能）。*/
+        UUID seriesUuid = article.getSeriesUuid();
+        List<UUID> categoryIds = articleMapper.findCategoryUuidsByArticleId(article.getId());
+        List<UUID> tagIds = articleMapper.findTagUuidsByArticleId(article.getId());
+
+        /* DB 刪除（FK CASCADE 自動清 article_tags / article_categories；article_versions 已無 FK，
+         * 由 version 模組的 ArticleDeletedEvent consumer 與每日校正清除）*/
+        transactionTemplate.executeWithoutResult(status -> {
+            articleRepository.delete(article);
+            /*
+             * SP-A: 移除 seriesFacade.notifyArticleDeletedFromSeries
+             * series 篇數已改為即時計數（V36 移除 article_count），不再有 series 端的刪除 consumer。
+             * ArticleServiceImpl 不再依賴 SeriesFacade interface。
+             */
+        });
+
+        /* DB 已 commit：被刪的是已發布文章才會改變歸檔頁，失效快取（草稿等本來就不在歸檔中，不必打掉快取） */
+        if (article.getStatus() == ArticleStatus.PUBLISHED) {
+            archiveCache.evict();
+        }
+
+        /* DB 已 commit，best-effort 發送 ArticleDeletedEvent（rich payload）*/
+        articleEventPublisher.publishDeleted(article, seriesUuid, categoryIds, tagIds);
+    }
+
+    /**
+     * 發布文章
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @return 發布後的文章完整資訊
+     */
+    public ArticleResponse publishArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        checkWritePermission(operatorUuid, operatorRole, article);
+        validateStatusTransition(article.getStatus(), ArticleStatus.PUBLISHED, operatorRole);
+
+        article.setStatus(ArticleStatus.PUBLISHED);
+        if (article.getPublishedAt() == null) {
+            article.setPublishedAt(LocalDateTime.now());
+        }
+
+        /**
+         * 發布前清除過期的駁回理由：曾被駁回的文章若殘留理由，發布後即成為
+         * 匿名可讀的公開內容（GET /api/v1/articles/{uuid} 與公開列表）。
+         */
+        clearRejectReasonIfNotRejected(article);
+
+        /** DB 操作（save + 查詢 tags）在同一個 transaction 內 */
+        Object[] txResult = transactionTemplate.execute(status -> {
+            Article saved = articleRepository.save(article);
+            List<TagInfo> tagInfos = articleMapper.findTagsByArticleUuid(saved.getUuid());
+            return new Object[]{saved, tagInfos};
+        });
+
+        Article saved = (Article) txResult[0];
+        @SuppressWarnings("unchecked")
+        List<TagInfo> tags = (List<TagInfo>) txResult[1];
+
+        /** DB 已 commit，歸檔頁多了這篇文章：失效快取（先於 MQ，失效不受訊息發送快慢影響） */
+        archiveCache.evict();
+
+        /** DB 已 commit，best-effort 發送發布事件 MQ（失敗不影響發布結果） */
+        articleEventPublisher.publishPublished(saved, tags);
+
+        /** best-effort 發送 ContentChanged(PUBLISHED) MQ（供 version 模組觸發快照） */
+        articleEventPublisher.publishContentChanged(saved, ArticleContentChangedEvent.Action.PUBLISHED);
+
+        /** best-effort 發送標籤事件 MQ */
+        if (tags != null && !tags.isEmpty()) {
+            List<UUID> tagIds = tags.stream().map(TagInfo::id).toList();
+            articleEventPublisher.publishTagged(saved, tagIds);
+        }
+
+        return articleResponseMapper.toResponse(saved);
+    }
+
+    /**
+     * 駁回文章（僅 ADMIN）
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @param reason       駁回原因
+     * @return 駁回後的文章完整資訊
+     */
+    @Transactional
+    public ArticleResponse rejectArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid, String reason) {
+        if (operatorRole != Role.ADMIN) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        validateStatusTransition(article.getStatus(), ArticleStatus.REJECTED, operatorRole);
+
+        article.setStatus(ArticleStatus.REJECTED);
+        log.info("文章 {} 已被駁回，原因：{}", articleUuid, reason);
+        article.setRejectReason(reason);
+
+        Article updated = articleRepository.save(article);
+        return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
+     * 提交文章審核（DRAFT / REJECTED → PENDING_REVIEW）
+     *
+     * <p>
+     * 允許的來源狀態完全由 {@link #VALID_TRANSITIONS} 決定，本方法不內嵌第二套判斷
+     * （SEC-02 收斂）。REJECTED → PENDING_REVIEW 是「被駁回後改一改重新送審」，
+     * 送審成功時一併清空 rejectReason。
+     * </p>
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param articleUuid  文章公開 UUID
+     * @return 提交審核後的文章完整資訊
+     */
+    @Transactional
+    public ArticleResponse submitForReview(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        checkWritePermission(operatorUuid, operatorRole, article);
+        validateStatusTransition(article.getStatus(), ArticleStatus.PENDING_REVIEW, operatorRole);
+        article.setStatus(ArticleStatus.PENDING_REVIEW);
+        clearRejectReasonIfNotRejected(article);
+        Article updated = articleRepository.save(article);
+        return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
+     * 抽回送審文章（PENDING_REVIEW → DRAFT）
+     *
+     * <p>
+     * 作者送審後在審核完成前反悔時使用，將文章退回草稿以便繼續編輯。
+     * 僅允許 PENDING_REVIEW 狀態抽回，其餘狀態一律拋出
+     * {@link ArticleErrorCode#ARTICLE_STATUS_TRANSITION_INVALID}。
+     * </p>
+     *
+     * <p>
+     * <b>來源限制比狀態機更嚴是刻意的</b>：{@link #VALID_TRANSITIONS} 裡
+     * ARCHIVED → DRAFT、REJECTED → DRAFT 都是合法轉換，但那兩條不屬於「抽回送審」語意，
+     * 不從本端點放行（見 VALID_TRANSITIONS 的「表與入口的分工」）。
+     * 轉換本身是否合法仍交由 {@link #validateStatusTransition} 判定，本方法不內嵌第二套規則。
+     * </p>
+     *
+     * <p>
+     * <b>權限刻意嚴於其他寫入操作：僅限文章作者本人</b>。抽回與駁回是職責分離的兩個動作
+     * ——「抽回」是作者主動收回自己送審的文章，「駁回」是 ADMIN 審核不通過。
+     * 因此本方法不走 {@link #checkWritePermission} 的 ADMIN ownership bypass，
+     * 改用 {@link #checkAuthorOnly}；ADMIN 要處理他人送審文章應走
+     * {@link #rejectArticle}（該路徑行為不受影響）。
+     * </p>
+     *
+     * <p>
+     * 刻意不發送任何 MQ 事件：PENDING_REVIEW 從未進入 Elasticsearch 索引
+     * （索引僅由 ArticlePublishedEvent / ArticleUpdatedEvent 建立，兩者皆限 PUBLISHED），
+     * 故無反向索引動作需求；此與同樣不發事件的 {@link #submitForReview}、
+     * {@link #rejectArticle} 對稱。
+     * </p>
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色（保留以與其他狀態轉換方法簽章一致；
+     *                     抽回為作者本人專屬，刻意不依角色放行）
+     * @param articleUuid  文章公開 UUID
+     * @return 抽回後的文章完整資訊
+     */
+    @Transactional
+    public ArticleResponse withdrawArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        checkAuthorOnly(operatorUuid, article);
+        /*
+         * 入口語意守衛（比狀態機更嚴，見 VALID_TRANSITIONS 的「表與入口的分工」）：
+         * 抽回專指「收回自己送審中的文章」，故來源必須是 PENDING_REVIEW。
+         * 表裡的 ARCHIVED → DRAFT、REJECTED → DRAFT 是合法轉換，但不屬於抽回語意，
+         * 不得從這個端點放行。
+         */
+        if (article.getStatus() != ArticleStatus.PENDING_REVIEW) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
+        }
+        /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則 */
+        validateStatusTransition(article.getStatus(), ArticleStatus.DRAFT, operatorRole);
+        article.setStatus(ArticleStatus.DRAFT);
+        clearRejectReasonIfNotRejected(article);
+        Article updated = articleRepository.save(article);
+        return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
+     * 下架文章（PUBLISHED → ARCHIVED，僅 ADMIN）
+     *
+     * <p>
+     * 補上 {@link #VALID_TRANSITIONS} 裡 PUBLISHED → ARCHIVED 這條邊的入口。
+     * 在此之前已發布文章只剩硬刪（CASCADE、不可逆）一途，下架是可逆的替代路徑
+     * （復原見 {@link #unarchiveArticle}）。
+     * </p>
+     *
+     * <p>
+     * <b>權限刻意嚴於其他寫入操作：僅 ADMIN</b>，不走 {@link #checkWritePermission}
+     * 的作者放行。下架是把公開內容自站上撤下的編審決定，不該由作者自助執行；
+     * 作者要停止曝光自己的文章應走刪除。角色守衛刻意排在
+     * {@code entityFinder} 查詢<b>之前</b>（與 {@link #rejectArticle} 一致），
+     * 避免非 ADMIN 以「A0203 還是 A0201」的回應差異探測文章是否存在。
+     * </p>
+     *
+     * <p>
+     * <b>連鎖副作用</b>：下架後文章即非公開，發布時建立的 Elasticsearch 索引必須移除，
+     * 否則搜尋結果仍會曝光已下架文章的標題與內文摘要。此處以
+     * {@link ArticleEventPublisher#publishArchived} 發出 {@code article.archived}，
+     * 由 search 模組的 consumer 刪除該 document。其餘公開讀取路徑
+     * （文章列表 / 分類列表 / series 詳情與列表 / 熱門排行回填）
+     * 一律以 {@code status = 'PUBLISHED'} 為條件即時查詢，改狀態即自動排除，無需額外連動。
+     * 唯一的例外是歸檔投影：它有 Redis 快取（PERF-04），故下架 commit 後須主動失效
+     * {@link ArticleArchiveCache#evict()}，否則已下架文章的標題與 slug 會在歸檔頁多留至 TTL 到期。
+     * </p>
+     *
+     * <p>
+     * <b>刻意不標註 {@code @Transactional}</b>：本方法在 DB 寫入後發送 MQ，
+     * 若整段落在交易作用域內就會在 commit 前送出訊息（違反
+     * {@code code-standards.md §Transaction+MQ 時序}）。故改以
+     * {@link TransactionTemplate} 收斂 DB 操作，commit 成功後才 best-effort 發事件。
+     * </p>
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
+     * @param articleUuid  文章公開 UUID
+     * @return 下架後的文章完整資訊
+     */
+    public ArticleResponse archiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        if (operatorRole != Role.ADMIN) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則（SEC-02） */
+        validateStatusTransition(article.getStatus(), ArticleStatus.ARCHIVED, operatorRole);
+        article.setStatus(ArticleStatus.ARCHIVED);
+        /*
+         * 與其他狀態轉換點一致地清除過期駁回理由。今日 VALID_TRANSITIONS 只允許
+         * PUBLISHED → ARCHIVED，來源不可能是 REJECTED，故此處是縱深防禦（涵蓋修復前
+         * 就殘留 rejectReason 的舊資料），不是現行洩漏路徑；但不變量「不在 REJECTED
+         * 就不該帶著駁回理由」必須由每個轉換點共同維持，不能倚賴「表剛好不允許」。
+         */
+        clearRejectReasonIfNotRejected(article);
+
+        /** DB 寫入收斂在 transaction 內，確保發事件時已 commit */
+        Article updated = transactionTemplate.execute(status -> articleRepository.save(article));
+
+        /** DB 已 commit，歸檔頁不得再列出已下架文章：失效快取（先於 MQ；下架用於撤下，失效不等訊息） */
+        archiveCache.evict();
+
+        /** DB 已 commit，best-effort 發送下架事件 MQ（供 search 模組移除 ES 索引） */
+        articleEventPublisher.publishArchived(updated);
+
+        return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
+     * 復原已下架文章（ARCHIVED → DRAFT，僅 ADMIN）
+     *
+     * <p>
+     * 補上 {@link #VALID_TRANSITIONS} 裡 ARCHIVED → DRAFT 這條邊的入口。
+     * 復原後文章回到可編輯的草稿狀態，要再次公開必須重新走
+     * {@link #submitForReview} / {@link #publishArticle} 流程——
+     * 刻意不直接回到 PUBLISHED，避免繞過既有的發布把關。
+     * </p>
+     *
+     * <p>
+     * <b>來源限制比狀態機更嚴是刻意的</b>（見 VALID_TRANSITIONS 的「表與入口的分工」）：
+     * 表裡 REJECTED → DRAFT、PENDING_REVIEW → DRAFT 都是合法轉換，但那兩條不屬於
+     * 「復原下架文章」語意，不從本端點放行；轉換本身是否合法仍交由
+     * {@link #validateStatusTransition} 判定，本方法不內嵌第二套規則。
+     * </p>
+     *
+     * <p>
+     * <b>刻意不發送任何 MQ 事件</b>：文章在下架時已從 Elasticsearch 索引移除，
+     * DRAFT 也不進索引（索引僅由 ArticlePublishedEvent / ArticleUpdatedEvent 建立，
+     * 兩者皆限 PUBLISHED），故無反向索引動作需求；此與同樣不發事件的
+     * {@link #submitForReview}、{@link #withdrawArticle} 對稱。
+     * </p>
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色（非 ADMIN 一律拒絕）
+     * @param articleUuid  文章公開 UUID
+     * @return 復原後的文章完整資訊
+     */
+    @Transactional
+    public ArticleResponse unarchiveArticle(UUID operatorUuid, Role operatorRole, UUID articleUuid) {
+        if (operatorRole != Role.ADMIN) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+
+        Article article = entityFinder.findByUuidOrThrow(articleUuid);
+        /*
+         * 入口語意守衛（比狀態機更嚴，見 VALID_TRANSITIONS 的「表與入口的分工」）：
+         * 復原專指「把已下架文章拉回可編輯狀態」，故來源必須是 ARCHIVED。
+         */
+        if (article.getStatus() != ArticleStatus.ARCHIVED) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
+        }
+        /** 轉換是否合法一律回頭問狀態機，不在此內嵌第二套規則（SEC-02） */
+        validateStatusTransition(article.getStatus(), ArticleStatus.DRAFT, operatorRole);
+        article.setStatus(ArticleStatus.DRAFT);
+        /* 同 archiveArticle：DRAFT 不是 REJECTED，且復原後文章會回到作者手上重新編輯送審 */
+        clearRejectReasonIfNotRejected(article);
+
+        Article updated = articleRepository.save(article);
+        return articleResponseMapper.toResponse(updated);
+    }
+
+    /**
+     * 清除已過期的駁回理由：文章只要不在 {@link ArticleStatus#REJECTED}，就不該帶著駁回理由。
+     *
+     * <p>
+     * {@code rejectReason} 的語意是「<b>這次</b>駁回的理由」，文章一旦離開 REJECTED 即失效。
+     * 過期理由若殘留，會隨文章進入公開狀態而外流給匿名讀者
+     * （遮蔽層見 {@code ArticleResponseMapper#resolveRejectReason}，本方法為縱深防禦的第二層）。
+     * </p>
+     *
+     * <p>
+     * 刻意放在各個「明確的狀態轉換點」而非 {@link #validateStatusTransition} 內部：
+     * 守衛只負責判斷合法性、不應有副作用。
+     * </p>
+     *
+     * <p>
+     * 版本還原（{@code ArticleFacadeImpl#applyRestoreContent}）不在此列——它自 PR #66
+     * 起完全不改動文章狀態（{@code ArticleRestoreData} 已無 status 欄位，型別層即封閉），
+     * 因此不是狀態轉換點，也就不需要清除。
+     * </p>
+     *
+     * @param article 目標文章（狀態必須已設定為轉換後的目標狀態）
+     */
+    private void clearRejectReasonIfNotRejected(Article article) {
+        if (article.getStatus() != ArticleStatus.REJECTED) {
+            article.setRejectReason(null);
+        }
+    }
+
+    /**
+     * 檢查寫入權限：ADMIN 可操作任何文章，AUTHOR 只能操作自己的
+     *
+     * @param operatorUuid   操作者公開 UUID
+     * @param operatorRole 操作者角色
+     * @param article      目標文章
+     */
+    private void checkWritePermission(UUID operatorUuid, Role operatorRole, Article article) {
+        if (operatorRole == Role.ADMIN) {
+            return;
+        }
+        if (!article.getAuthorUuid().equals(operatorUuid)) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+    }
+
+    /**
+     * 檢查嚴格作者身分：僅文章作者本人可通過，ADMIN 亦不例外
+     *
+     * <p>
+     * 與 {@link #checkWritePermission} 的差異在於<b>不提供 ADMIN ownership bypass</b>，
+     * 供「作者主動操作」語意的端點使用（目前為 {@link #withdrawArticle}）。
+     * 刻意獨立成一個方法而非在共用方法加開關，避免影響
+     * update / delete / submit / publish 既有的 ADMIN 管理權行為。
+     * </p>
+     *
+     * @param operatorUuid 操作者公開 UUID
+     * @param article    目標文章
+     */
+    private void checkAuthorOnly(UUID operatorUuid, Article article) {
+        if (!article.getAuthorUuid().equals(operatorUuid)) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+    }
+
+    /**
+     * 驗證狀態轉換是否合法（所有改狀態路徑的唯一守衛）
+     *
+     * <p>
+     * 合法轉換一律查 {@link #VALID_TRANSITIONS}；PENDING_REVIEW → PUBLISHED / REJECTED
+     * 另需 ADMIN 權限。update / publish / reject / submitForReview / withdraw 全部經此，
+     * 任何新的狀態改動路徑也必須經此（SEC-02：restore 曾完全繞過，已於同一 PR 移除改狀態的能力）。
+     * </p>
+     *
+     * <p>
+     * <b>可見性刻意放寬到 package-private</b>：狀態機的完整 5×5 轉換矩陣要由
+     * {@code ArticleCommandSubServiceTest} 直接驗證。矩陣中多數格子（含所有非法轉換）
+     * 沒有任何 public 方法可觸發，透過既有入口無法覆蓋全矩陣；
+     * 本類別本身即 package-private，故此舉不擴大模組外的 API 面。
+     * （PUBLISHED → ARCHIVED、ARCHIVED → DRAFT 原本亦無入口，現已分別由
+     * {@link #archiveArticle}、{@link #unarchiveArticle} 補上。）
+     * </p>
+     *
+     * @param from         目前狀態
+     * @param to           目標狀態
+     * @param operatorRole 操作者角色
+     */
+    void validateStatusTransition(ArticleStatus from, ArticleStatus to, Role operatorRole) {
+        Set<ArticleStatus> allowed = VALID_TRANSITIONS.getOrDefault(from, Set.of());
+        if (!allowed.contains(to)) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_STATUS_TRANSITION_INVALID);
+        }
+        /** PENDING_REVIEW → PUBLISHED / REJECTED 需要 ADMIN 權限 */
+        if (from == ArticleStatus.PENDING_REVIEW
+                && (to == ArticleStatus.PUBLISHED || to == ArticleStatus.REJECTED)
+                && operatorRole != Role.ADMIN) {
+            throw new BusinessException(ArticleErrorCode.ARTICLE_ACCESS_DENIED);
+        }
+    }
+
+    /**
+     * 生成 URL slug（基於標題，去除特殊字元）
+     *
+     * @param title 文章標題
+     * @return slug 字串
+     */
+    private String generateSlug(String title) {
+        String base = title.toLowerCase()
+                .replaceAll("[^a-z0-9\\u4e00-\\u9fa5\\s-]", "")
+                .replaceAll("\\s+", "-")
+                .replaceAll("-{2,}", "-");
+        return base + "-" + UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    /**
+     * 自動擷取摘要。
+     *
+     * <p>summary 非空白時直接回傳；空白則透過 {@link ArticleMarkdownRenderer#toPlainText(String)}
+     * 取 Markdown 純文字前 200 字。</p>
+     *
+     * @param content Markdown 內容
+     * @param summary 原始摘要（可能為空）
+     * @return 摘要字串
+     */
+    private String extractSummary(String content, String summary) {
+        if (summary != null && !summary.isBlank()) {
+            return summary;
+        }
+        if (content == null) {
+            return null;
+        }
+        String plainText = markdownRenderer.toPlainText(content);
+        if (plainText == null) {
+            return null;
+        }
+        return plainText.substring(0, Math.min(200, plainText.length()));
+    }
+
+
+    /**
+     * 同步文章分類關聯（差集＋批次，PERF-27）
+     *
+     * <p>
+     * 與文章目前的分類比對：只刪除被移除的、只新增新加入的，各以單一批次語句完成，未變動的關聯完全不碰。
+     * 傳入的分類 UUID 以單一 {@code findAllByUuidIn} 讀出，任一不存在即 {@code CATEGORY_NOT_FOUND}（此時尚未寫入任何關聯）。
+     * 空列表表示清除所有分類，null 由呼叫端決定是否進入此方法。寫入依分類主鍵升冪，順序固定。
+     * </p>
+     *
+     * @param articleId   文章資料庫主鍵
+     * @param categoryIds 分類 UUID 列表（空列表表示清除所有）
+     * @param existingIds 文章目前已掛的分類主鍵（新文章傳空集合，免一次必為空的查詢）
+     */
+    private void syncCategories(Long articleId, List<UUID> categoryIds, Collection<Long> existingIds) {
+        Set<Long> target = new TreeSet<>();
+        if (categoryIds != null && !categoryIds.isEmpty()) {
+            List<UUID> distinctUuids = categoryIds.stream().distinct().toList();
+            List<Category> found = categoryRepository.findAllByUuidIn(distinctUuids);
+            if (found.size() != distinctUuids.size()) {
+                throw new BusinessException(ArticleErrorCode.CATEGORY_NOT_FOUND);
+            }
+            found.forEach(category -> target.add(category.getId()));
+        }
+        Set<Long> existing = new TreeSet<>(existingIds);
+        List<Long> toDelete = existing.stream().filter(id -> !target.contains(id)).toList();
+        List<Long> toInsert = target.stream().filter(id -> !existing.contains(id)).toList();
+        if (!toDelete.isEmpty()) {
+            categoryMapper.deleteArticleCategories(articleId, toDelete);
+        }
+        if (!toInsert.isEmpty()) {
+            categoryMapper.insertArticleCategories(articleId, toInsert);
+        }
+    }
+}

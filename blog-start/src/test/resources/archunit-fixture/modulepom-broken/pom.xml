@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ModulePomDependencyTest 的反向驗證 fixture：根 pom 宣告三個模組，但
+  blog-module-ghost 沒有目錄、blog-module-bad 的 pom 不是合法 XML、另有一個磁碟上存在卻沒宣告的 blog-module-orphan。
+  守衛的「覆蓋率」斷言必須對這種情況報出缺口。
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>fixture</groupId>
+    <artifactId>fixture-root</artifactId>
+    <version>1.0</version>
+    <packaging>pom</packaging>
+    <modules>
+        <module>blog-module-ok</module>
+        <module>blog-module-bad</module>
+        <module>blog-module-ghost</module>
+    </modules>
+</project>

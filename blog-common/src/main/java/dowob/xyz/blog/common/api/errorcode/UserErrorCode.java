@@ -6,6 +6,9 @@ import lombok.Getter;
 /**
  * 用戶/認證模組錯誤碼 (User Module) 範圍：A01
  *
+ * <p>A0106 已停用（Q8，2026-11-04）：註冊遇到重複 email 一律回成功（SEC-14），不再有「信箱已被註冊」錯誤；
+ * 保留此碼不重用。</p>
+ *
  * @author Yuan
  * @version 1.0
  */
@@ -39,11 +42,6 @@ public enum UserErrorCode implements IErrorCode {
     TOKEN_ACCESS_FORBIDDEN("A0105", "無權限訪問"),
 
     /**
-     * 信箱已被註冊
-     */
-    EMAIL_DUPLICATED("A0106", "該信箱已被註冊"),
-
-    /**
      * 暱稱已被使用
      */
     NICKNAME_DUPLICATED("A0107", "該暱稱已被使用"),
@@ -61,8 +59,27 @@ public enum UserErrorCode implements IErrorCode {
     /**
      * 無效的用戶角色
      */
-    INVALID_USER_ROLE("A0110", "無效的用戶角色")
+    INVALID_USER_ROLE("A0110", "無效的用戶角色"),
 
+    /**
+     * 電子信箱尚未驗證
+     */
+    EMAIL_NOT_VERIFIED("A0111", "請先驗證電子信箱"),
+
+    /**
+     * 用戶名已被使用
+     */
+    USERNAME_DUPLICATED("A0112", "該用戶名已被使用"),
+
+    /**
+     * 請求頻率超過限制
+     */
+    RATE_LIMIT_EXCEEDED("A0113", "請求過於頻繁，請稍後再試"),
+
+    /**
+     * 帳號因多次失敗嘗試被暫時鎖定
+     */
+    ACCOUNT_LOCKED("A0114", "帳號已因多次失敗嘗試被暫時鎖定，請15分鐘後再試")
 
     ;
 

@@ -1,0 +1,107 @@
+package dowob.xyz.blog.module.comment.service;
+
+import dowob.xyz.blog.infrastructure.facade.ArticleFacade;
+import dowob.xyz.blog.infrastructure.facade.UserFacade;
+import dowob.xyz.blog.infrastructure.facade.dto.ArticleData;
+import dowob.xyz.blog.infrastructure.persistence.BatchedQuery;
+import dowob.xyz.blog.module.comment.mapper.CommentMapper;
+import dowob.xyz.blog.module.comment.model.CommentRow;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.stream.IntStream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
+
+/**
+ * CommentService 留言列表的批次查詢守衛。
+ *
+ * <p>本路徑有兩個無上界的 {@code IN (...)}：{@code findFirstRepliesByParentIds}
+ * 的輸入為一頁 top-level 留言 id，{@code findLikedCommentIdsByUser} 的輸入是
+ * <b>top-level ＋ 全部 replies</b>——後者可遠大於頁大小，是本 repo 最需要切批的一處。</p>
+ *
+ * <p>{@code findFirstRepliesByParentIds} 帶 {@code ORDER BY c.parent_id, c.created_at}，
+ * 但呼叫端以 {@code groupingBy(parentId)} 消費，且同一 parent 的 replies 必落在同一批，
+ * 故「同 parent 內按 created_at」這個唯一被消費的順序性質在切批後仍成立。</p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@ExtendWith(MockitoExtension.class)
+@DisplayName("CommentService 批次查詢守衛")
+class CommentBatchingTest {
+
+    @Mock private CommentMapper commentMapper;
+    @Mock private ArticleFacade articleFacade;
+    @Mock private UserFacade userFacade;
+    @Mock private CommentMarkdownRenderer renderer;
+    @InjectMocks private CommentService commentService;
+
+    /** findFirstRepliesByParentIds 每次收到的批次大小 */
+    private final List<Integer> replyBatchSizes = new ArrayList<>();
+
+    /** countRepliesByParentIds 每次收到的批次大小 */
+    private final List<Integer> replyCountBatchSizes = new ArrayList<>();
+
+    /** findLikedCommentIdsByUser 每次收到的批次大小 */
+    private final List<Integer> likedBatchSizes = new ArrayList<>();
+
+    /**
+     * 建立指定 id 的 top-level 留言列。
+     *
+     * @param id 留言主鍵
+     * @return 留言列
+     */
+    private CommentRow topLevel(long id) {
+        CommentRow c = new CommentRow();
+        c.setId(id);
+        return c;
+    }
+
+    @Test
+    @DisplayName("replies、replyCount 與 liked 三個 IN 查詢都切批")
+    void bothInQueriesSplitIntoBatches() {
+        int total = BatchedQuery.BATCH_SIZE + 100;
+        UUID articleUuid = UUID.randomUUID();
+        UUID viewerUuid = UUID.randomUUID();
+
+        when(articleFacade.findByUuid(articleUuid)).thenReturn(Optional.of(
+                new ArticleData(articleUuid, "PUBLISHED", null, UUID.randomUUID(), null)));
+        when(commentMapper.findTopLevelByArticle(eq(articleUuid), anyString(), anyInt(), anyInt()))
+                .thenReturn(IntStream.rangeClosed(1, total).mapToObj(i -> topLevel(i)).toList());
+        when(commentMapper.findFirstRepliesByParentIds(anyList(), anyInt())).thenAnswer(invocation -> {
+            List<Long> batch = invocation.getArgument(0);
+            replyBatchSizes.add(batch.size());
+            return List.<CommentRow>of();
+        });
+        when(commentMapper.countRepliesByParentIds(anyList())).thenAnswer(invocation -> {
+            List<Long> batch = invocation.getArgument(0);
+            replyCountBatchSizes.add(batch.size());
+            return List.<CommentMapper.ReplyCountRow>of();
+        });
+        when(commentMapper.findLikedCommentIdsByUser(eq(viewerUuid), anyList())).thenAnswer(invocation -> {
+            List<Long> batch = invocation.getArgument(1);
+            likedBatchSizes.add(batch.size());
+            return List.<Long>of();
+        });
+
+        commentService.listComments(articleUuid, viewerUuid, false, "newest", 1, total);
+
+        assertThat(replyBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
+        assertThat(replyCountBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
+        assertThat(likedBatchSizes).containsExactly(BatchedQuery.BATCH_SIZE, 100);
+    }
+}

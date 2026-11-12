@@ -18,6 +18,7 @@
 
     <modules>
         <module>blog-common</module>
+        <module>blog-db-migration</module>
         <module>blog-infrastructure</module>
         <module>blog-module-user</module>
         <module>blog-module-article</module>
@@ -25,11 +26,18 @@
         <module>blog-module-tag</module>
         <module>blog-module-search</module>
         <module>blog-module-recommend</module>
+        <module>blog-module-comment</module>
+        <module>blog-module-reading</module>
+        <module>blog-module-series</module>
+        <module>blog-module-version</module>
         <module>blog-start</module>
     </modules>
 
     <properties>
         <java.version>21</java.version>
+        <!-- Jacoco 棘輪下限預設 0（不檢查）；各模組 pom 覆寫為自己的下限，見 ai-docs/testing-standards.md -->
+        <jacoco.minimum.line>0.00</jacoco.minimum.line>
+        <jacoco.minimum.branch>0.00</jacoco.minimum.branch>
         <spring-boot.version>3.5.9</spring-boot.version>
         <mybatis-starter.version>3.0.4</mybatis-starter.version>
         <commons-compress.version>1.28.0</commons-compress.version>
@@ -40,6 +48,11 @@
         <blog.version>1.0</blog.version>
         <minio.version>8.6.0</minio.version>
         <jjwt.version>0.12.3</jjwt.version>
+        <thumbnailator.version>0.4.20</thumbnailator.version>
+        <tika.version>3.3.3</tika.version>
+        <flexmark.version>0.64.8</flexmark.version>
+        <opencc4j.version>1.8.1</opencc4j.version>
+        <owasp-java-html-sanitizer.version>20240325.1</owasp-java-html-sanitizer.version>
     </properties>
 
     <dependencyManagement>
@@ -136,6 +149,17 @@
             </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-mail</artifactId>
+                <version>${spring-boot.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-starter-logging</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-starter-jdbc</artifactId>
                 <version>${spring-boot.version}</version>
                 <exclusions>
@@ -176,6 +200,11 @@
             </dependency>
             <dependency>
                 <groupId>dowob.xyz</groupId>
+                <artifactId>blog-db-migration</artifactId>
+                <version>${blog.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dowob.xyz</groupId>
                 <artifactId>blog-infrastructure</artifactId>
                 <version>${blog.version}</version>
             </dependency>
@@ -207,6 +236,26 @@
             <dependency>
                 <groupId>dowob.xyz</groupId>
                 <artifactId>blog-module-recommend</artifactId>
+                <version>${blog.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dowob.xyz</groupId>
+                <artifactId>blog-module-comment</artifactId>
+                <version>${blog.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dowob.xyz</groupId>
+                <artifactId>blog-module-reading</artifactId>
+                <version>${blog.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dowob.xyz</groupId>
+                <artifactId>blog-module-series</artifactId>
+                <version>${blog.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dowob.xyz</groupId>
+                <artifactId>blog-module-version</artifactId>
                 <version>${blog.version}</version>
             </dependency>
 
@@ -245,6 +294,63 @@
                 <version>1.21.4</version>
                 <scope>test</scope>
             </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>1.21.4</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.redis</groupId>
+                <artifactId>testcontainers-redis</artifactId>
+                <version>2.2.4</version>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- File Module -->
+            <dependency>
+                <groupId>net.coobird</groupId>
+                <artifactId>thumbnailator</artifactId>
+                <version>${thumbnailator.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-core</artifactId>
+                <version>${tika.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>rabbitmq</artifactId>
+                <version>${testcontainers.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>elasticsearch</artifactId>
+                <version>${testcontainers.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- Tag Module -->
+            <dependency>
+                <groupId>com.github.houbb</groupId>
+                <artifactId>opencc4j</artifactId>
+                <version>${opencc4j.version}</version>
+            </dependency>
+
+            <!-- Article Module - Markdown 渲染 -->
+            <dependency>
+                <groupId>com.vladsch.flexmark</groupId>
+                <artifactId>flexmark-all</artifactId>
+                <version>${flexmark.version}</version>
+            </dependency>
+
+            <!-- Comment Module - HTML Sanitizer -->
+            <dependency>
+                <groupId>com.googlecode.owasp-java-html-sanitizer</groupId>
+                <artifactId>owasp-java-html-sanitizer</artifactId>
+                <version>${owasp-java-html-sanitizer.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -255,9 +361,34 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
+        <!--
+          surefire 的 includes 統一在此（ARCH-12）：各模組不再各自複製。
+          *Test／*Tests 為單元測試，*IT 為整合測試（Testcontainers）；blog-start 另外排除 *E2E
+          （見其 pom 與 -Pe2e／-Pred-e2e profile 對 includes 的覆寫）。
+        -->
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <includes>
+                            <include>**/*Test.java</include>
+                            <include>**/*Tests.java</include>
+                            <include>**/*IT.java</include>
+                        </includes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -270,6 +401,53 @@
                         </path>
                     </annotationProcessorPaths>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.14</version>
+                <executions>
+                    <execution>
+                        <id>default-prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <!-- 棘輪式覆蓋率下限：綁 verify、排在 report 之後；無 jacoco.exec（如 blog-db-migration）自動略過 -->
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.minimum.line}</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.minimum.branch}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

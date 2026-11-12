@@ -12,6 +12,14 @@
     <artifactId>blog-start</artifactId>
     <description>Application Entry Point</description>
 
+    <!-- Jacoco 棘輪下限（2026-11-05 現值減 2pp 無條件捨去；只可上調不可下調，Q13）。
+         例外（Yuan 2026-11-05）：blog-start 自有程式幾乎都是設定類別，全模組只有 6 個分支，
+         百分比波動過大（少測 1 個即由 100% 掉到約 86%），故不設分支下限，只守 line。 -->
+    <properties>
+        <jacoco.minimum.line>0.76</jacoco.minimum.line>
+        <jacoco.minimum.branch>0</jacoco.minimum.branch>
+    </properties>
+
     <dependencies>
         <!-- Spring Boot Starter Web -->
         <dependency>
@@ -25,7 +33,22 @@
             <version>${log4j2.version}</version>
         </dependency>
 
+        <!-- Actuator（Health Probe + 可觀測性基礎） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Prometheus 匯出（ARCH-16／C7）：只在 management port 的 /actuator/prometheus 提供，不對外公開；版本由 Spring Boot BOM 管理 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
         <!-- Modules -->
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-db-migration</artifactId>
+        </dependency>
         <dependency>
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-user</artifactId>
@@ -50,7 +73,23 @@
             <groupId>dowob.xyz</groupId>
             <artifactId>blog-module-recommend</artifactId>
         </dependency>
-        
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-comment</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-reading</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-series</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dowob.xyz</groupId>
+            <artifactId>blog-module-version</artifactId>
+        </dependency>
+
         <!-- Tests -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -58,14 +97,63 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- ArchUnit：跨模組邊界守衛（ai-docs/architecture.md §Cross-Module Boundary Rules） -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.3.0</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Testcontainers -->
+        <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.redis</groupId>
+            <artifactId>testcontainers-redis</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>elasticsearch</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- includes 繼承 root pluginManagement（ARCH-12）；-Pe2e／-Pred-e2e 於 profile 內覆寫 -->
+                    <!-- 預設排除 E2E 測試（需啟動 5 個 Docker 容器，耗時較長） -->
+                    <excludes>
+                        <exclude>**/*E2E.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
@@ -81,5 +169,44 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- E2E 測試 profile：./mvnw test -Pe2e -pl blog-start -am -->
+        <profile>
+            <id>e2e</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/*E2E.java</include>
+                            </includes>
+                            <!-- red/*RedE2E 於 2026-10-31 全數轉綠（T2 併發修復後），併入 e2e（TEST-10） -->
+                            <excludes combine.self="override"/>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>red-e2e</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>**/red/*RedE2E.java</include>
+                            </includes>
+                            <excludes combine.self="override"/>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>

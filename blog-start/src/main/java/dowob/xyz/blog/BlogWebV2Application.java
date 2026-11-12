@@ -3,6 +3,7 @@ package dowob.xyz.blog;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.EnableAspectJAutoProxy;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 部落格系統啟動類
@@ -11,6 +12,7 @@ import org.springframework.context.annotation.EnableAspectJAutoProxy;
  * @version 1.0
  */
 @EnableAspectJAutoProxy
+@EnableScheduling
 @SpringBootApplication
 public class BlogWebV2Application {
     /**

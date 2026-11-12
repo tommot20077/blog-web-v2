@@ -1,0 +1,862 @@
+package dowob.xyz.blog.infrastructure.config;
+
+import dowob.xyz.blog.common.api.enums.Role;
+import dowob.xyz.blog.common.security.AuthUser;
+import dowob.xyz.blog.infrastructure.security.JwtAuthenticationFilter;
+import dowob.xyz.blog.infrastructure.security.AuthStateLoader;
+import dowob.xyz.blog.infrastructure.security.JwtService;
+import dowob.xyz.blog.infrastructure.security.UserAuthService;
+import java.util.UUID;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * SecurityConfig 授權規則整合測試
+ *
+ * <p>
+ * 使用 {@code @WebMvcTest} 搭配測試用 Controller，驗證 {@link SecurityConfig}
+ * 定義的 URL 授權規則、CSRF 設定與自訂 401 入口點。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@WebMvcTest
+@ContextConfiguration(classes = {SecurityConfig.class, JwtAuthenticationFilter.class, SecurityConfigTest.StubController.class})
+@Import(SecurityConfig.class)
+@DisplayName("SecurityConfig 授權規則測試")
+class SecurityConfigTest {
+
+    /** 測試用文章 UUID（SecurityConfig 的公開規則以 UUID 形狀限定路徑參數） */
+    private static final String ARTICLE_UUID = "11111111-1111-1111-1111-111111111111";
+
+    /** 測試用版本 UUID */
+    private static final String VERSION_UUID = "22222222-2222-2222-2222-222222222222";
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private JwtService jwtService;
+
+    @MockitoBean
+    private StringRedisTemplate stringRedisTemplate;
+
+    @MockitoBean
+    private UserAuthService userAuthService;
+
+    /** Mock：認證狀態載入器（JwtAuthenticationFilter 所需） */
+    @MockitoBean
+    private AuthStateLoader authStateLoader;
+
+    /**
+     * 測試用 Controller，提供各路徑端點以驗證安全規則
+     */
+    @RestController
+    static class StubController {
+
+        @GetMapping("/api/v1/auth/login")
+        public String authLogin() {
+            return "login";
+        }
+
+        @PostMapping("/api/v1/auth/register")
+        public String authRegister() {
+            return "register";
+        }
+
+        // ── 文章端點（對齊 ArticleController / CommentController / VersionController
+        //    / HighlightController / ReadingProgressController 的實際 URL 形狀）──
+
+        @GetMapping("/api/v1/articles")
+        public String listArticles() {
+            return "articles";
+        }
+
+        @GetMapping("/api/v1/articles/archive")
+        public String getArchive() {
+            return "archive";
+        }
+
+        @GetMapping("/api/v1/articles/slug/{slug}")
+        public String getArticleBySlug(@PathVariable String slug) {
+            return "article-by-slug";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}")
+        public String getArticle(@PathVariable String uuid) {
+            return "article";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/comments")
+        public String listComments(@PathVariable String uuid) {
+            return "comments";
+        }
+
+        @GetMapping("/api/v1/articles/me")
+        public String getMyArticles() {
+            return "my-articles";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/edit")
+        public String getArticleForEdit(@PathVariable String uuid) {
+            return "article-for-edit";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/versions")
+        public String listVersions(@PathVariable String uuid) {
+            return "versions";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/versions/{versionUuid}")
+        public String getVersionDetail(@PathVariable String uuid, @PathVariable String versionUuid) {
+            return "version-detail";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/highlights")
+        public String listHighlights(@PathVariable String uuid) {
+            return "highlights";
+        }
+
+        @GetMapping("/api/v1/articles/{uuid}/progress")
+        public String getProgress(@PathVariable String uuid) {
+            return "progress";
+        }
+
+        @PostMapping("/api/v1/articles")
+        public String createArticle() {
+            return "created";
+        }
+
+        @GetMapping("/api/v1/tags/java")
+        public String getTag() {
+            return "tag";
+        }
+
+        @GetMapping("/api/v1/users/1")
+        public String getUser() {
+            return "user";
+        }
+
+        @GetMapping("/api/v1/users/{uuid}/profile")
+        public String getPublicProfile(@PathVariable String uuid) {
+            return "public-profile";
+        }
+
+        @GetMapping("/api/v1/users/me/profile")
+        public String getMeProfile() {
+            return "me-profile";
+        }
+
+        @PatchMapping("/api/v1/users/{uuid}/profile")
+        public String patchProfile(@PathVariable String uuid) {
+            return "profile-patched";
+        }
+
+        @GetMapping("/api/v1/authors")
+        public String searchAuthors() {
+            return "authors";
+        }
+
+        @PostMapping("/api/v1/authors")
+        public String createAuthor() {
+            return "author-created";
+        }
+
+        @GetMapping("/api/v1/files/abc")
+        public String getFile() {
+            return "file";
+        }
+
+        @GetMapping("/api/v1/categories/1")
+        public String getCategory() {
+            return "category";
+        }
+
+        @GetMapping("/api/v1/series")
+        public String listSeries() {
+            return "series-list";
+        }
+
+        @GetMapping("/api/v1/series/spring-boot")
+        public String getSeries() {
+            return "series-detail";
+        }
+
+        @PostMapping("/api/v1/series")
+        public String createSeries() {
+            return "series-created";
+        }
+
+        @PostMapping("/api/v1/auth/logout")
+        public String authLogout() {
+            return "logout";
+        }
+
+        @PostMapping("/api/v1/auth/refresh")
+        public String authRefresh() {
+            return "refresh";
+        }
+
+        @GetMapping("/api/v1/recommend/trending")
+        public String getRecommend() {
+            return "recommend";
+        }
+
+        @GetMapping("/api/v1/search")
+        public String search() {
+            return "search";
+        }
+
+        @GetMapping("/api/v1/search/suggest")
+        public String searchSuggest() {
+            return "suggest";
+        }
+
+        @GetMapping("/api/v1/admin/dashboard")
+        public String adminDashboard() {
+            return "dashboard";
+        }
+
+        @PostMapping("/api/v1/admin/settings")
+        public String adminSettings() {
+            return "settings";
+        }
+
+        @DeleteMapping("/api/v1/admin/users/1")
+        public String adminDeleteUser() {
+            return "deleted";
+        }
+
+        @GetMapping("/api/v1/profile")
+        public String profile() {
+            return "profile";
+        }
+
+        @PostMapping("/api/v1/comments")
+        public String postComment() {
+            return "comment";
+        }
+
+        /** 回覆分頁端點（D3）：對齊 CommentController#listReplies 的實際 URL 形狀 */
+        @GetMapping("/api/v1/comments/{uuid}/replies")
+        public String listCommentReplies(@PathVariable String uuid) {
+            return "replies";
+        }
+
+        /** 留言編輯／刪除的實際 URL 形狀（需認證；用來證明回覆端點的 permitAll 沒有外溢） */
+        @GetMapping("/api/v1/comments/{uuid}")
+        public String getCommentByUuid(@PathVariable String uuid) {
+            return "comment-by-uuid";
+        }
+
+        @GetMapping("/swagger-ui/index.html")
+        public String swagger() {
+            return "swagger";
+        }
+
+        @GetMapping("/v3/api-docs")
+        public String apiDocs() {
+            return "docs";
+        }
+    }
+
+    // ── Auth 端點（permitAll）──
+
+    @Test
+    @DisplayName("未認證訪問 /api/v1/auth/** GET 應回傳 200")
+    void unauthenticatedGetAuth_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/auth/login"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證訪問 /api/v1/auth/** POST 應回傳 200（CSRF 已禁用）")
+    void unauthenticatedPostAuth_shouldReturn200() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+    }
+
+    // ── Auth 端點（logout 需認證，refresh 靠 cookie 驗證保持公開）──
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/auth/logout 應回傳 401")
+    void logout_withoutAuth_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("已認證 POST /api/v1/auth/logout 應回傳 200")
+    void logout_withAuth_shouldReturn200() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/logout")
+                        .with(asUser())
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/auth/refresh 應回傳 200（permitAll，靠 cookie 驗證）")
+    void refresh_withoutAuth_shouldReturn200() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/refresh")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
+
+    // ── 公開 GET 端點 ──
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles 列表應回傳 200")
+    void unauthenticatedListArticles_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/archive 應回傳 200")
+    void unauthenticatedGetArchive_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/archive"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/slug/{slug} 應回傳 200")
+    void unauthenticatedGetArticleBySlug_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/slug/my-first-post"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid} 應回傳 200")
+    void unauthenticatedGetArticleByUuid_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/comments 應回傳 200")
+    void unauthenticatedListComments_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/comments"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("D3：未認證 GET /api/v1/comments/{uuid}/replies 應回傳 200（與留言列表一致，匿名可讀）")
+    void unauthenticatedListCommentReplies_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/" + ARTICLE_UUID + "/replies"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("D3：permitAll 只開放 GET .../replies：同前綴的 GET /api/v1/comments/{uuid} 仍回 401")
+    void unauthenticatedGetCommentByUuid_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/" + ARTICLE_UUID))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("D3：非 UUID 形狀的路徑變數不落入 replies 的 permitAll 規則（fail-closed）")
+    void unauthenticatedListCommentRepliesWithNonUuid_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/comments/not-a-uuid/replies"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("D3：未認證 POST /api/v1/comments/{uuid}/replies 應回傳 401（只開放 GET）")
+    void unauthenticatedPostCommentReplies_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/comments/" + ARTICLE_UUID + "/replies")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── actuator：暴露 metrics 後的授權面（只有 health/info 是公開的）──
+
+    @Test
+    @DisplayName("未認證 GET /actuator/metrics 應回傳 401")
+    void unauthenticatedGetActuatorMetrics_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/metrics"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("主 port 上未認證 GET /actuator/health 與 /actuator/info 應回 401（fail-closed；健康檢查改走 /livez、/readyz，management port 上才匿名）")
+    void unauthenticatedGetActuatorHealthAndInfoOnMainPort_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/health")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/actuator/info")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /livez 與 /readyz 不得回 401（management port 搬走後，K3s probe 走主 port 的 additional path）")
+    void unauthenticatedGetProbePaths_shouldNotBeUnauthorized() throws Exception {
+        for (String path : new String[]{"/livez", "/readyz"}) {
+            mockMvc.perform(get(path))
+                    .andExpect(result -> {
+                        int status = result.getResponse().getStatus();
+                        if (status == 401 || status == 403) {
+                            throw new AssertionError(path + " 不得需要認證——K3s liveness/readiness probe 依賴它，"
+                                    + "收緊會讓 pod 反覆重啟（security.md），實得 " + status);
+                        }
+                    });
+        }
+    }
+
+    @Test
+    @DisplayName("未認證 GET /actuator/prometheus 應回傳 401（主 port 上 fail-closed；匯出端點只在 management port）")
+    void unauthenticatedGetActuatorPrometheus_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("一般登入使用者 GET /actuator/metrics 應回傳 403——運維資訊限 ADMIN")
+    void authenticatedNonAdminGetActuatorMetrics_shouldReturn403() throws Exception {
+        mockMvc.perform(get("/actuator/metrics").with(asUser()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("ADMIN GET /actuator/metrics 應通過授權（本測試不載入 actuator endpoint，故只驗非 401／403）")
+    void adminGetActuatorMetrics_shouldPassAuthorization() throws Exception {
+        mockMvc.perform(get("/actuator/metrics").with(asAdmin()))
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    if (status == 401 || status == 403) {
+                        throw new AssertionError("ADMIN 應通過 /actuator/** 的授權，實得 " + status);
+                    }
+                });
+    }
+
+    // ── SEC-09：已收窄的 articles 子端點（URL 層兒底，不再只靠方法層 @PreAuthorize）──
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/me 應回傳 401")
+    void unauthenticatedGetMyArticles_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/me"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/edit 應回傳 401")
+    void unauthenticatedGetArticleForEdit_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/edit"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/versions 應回傳 401")
+    void unauthenticatedListVersions_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/versions"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/versions/{versionUuid} 應回傳 401")
+    void unauthenticatedGetVersionDetail_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/versions/" + VERSION_UUID))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/highlights 應回傳 401")
+    void unauthenticatedListHighlights_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/highlights"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/articles/{uuid}/progress 應回傳 401")
+    void unauthenticatedGetProgress_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/progress"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── SEC-09：收窄後合法使用者仍須能存取（正向案例）──
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/me 應回傳 200")
+    void authenticatedGetMyArticles_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/me").with(asUser()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/{uuid}/edit 應回傳 200")
+    void authenticatedGetArticleForEdit_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/edit").with(asAuthor()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/{uuid}/versions 應回傳 200")
+    void authenticatedListVersions_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/versions").with(asAuthor()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/{uuid}/highlights 應回傳 200")
+    void authenticatedListHighlights_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/highlights").with(asUser()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("已認證 GET /api/v1/articles/{uuid}/progress 應回傳 200")
+    void authenticatedGetProgress_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID + "/progress").with(asUser()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/tags/** 應回傳 200")
+    void unauthenticatedGetTags_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/tags/java"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/users/** 應回傳 401（已收窄 permitAll）")
+    void unauthenticatedGetUsers_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/users/1"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/users/{uuid}/profile（公開作者頁）應回傳 200")
+    void unauthenticatedGetPublicProfile_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/users/" + ARTICLE_UUID + "/profile"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/users/me/profile 應回傳 401（permitAll 只限 UUID 形狀路徑，字面量子路徑 fail-closed）")
+    void unauthenticatedGetMeProfile_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/users/me/profile"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 PATCH /api/v1/users/{uuid}/profile 應回傳 401（僅開放 GET）")
+    void unauthenticatedPatchProfile_shouldReturn401() throws Exception {
+        mockMvc.perform(patch("/api/v1/users/" + ARTICLE_UUID + "/profile"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/authors（作者搜尋）應回傳 200")
+    void unauthenticatedGetAuthors_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/authors"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/authors 應回傳 401（僅開放 GET）")
+    void unauthenticatedPostAuthors_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/authors"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/files/** 應回傳 200")
+    void unauthenticatedGetFiles_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/files/abc"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/series 列表應回傳 200")
+    void unauthenticatedListSeries_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/series"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/series/{slug} 詳情應回傳 200")
+    void unauthenticatedGetSeriesDetail_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/series/spring-boot"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/series 應回傳 401（僅開放 GET，寫入仍需認證）")
+    void unauthenticatedPostSeries_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/series"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/categories/** 應回傳 200")
+    void unauthenticatedGetCategories_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/categories/1"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/recommend/** 應回傳 200")
+    void unauthenticatedGetRecommend_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/recommend/trending"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/search 應回傳 200")
+    void unauthenticatedGetSearch_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/search"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET /api/v1/search/suggest 應回傳 200")
+    void unauthenticatedGetSearchSuggest_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/search/suggest"))
+                .andExpect(status().isOk());
+    }
+
+    // ── 非公開的寫入端點需要認證 ──
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/articles 應回傳 401")
+    void unauthenticatedPostArticles_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/articles")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("未認證 POST /api/v1/comments 應回傳 401")
+    void unauthenticatedPostComments_shouldReturn401() throws Exception {
+        mockMvc.perform(post("/api/v1/comments")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── Admin 端點 ──
+
+    @Test
+    @DisplayName("未認證訪問 /api/v1/admin/** 應回傳 401")
+    void unauthenticatedAccessAdmin_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/dashboard"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("一般用戶訪問 /api/v1/admin/** 應回傳 403")
+    void userAccessAdmin_shouldReturn403() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/dashboard").with(asUser()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Admin GET /api/v1/admin/** 應通過安全層")
+    void adminGetAdmin_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/dashboard").with(asAdmin()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Admin POST /api/v1/admin/** 應通過安全層")
+    void adminPostAdmin_shouldReturn200() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/settings").with(asAdmin())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Admin DELETE /api/v1/admin/** 應通過安全層")
+    void adminDeleteAdmin_shouldReturn200() throws Exception {
+        mockMvc.perform(delete("/api/v1/admin/users/1").with(asAdmin()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("AUTHOR 訪問 /api/v1/admin/** 應回傳 403")
+    void authorAccessAdmin_shouldReturn403() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/dashboard").with(asAuthor()))
+                .andExpect(status().isForbidden());
+    }
+
+    // ── 認證用戶存取一般端點 ──
+
+    @Test
+    @DisplayName("認證用戶 GET 一般端點應回傳 200")
+    void authenticatedUserGetProfile_shouldReturn200() throws Exception {
+        mockMvc.perform(get("/api/v1/profile").with(asUser()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("認證用戶 POST 一般端點應回傳 200")
+    void authenticatedUserPostComment_shouldReturn200() throws Exception {
+        mockMvc.perform(post("/api/v1/comments").with(asUser())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("未認證 GET 一般端點應回傳 401")
+    void unauthenticatedGetProfile_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/v1/profile"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── CSRF 禁用驗證 ──
+
+    @Test
+    @DisplayName("POST 請求無 CSRF token 不應被拒絕")
+    void postWithoutCsrf_shouldNotBeRejected() throws Exception {
+        // 若 CSRF 啟用，此 POST 會因缺少 token 回傳 403
+        // auth 端點本身 permitAll，所以成功代表 CSRF 已禁用
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isOk());
+    }
+
+    // ── 靜態資源與 Swagger ──
+
+    @Test
+    @DisplayName("springdoc 關閉（預設）時，未認證訪問 /swagger-ui/** 應回傳 401（不在 permitAll）")
+    void unauthenticatedAccessSwagger_whenSpringdocDisabled_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/swagger-ui/index.html"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("springdoc 關閉（預設）時，未認證訪問 /v3/api-docs 應回傳 401（不在 permitAll）")
+    void unauthenticatedAccessApiDocs_whenSpringdocDisabled_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── 自訂 401 入口點 ──
+
+    @Test
+    @DisplayName("未認證請求應回傳 401 而非預設 403")
+    void unauthenticatedRequest_shouldReturn401NotDefault403() throws Exception {
+        mockMvc.perform(get("/api/v1/profile"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ── CORS 設定驗證 ──
+
+    @Nested
+    @DisplayName("CORS 設定")
+    class CorsConfigTests {
+
+        @Test
+        @DisplayName("OPTIONS preflight 請求帶 http://localhost:5500 Origin 應回傳 200 且含 CORS 回應標頭")
+        void preflightRequest_fromLocalhostPort5500_shouldReturn200() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/" + ARTICLE_UUID)
+                            .header("Origin", "http://localhost:5500")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:5500"));
+        }
+
+        @Test
+        @DisplayName("OPTIONS preflight 請求帶 http://127.0.0.1:5500 Origin 應回傳 200 且含 CORS 回應標頭")
+        void preflightRequest_from127Port5500_shouldReturn200() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/" + ARTICLE_UUID)
+                            .header("Origin", "http://127.0.0.1:5500")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Origin", "http://127.0.0.1:5500"));
+        }
+
+        @Test
+        @DisplayName("OPTIONS preflight 帶不在白名單的 Origin → 不應回傳 Access-Control-Allow-Origin 標頭")
+        void preflightRequest_fromUnknownOrigin_shouldNotReturnAllowOriginHeader() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/" + ARTICLE_UUID)
+                            .header("Origin", "http://evil.example.com")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(header().doesNotExist("Access-Control-Allow-Origin"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("CORS 回應應包含 Access-Control-Allow-Credentials: true")
+        void corsResponse_shouldIncludeAllowCredentialsHeader() throws Exception {
+            mockMvc.perform(options("/api/v1/articles/" + ARTICLE_UUID)
+                            .header("Origin", "http://localhost:5500")
+                            .header("Access-Control-Request-Method", "GET"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
+        }
+
+        @Test
+        @DisplayName("跨域回應暴露 Retry-After（SEC-23：前端跨域時才讀得到 429 的重試秒數）")
+        void corsResponse_shouldExposeRetryAfterHeader() throws Exception {
+            mockMvc.perform(get("/api/v1/articles/" + ARTICLE_UUID)
+                            .header("Origin", "http://localhost:5500"))
+                    .andExpect(header().string("Access-Control-Expose-Headers",
+                            org.hamcrest.Matchers.containsString("Retry-After")));
+        }
+    }
+
+    // ── 工具方法 ──
+
+    private static RequestPostProcessor asAdmin() {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.ADMIN.getSpringSecurityRole()));
+        Role.ADMIN.getPermissions().forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        return authentication(
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 1L), Role.ADMIN), null, authorities));
+    }
+
+    private static RequestPostProcessor asUser() {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.USER.getSpringSecurityRole()));
+        Role.USER.getPermissions().forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        return authentication(
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 2L), Role.USER), null, authorities));
+    }
+
+    private static RequestPostProcessor asAuthor() {
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(Role.AUTHOR.getSpringSecurityRole()));
+        Role.AUTHOR.getPermissions().forEach(p ->
+                authorities.add(new SimpleGrantedAuthority(p.name())));
+        return authentication(
+                new UsernamePasswordAuthenticationToken(new AuthUser(new UUID(0L, 3L), Role.AUTHOR), null, authorities));
+    }
+}

@@ -1,0 +1,68 @@
+package dowob.xyz.blog.module.recommend.config;
+
+import dowob.xyz.blog.infrastructure.event.ArticleEventContract;
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.TopicExchange;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import static dowob.xyz.blog.infrastructure.config.DeadLetterTopology.dlqArgs;
+
+/**
+ * 推薦模組 RabbitMQ 設定
+ *
+ * <p>
+ * 訂閱文章事件以清除推薦快取：
+ * 當文章發布時，清除對應的相關文章推薦快取，
+ * 確保推薦結果反映最新的文章索引狀態。
+ * 推薦模組的 Consumer 與其他模組一致採用 AUTO ACK 模式：失敗由容器重試，耗盡後進 DLQ，以防止訊息遺失。
+ * </p>
+ *
+ * @author Yuan
+ * @version 1.0
+ */
+@Configuration
+public class RecommendRabbitMqConfig {
+
+    /**
+     * 文章事件 Exchange 名稱（取自共用事件契約 {@link ArticleEventContract#EXCHANGE}）
+     */
+    public static final String ARTICLE_EVENTS_EXCHANGE = ArticleEventContract.EXCHANGE;
+
+    /**
+     * 推薦模組監聽文章發布事件的 Queue 名稱
+     */
+    public static final String QUEUE_RECOMMEND_ARTICLE_PUBLISHED = "recommend.article.published";
+
+    /**
+     * 文章已發布 Routing Key
+     */
+    public static final String ROUTING_KEY_ARTICLE_PUBLISHED = ArticleEventContract.ROUTING_KEY_PUBLISHED;
+
+    /**
+     * 建立推薦模組專屬的文章發布事件 Queue（持久化，含 DLQ 設定）
+     *
+     * @return Queue 實例
+     */
+    @Bean
+    public Queue recommendArticlePublishedQueue() {
+        return new Queue(QUEUE_RECOMMEND_ARTICLE_PUBLISHED, true, false, false, dlqArgs());
+    }
+
+    /**
+     * 將推薦模組的 Queue 綁定至文章事件 Exchange
+     *
+     * @param articleEventsExchange 共用的 article.events exchange（由 infrastructure 的 RabbitMqConfig 宣告）
+     * @return Binding 實例
+     */
+    @Bean
+    public Binding recommendArticlePublishedBinding(@Qualifier("articleEventsExchange") TopicExchange articleEventsExchange) {
+        return BindingBuilder
+                .bind(recommendArticlePublishedQueue())
+                .to(articleEventsExchange)
+                .with(ROUTING_KEY_ARTICLE_PUBLISHED);
+    }
+}

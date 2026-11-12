@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  守衛 #5 XML 掃描的反向驗證 fixture —— 故意違規，不得被當成範例。
+
+  namespace 宣告 owner 為 series 模組，SQL 卻直讀 article 模組的業務表 articles。
+  本檔位於 archunit-fixture/mapper/ 而非 mapper/，故正向守衛的
+  classpath*:mapper/*.xml 掃不到它。
+-->
+<mapper namespace="dowob.xyz.blog.module.series.mapper.ViolatingSeriesMapper">
+
+    <select id="countPublishedArticles" resultType="int">
+        SELECT COUNT(*) FROM articles WHERE series_id = #{seriesId} AND status = 'PUBLISHED'
+    </select>
+
+</mapper>
