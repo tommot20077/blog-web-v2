@@ -153,24 +153,6 @@ public class RedisKeyConstant {
     public static final String RESEND_VERIFY_DAY_PREFIX = "rate:resend-verify:day:";
 
     /**
-     * 信箱驗證碼 Key 前綴 (String)
-     * Key: auth:email-verify:code:{email}
-     */
-    public static final String EMAIL_VERIFY_CODE_PREFIX = "auth:email-verify:code:";
-
-    /** 信箱驗證碼 TTL（分鐘） */
-    public static final long EMAIL_VERIFY_CODE_TTL_MINUTES = 10L;
-
-    /**
-     * 信箱驗證碼失敗計數 Key 前綴 (String)
-     * Key: auth:email-verify:fail:{email}
-     */
-    public static final String EMAIL_VERIFY_CODE_FAIL_PREFIX = "auth:email-verify:fail:";
-
-    /** 信箱驗證碼最大允許失敗次數，超過此值將拒絕進一步驗證（防暴力破解） */
-    public static final int EMAIL_VERIFY_CODE_MAX_ATTEMPTS = 5;
-
-    /**
      * 生成重發驗證信每分鐘限速 Redis Key
      *
      * @param email 用戶信箱
@@ -188,26 +170,6 @@ public class RedisKeyConstant {
      */
     public static String getResendVerifyDayKey(String email) {
         return RESEND_VERIFY_DAY_PREFIX + email;
-    }
-
-    /**
-     * 生成信箱驗證碼 Redis Key
-     *
-     * @param email 用戶信箱
-     * @return Redis Key
-     */
-    public static String getEmailVerifyCodeKey(String email) {
-        return EMAIL_VERIFY_CODE_PREFIX + email;
-    }
-
-    /**
-     * 生成信箱驗證碼失敗計數 Redis Key
-     *
-     * @param email 用戶信箱
-     * @return Redis Key
-     */
-    public static String getEmailVerifyCodeFailKey(String email) {
-        return EMAIL_VERIFY_CODE_FAIL_PREFIX + email;
     }
 
     /** ===================== IP 層級登入/註冊限流 ===================== */
@@ -277,12 +239,6 @@ public class RedisKeyConstant {
      */
     public static final String RESEND_VERIFICATION_IP_PREFIX = "auth:resend-verification:ip:";
 
-    /**
-     * 驗證碼校驗 IP 層級限流 Key 前綴 (String)
-     * Key: auth:verify-code:ip:{ip}
-     */
-    public static final String VERIFY_CODE_IP_PREFIX = "auth:verify-code:ip:";
-
     /** 忘記密碼：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3；獨立常數方便日後分開調整） */
     public static final int FORGOT_PASSWORD_IP_MAX = 10;
 
@@ -294,12 +250,6 @@ public class RedisKeyConstant {
 
     /** 重寄驗證信 IP 限流窗口（分鐘），等同每小時 */
     public static final long RESEND_VERIFICATION_IP_TTL_MINUTES = 60L;
-
-    /** 驗證碼校驗：單一 IP 在窗口內允許的最大次數（沿用註冊門檻，A3） */
-    public static final int VERIFY_CODE_IP_MAX = 10;
-
-    /** 驗證碼校驗 IP 限流窗口（分鐘），等同每小時 */
-    public static final long VERIFY_CODE_IP_TTL_MINUTES = 60L;
 
     /**
      * 生成忘記密碼 IP 層級限流 Redis Key
@@ -319,16 +269,6 @@ public class RedisKeyConstant {
      */
     public static String getResendVerificationIpKey(String ip) {
         return RESEND_VERIFICATION_IP_PREFIX + ip;
-    }
-
-    /**
-     * 生成驗證碼校驗 IP 層級限流 Redis Key
-     *
-     * @param ip client IP
-     * @return Redis Key
-     */
-    public static String getVerifyCodeIpKey(String ip) {
-        return VERIFY_CODE_IP_PREFIX + ip;
     }
 
     /**

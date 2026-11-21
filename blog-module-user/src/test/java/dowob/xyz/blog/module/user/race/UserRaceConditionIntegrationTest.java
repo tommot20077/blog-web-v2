@@ -184,15 +184,6 @@ class UserRaceConditionIntegrationTest extends AbstractIntegrationTest {
         verify(rabbitTemplate, times(1)).convertAndSend(anyString(), anyString(), event.capture());
         assertThat(event.getValue().userUuid()).as("唯一發出的事件屬於贏家")
                 .isEqualTo(jdbc.queryForObject("SELECT uuid FROM users WHERE id = ?", java.util.UUID.class, winnerId));
-
-        assertThat(redis.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(emails[winner])))
-                .as("贏家的驗證碼 key").matches("\\d{6}");
-        if (!emails[loser].equals(emails[winner])) {
-            assertThat(redis.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(emails[loser])))
-                    .as("輸家的 email 沒有任何驗證碼 key").isNull();
-        }
-        redis.delete(RedisKeyConstant.getEmailVerifyCodeKey(emails[winner]));
-        redis.delete(RedisKeyConstant.getEmailVerifyCodeKey(emails[loser]));
     }
 
     private java.util.UUID uuidOfEmail(String email) {

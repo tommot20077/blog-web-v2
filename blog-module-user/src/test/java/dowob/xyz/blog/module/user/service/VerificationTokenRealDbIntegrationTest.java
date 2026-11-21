@@ -68,7 +68,6 @@ class VerificationTokenRealDbIntegrationTest extends AbstractRealTokenIntegratio
         redis.delete(RedisKeyConstant.getForgotPwdDayKey(EMAIL));
         redis.delete(RedisKeyConstant.getResendVerifyMinKey(EMAIL));
         redis.delete(RedisKeyConstant.getResendVerifyDayKey(EMAIL));
-        redis.delete(RedisKeyConstant.getEmailVerifyCodeKey(EMAIL));
     }
 
     @BeforeEach

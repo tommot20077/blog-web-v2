@@ -104,7 +104,6 @@ class RateLimitedEndpointGuardTest {
     private static final Map<String, String> EXEMPT = new TreeMap<>(Map.ofEntries(
             Map.entry("AuthController#register", "auth 流程：已有 per-IP 註冊限流（A0113）"),
             Map.entry("AuthController#login", "auth 流程：已有 per-IP 與失敗鎖定限流（A0113）"),
-            Map.entry("AuthController#verifyEmailCode", "auth 流程：已有 per-IP 與失敗次數限流（A0113）"),
             Map.entry("AuthController#resendVerification", "auth 流程：已有 per-email 與 per-IP 限流（A0113）"),
             Map.entry("AuthController#forgotPassword", "auth 流程：已有 per-email 與 per-IP 限流（A0113）"),
             Map.entry("AuthController#refresh", "auth 流程：需有效 refresh token cookie，無 token 即被拒，不產生內容寫入"),

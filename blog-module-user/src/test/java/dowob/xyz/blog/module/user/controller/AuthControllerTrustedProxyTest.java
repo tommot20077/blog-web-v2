@@ -130,10 +130,9 @@ class AuthControllerTrustedProxyTest {
     }
 
     @Test
-    @DisplayName("count=1：POST /forgot-password、/resend-verification、/verify-email-code → 傳入 XFF 最右節，而非可偽造的第一節（A3）")
+    @DisplayName("count=1：POST /forgot-password、/resend-verification → 傳入 XFF 最右節，而非可偽造的第一節（A3）")
     void ipSensitiveEndpoints_trustedProxyCountOne_shouldPassRightmostXffEntry() throws Exception {
         String emailBody = "{\"email\": \"test@example.com\"}";
-        String codeBody = "{\"email\": \"test@example.com\", \"code\": \"123456\"}";
 
         mockMvc.perform(post("/api/v1/auth/forgot-password")
                         .header("X-Forwarded-For", "6.6.6.6, 203.0.113.7")
@@ -145,14 +144,8 @@ class AuthControllerTrustedProxyTest {
                         .with(req -> { req.setRemoteAddr("10.0.0.5"); return req; })
                         .contentType(MediaType.APPLICATION_JSON).content(emailBody))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/api/v1/auth/verify-email-code")
-                        .header("X-Forwarded-For", "6.6.6.6, 203.0.113.7")
-                        .with(req -> { req.setRemoteAddr("10.0.0.5"); return req; })
-                        .contentType(MediaType.APPLICATION_JSON).content(codeBody))
-                .andExpect(status().isOk());
 
         verify(authService).forgotPassword(eq("test@example.com"), eq("203.0.113.7"));
         verify(authService).resendVerification(eq("test@example.com"), eq("203.0.113.7"));
-        verify(authService).verifyEmailCode(eq("test@example.com"), eq("123456"), eq("203.0.113.7"));
     }
 }

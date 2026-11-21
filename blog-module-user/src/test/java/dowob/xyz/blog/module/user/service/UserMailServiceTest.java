@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.UserStatus;
-import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
 import dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent;
@@ -24,8 +23,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.mail.MailSendException;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -52,7 +49,7 @@ import static org.mockito.Mockito.when;
 /**
  * {@link UserMailService} 單元測試
  *
- * <p>ARCH-24 起事件只帶 {@code eventId}／{@code userUuid}，本服務於寄信當下查 users 與 Redis，並於此時產生 token（A1：DB 只存 SHA-256）。
+ * <p>ARCH-24 起事件只帶 {@code eventId}／{@code userUuid}，本服務於寄信當下查 users，並於此時產生 token（A1：DB 只存 SHA-256）。
  * 這裡驗證：寄出的是明文、DB 存的是雜湊；順序為刪舊→存雜湊→寄信；寄信失敗往外拋；已驗證／已刪帳不產生 token。</p>
  *
  * @author Yuan
@@ -73,23 +70,17 @@ class UserMailServiceTest {
     private JavaMailSender mailSender;
     private UserRepository userRepository;
     private VerificationTokenRepository tokenRepository;
-    private StringRedisTemplate redisTemplate;
-    private ValueOperations<String, String> valueOps;
     private MimeMessage message;
     private UserMailService service;
 
     @BeforeEach
-    @SuppressWarnings("unchecked")
     void setUp() {
         mailSender = mock(JavaMailSender.class);
         userRepository = mock(UserRepository.class);
         tokenRepository = mock(VerificationTokenRepository.class);
-        redisTemplate = mock(StringRedisTemplate.class);
-        valueOps = mock(ValueOperations.class);
-        when(redisTemplate.opsForValue()).thenReturn(valueOps);
         message = new MimeMessage(Session.getInstance(new Properties()));
         when(mailSender.createMimeMessage()).thenReturn(message);
-        service = new UserMailService(mailSender, userRepository, tokenRepository, redisTemplate);
+        service = new UserMailService(mailSender, userRepository, tokenRepository);
         ReflectionTestUtils.setField(service, "frontendBaseUrl", "https://90030.xyz");
         ReflectionTestUtils.setField(service, "securityFromAddress", "no-reply@90030.xyz");
         ReflectionTestUtils.setField(service, "securityFromName", "Blog Security Bot");
@@ -133,10 +124,23 @@ class UserMailServiceTest {
     }
 
     @Test
-    @DisplayName("sendVerificationEmail → 收件人取自 users、驗證碼取自 Redis；信中是明文 token，DB 只存其 SHA-256")
+    @DisplayName("sendVerificationEmail → 信中只有驗證連結，不含 6 位數驗證碼")
+    void sendVerificationEmail_shouldContainLinkOnlyWithoutCode() throws Exception {
+        givenUser(UserStatus.PENDING_VERIFICATION);
+
+        boolean sent = service.sendVerificationEmail(registered());
+
+        assertThat(sent).isTrue();
+        String body = (String) message.getContent();
+        assertThat(body).contains("/verify-email?token=")
+                .doesNotContain("123456")
+                .doesNotContainIgnoringCase("verification code");
+    }
+
+    @Test
+    @DisplayName("sendVerificationEmail → 收件人取自 users；信中是明文 token，DB 只存其 SHA-256")
     void sendVerificationEmail_shouldMailPlainTokenAndStoreOnlyHash() throws Exception {
         givenUser(UserStatus.PENDING_VERIFICATION);
-        when(valueOps.get(RedisKeyConstant.getEmailVerifyCodeKey(DB_EMAIL))).thenReturn("123456");
 
         boolean sent = service.sendVerificationEmail(registered());
 
@@ -147,7 +151,7 @@ class UserMailServiceTest {
                 .contains("Blog Security Bot")
                 .contains("no-reply@90030.xyz");
         assertThat(message.getSubject()).isEqualTo("Verify your email address");
-        assertThat((String) message.getContent()).contains("123456").contains("Yuan");
+        assertThat((String) message.getContent()).contains("Yuan");
 
         String plain = plainTokenIn("https://90030.xyz/verify-email");
         VerificationToken saved = savedToken();
@@ -195,35 +199,6 @@ class UserMailServiceTest {
 
         assertThatThrownBy(() -> service.sendVerificationEmail(registered()))
                 .isInstanceOf(MailSendException.class);
-    }
-
-    @Test
-    @DisplayName("sendVerificationEmail：Redis 已無驗證碼 → 照寄，只含連結、不含驗證碼段落")
-    void sendVerificationEmail_codeExpiredInRedis_sendsLinkOnly() throws Exception {
-        givenUser(UserStatus.PENDING_VERIFICATION);
-        when(valueOps.get(RedisKeyConstant.getEmailVerifyCodeKey(DB_EMAIL))).thenReturn(null);
-
-        boolean sent = service.sendVerificationEmail(registered());
-
-        assertThat(sent).isTrue();
-        String body = (String) message.getContent();
-        assertThat(body).contains("https://90030.xyz/verify-email?token=");
-        assertThat(body).doesNotContain("verification code").doesNotContain("null");
-    }
-
-    @Test
-    @DisplayName("sendVerificationEmail：Redis 讀取拋例外 → 降級只寄連結（不重試進 DLQ）")
-    void sendVerificationEmail_redisFailure_degradesToLinkOnly() throws Exception {
-        givenUser(UserStatus.PENDING_VERIFICATION);
-        when(valueOps.get(RedisKeyConstant.getEmailVerifyCodeKey(DB_EMAIL)))
-                .thenThrow(new org.springframework.data.redis.RedisConnectionFailureException("down"));
-
-        boolean sent = service.sendVerificationEmail(registered());
-
-        assertThat(sent).isTrue();
-        assertThat((String) message.getContent())
-                .contains("https://90030.xyz/verify-email?token=")
-                .doesNotContain("verification code");
     }
 
     @Test

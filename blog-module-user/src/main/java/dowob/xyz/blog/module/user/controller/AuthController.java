@@ -14,7 +14,6 @@ import dowob.xyz.blog.module.user.model.dto.request.ForgotPasswordRequest;
 import dowob.xyz.blog.module.user.model.dto.request.LoginRequest;
 import dowob.xyz.blog.module.user.model.dto.request.RegisterRequest;
 import dowob.xyz.blog.module.user.model.dto.request.ResetPasswordRequest;
-import dowob.xyz.blog.module.user.model.dto.request.VerifyEmailCodeRequest;
 import dowob.xyz.blog.module.user.model.dto.request.VerifyEmailRequest;
 import dowob.xyz.blog.module.user.model.dto.response.AuthResponse;
 import dowob.xyz.blog.module.user.model.dto.response.LoginResult;
@@ -221,23 +220,6 @@ public class AuthController {
     @PostMapping("/verify-email")
     public ApiResponse<Void> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
         authService.verifyEmail(request.getToken());
-        return ApiResponse.success();
-    }
-
-    /**
-     * 使用驗證碼驗證電子信箱
-     *
-     * @param request     包含電子信箱與 6 位數驗證碼
-     * @param httpRequest HTTP 請求（解析 client IP 供 IP 層級限流，A3）
-     * @return 成功回應
-     */
-    @Operation(summary = "使用驗證碼驗證電子信箱",
-            description = "公開。透過驗證信中的 6 位數驗證碼啟用帳號；失敗次數過多會被限流。")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "A0001 參數校驗失敗；A0104 驗證碼錯誤或已過期；A0113 驗證嘗試次數過多")
-    @PostMapping("/verify-email-code")
-    public ApiResponse<Void> verifyEmailCode(@Valid @RequestBody VerifyEmailCodeRequest request,
-                                             HttpServletRequest httpRequest) {
-        authService.verifyEmailCode(request.getEmail(), request.getCode(), clientIpResolver.resolve(httpRequest));
         return ApiResponse.success();
     }
 

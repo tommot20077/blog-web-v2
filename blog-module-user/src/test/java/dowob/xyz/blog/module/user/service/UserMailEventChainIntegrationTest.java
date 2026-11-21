@@ -82,8 +82,6 @@ class UserMailEventChainIntegrationTest extends AbstractRealTokenIntegrationTest
         jdbc.update("DELETE FROM verification_tokens WHERE user_id IN (SELECT id FROM users WHERE email LIKE ?)",
                 PREFIX + "%");
         jdbc.update("DELETE FROM users WHERE email LIKE ?", PREFIX + "%");
-        redis.delete(RedisKeyConstant.getEmailVerifyCodeKey(EMAIL));
-        redis.delete(RedisKeyConstant.getEmailVerifyCodeFailKey(EMAIL));
         redis.delete(RedisKeyConstant.getForgotPwdMinKey(EMAIL));
         redis.delete(RedisKeyConstant.getForgotPwdDayKey(EMAIL));
         redis.delete(RedisKeyConstant.getResendVerifyMinKey(EMAIL));
@@ -141,13 +139,12 @@ class UserMailEventChainIntegrationTest extends AbstractRealTokenIntegrationTest
         UserRegisteredEvent event = captureRegistered(1);
         assertThat(event.toString()).doesNotContain(EMAIL).doesNotContain("Arch24User");
         assertThat(tokenRows("EMAIL_VERIFICATION")).as("註冊時 AuthService 不建立 token").isZero();
-        String code = redis.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(EMAIL));
 
         verificationConsumer.handleUserRegistered(event);
 
         MimeMessage mail = sentMails(1).get(0);
         assertThat(mail.getAllRecipients()[0].toString()).isEqualTo(EMAIL);
-        assertThat((String) mail.getContent()).contains(code).contains("Arch24User");
+        assertThat((String) mail.getContent()).contains("Arch24User").doesNotContainIgnoringCase("verification code");
         String plain = tokenIn(mail, "/verify-email");
         String stored = jdbc.queryForObject("""
                 SELECT vt.token_hash FROM verification_tokens vt JOIN users u ON u.id = vt.user_id

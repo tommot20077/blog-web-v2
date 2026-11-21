@@ -1,7 +1,6 @@
 package dowob.xyz.blog.module.user.service;
 
 import dowob.xyz.blog.common.api.enums.UserStatus;
-import dowob.xyz.blog.common.constant.RedisKeyConstant;
 import dowob.xyz.blog.module.user.model.User;
 import dowob.xyz.blog.module.user.model.VerificationToken;
 import dowob.xyz.blog.module.user.model.event.RegistrationAttemptOnExistingEmailEvent;
@@ -10,7 +9,6 @@ import dowob.xyz.blog.module.user.model.event.UserRegisteredEvent;
 import dowob.xyz.blog.module.user.repository.UserRepository;
 import dowob.xyz.blog.module.user.repository.VerificationTokenRepository;
 import dowob.xyz.blog.module.user.util.TokenHasher;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
@@ -33,7 +31,7 @@ import java.util.UUID;
  * 用戶安全郵件服務
  *
  * <p>負責寄送信箱驗證與密碼重設等安全通知信。寄信事件不含個資與 token（ARCH-24），
- * 本服務於寄信當下依 {@code userUuid} 查詢 users 與 Redis，並在此時<b>產生</b>驗證／重設 token（A1）：
+ * 本服務於寄信當下依 {@code userUuid} 查詢 users，並在此時<b>產生</b>驗證／重設 token（A1）：
  * 信件內容是明文 token，{@code verification_tokens} 只存其 SHA-256（見 {@link TokenHasher}）。</p>
  *
  * <p><b>交易與冪等（寄信失敗重試）</b>：兩個產生 token 的方法標 {@link Transactional}，被 consumer 的
@@ -72,9 +70,6 @@ public class UserMailService {
     /** 驗證 Token Repository（寄信當下刪舊 token、存新 token 的 SHA-256） */
     private final VerificationTokenRepository verificationTokenRepository;
 
-    /** Redis 操作模板（寄信當下查 6 位數驗證碼） */
-    private final StringRedisTemplate redisTemplate;
-
     /** 前端基礎網址 */
     @Value("${app.frontend-base-url}")
     private String frontendBaseUrl;
@@ -91,13 +86,15 @@ public class UserMailService {
      * 寄送信箱驗證信
      *
      * <p><b>事件不含個資與 token（ARCH-24）</b>，本方法於寄信當下以 {@code event.userUuid()} 查詢 email、暱稱
-     * （{@code users}）與驗證碼（Redis，故障時降級為只寄連結），並<b>產生新的驗證連結 token</b>（A1）：
+     * （{@code users}），並<b>產生新的驗證連結 token</b>（A1）：
      * 先刪該使用者同類舊 token（讓「最新＝唯一」，舊連結立即失效）、存入新 token 的 SHA-256、最後才寄信，
      * 信中是明文。順序與交易語意見類別說明。</p>
      *
      * <p><b>略過不寄的情況</b>（皆以 INFO 記一行，不記 email 與 token，不產生 token，回傳 {@code false}，呼叫端正常 ack）：
      * 使用者不存在、使用者已刪帳（{@code DELETED}，email 已是墓碑值）、帳號已不是 {@code PENDING_VERIFICATION}
-     * （已驗證，晚到的舊事件不該再發驗證連結）。連結有效但 Redis 已沒有驗證碼（TTL 10 分鐘，比連結 24 小時短）→ 照寄，信中只含連結。</p>
+     * （已驗證，晚到的舊事件不該再發驗證連結）。</p>
+     *
+     * <p>信中只有驗證連結，沒有 6 位數驗證碼：驗證碼已移除（前端沒有輸入驗證碼的畫面，且明文存在 Redis），見 ai-docs/findings.md SEC-29。</p>
      *
      * @param event 用戶註冊事件
      * @return 是否真的寄出
@@ -115,20 +112,14 @@ public class UserMailService {
         String plainToken = issueToken(user.get(), TOKEN_TYPE_EMAIL_VERIFICATION,
                 LocalDateTime.now().plusHours(EMAIL_VERIFICATION_TTL_HOURS));
         String verifyUrl = buildUrl("/verify-email", plainToken);
-        String code = readVerificationCode(user.get());
-        String codePart = code == null ? "" : """
-
-                Or enter this verification code:
-                %s
-                """.formatted(code);
         String body = """
                 Hi %s,
 
                 Please verify your email address by opening this link:
                 %s
-                %s
+
                 This link expires in 24 hours.
-                """.formatted(user.get().getNickname(), verifyUrl, codePart);
+                """.formatted(user.get().getNickname(), verifyUrl);
 
         sendSecurityMail(user.get().getEmail(), "Verify your email address", body);
         return true;
@@ -204,21 +195,6 @@ public class UserMailService {
 
         sendSecurityMail(owner.get().getEmail(), "Someone tried to register with your email address", body);
         return true;
-    }
-
-    /**
-     * 讀取 Redis 中的驗證碼；Redis 故障時降級為 {@code null}（只寄連結），記 WARN 且不含 email。
-     *
-     * @param user 收件使用者
-     * @return 驗證碼；不存在或 Redis 故障為 {@code null}
-     */
-    private String readVerificationCode(User user) {
-        try {
-            return redisTemplate.opsForValue().get(RedisKeyConstant.getEmailVerifyCodeKey(user.getEmail()));
-        } catch (RuntimeException e) {
-            log.warn("讀取驗證碼失敗，降級為只寄驗證連結 - userUuid={}, error={}", user.getUuid(), e.getClass().getSimpleName());
-            return null;
-        }
     }
 
     /**
