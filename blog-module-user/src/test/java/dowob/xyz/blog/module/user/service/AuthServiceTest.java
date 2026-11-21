@@ -617,6 +617,23 @@ class AuthServiceTest {
     }
 
     /**
+     * 驗證：信箱驗證只走連結，註冊時不再產生 6 位數驗證碼、不寫入 Redis。
+     */
+    @Test
+    @DisplayName("register → 不產生驗證碼、不寫入 Redis 的 auth:email-verify:code:*")
+    void register_shouldNotStoreVerificationCodeInRedis() {
+        when(userRepository.existsByEmail(TEST_EMAIL)).thenReturn(false);
+        when(userRepository.existsByNickname(TEST_NICKNAME)).thenReturn(false);
+        when(passwordEncoder.encode(TEST_PASSWORD)).thenReturn("encodedPassword");
+        when(userRepository.save(any(User.class))).thenReturn(buildActiveUser());
+
+        authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
+
+        verify(valueOperations, never()).set(startsWith("auth:email-verify:code:"), anyString(), anyLong(), any(TimeUnit.class));
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), any(UserRegisteredEvent.class));
+    }
+
+    /**
      * 驗證：成功註冊後應發布 UserRegisteredEvent 至 RabbitMQ。
      */
     @Test
@@ -631,17 +648,7 @@ class AuthServiceTest {
 
         authService.register(TEST_EMAIL, TEST_PASSWORD, TEST_USERNAME, TEST_NICKNAME);
 
-        ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
-        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
-        ArgumentCaptor<String> codeCaptor = ArgumentCaptor.forClass(String.class);
-        verify(valueOperations).set(
-                eq(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL)),
-                codeCaptor.capture(),
-                eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
-                eq(TimeUnit.MINUTES)
-        );
-        assertThat(codeCaptor.getValue()).as("驗證碼只存 Redis，事件不帶（ARCH-24）").matches("\\d{6}");
-        assertThat(eventCaptor.getValue().toString()).doesNotContain(codeCaptor.getValue());
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), any(UserRegisteredEvent.class));
     }
 
     /**
@@ -974,140 +981,6 @@ class AuthServiceTest {
         verify(userRepository, never()).save(any());
     }
 
-    /**
-     * 驗證：使用正確 6 位驗證碼應啟用 PENDING_VERIFICATION 帳號，並清除舊 URL token、Redis code 與失敗計數。
-     */
-    @Test
-    @DisplayName("verifyEmailCode → 正確驗證碼 → 應啟用帳號並清除驗證資料")
-    void verifyEmailCode_withValidCode_shouldActivateUserAndClearVerificationState() {
-        User mockUser = buildActiveUser();
-        mockUser.setStatus(UserStatus.PENDING_VERIFICATION);
-        mockUser.setEmailVerified(false);
-        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
-        when(valueOperations.get(failKey)).thenReturn(null);
-        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
-
-        authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP);
-
-        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
-        verify(userRepository).save(captor.capture());
-        assertThat(captor.getValue().getStatus()).isEqualTo(UserStatus.ACTIVE);
-        assertThat(captor.getValue().isEmailVerified()).isTrue();
-        verify(verificationTokenRepository).deleteByUserIdAndType(mockUser.getId(), "EMAIL_VERIFICATION");
-        verify(redisTemplate).delete(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL));
-        verify(redisTemplate).delete(failKey);
-    }
-
-    /**
-     * 驗證：驗證碼不存在或不相符時，應拋出 TOKEN_INVALID 且不可啟用帳號。
-     */
-    @Test
-    @DisplayName("verifyEmailCode → 驗證碼不符 → 應拋出 TOKEN_INVALID")
-    void verifyEmailCode_withInvalidCode_shouldThrowTokenInvalid() {
-        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
-        when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).getCode())
-                        .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
-
-        verify(userRepository, never()).save(any());
-        verify(verificationTokenRepository, never()).deleteByUserIdAndType(anyLong(), anyString());
-    }
-
-    /**
-     * 驗證：失敗次數達上限（5 次）後，應拋出 RATE_LIMIT_EXCEEDED 且不再檢查驗證碼。
-     */
-    @Test
-    @DisplayName("verifyEmailCode → 失敗次數達上限 → 應拋出 RATE_LIMIT_EXCEEDED")
-    void verifyEmailCode_lockedAfterMaxAttempts_shouldThrowRateLimitExceeded() {
-        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
-        when(valueOperations.get(failKey)).thenReturn("5");
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "000000", TEST_IP))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).getCode())
-                        .isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
-
-        verify(userRepository, never()).findByEmail(any());
-    }
-
-    /**
-     * 驗證：驗證碼錯誤時應遞增失敗計數器。
-     */
-    @Test
-    @DisplayName("verifyEmailCode → 驗證碼錯誤 → 應遞增失敗計數器")
-    void verifyEmailCode_wrongCode_shouldIncrementFailCounter() {
-        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
-        when(valueOperations.get(failKey)).thenReturn(null);
-        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
-        when(userRedisAtomicOps.incrementWithTtl(eq(failKey), any(Duration.class))).thenReturn(2L);
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
-                .isInstanceOf(BusinessException.class);
-
-        verify(userRedisAtomicOps).incrementWithTtl(eq(failKey), any(Duration.class));
-    }
-
-    /**
-     * 驗證：首次驗證碼錯誤（count == 1）應設定失敗計數器 TTL。
-     */
-    @Test
-    @DisplayName("verifyEmailCode → 首次驗證碼錯誤 → 應設定失敗計數器 TTL")
-    void verifyEmailCode_firstWrongCode_shouldSetFailKeyTtl() {
-        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
-        when(valueOperations.get(failKey)).thenReturn(null);
-        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
-        when(userRedisAtomicOps.incrementWithTtl(eq(failKey), any(Duration.class))).thenReturn(1L);
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
-                .isInstanceOf(BusinessException.class);
-
-        verify(userRedisAtomicOps).incrementWithTtl(eq(failKey),
-                eq(Duration.ofMinutes(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES)));
-    }
-
-    /**
-     * 驗證：驗證碼正確但用戶不存在時，應拋出 TOKEN_INVALID。
-     */
-    @Test
-    @DisplayName("verifyEmailCode → 驗證碼正確但用戶不存在 → 應拋出 TOKEN_INVALID")
-    void verifyEmailCode_codeExistsButUserNotFound_shouldThrowTokenInvalid() {
-        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
-        when(valueOperations.get(failKey)).thenReturn(null);
-        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).getCode())
-                        .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
-
-        verify(userRepository, never()).save(any());
-    }
-
-    /**
-     * 驗證：驗證碼正確但用戶狀態非 PENDING_VERIFICATION，應拋出 TOKEN_INVALID（安全設計，避免洩漏帳號狀態）。
-     */
-    @Test
-    @DisplayName("verifyEmailCode → 用戶狀態非 PENDING_VERIFICATION → 應拋出 TOKEN_INVALID")
-    void verifyEmailCode_userNotPending_shouldThrowTokenInvalid() {
-        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(TEST_EMAIL);
-        when(valueOperations.get(failKey)).thenReturn(null);
-        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("123456");
-        User mockUser = buildActiveUser(); // status = ACTIVE
-        when(userRepository.findByEmail(TEST_EMAIL)).thenReturn(Optional.of(mockUser));
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).getCode())
-                        .isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
-
-        verify(userRepository, never()).save(any());
-    }
-
     /* =========================================================================
        forgotPassword 測試
        ========================================================================= */
@@ -1396,7 +1269,7 @@ class AuthServiceTest {
      * 驗證：有效 PENDING 狀態用戶應成功發送驗證信。
      */
     @Test
-    @DisplayName("resendVerification → 有效 PENDING 用戶 → 發布事件與 Redis 驗證碼，不建立 token（A1）")
+    @DisplayName("resendVerification → 有效 PENDING 用戶 → 只發布事件，不建立 token（A1）、不寫 Redis 驗證碼")
     void resendVerification_validPendingUser_shouldSendEmail() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(userRedisAtomicOps.incrementWithTtl(anyString(), any(Duration.class))).thenReturn(1L);
@@ -1408,17 +1281,8 @@ class AuthServiceTest {
         authService.resendVerification(TEST_EMAIL, TEST_IP);
 
         verifyNoInteractions(verificationTokenRepository);
-        ArgumentCaptor<UserRegisteredEvent> eventCaptor = ArgumentCaptor.forClass(UserRegisteredEvent.class);
-        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), eventCaptor.capture());
-        ArgumentCaptor<String> codeCaptor = ArgumentCaptor.forClass(String.class);
-        verify(valueOperations).set(
-                eq(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL)),
-                codeCaptor.capture(),
-                eq(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES),
-                eq(TimeUnit.MINUTES)
-        );
-        assertThat(codeCaptor.getValue()).as("驗證碼只存 Redis，事件不帶（ARCH-24）").matches("\\d{6}");
-        assertThat(eventCaptor.getValue().toString()).doesNotContain(codeCaptor.getValue());
+        verify(rabbitTemplate).convertAndSend(anyString(), anyString(), any(UserRegisteredEvent.class));
+        verify(valueOperations, never()).set(startsWith("auth:email-verify:code:"), anyString(), anyLong(), any(TimeUnit.class));
     }
 
     /**
@@ -2241,47 +2105,5 @@ class AuthServiceTest {
         authService.resendVerification(TEST_EMAIL, null);
 
         verify(userRedisAtomicOps, never()).incrementWithTtl(startsWith(RedisKeyConstant.RESEND_VERIFICATION_IP_PREFIX), any(Duration.class));
-    }
-
-    @Test
-    @DisplayName("verifyEmailCode(ip) → IP 第 11 次 → RATE_LIMIT_EXCEEDED，且在讀取驗證碼與失敗計數之前")
-    void verifyEmailCode_ipOverLimit_throwsBeforeTouchingCode() {
-        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getVerifyCodeIpKey(TEST_IP)), any(Duration.class)))
-                .thenReturn((long) RedisKeyConstant.VERIFY_CODE_IP_MAX + 1);
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(IP_LIMIT_EMAIL, "123456", TEST_IP))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.RATE_LIMIT_EXCEEDED.getCode()));
-
-        verifyNoInteractions(valueOperations);
-        verify(userRepository, never()).findByEmail(anyString());
-    }
-
-    @Test
-    @DisplayName("verifyEmailCode(ip) → IP 第 10 次仍放行；使用 verify-code 專屬 key 與 60 分鐘窗口")
-    void verifyEmailCode_ipAtLimit_proceedsWithOwnKeyAndWindow() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(userRedisAtomicOps.incrementWithTtl(eq(RedisKeyConstant.getVerifyCodeIpKey(TEST_IP)), any(Duration.class)))
-                .thenReturn((long) RedisKeyConstant.VERIFY_CODE_IP_MAX);
-        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", TEST_IP))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        e -> assertThat(e.getCode()).isEqualTo(UserErrorCode.TOKEN_INVALID.getCode()));
-
-        verify(userRedisAtomicOps).incrementWithTtl(RedisKeyConstant.getVerifyCodeIpKey(TEST_IP),
-                Duration.ofMinutes(RedisKeyConstant.VERIFY_CODE_IP_TTL_MINUTES));
-    }
-
-    @Test
-    @DisplayName("verifyEmailCode(null ip) → 跳過 IP 限流")
-    void verifyEmailCode_nullIp_skipsIpLimit() {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.get(RedisKeyConstant.getEmailVerifyCodeKey(TEST_EMAIL))).thenReturn("654321");
-
-        assertThatThrownBy(() -> authService.verifyEmailCode(TEST_EMAIL, "123456", null))
-                .isInstanceOf(BusinessException.class);
-
-        verify(userRedisAtomicOps, never()).incrementWithTtl(startsWith(RedisKeyConstant.VERIFY_CODE_IP_PREFIX), any(Duration.class));
     }
 }

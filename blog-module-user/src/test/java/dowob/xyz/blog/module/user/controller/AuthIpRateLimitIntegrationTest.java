@@ -26,24 +26,23 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * forgot-password／resend-verification／verify-email-code 的 per-IP 限流整合測試（A3／SEC-22；真實 Spring Security + Redis）。
+ * forgot-password／resend-verification 的 per-IP 限流整合測試（A3／SEC-22；真實 Spring Security + Redis）。
  *
  * <p>每個請求都使用<b>不同的 email</b>，因此 per-email 限流（每分鐘 1 次）不會干擾：被擋下的原因只能是 IP 計數。
- * 涵蓋：同一 IP 第 11 次被擋、不同 IP 互不影響、三個端點各自計數、輪換 {@code X-Forwarded-For} 無法繞過
+ * 涵蓋：同一 IP 第 11 次被擋、不同 IP 互不影響、兩個端點各自計數、輪換 {@code X-Forwarded-For} 無法繞過
  * （預設 {@code app.http.trusted-proxy-count=0}，只看 remoteAddr）。</p>
  *
  * @author Yuan
  * @version 1.0
  */
 @AutoConfigureMockMvc
-@DisplayName("忘記密碼／重寄／驗證碼 per-IP 限流整合測試（A3）")
+@DisplayName("忘記密碼／重寄 per-IP 限流整合測試（A3）")
 class AuthIpRateLimitIntegrationTest extends AbstractIntegrationTest {
 
     private static final String IP_A = "198.51.100.71";
     private static final String IP_B = "198.51.100.72";
     private static final String FORGOT = "/api/v1/auth/forgot-password";
     private static final String RESEND = "/api/v1/auth/resend-verification";
-    private static final String VERIFY_CODE = "/api/v1/auth/verify-email-code";
 
     @Autowired
     private MockMvc mockMvc;
@@ -60,7 +59,6 @@ class AuthIpRateLimitIntegrationTest extends AbstractIntegrationTest {
         for (String ip : new String[]{IP_A, IP_B}) {
             redis.delete(RedisKeyConstant.getForgotPasswordIpKey(ip));
             redis.delete(RedisKeyConstant.getResendVerificationIpKey(ip));
-            redis.delete(RedisKeyConstant.getVerifyCodeIpKey(ip));
         }
         Set<String> perEmail = redis.keys("*iplimit-*");
         if (perEmail != null && !perEmail.isEmpty()) {
@@ -70,9 +68,7 @@ class AuthIpRateLimitIntegrationTest extends AbstractIntegrationTest {
 
     private ResultActions call(String path, String remoteAddr, String xff) throws Exception {
         String email = "iplimit-" + UUID.randomUUID() + "@example.com";
-        Map<String, String> body = VERIFY_CODE.equals(path)
-                ? Map.of("email", email, "code", "123456")
-                : Map.of("email", email);
+        Map<String, String> body = Map.of("email", email);
         var request = post(path)
                 .with(req -> { req.setRemoteAddr(remoteAddr); return req; })
                 .contentType(MediaType.APPLICATION_JSON)
@@ -117,24 +113,13 @@ class AuthIpRateLimitIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    @DisplayName("verify-email-code：同一 IP 第 11 次被擋（先於驗證碼比對）；不同 IP 不受影響")
-    void verifyEmailCode_eleventhRequestFromSameIpBlocked_otherIpUnaffected() throws Exception {
-        exhaust(VERIFY_CODE, IP_A);
-
-        expectRateLimited(call(VERIFY_CODE, IP_A, null));
-        expectNotRateLimited(call(VERIFY_CODE, IP_B, null));
-    }
-
-    @Test
-    @DisplayName("三個端點各自計數：forgot 用盡後 resend 與 verify-code 對同一 IP 仍可用")
+    @DisplayName("兩個端點各自計數：forgot 用盡後 resend 對同一 IP 仍可用")
     void endpointsCountIndependently() throws Exception {
         exhaust(FORGOT, IP_A);
         expectRateLimited(call(FORGOT, IP_A, null));
 
         expectNotRateLimited(call(RESEND, IP_A, null));
-        expectNotRateLimited(call(VERIFY_CODE, IP_A, null));
         assertThat(redis.opsForValue().get(RedisKeyConstant.getResendVerificationIpKey(IP_A))).isEqualTo("1");
-        assertThat(redis.opsForValue().get(RedisKeyConstant.getVerifyCodeIpKey(IP_A))).isEqualTo("1");
     }
 
     @Test

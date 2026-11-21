@@ -29,7 +29,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -193,7 +192,6 @@ public class AuthService {
          * users 的 INSERT 是交易內第一個寫入：撞到唯一約束時例外立即中止交易（之後不再執行任何 SQL），
          * 在交易之外轉成業務結果（RACE-02／RACE-03／Q8）。
          */
-        String verificationCode = generateVerificationCode();
         User savedUser;
         try {
             savedUser = transactionTemplate.execute(status -> userRepository.save(user));
@@ -211,7 +209,6 @@ public class AuthService {
         }
 
         /** DB 已 commit，best-effort 發 MQ（失敗不影響註冊結果） */
-        saveEmailVerificationCode(savedUser.getEmail(), verificationCode);
         try {
             rabbitTemplate.convertAndSend(
                     UserRabbitMqConfig.EXCHANGE,
@@ -451,67 +448,6 @@ public class AuthService {
         userRepository.save(user);
 
         verificationTokenRepository.delete(verificationToken);
-        redisTemplate.delete(RedisKeyConstant.getEmailVerifyCodeKey(user.getEmail()));
-    }
-
-    /**
-     * 使用 6 位數驗證碼驗證電子信箱（含 client IP 層級限流）
-     *
-     * <p>內建防暴力破解機制：失敗次數達 {@link RedisKeyConstant#EMAIL_VERIFY_CODE_MAX_ATTEMPTS}
-     * 後拒絕後續請求，直至驗證碼過期或重新發送。
-     * DB 在 {@link TransactionTemplate} 內提交後才清除 Redis 資料，避免 DB rollback 導致驗證碼遺失。</p>
-     *
-     * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
-     * （{@link RedisKeyConstant#VERIFY_CODE_IP_MAX} 次 / {@link RedisKeyConstant#VERIFY_CODE_IP_TTL_MINUTES} 分鐘，
-     * 與忘記密碼、重寄各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}；發生在任何 email／驗證碼邏輯之前。
-     * {@code clientIp} 為 null 時跳過。</p>
-     *
-     * @param email    電子信箱
-     * @param code     6 位數驗證碼
-     * @param clientIp client IP（可為 null，表示無法解析，跳過 IP 限流）
-     */
-    public void verifyEmailCode(String email, String code, String clientIp) {
-        checkIpRateLimit(
-                clientIp == null ? null : RedisKeyConstant.getVerifyCodeIpKey(clientIp),
-                RedisKeyConstant.VERIFY_CODE_IP_MAX,
-                RedisKeyConstant.VERIFY_CODE_IP_TTL_MINUTES);
-
-        String failKey = RedisKeyConstant.getEmailVerifyCodeFailKey(email);
-        String failCountStr = redisTemplate.opsForValue().get(failKey);
-        if (failCountStr != null && Integer.parseInt(failCountStr) >= RedisKeyConstant.EMAIL_VERIFY_CODE_MAX_ATTEMPTS) {
-            throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
-        }
-
-        String codeKey = RedisKeyConstant.getEmailVerifyCodeKey(email);
-        String storedCode = redisTemplate.opsForValue().get(codeKey);
-        if (storedCode == null || !storedCode.equals(code)) {
-            userRedisAtomicOps.incrementWithTtl(failKey,
-                    Duration.ofMinutes(RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES));
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
-        }
-
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new BusinessException(UserErrorCode.TOKEN_INVALID));
-
-        // 此處所有 non-PENDING 狀態統一回傳 TOKEN_INVALID，避免洩漏帳號狀態資訊（意圖設計）
-        if (user.getStatus() != UserStatus.PENDING_VERIFICATION) {
-            throw new BusinessException(UserErrorCode.TOKEN_INVALID);
-        }
-
-        /** DB 在 transaction 內提交；提交後才清 Redis，避免 DB rollback 導致驗證碼遺失 */
-        transactionTemplate.executeWithoutResult(status -> {
-            user.setEmailVerified(true);
-            user.setStatus(UserStatus.ACTIVE);
-            userRepository.save(user);
-            verificationTokenRepository.deleteByUserIdAndType(user.getId(), "EMAIL_VERIFICATION");
-        });
-
-        try {
-            redisTemplate.delete(codeKey);
-            redisTemplate.delete(failKey);
-        } catch (Exception e) {
-            log.warn("Redis 清理驗證碼失敗（best-effort）: {}", e.getMessage(), e);
-        }
     }
 
     /**
@@ -524,7 +460,7 @@ public class AuthService {
      *
      * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
      * （{@link RedisKeyConstant#FORGOT_PASSWORD_IP_MAX} 次 / {@link RedisKeyConstant#FORGOT_PASSWORD_IP_TTL_MINUTES} 分鐘，
-     * 與重寄、驗證碼各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。
+     * 與重寄各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}。
      * <b>必須先於「信箱是否存在」的判斷</b>，因此超限回應與信箱是否存在無關，不會洩漏帳號。{@code clientIp} 為 null 時跳過。</p>
      *
      * @param email    用戶電子信箱
@@ -566,14 +502,14 @@ public class AuthService {
     /**
      * 重發驗證信（含 client IP 層級限流）
      *
-     * <p>若信箱存在且帳號處於 PENDING_VERIFICATION 狀態，重設 Redis 驗證碼並發布 {@link UserRegisteredEvent}
+     * <p>若信箱存在且帳號處於 PENDING_VERIFICATION 狀態，發布 {@link UserRegisteredEvent}
      * 至 RabbitMQ；舊驗證連結 token 的取代與新 token 的產生由寄信 consumer 在寄信當下完成（A1）。
      * 若信箱不存在或帳號已啟用，靜默忽略（安全考量）。
      * 每封信箱每分鐘限呼叫 1 次、每日限 5 次，超過拋出 RATE_LIMIT_EXCEEDED。</p>
      *
      * <p><b>IP 限流（A3／SEC-22）</b>：最先以 client IP 計數
      * （{@link RedisKeyConstant#RESEND_VERIFICATION_IP_MAX} 次 / {@link RedisKeyConstant#RESEND_VERIFICATION_IP_TTL_MINUTES} 分鐘，
-     * 與忘記密碼、驗證碼各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}，發生在信箱查詢之前。
+     * 與忘記密碼各自獨立計數），超過拋出 {@link UserErrorCode#RATE_LIMIT_EXCEEDED}，發生在信箱查詢之前。
      * {@code clientIp} 為 null 時跳過。</p>
      *
      * @param email    用戶電子信箱
@@ -604,15 +540,7 @@ public class AuthService {
                 return;
             }
 
-            /** 舊 token 的刪除與新 token 的產生都由寄信 consumer 在寄信當下於同一交易完成（A1），這裡只備好 Redis 驗證碼並發事件 */
-            String verificationCode = generateVerificationCode();
-            saveEmailVerificationCode(user.getEmail(), verificationCode);
-            // 新碼發出，重置失敗計數讓使用者可從新碼開始驗證
-            try {
-                redisTemplate.delete(RedisKeyConstant.getEmailVerifyCodeFailKey(user.getEmail()));
-            } catch (Exception e) {
-                log.warn("Redis 清除驗證碼失敗計數失敗（best-effort）: {}", e.getMessage(), e);
-            }
+            /** 舊 token 的刪除與新 token 的產生都由寄信 consumer 在寄信當下於同一交易完成（A1），這裡只發事件 */
             try {
                 rabbitTemplate.convertAndSend(
                         UserRabbitMqConfig.EXCHANGE,
@@ -691,25 +619,6 @@ public class AuthService {
         long count = userRedisAtomicOps.incrementWithTtl(key, Duration.ofMinutes(ttlMinutes));
         if (count > max) {
             throw new BusinessException(UserErrorCode.RATE_LIMIT_EXCEEDED);
-        }
-    }
-
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
-
-    private String generateVerificationCode() {
-        return String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
-    }
-
-    private void saveEmailVerificationCode(String email, String code) {
-        try {
-            redisTemplate.opsForValue().set(
-                    RedisKeyConstant.getEmailVerifyCodeKey(email),
-                    code,
-                    RedisKeyConstant.EMAIL_VERIFY_CODE_TTL_MINUTES,
-                    TimeUnit.MINUTES
-            );
-        } catch (Exception e) {
-            log.warn("Redis 寫入驗證碼失敗（best-effort）: {}", e.getMessage(), e);
         }
     }
 }
